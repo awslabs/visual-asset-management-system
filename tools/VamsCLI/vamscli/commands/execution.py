@@ -979,10 +979,11 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
     try:
         if auto_paginate:
             # With --output each page is written as it arrives, so a page that fails keeps what was
-            # read; the text is held in memory only when stdout must carry it.
-            out = _open_output() if output_file else None
-            streamed = out is not None
-            parts = [] if (json_output or out is None) else None
+            # read; the text is held in memory only when stdout must carry it. The file is opened once
+            # the first page has arrived, so a first page that fails leaves an existing file as it was.
+            out = None
+            streamed = bool(output_file)
+            parts = [] if (json_output or not output_file) else None
             truncated = False
             row_count = byte_len = page_count = 0
             next_token = starting_token
@@ -997,6 +998,8 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
                         kept = {'rowsWritten': row_count, 'outputFile': output_file} if out else {}
                         raise _resumable(e, next_token, pagesRead=page_count - 1, **kept)
                     piece = page.get('resultContent', '') or ''
+                    if output_file and out is None:
+                        out = _open_output()
                     if out is not None:
                         try:
                             out.write(piece)

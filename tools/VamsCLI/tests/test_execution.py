@@ -1779,7 +1779,20 @@ class TestAPageThatFailsKeepsWhatWasRead:
             mocks['api_client'].get_execution_results.side_effect = page
             result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
         assert result.exit_code == 0, result.output
-        assert seen == ['', 'first-', 'first-second-'] and out.read_text() == 'first-second-third'
+        # The file is created once the first page has arrived.
+        assert seen == [None, 'first-', 'first-second-'] and out.read_text() == 'first-second-third'
+
+    def test_a_first_page_that_fails_leaves_an_existing_file_as_it_was(self, cli_runner, generic_command_mocks,
+                                                                       tmp_path):
+        from vamscli.utils.exceptions import APIError
+
+        out = tmp_path / "result.txt"
+        out.write_text("an earlier run's results")
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = APIError("Server error (503): try again later")
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+        assert result.exit_code == 1
+        assert out.read_text() == "an earlier run's results"
 
     def test_a_first_page_that_fails_names_no_token(self, cli_runner, generic_command_mocks, tmp_path):
         from vamscli.utils.exceptions import ExecutionNotFoundError
