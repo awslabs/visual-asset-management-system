@@ -231,7 +231,7 @@ GovCloud is a cross-cutting switch, not a dedicated nested stack. It is validate
 
 #### Restricted-partition constraints
 
-Configuration validation enforces the following when `app.govCloud.enabled` is `true`, or when the deployment Region resolves to a partition other than `aws`. This is the complete set of constraints that apply regardless of other settings; a configuration that violates any of them is rejected before synthesis with an error naming the field.
+Configuration validation enforces the following when `app.govCloud.enabled` is `true`, or when the deployment Region resolves to a partition other than `aws`. The table lists the constraints that apply regardless of other settings, and the EDH Workstations add-on, which is refused outside two partitions; a configuration that violates any of them is rejected before synthesis with an error naming the field. Features that are refused in some partitions only when they are turned on follow the table.
 
 | Constraint                                               | Setting required                                                                    | Reason                                                                                                                                  |
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -243,6 +243,15 @@ Configuration validation enforces the following when `app.govCloud.enabled` is `
 | No next-generation OpenSearch Serverless                 | `app.openSearch.useServerless.nextGen: false`                                       | Next-generation Serverless collection groups are unavailable.                                                                           |
 | No OpenSearch Serverless in the European Sovereign Cloud | `app.openSearch.useServerless.enabled: false` (use `app.openSearch.useProvisioned`) | Amazon OpenSearch Serverless has no endpoint in the `aws-eusc` partition. Applies to `aws-eusc` only; AWS GovCloud supports Serverless. |
 | No EDH Workstations add-on outside AWS GovCloud          | `app.addons.useEdhWorkstations.enabled: false`                                      | EDH clusters run only in the `aws` and `aws-us-gov` partitions. Applies to every other partition, whatever `app.govCloud.enabled` is.   |
+
+Feature settings that configuration validation refuses outside the partitions or Regions that offer them, each described in its own section:
+
+-   An API custom domain, outside `aws` and `aws-us-gov` ([API configuration](#api-configuration-appapi)).
+-   `app.useGlobalVpc.addCrossRegionS3Endpoints: true` with an external asset bucket in another Region, outside `aws` ([VPC](#vpc-appuseglobalvpc)).
+-   The Video SOP/BOM Extraction pipeline, outside `aws` and `aws-us-gov` ([Video SOP/BOM extraction](#video-sopbom-extraction-apppipelinesusegenaivideosopbom)).
+-   The GenAI CAD STEP agent's `agentcore` runtime, outside `aws` ([GenAI CAD STEP agent](#genai-cad-step-agent-apppipelinesusegenaicadstepagent)).
+-   A `global.` or `us.` cross-Region inference-profile model id, outside `aws` ([Choosing an Amazon Bedrock model](#choosing-an-amazon-bedrock-model)).
+-   The Image to 3D Blender agent's Stability AI image editing (`useStabilityImageEditing`), outside the `aws` partition's `us-` Regions ([Image to 3D](#image-to-3d-apppipelinesuseimageto3d)).
 
 Amazon Cognito advanced security (`AdvancedSecurityMode`) is also unavailable in these partitions. VAMS does not configure it and suppresses the corresponding CDK Nag check automatically, so it needs no configuration change.
 
