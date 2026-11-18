@@ -61,7 +61,8 @@ export const ZIP_ARCHIVE_STATE_MACHINE_TIMEOUT = cdk.Duration.minutes(11 * 60 + 
  * States.HeartbeatTimeout within 30 minutes instead of at the 11-hour task timeout, and the read-time
  * reconcile finalizes its job FAILED "The archive job stopped responding". The clock starts when the
  * Batch job is submitted, so the 30 minutes also cover the job's wait in the Batch queue and its
- * Fargate start; a job still queued after that ends the same way.
+ * Fargate start. pipelineEnd then looks the job up: one still waiting to start is cancelled and
+ * reported as having waited too long, one that failed before its container ran as unable to start.
  */
 export const ZIP_ARCHIVE_BATCH_HEARTBEAT = cdk.Duration.minutes(30);
 
@@ -336,6 +337,7 @@ export class ZipArchiveConstruct extends Construct {
             this,
             props.lambdaCommonBaseLayer,
             props.assetAuxiliaryBucket,
+            batchPipeline.batchJobQueue,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -496,7 +498,7 @@ export class ZipArchiveConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Pipeline Lambda functions read the asset buckets and answer Step Functions task tokens.",
+                    reason: "Pipeline Lambda functions read the asset buckets and answer Step Functions task tokens. pipelineEnd lists the run's AWS Batch jobs (ListJobs supports no resource-level permission) and cancels the run's job by id, which AWS Batch generates at submit, so job/* in this account and Region is the narrowest ARN.",
                 },
                 {
                     id: "AwsSolutions-IAM4",

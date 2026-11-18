@@ -52,7 +52,7 @@ The search box above each list finds jobs by asset ID, asset name, request ID, a
 | **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. |
 | **Cancelled** | You cancelled the job before it finished.                                                                   |
 
-If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory. Create the job again; see [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if it recurs.
+If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory; create the job again. If it fails with **The archive job waited too long to start**, too many archive jobs were running at once; create it again later. See [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if a failure recurs.
 
 While a job is queued or running, the list refreshes itself every few seconds.
 
