@@ -1844,8 +1844,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         if asset_upload_table:
             try:
                 # Query using the GSI to find uploads for this asset, every page: each row found is
-                # deleted, so a row past the first page would otherwise be left behind. Asset ids are
-                # unique per database only, so a row is deleted only when it names this asset's database.
+                # deleted, so a row past the first page would otherwise be left behind. A row is
+                # deleted only when it names this asset's database.
                 for item in query_all_items(
                     asset_upload_table,
                     IndexName='AssetIdGSI',
