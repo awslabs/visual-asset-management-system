@@ -43,6 +43,9 @@ EXPECTED_LISTING = {
         "/assets": {"GET"},
         "/database/{databaseId}/assets/{assetId}": {"GET"},
         "/database/{databaseId}/assets/{assetId}/metadata": {"GET"},
+        "/database/{databaseId}/assets/{assetId}/metadata/file": {"GET"},
+        "/asset-links/{assetLinkId}/metadata": {"GET"},
+        "/database/{databaseId}/metadata": {"GET"},
         "/auth/user/api-keys": {"GET"},
         "/auth/user/api-keys/{apiKeyId}": {"GET"},
     },
@@ -54,6 +57,11 @@ EXPECTED_LISTING = {
         "/database/{databaseId}/assets/{assetId}": {"GET"},
         "/database/{databaseId}/assets/{assetId}/archiveAsset": {"DELETE"},
         "/database/{databaseId}/assets/{assetId}/metadata": {"GET", "POST"},
+        "/database/{databaseId}/assets/{assetId}/metadata/file": {"GET", "POST"},
+        "/asset-links/{assetLinkId}/metadata": {"GET", "POST", "PUT", "DELETE"},
+        # PUT and DELETE are granted for the role's own database only (concrete-value grants), which
+        # the listing does not report, so the web does not gate the database metadata editor on them.
+        "/database/{databaseId}/metadata": {"GET", "POST"},
         "/auth/user/api-keys": {"GET", "POST"},
         "/auth/user/api-keys/{apiKeyId}": {"GET", "PUT", "DELETE"},
     },

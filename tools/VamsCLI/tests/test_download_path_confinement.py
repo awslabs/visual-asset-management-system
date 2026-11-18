@@ -95,7 +95,7 @@ def _urls(*relative_paths):
     return {p: {"downloadUrl": f"https://example.invalid{p}"} for p in relative_paths}
 
 
-ESCAPING = ("/../escape.txt", "/folder/../../escape2.txt")
+OUTSIDE = ("/../escape.txt", "/folder/../../escape2.txt")
 
 
 class TestAssetsDownloadStaysInTheTarget:
@@ -111,7 +111,7 @@ class TestAssetsDownloadStaysInTheTarget:
         self, cli_runner, assets_command_mocks, tmp_path, extra_args
     ):
         target = tmp_path / "out"
-        keys = ("/ok.txt", *ESCAPING)
+        keys = ("/ok.txt", *OUTSIDE)
         with (
             assets_command_mocks as mocks,
             patch("vamscli.commands.assets.generate_presigned_urls", return_value=_urls(*keys)),
@@ -147,7 +147,7 @@ class TestAssetsDownloadStaysInTheTarget:
             assert refused == {} and (target / "escape.txt").exists()
         else:
             assert result.exit_code == 1, result.output
-            assert refused == {key: DOWNLOAD_PATH_OUTSIDE_TARGET_REASON for key in ESCAPING}
+            assert refused == {key: DOWNLOAD_PATH_OUTSIDE_TARGET_REASON for key in OUTSIDE}
             assert data["overall_success"] is False and data["successful_files"] == 1
 
     def test_a_file_key_that_leaves_the_target_is_refused_before_any_request(
