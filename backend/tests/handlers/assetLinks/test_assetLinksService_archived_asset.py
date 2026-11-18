@@ -132,3 +132,27 @@ class TestRefusedMatchesMissing:
         assert response["statusCode"] == 400
         assert "Asset not found" in json.loads(response["body"])["message"]
         enforcer.return_value.enforce.assert_not_called()
+
+def _archived_only(obj):
+    """A role granted db1's archived records only."""
+    return obj.get("databaseId") == f"{_DB}#deleted"
+
+
+@pytest.mark.unit
+class TestArchivedOnlyCallerGetsOneAnswerForLiveAndMissing:
+    """With showArchived a missing id is decided as both an archived and a live asset."""
+
+    def _status_and_message(self, response):
+        return response["statusCode"], json.loads(response["body"])["message"]
+
+    def test_live_and_missing_answer_alike(self):
+        live, _, live_links = _call(_Table(_live()), {"showArchived": "true"}, enforce=_archived_only)
+        missing, _, missing_links = _call(_Table(), {"showArchived": "true"}, enforce=_archived_only)
+        assert self._status_and_message(live) == self._status_and_message(missing)
+        assert live["statusCode"] == 403
+        live_links.query.assert_not_called()
+        missing_links.query.assert_not_called()
+
+    def test_the_archived_record_is_still_read(self):
+        response, _, _ = _call(_Table(_archived()), {"showArchived": "true"}, enforce=_archived_only)
+        assert response["statusCode"] == 200

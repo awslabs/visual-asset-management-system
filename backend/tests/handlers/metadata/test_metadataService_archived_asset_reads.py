@@ -225,3 +225,29 @@ class TestRefusedMatchesMissing:
         assert response["statusCode"] == 400
         assert "Asset not found" in _message(response)
         assert harness.authorized_objects == []
+
+def _archived_only(entity):
+    """A role granted db1's archived records only."""
+    return entity.get("databaseId") == f"{_DB}#deleted"
+
+
+@pytest.mark.unit
+class TestArchivedOnlyCallerGetsOneAnswerForLiveAndMissing:
+    """With showArchived a missing id is decided as both an archived and a live asset."""
+
+    @pytest.mark.parametrize("read", _READS, ids=_READ_IDS)
+    def test_live_and_missing_answer_alike(self, read):
+        _id, path, query = read
+        query = dict(query, showArchived="true")
+        live = _Harness(_Table(_live()), authorized=_archived_only).call(_event("GET", path, query))
+        missing = _Harness(_Table(), authorized=_archived_only)
+        missing_response = missing.call(_event("GET", path, query))
+        assert (live["statusCode"], _message(live)) == \
+            (missing_response["statusCode"], _message(missing_response))
+        assert live["statusCode"] == 403
+        assert missing.queried_keys == []
+
+    def test_the_archived_record_is_still_read(self):
+        response = _Harness(_Table(_archived()), authorized=_archived_only).call(
+            _event("GET", f"{_BASE}/metadata", {"showArchived": "true"}))
+        assert response["statusCode"] == 200

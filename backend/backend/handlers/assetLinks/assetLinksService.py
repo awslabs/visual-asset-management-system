@@ -11,7 +11,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
-from common.dynamodb import batch_get_items, get_asset_record, asset_authorization_object
+from common.dynamodb import batch_get_items, get_asset_record, asset_authorization_objects
 from common.validators import validate, parse_show_archived, SHOW_ARCHIVED_INVALID_MESSAGE
 from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
@@ -261,9 +261,9 @@ def get_asset_links_for_asset(asset_id: str, database_id: str, child_tree_view: 
             # Authorization is decided before existence, so a refused caller cannot tell an
             # archived asset from a missing one
             target_asset = get_asset_record(asset_storage_table, database_id, asset_id, include_archived=True)
-            if not check_asset_permission(
-                    asset_authorization_object(target_asset, database_id, asset_id, include_archived=True),
-                    claims_and_roles):
+            if not all(check_asset_permission(authorization_object, claims_and_roles)
+                       for authorization_object in asset_authorization_objects(
+                           target_asset, database_id, asset_id, include_archived=True)):
                 raise PermissionError("Not authorized to view links for this asset")
             if not target_asset:
                 raise ValueError("Asset not found in database")
