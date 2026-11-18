@@ -269,7 +269,7 @@ def _redirected_host(response, request_url: str) -> Optional[str]:
     return host if host and host != urlparse(request_url).netloc else None
 
 from ..constants import (
-    API_AUDIT_LOG_GROUPS, API_AUDIT_QUERIES, API_AUDIT_QUERY, API_AUDIT_QUERY_EXPORT,
+    AUDIT_SEARCH_UNAVAILABLE_MESSAGE, API_AUDIT_LOG_GROUPS, API_AUDIT_QUERIES, API_AUDIT_QUERY, API_AUDIT_QUERY_EXPORT,
     API_VERSION, API_AMPLIFY_CONFIG, DEFAULT_TIMEOUT, DEFAULT_READ_TIMEOUT, MAX_AUTH_RETRIES,
     MINIMUM_API_VERSION,
     API_LOGIN_PROFILE, API_SECURE_CONFIG, API_ASSETS, API_DATABASE_ASSETS, API_DATABASE_ASSET,
@@ -8529,7 +8529,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         except RouteNotDeployedError:
             raise AuditSearchNotSupportedError(
-                "Audit log search is not supported by this deployment (upgrade VAMS to 2.7.0 or later).")
+                AUDIT_SEARCH_UNAVAILABLE_MESSAGE)
 
         except GlobalInfrastructureError:
             raise
