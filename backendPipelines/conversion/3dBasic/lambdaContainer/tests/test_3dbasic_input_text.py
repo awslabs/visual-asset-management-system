@@ -23,6 +23,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
@@ -197,7 +200,7 @@ class TestTheHandlerChecksBeforeFetchingOrLoading:
         upload = MagicMock()
         with patch.object(mod, "download", MagicMock(side_effect=_download)), \
                 patch.object(mod, "uploadV2", upload), \
-                patch.object(mod, "trimesh", trimesh_stub), \
+                patch.object(mod, "run_worker", in_process_worker(trimesh_stub)), \
                 patch.object(mod.referenced_files, "fetch_referenced_files", fetch):
             with pytest.raises(mod.InputTextError, match=r"^w\.obj could not be read as OBJ text"):
                 mod.convert_input_output("s3://abkt/xid/w.obj", "s3://obkt/files/", ".glb")

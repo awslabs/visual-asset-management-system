@@ -78,6 +78,21 @@ def memory_limit_bytes(environ=None):
     return megabytes * MB if megabytes > 0 else None
 
 
+# Virtual address space the parsers reserve beyond what they use: measured on trimesh 5.2.1 with numpy
+# 2.5.5, an interpreter that loads and exports a 7 MB PLY holds about 150 MB resident and reaches
+# 1.67 GB of address space, because OpenBLAS reserves thread buffers up front (it fails to start at
+# an address-space limit of 1 GB). The worker's limit adds this to the function's memory, so it bounds
+# a runaway allocation without refusing an input the size check allows.
+ADDRESS_SPACE_OVERHEAD_BYTES = 2 * 1024 * MB
+
+
+def address_space_limit_bytes(environ=None):
+    """The worker's ``RLIMIT_AS``: the function's memory plus the parsers' address-space overhead, or
+    None when the memory is not known."""
+    memory = memory_limit_bytes(environ)
+    return None if memory is None else memory + ADDRESS_SPACE_OVERHEAD_BYTES
+
+
 def free_disk_bytes(path="/tmp"):
     return shutil.disk_usage(path).free
 

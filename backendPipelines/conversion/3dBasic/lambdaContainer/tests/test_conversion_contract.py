@@ -15,6 +15,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
@@ -130,7 +133,7 @@ class TestConvertInputOutput:
 
         with patch.object(mod, "download", MagicMock(side_effect=_download)), \
                 patch.object(mod, "uploadV2", MagicMock(side_effect=_upload)), \
-                patch.object(mod, "trimesh", _exporting_trimesh()):
+                patch.object(mod, "run_worker", in_process_worker(_exporting_trimesh())):
             mod.convert_input_output(
                 input_path, "s3://obkt/pipelines/p1/JOB/output/E1/files/",
                 output_filetype, relative_subdir)

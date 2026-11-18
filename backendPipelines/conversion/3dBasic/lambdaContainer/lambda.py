@@ -7,11 +7,15 @@ import boto3
 import os
 import shutil
 import struct
+import subprocess
+import sys
 import tempfile
 import threading
-import trimesh
+import time
 import referenced_files
 import size_check
+from conversion_worker import (  # noqa: F401  (re-exported: the checks the child applies)
+    MESH_ONLY_OUTPUT_FORMATS, USER_ERRORS, check_exportable, geometry_counts)
 from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
@@ -231,39 +235,6 @@ SUPPORTED_INPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz'}
 # this set rather than against the accept list.
 SUPPORTED_OUTPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb'}
 
-# The output formats that store triangles and nothing else. A point cloud (an `.xyz` file, or a `.ply`
-# with vertices and no faces) has none, and trimesh writes it to STL as a header and a zero triangle
-# count -- an 84-byte file -- without raising, so the run would report success for an empty model.
-# OBJ, PLY, GLB and GLTF all store the points.
-MESH_ONLY_OUTPUT_FORMATS = {'.stl'}
-
-
-def geometry_counts(loaded):
-    """``(vertices, triangles)`` summed over what trimesh loaded: a mesh, a point cloud, a path, or a
-    scene holding any of those."""
-    geometry = getattr(loaded, "geometry", None)
-    parts = list(geometry.values()) if isinstance(geometry, dict) else [loaded]
-    vertices = triangles = 0
-    for part in parts:
-        part_vertices = getattr(part, "vertices", None)
-        part_faces = getattr(part, "faces", None)
-        vertices += 0 if part_vertices is None else len(part_vertices)
-        triangles += 0 if part_faces is None else len(part_faces)
-    return vertices, triangles
-
-
-def check_exportable(loaded, output_filetype, input_name):
-    """Raise ``ValueError`` when the export would write a model with nothing in it: an input that
-    loaded no geometry at all, or one with no triangles for a target that stores only triangles."""
-    vertices, triangles = geometry_counts(loaded)
-    if vertices == 0:
-        raise ValueError(f"{input_name} contains no geometry, so there is nothing to convert")
-    if output_filetype in MESH_ONLY_OUTPUT_FORMATS and triangles == 0:
-        raise ValueError(
-            f"{input_name} contains no triangles (it is a point cloud), and {output_filetype} stores "
-            f"triangle meshes only. Convert it to .ply, .obj, .glb or .gltf, which store points.")
-
-
 class InputTextError(ValueError):
     """The text a model input is read from is not UTF-8, so the loader cannot read it."""
 
@@ -473,6 +444,117 @@ def exported_files(export_dir):
     return sorted(found)
 
 
+# The environment the worker child starts with: nothing from the function's own, so no AWS credential
+# or session token (AWS_*) and no other variable reaches the parsers. These are only what the
+# interpreter and its shared libraries need to start.
+WORKER_ENV_PASSTHROUGH = ("PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "LANG", "LC_ALL", "TZ")
+# Seconds of the invocation kept for uploading the output and answering after the worker, so a
+# worker that uses its whole allowance still leaves the parent time to report the failure.
+WORKER_RESERVE_SECONDS = 90
+# Used when the invocation's remaining time is not known (outside Lambda).
+WORKER_DEFAULT_TIMEOUT_SECONDS = 900
+# The most of the child's stderr kept in the log when it fails.
+WORKER_STDERR_LOG_CHARS = 4000
+
+# The monotonic time the invocation ends, set by the handler from the Lambda context.
+_invocation_deadline = None
+
+_WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conversion_worker.py")
+
+
+def worker_environment(environ=None, work_dir="/tmp"):
+    """The scrubbed environment of the worker child."""
+    environ = os.environ if environ is None else environ
+    env = {name: environ[name] for name in WORKER_ENV_PASSTHROUGH if name in environ}
+    env.update({"HOME": "/tmp", "TMPDIR": work_dir, "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1"})
+    return env
+
+
+def worker_timeout_seconds(now=None):
+    """Seconds the worker may run: the invocation's remaining time less the reserve."""
+    if _invocation_deadline is None:
+        return WORKER_DEFAULT_TIMEOUT_SECONDS
+    now = time.monotonic() if now is None else now
+    return max(_invocation_deadline - now - WORKER_RESERVE_SECONDS, 1)
+
+
+def run_worker(job, work_dir, timeout_seconds=None):
+    """Run the load and the export in a child process (conversion_worker.py) and return when it has
+    written ``job["output_file"]``.
+
+    The child gets a scrubbed environment, an address-space limit (``job["address_space_bytes"]``)
+    and a wall-clock limit; on a timeout its whole process group is killed. A failure it reports is
+    raised here: a ``ValueError`` as a ``ValueError`` (the text is the model's author's to act on),
+    anything else as a ``RuntimeError`` with the same text."""
+    timeout = worker_timeout_seconds() if timeout_seconds is None else timeout_seconds
+    job_path = os.path.join(work_dir, "job.json")
+    result_path = os.path.join(work_dir, "result.json")
+    stderr_path = os.path.join(work_dir, "worker.stderr")
+    with open(job_path, "w", encoding="utf-8") as handle:
+        json.dump(job, handle)
+    with open(stderr_path, "wb") as stderr:
+        process = subprocess.Popen(
+            [sys.executable, _WORKER_SCRIPT, job_path, result_path],
+            env=worker_environment(work_dir=work_dir), cwd=work_dir, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(process)
+            raise RuntimeError(
+                f"The conversion of {job['input_name']} did not finish within {int(timeout)} seconds "
+                f"and was stopped. Reduce the model's size and run the conversion again.")
+        finally:
+            # Nothing the worker started outlives it.
+            _kill_group(process)
+
+    result = None
+    try:
+        with open(result_path, encoding="utf-8") as handle:
+            result = json.load(handle)
+    except (OSError, ValueError):
+        pass
+    if result is not None and result.get("ok"):
+        return
+    if result is None:
+        _log_worker_stderr(stderr_path)
+        code = process.returncode
+        detail = f"was killed by signal {-code}" if code is not None and code < 0 else f"exited with status {code}"
+        raise RuntimeError(
+            f"The conversion of {job['input_name']} stopped unexpectedly: the converter {detail}. "
+            f"A model larger than the function's memory is the usual cause.")
+    if result.get("type") == "MemoryError":
+        memory = job.get("address_space_bytes")
+        limit = f" ({memory / 1024 ** 2:,.0f} MB)" if memory else ""
+        raise RuntimeError(
+            f"{job['input_name']} needs more memory to convert than this function has{limit}. "
+            f"Reduce the model's size and run the conversion again.")
+    message = result.get("message") or "The conversion failed"
+    raise (ValueError if result.get("type") in USER_ERRORS else RuntimeError)(message)
+
+
+def _kill_group(process):
+    try:
+        os.killpg(process.pid, 9)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _log_worker_stderr(path):
+    try:
+        with open(path, "rb") as handle:
+            tail = handle.read()[-WORKER_STDERR_LOG_CHARS:].decode("utf-8", errors="replace")
+    except OSError:
+        return
+    if tail.strip():
+        logger.error(f"Conversion worker stderr: {tail}")
+
+
 def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version=""):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
@@ -540,22 +622,23 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
                                     size_limit - input_size) if size_limit is not None
                 else referenced_files.DEFAULT_MAX_TOTAL_BYTES),
             logger=logger)
-        resolver = referenced_files.ConfinedResolver(
-            input_dir, input_relative_path, fetched.by_reference)
-
-        # Load mesh using trimesh
-        mesh = trimesh.load(temp_file, resolver=resolver)
-        check_exportable(mesh, output_filetype, os.path.basename(input_key))
 
         # Export mesh to output format, under the name it will carry in the asset: the input file's
-        # own name with the output extension.
-        # NOTE: SUPPORTED_OUTPUT_FORMATS (and therefore output_filetype) carry a leading dot, e.g. ".stl",
-        # but trimesh's exporter registry is keyed without it ("stl"). Passing the dotted form raises
-        # ValueError("%s exporter not available!", ".stl") and fails every conversion, so strip it here.
+        # own name with the output extension. The load and the export run in a child process (see
+        # run_worker), which writes the file to the export directory.
         outputFileName, _ = os.path.splitext(os.path.basename(input_key)) #get the original file name without extension
         outputFileName = f"{outputFileName}{output_filetype}" #add final output extension
         output_file = os.path.join(export_dir, outputFileName)
-        mesh.export(output_file, file_type=output_filetype.lstrip('.'))
+        run_worker({
+            "input_file": temp_file,
+            "input_dir": input_dir,
+            "input_relative_path": input_relative_path,
+            "by_reference": fetched.by_reference,
+            "output_file": output_file,
+            "output_filetype": output_filetype,
+            "input_name": os.path.basename(input_key),
+            "address_space_bytes": size_check.address_space_limit_bytes(),
+        }, work_dir)
 
         # Upload output file to S3. The converted file keeps the input file's subdirectory within the
         # asset so the write-back step places it beside the input rather than at the asset root. A
@@ -593,7 +676,21 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     logger.info("Conversion complete")
 
 
+def _remember_deadline(context):
+    """Record when this invocation ends, from the Lambda context, for the worker's time limit."""
+    global _invocation_deadline
+    try:
+        millis = context.get_remaining_time_in_millis()
+    except AttributeError:
+        millis = None
+    if isinstance(millis, bool) or not isinstance(millis, (int, float)):
+        _invocation_deadline = None
+        return
+    _invocation_deadline = time.monotonic() + millis / 1000.0
+
+
 def lambda_handler(event, context):
+    _remember_deadline(context)
     # The logger keeps its keys in a reused execution environment, so the previous invocation's
     # workflow execution id is removed before anything is logged.
     logger.remove_keys(['workflowExecutionId'])

@@ -13,6 +13,9 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
 from botocore.exceptions import ClientError
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -78,6 +81,16 @@ class TestMemoryLimitFromTheEnvironment:
 
 
 @pytest.mark.unit
+class TestAddressSpaceLimit:
+    def test_it_is_the_function_memory_plus_the_parsers_overhead(self):
+        assert size_check.address_space_limit_bytes({"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "5308"}) == \
+            5308 * MB + size_check.ADDRESS_SPACE_OVERHEAD_BYTES
+
+    def test_it_is_absent_outside_lambda(self):
+        assert size_check.address_space_limit_bytes({}) is None
+
+
+@pytest.mark.unit
 class TestCheckSize:
     def test_an_input_within_the_limit_passes_and_the_limit_is_returned(self):
         limit = size_check.check_size("m.stl", ".stl", 10 * MB, FUNCTION_MEMORY_MB * MB, BIG_DISK)
@@ -139,7 +152,7 @@ def _convert(mod, client, key="xid/model.ply", version="", memory_mb=FUNCTION_ME
     with patch.object(mod, "_s3_client_for_bucket", lambda bucket: client), \
             patch.object(mod, "download", download), \
             patch.object(mod, "uploadV2", MagicMock(side_effect=lambda bucket, k, path: k)), \
-            patch.object(mod, "trimesh", _exporting_trimesh()), \
+            patch.object(mod, "run_worker", in_process_worker(_exporting_trimesh())), \
             patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": str(memory_mb)}), \
             patch.object(size_check, "free_disk_bytes", lambda path: free):
         try:
