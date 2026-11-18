@@ -1883,7 +1883,7 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     Examples:
         vamscli compliance audit
         vamscli compliance audit --event-type quarantine_released --max-items 100
-        vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59Z
+        vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59.999999Z
         vamscli compliance audit --starting-token "token123"
         vamscli compliance audit -d my-database -a my-asset
     """
