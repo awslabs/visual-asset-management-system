@@ -48,7 +48,10 @@ export const DATABASE_USER_ROUTES: ListedRoute[] = [
     route("/auth/user/api-keys/{apiKeyId}", ["GET", "PUT", "DELETE"]),
 ];
 
-/** The administrator role: every method on every route. */
+/**
+ * The administrator role: every method on the routes listed here. It leaves out `deleteAsset`, so a
+ * test that needs permanent delete adds that route to this listing itself.
+ */
 export const ADMIN_ROUTES: ListedRoute[] = [
     route("/database", ["GET", "POST"]),
     route("/database/{databaseId}", ["GET", "PUT", "DELETE"]),
