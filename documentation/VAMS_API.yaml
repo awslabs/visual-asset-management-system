@@ -11032,7 +11032,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`; answered only to a caller allowed to read a recipe with that id for every OS family, any other caller receives `403`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
+                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`; answered only to a caller allowed to read a recipe with that id for every OS family, any other caller receives `403`), another recipe uses the `stackName` (`stackName is already used by another recipe`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
                     content:
                         application/json:
                             schema:
@@ -11114,7 +11114,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The recipe has `source: config` (`a config recipe is edited in the repository, not here`), the body carries `assets` for a recipe that holds none (`assets are only supported on shipped recipes`) or `assets` other than the ones the recipe holds (`the assets of a duplicated recipe cannot be changed`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`), the recipe was deleted after the request read it (`the recipe no longer exists`), or other writes to the recipe kept landing between the request's read and its write (`the recipe changed while it was saved; try again`)."
+                    description: "The recipe has `source: config` (`a config recipe is edited in the repository, not here`), the body carries `assets` for a recipe that holds none (`assets are only supported on shipped recipes`) or `assets` other than the ones the recipe holds (`the assets of a duplicated recipe cannot be changed`), another recipe uses the `stackName` (`stackName is already used by another recipe`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`), the recipe was deleted after the request read it (`the recipe no longer exists`), or other writes to the recipe kept landing between the request's read and its write (`the recipe changed while it was saved; try again`)."
                     content:
                         application/json:
                             schema:
@@ -15153,7 +15153,7 @@ components:
                     minLength: 1
                     maxLength: 200
                     pattern: '^[a-zA-Z0-9\-._ ]{1,256}$'
-                    description: "Base name of the EDH software stack each build registers, as `<stackName> v<version>`. A create or update refuses a name another recipe uses, compared with surrounding spaces removed and without regard to case (409 `stackName is already used by recipe '<id>'`)."
+                    description: "Base name of the EDH software stack each build registers, as `<stackName> v<version>`. A create or update refuses a name another recipe uses, compared with surrounding spaces removed and without regard to case (409 `stackName is already used by another recipe`)."
                 profileId:
                     type: integer
                     minimum: 0
