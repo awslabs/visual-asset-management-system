@@ -289,7 +289,7 @@ The answer is the same when the workflow or a pipeline does not exist, and every
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | Invalid parameters, a body that is not a valid `vams-rules-v1` document, the scoping database is absent, or the name exists and belongs to a system schema (`System schemas cannot be modified`) or to a deleted database's schema |
 | `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                              |
-| `409`  | The compliance data of a deleted database with the scope's id is still being moved                                                                                                                                                 |
+| `409`  | The compliance data of a deleted database with the scope's id is still being moved, or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)   |
 | `500`  | Internal server error                                                                                                                                                                                                              |
 
 ---
@@ -356,12 +356,12 @@ A system schema (`isSystem: true`) is updated or deleted only by the system user
 
 ### Error responses
 
-| Status | Description                                                                                                                                           |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database |
-| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                 |
-| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved                                              |
-| `500`  | Internal server error                                                                                                                                 |
+| Status | Description                                                                                                                                                                                                                                            |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or body, the schema or scoping database does not exist, the schema is a system schema, or the schema belongs to a deleted database                                                                                                  |
+| `403`  | Not authorized, or a new or changed pipeline rule names a workflow the caller may not run (`ruleName` names the rule)                                                                                                                                  |
+| `409`  | The compliance data of a deleted database with the schema's current or new scope id is still being moved, or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`) |
+| `500`  | Internal server error                                                                                                                                                                                                                                  |
 
 ---
 

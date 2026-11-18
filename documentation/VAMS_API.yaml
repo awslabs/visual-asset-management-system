@@ -11618,7 +11618,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/pipelineRuleRefusedError"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)."
                     content:
                         application/json:
                             schema:
@@ -11705,7 +11705,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/pipelineRuleRefusedError"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)."
                     content:
                         application/json:
                             schema:

@@ -8,7 +8,9 @@ every version of an unbound one)."""
 import json
 from unittest.mock import MagicMock, patch
 
+import boto3
 import pytest
+from moto import mock_aws
 
 from backend.tests.handlers.compliance._harness import (
     RULES_SCHEMA_BODY, SCHEMA, USER, body_of, claims_for, enforcer, put_items, rest_event,
@@ -379,6 +381,33 @@ class TestRegisterAndUpdate:
                                 tokens=("SYSTEM_USER",), schema_rows=[schema_row(is_system=True)])
         assert response["statusCode"] == 200
         assert put_items(tables["schema"])[0]["isSystem"] is True
+    @pytest.mark.parametrize("method", ["POST", "PUT"])
+    def test_a_save_that_loses_the_version_to_a_concurrent_save_is_refused(self, method):
+        # The concurrent save wrote v2 after this save read v1 as the latest version.
+        with mock_aws():
+            table = boto3.resource("dynamodb", region_name="us-east-1").create_table(
+                TableName="schemas", BillingMode="PAY_PER_REQUEST",
+                KeySchema=[{"AttributeName": "schemaName", "KeyType": "HASH"},
+                           {"AttributeName": "internalVersion", "KeyType": "RANGE"}],
+                AttributeDefinitions=[{"AttributeName": "schemaName", "AttributeType": "S"},
+                                      {"AttributeName": "internalVersion", "AttributeType": "N"}])
+            concurrent = dict(schema_row(version=2), description="the concurrent save")
+            table.put_item(Item=concurrent)
+            path = "/compliance/schemas" + (f"/{SCHEMA}" if method == "PUT" else "")
+            event = rest_event(method, path, {"schemaName": SCHEMA} if method == "PUT" else None,
+                               body={"schemaName": SCHEMA, "schemaBody": RULES_SCHEMA_BODY,
+                                     "description": "this save"})
+            with patch(f"{MOD}._latest_schema_item", return_value=schema_row(version=1)), \
+                    patch(f"{MOD}.schema_table", table), \
+                    patch(f"{MOD}.request_to_claims", claims_for(USER)), \
+                    patch(f"{MOD}.CasbinEnforcer", return_value=enforcer()), \
+                    patch(f"{MOD}.database_table", _tables()[2]):
+                response = svc.lambda_handler(event, MagicMock())
+            stored = table.get_item(Key={"schemaName": SCHEMA, "internalVersion": 2})["Item"]
+        assert response["statusCode"] == 409
+        assert body_of(response)["message"] == svc.SCHEMA_VERSION_CONFLICT_MESSAGE
+        assert stored["description"] == "the concurrent save"
+
     def test_updating_a_system_schema_as_a_user_is_refused(self):
         response, tables = _run(
             rest_event("PUT", f"/compliance/schemas/{SCHEMA}", {"schemaName": SCHEMA},
