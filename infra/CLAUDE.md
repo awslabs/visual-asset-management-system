@@ -540,7 +540,7 @@ KMS policy runs after it.
 
 **S3 TLS enforcement.** Every S3 bucket gets `requireTLSAndAdditionalPolicyAddToResourcePolicy(bucket, config)` — Deny policy for `s3:*` when `aws:SecureTransport=false`, plus optional additional policy from `config/policy/s3AdditionalBucketPolicyConfig.json`.
 
-**Content Security Policy.** `generateContentSecurityPolicy()` in `security.ts` builds CSP headers: base sources (self, blob, data, API URL, S3 endpoint); conditional sources (Cognito IDP/Identity, Location Service, unsafe-eval); extensible via `config/csp/cspAdditionalConfig.json`.
+**Content Security Policy.** `generateContentSecurityPolicy()` in `security.ts` builds CSP headers: base sources (self, blob, data, API URL; `connect-src`, `img-src`, `media-src` and `frame-src` also carry `https://*.<partition DNS suffix>` from `Service("S3", false).DnsSuffix`, so a presigned URL for a bucket in any Region is allowed; never name a regional S3 host); conditional sources (Cognito IDP/Identity, Location Service, unsafe-eval); extensible via `config/csp/cspAdditionalConfig.json`.
 
 `script-src` allows the inline `<script>` blocks in `web/index.html` by **SHA-256 hash**, from the generated `INDEX_HTML_INLINE_SCRIPT_HASHES` in `lib/helper/cspInlineScriptHashes.ts`. **That file is generated — do not hand-edit it.** A hash covers the exact text content of the element, indentation included, so any edit to an inline block (a reformat is enough) invalidates it, and the browser then silently refuses to run the script. Regenerate with `cd web && npm run build && node scripts/cspInlineScriptHashes.js --ts`; `test/web/cspInlineScriptHashes.test.ts` recomputes from `web/index.html` and fails on drift. The full workflow lives in `web/CLAUDE.md` Rule 9.
 
