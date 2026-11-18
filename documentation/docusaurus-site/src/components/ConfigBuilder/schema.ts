@@ -353,6 +353,17 @@ const CORE_FIELDS: FieldMeta[] = [
         help: "Register existing S3 buckets with VAMS. Required when not creating a new bucket.",
     },
     {
+        path: "app.assetBuckets.useS3TransferAcceleration",
+        label: "S3 Transfer Acceleration",
+        input: "boolean",
+        section: "essentials",
+        advanced: true,
+        help: "Serve presigned upload and download URLs for the VAMS-created asset bucket and the auxiliary bucket through S3 Transfer Acceleration. Commercial partition only; adds a per-GB transfer charge. Imported buckets set the same key on their entry and must have acceleration enabled by their owner before deployment.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.assetBuckets.createNewBucket") ||
+            getByPath(c, "app.assetBuckets.useS3TransferAcceleration") === true,
+    },
+    {
         path: "app.assetBuckets.presignedUrlNetworkRestrictions",
         label: "Presigned URL network restrictions",
         input: "presigned-url-restrictions",

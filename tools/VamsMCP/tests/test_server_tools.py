@@ -6,6 +6,7 @@ No live VAMS deployment or vamscli profile is required.
 
 import dataclasses
 import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,6 +41,24 @@ def test_list_databases_uses_pagination(mock_client):
     result = server.list_databases()
     assert result == {"Items": [{"databaseId": "db1"}], "count": 1}
     assert mock_client.paginate.called
+
+
+def test_list_buckets_passes_the_acceleration_flag_through(real_paginate_client):
+    """Each row reaches the agent as the API sent it, `isAccelerated` included, and the tool
+    description names the field."""
+    rows = [
+        {"bucketId": "b1", "bucketName": "n1", "bucketRegion": "us-west-2", "isAccelerated": True},
+        {"bucketId": "b2", "bucketName": "n2", "isAccelerated": False},
+        {"bucketId": "b3", "bucketName": "n3"},
+    ]
+    real_paginate_client.api.list_buckets.return_value = {"message": {"Items": rows}}
+    result = server.list_buckets()
+    assert [r.get("isAccelerated") for r in result["Items"]] == [True, False, None]
+    assert result["Items"][0]["bucketRegion"] == "us-west-2"
+    # The agent reads the field name from the description; the wording around it is free.
+    assert re.search(r"\bisAccelerated\b", server.list_buckets.__doc__ or ""), (
+        "list_buckets description must name isAccelerated"
+    )
 
 
 def test_get_asset_calls_api(mock_client):

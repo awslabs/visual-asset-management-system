@@ -13342,8 +13342,8 @@ components:
                     description: >-
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
-                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
-                        and complianceBinding; a deployment can register more (permission object types in
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
+                        complianceBinding and auditLog; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -13418,8 +13418,8 @@ components:
                     description: >-
                         Type of object this constraint applies to. The core types are database,
                         asset, api, web, tag, tagType, role, userRole, pipeline, workflow,
-                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade
-                        and complianceBinding; a deployment can register more (permission object types in
+                        metadataSchema, complianceSchema, complianceEvaluation, complianceCascade,
+                        complianceBinding and auditLog; a deployment can register more (permission object types in
                         the fork or add-on constants files), so the set is not fixed. GET
                         /auth/constraints/permissionObjects lists the types the deployment accepts,
                         with the fields valid on each. Any other value is rejected with 400.
@@ -19012,6 +19012,10 @@ components:
                     type: string
                     nullable: true
                     description: "The 12-digit AWS account that owns the bucket when it is not the deployment account; null otherwise."
+                isAccelerated:
+                    type: boolean
+                    description: "Whether S3 Transfer Acceleration is on for the bucket, as the bucket's registration records it. Uploads and downloads for an accelerated bucket use its accelerate endpoint. False when the registration does not say."
+                    default: false
             required:
                 - bucketId
                 - bucketName

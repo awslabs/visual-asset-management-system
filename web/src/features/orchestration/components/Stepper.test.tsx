@@ -27,6 +27,29 @@ const shownText = (element: Element) => {
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/**
+ * The words of `text` as axe-core's label-content-name-mismatch compares them: symbols such as the
+ * check mark and punctuation dropped, lower case, split at anything that is not a letter or a digit.
+ */
+const axeWords = (text: string) =>
+    text
+        .replace(/[\u2190-\u2BFF]/g, "")
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter(Boolean);
+
+/**
+ * The words of `element`'s text as axe-core 4.14 reads it: `visibleVirtual` joins the text of the
+ * children with no separator, so a badge "2" and a label "Pipeline overrides" in sibling elements read
+ * "2Pipeline overrides" unless a space text node stands between them. This is `textContent`.
+ */
+const axeVisibleWords = (element: Element) => axeWords(element.textContent || "");
+
+/** Whether the visible words appear, in order and together, among the words of the name (Label in Name). */
+const labelInName = (visible: string[], name: string[]) =>
+    visible.length > 0 &&
+    name.some((_, start) => visible.every((word, offset) => name[start + offset] === word));
+
 const STEPS = [
     { id: "basic", label: "Basic" },
     { id: "tags", label: "Tags and Config Body" },
@@ -140,6 +163,60 @@ describe("Stepper", () => {
         // hidden.
         for (const button of buttons) {
             expect(button.querySelector("[aria-hidden='true']")).toBeNull();
+        }
+    });
+
+    it("a numbered step button's text, read as axe joins it, is a run of words of its name (#1592)", () => {
+        // Control: the 8242ea0ce shape, the badge and the label as sibling elements with nothing
+        // between them, reads "2Pipeline overrides", and "2pipeline" is not a word of the name.
+        const { container } = render(
+            <button aria-label="2 Pipeline overrides: go to step 2">
+                <div>2</div>
+                <span>Pipeline overrides</span>
+            </button>
+        );
+        const joined = screen.getByRole("button", { name: "2 Pipeline overrides: go to step 2" });
+        expect(axeVisibleWords(joined)).toEqual(["2pipeline", "overrides"]);
+        expect(
+            labelInName(axeVisibleWords(joined), axeWords(joined.getAttribute("aria-label") ?? ""))
+        ).toBe(false);
+        container.remove();
+
+        // The pipeline template wizard's own steps, from its first step (every later one numbered)
+        // and from its last (the earlier ones completed, a check mark badge).
+        const WIZARD = [
+            { id: "basic", label: "Basic" },
+            { id: "overrides", label: "Pipeline overrides" },
+            { id: "tags", label: "Tags and Config Body" },
+            { id: "review", label: "Review" },
+        ];
+        for (const current of ["basic", "review"]) {
+            const { unmount } = render(
+                <Stepper
+                    steps={WIZARD}
+                    current={current}
+                    onJumpTo={jest.fn()}
+                    canJumpTo={() => true}
+                />
+            );
+            const buttons = screen.getAllByRole("button");
+            expect(buttons).toHaveLength(3);
+            for (const button of buttons) {
+                const name = button.getAttribute("aria-label") || "";
+                // The name is in the expectation so a failure says which button it was.
+                expect([name, labelInName(axeVisibleWords(button), axeWords(name))]).toEqual([
+                    name,
+                    true,
+                ]);
+            }
+            if (current === "basic") {
+                expect(buttons.map(axeVisibleWords)).toEqual([
+                    ["2", "pipeline", "overrides"],
+                    ["3", "tags", "and", "config", "body"],
+                    ["4", "review"],
+                ]);
+            }
+            unmount();
         }
     });
 

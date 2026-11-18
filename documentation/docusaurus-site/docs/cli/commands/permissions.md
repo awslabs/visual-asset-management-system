@@ -436,6 +436,7 @@ Pre-built templates are available in `documentation/permissionsTemplates/`:
 | `compliance-admin.json`        | Compliance management for one database: schemas, schema binding, evaluation, quarantine, cascade approval; runs the database's and `GLOBAL` workflows (execute route and reads only) so it can save pipeline rules |
 | `compliance-readonly.json`     | Read-only compliance access for one database                                                                                                                                                                       |
 | `compliance-global-admin.json` | `GLOBAL` compliance schema management, read-only compliance across every database; runs `GLOBAL` workflows (execute route and reads only) so it can save pipeline rules                                            |
+| `audit-reader.json`            | Search and read the audit log groups matching `ALLOWED_GROUPS` (default `.*`); variables `ROLE_NAME` and `ALLOWED_GROUPS`                                                                                          |
 
 ### Template JSON format
 

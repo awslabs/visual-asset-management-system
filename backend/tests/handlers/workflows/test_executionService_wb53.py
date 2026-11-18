@@ -1315,6 +1315,64 @@ class TestPermanentDeleteExpiredHistory:
         assert resp["statusCode"] == 400
         assert "in progress" in json.loads(resp["body"])["message"].lower()
 
+    def _delete_with_failed_lookup(self, lookup_error):
+        """Permanent delete of a non-terminal row whose DescribeExecution raises lookup_error, with the
+        handler's logger and the row deletes spied on."""
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}._delete_all_rows") as m_delete_rows, \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.logger") as m_logger, \
+             patch(f"{MOD}.sfn") as m_sfn:
+            m_sfn.describe_execution.side_effect = lookup_error
+            resp = le.permanent_delete_execution({}, "e1000000000000000000000000000001")
+        return resp, m_logger, m_delete_rows, m_dynamo
+
+    @pytest.mark.parametrize("code", ["ThrottlingException", "AccessDeniedException"])
+    def test_failed_lookup_logs_at_error_with_its_code(self, code):
+        # #1440: validation_error() logs the 400 at WARNING, so the handler's own line must be the
+        # ERROR an alarm or a log search for errors finds, and it names the Step Functions error code.
+        resp, m_logger, m_delete_rows, m_dynamo = self._delete_with_failed_lookup(self._client_error(code))
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"]) == {
+            "message": "Execution is in progress; abort it before permanent delete."}
+        assert m_logger.error.call_count == 1
+        logged = m_logger.error.call_args.args[0]
+        assert code in logged
+        assert "e1000000000000000000000000000001" in logged
+        m_logger.info.assert_not_called()
+        m_delete_rows.assert_not_called()
+        m_dynamo.Table.return_value.delete_item.assert_not_called()
+
+    def test_unexpected_lookup_failure_logs_at_error_with_its_trace(self):
+        resp, m_logger, m_delete_rows, m_dynamo = self._delete_with_failed_lookup(RuntimeError("boom"))
+        assert resp["statusCode"] == 400
+        assert json.loads(resp["body"]) == {
+            "message": "Execution is in progress; abort it before permanent delete."}
+        assert m_logger.exception.call_count == 1
+        assert "e1000000000000000000000000000001" in m_logger.exception.call_args.args[0]
+        m_logger.info.assert_not_called()
+        m_delete_rows.assert_not_called()
+        m_dynamo.Table.return_value.delete_item.assert_not_called()
+
+    def test_expired_history_logs_no_error(self):
+        # The benign case (the execution's history is gone) stays at INFO and the delete goes ahead.
+        le.claims_and_roles = {"tokens": ["u1"]}
+        with patch(f"{MOD}.get_execution_main_row", return_value=self._main_row()), \
+             patch(f"{MOD}.authorize_abort", return_value=(True, "")), \
+             patch(f"{MOD}.get_pipeline_execution_rows", return_value=[]), \
+             patch(f"{MOD}._delete_all_rows"), \
+             patch(f"{MOD}.dynamodb") as m_dynamo, \
+             patch(f"{MOD}.logger") as m_logger, \
+             patch(f"{MOD}.sfn") as m_sfn:
+            m_dynamo.Table.return_value = MagicMock()
+            m_sfn.describe_execution.side_effect = self._client_error("ExecutionDoesNotExist")
+            resp = le.permanent_delete_execution({}, "e1000000000000000000000000000001")
+        assert resp["statusCode"] == 200
+        m_logger.error.assert_not_called()
+        m_logger.exception.assert_not_called()
+
 
 @pytest.mark.unit
 class TestRerunEnforcesExecuteRoute:

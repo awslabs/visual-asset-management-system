@@ -52,7 +52,7 @@ import zipfile
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Set
 from urllib.parse import unquote
 from xml.parsers import expat  # nosec B407 - hardened in _safe_expat
 
@@ -220,6 +220,9 @@ class FetchReport:
     skipped: List[SkippedReference] = field(default_factory=list)
     # Fetched files whose own references were not read (unreadable, or past the depth limit), with why.
     not_followed: List[SkippedReference] = field(default_factory=list)
+    # Every reference a fetched file names, as (the file's path, the path it names or the reference as
+    # authored when it was refused), in fetch order: which file reached which.
+    edges: List[tuple] = field(default_factory=list)
 
 
 # USD layer files, for a reference whose collector named no kind.
@@ -1024,6 +1027,13 @@ class DependencyResolver:
         # The incomplete-preview record (``FetchReport.skipped`` / ``not_followed``), in walk order.
         self.skipped_references: List[SkippedReference] = []
         self.not_followed: List[SkippedReference] = []
+        # ``FetchReport.edges``: every reference a read file names, as (the file's path, the path it names,
+        # or the reference as authored when it was refused), once each in walk order, which
+        # ``drop_left_out_references`` walks. Past MAX_GRAPH_EDGES the list is withheld (an empty
+        # ``FetchReport.edges``), so a partial graph never drops a skipped file from the report.
+        self.reference_edges: List[tuple] = []
+        self._reference_edge_set = set()
+        self.reference_edges_complete = True
         self._mdl_logged = set()
 
     # -- bounds -----------------------------------------------------------------------------------
@@ -1050,6 +1060,16 @@ class DependencyResolver:
     def _record_not_followed(self, rel: str, reason: str):
         if len(self.not_followed) < MAX_RECORDED_SKIPPED:
             self.not_followed.append(SkippedReference(rel, reason))
+
+    def _record_reference_edge(self, referrer: str, target: str):
+        edge = (referrer, target)
+        if edge in self._reference_edge_set:
+            return
+        if len(self.reference_edges) >= MAX_GRAPH_EDGES:
+            self.reference_edges_complete = False
+            return
+        self._reference_edge_set.add(edge)
+        self.reference_edges.append(edge)
 
     def _missing(self, node: _Node, reason: str):
         node.state = _MISSING
@@ -1126,6 +1146,7 @@ class DependencyResolver:
     def _consider(self, raw, percent_encoded: bool, required: bool, referrer: str, referrer_dir: str,
                   depth: int, queue: deque, kind: str = ""):
         relative = resolve_reference(raw, referrer_dir, percent_encoded=percent_encoded)
+        self._record_reference_edge(referrer, relative or (raw if isinstance(raw, str) else repr(raw)))
         target = local_path_for(self.local_root, relative) if relative else None
         if relative is None or target is None:
             if len(self.skipped_references) < MAX_RECORDED_SKIPPED:
@@ -1351,6 +1372,7 @@ class DependencyResolver:
         report.total_bytes = self.fetched_bytes
         report.skipped[:] = self.skipped_references
         report.not_followed[:] = self.not_followed
+        report.edges[:] = self.reference_edges if self.reference_edges_complete else []
 
 
 # --------------------------------------------------------------------------------------------------
@@ -1404,6 +1426,83 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
     finally:
         resolver.fill_thumbnail_report(report)
     return report
+
+
+# --------------------------------------------------------------------------------------------------
+# References only a root prim the preview leaves out uses
+# --------------------------------------------------------------------------------------------------
+
+def usd_references_by_root_prim(path: str) -> Dict[str, Set[str]]:
+    """For one USD layer, each reference or payload asset path authored under a root prim's specs
+    (variants included), with the names of the root prims that author it. A path authored anywhere
+    else in the layer (a sublayer, a layer-level value) is not in the result."""
+    from pxr import Sdf
+
+    found: Dict[str, Set[str]] = {}
+    layer = Sdf.Layer.FindOrOpen(path)
+    if layer is None:
+        return found
+    for root in layer.rootPrims:
+        def visit(spec_path, root_name=root.name):
+            spec = layer.GetObjectAtPath(spec_path)
+            if not isinstance(spec, Sdf.PrimSpec):
+                return
+            for items in (spec.referenceList, spec.payloadList):
+                for arc in items.GetAddedOrExplicitItems():
+                    if arc.assetPath:
+                        found.setdefault(str(arc.assetPath), set()).add(root_name)
+        layer.Traverse(root.path, visit)
+    return found
+
+
+def drop_left_out_references(report: FetchReport, input_rel: str, input_path: str,
+                             left_out_roots: Iterable[str]) -> int:
+    """Remove from ``report`` the skipped files that only reach the preview through root prims it left
+    out, and return how many entries were removed.
+
+    A reference the input authors only under ``left_out_roots`` is cut from the graph of fetched
+    files (``report.edges``); a skipped or unfollowed file no longer reachable from the input through
+    the edges that remain adds nothing to what is drawn, so it is not reported. A reference authored
+    anywhere else too, or reached from another file, stays. Nothing is removed when the references
+    cannot be read."""
+    left_out = set(left_out_roots)
+    if not left_out or not report.edges:
+        return 0
+    try:
+        authored = usd_references_by_root_prim(input_path)
+    except Exception as e:
+        logger.info(f"Could not read the root prims' references ({type(e).__name__}); "
+                    f"every skipped file stays reported")
+        return 0
+    input_dir = posixpath.dirname(input_rel)
+    cut = set()
+    for raw, roots in authored.items():
+        if roots <= left_out:
+            relative = resolve_reference(raw, input_dir)
+            cut.add(relative or raw)
+    if not cut:
+        return 0
+    graph: Dict[str, Set[str]] = {}
+    for source, target in report.edges:
+        if source == input_rel and target in cut:
+            continue
+        graph.setdefault(source, set()).add(target)
+    reachable, pending = {input_rel}, [input_rel]
+    while pending:
+        for target in graph.get(pending.pop(), ()):
+            if target not in reachable:
+                reachable.add(target)
+                pending.append(target)
+
+    named = {target for _, target in report.edges}
+    before = len(report.skipped) + len(report.not_followed)
+    report.skipped = [e for e in report.skipped if e.reference in reachable or e.reference not in named]
+    report.not_followed = [e for e in report.not_followed if e.reference in reachable or e.reference not in named]
+    removed = before - len(report.skipped) - len(report.not_followed)
+    if removed:
+        logger.info(f"{removed} skipped referenced files are used only by root prims the preview "
+                    f"leaves out; not reported")
+    return removed
 
 
 # --------------------------------------------------------------------------------------------------

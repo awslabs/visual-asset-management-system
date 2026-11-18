@@ -102,6 +102,123 @@ export async function firstCardId(page: Page): Promise<string | null> {
 }
 
 /**
+ * The tooltip of the "System" badge a system pipeline or workflow card carries (PipelinesPage /
+ * WorkflowsPage). A system record is read-only except `enabled`: its menu offers View instead of
+ * Edit, and Archive stays listed but disabled with its reason.
+ */
+export const SYSTEM_RECORD_BADGE_TITLE = "Shipped with the deployment; read-only except Enabled";
+
+/** One card of a pipeline or workflow list: the name its "Actions for" button carries, and whether
+ * it is a system record. */
+export interface CardSummary {
+    name: string;
+    system: boolean;
+}
+
+/** The cards the list shows (its first page), in order, each marked system or not by its badge. */
+export async function cardSummaries(page: Page): Promise<CardSummary[]> {
+    const actions = page.getByRole("button", { name: /Actions for/i });
+    const cards: CardSummary[] = [];
+    for (const action of await actions.all()) {
+        const label = (await action.getAttribute("aria-label")) || "";
+        const m = label.match(/Actions for\s+(.+)$/i);
+        if (!m) continue;
+        const card = action.locator("xpath=ancestor::div[contains(@class,'orch-outline')][1]");
+        const system = (await card.locator(`[title="${SYSTEM_RECORD_BADGE_TITLE}"]`).count()) > 0;
+        cards.push({ name: m[1].trim(), system });
+    }
+    return cards;
+}
+
+/**
+ * The name of the first card that is (or is not) a system record, or null when the list has none.
+ * A spec about Edit or Archive picks an ordinary card; a system record offers neither.
+ */
+export async function firstCardName(
+    page: Page,
+    { system }: { system: boolean }
+): Promise<string | null> {
+    return (await cardSummaries(page)).find((card) => card.system === system)?.name ?? null;
+}
+
+/** One API route the signed-in role may call: the shape `GET /auth/routes/api/allowed` answers. */
+export interface AllowedApiRoute {
+    path: string;
+    methods: string[];
+}
+
+/**
+ * The API routes the signed-in role may call, from `GET /auth/routes/api/allowed` — the same list the
+ * app's own permission check (`useAllowedRoutes`) reads to show or hide an action, so a spec expects
+ * an action exactly when the API allows it to this role. Null without an API context or when the call
+ * fails.
+ */
+export async function allowedApiRoutes(page: Page): Promise<AllowedApiRoute[] | null> {
+    const ctx = await apiContext(page);
+    if (!ctx) return null;
+    const response = await page.request.get(`${ctx.base}/auth/routes/api/allowed`, {
+        headers: { Authorization: `Bearer ${ctx.token}` },
+    });
+    if (!response.ok()) return null;
+    const body = await response.json().catch(() => null);
+    const routes = (body?.message ?? body)?.routes;
+    return Array.isArray(routes) ? (routes as AllowedApiRoute[]) : null;
+}
+
+/**
+ * Whether `routes` allows `method` on `pathTemplate`, matched as the app matches them
+ * (`useAllowedRoutes.pathsMatch`): segment by segment, a `{param}` in a granted route matching any
+ * segment, and a `{param}` in the queried template matching only a granted `{param}`.
+ */
+export function routeAllowed(
+    routes: AllowedApiRoute[],
+    method: string,
+    pathTemplate: string
+): boolean {
+    const wanted = pathTemplate.split("/");
+    return routes.some((route) => {
+        if (!route.methods.map((m) => m.toUpperCase()).includes(method.toUpperCase())) return false;
+        const granted = route.path.split("/");
+        return (
+            granted.length === wanted.length &&
+            granted.every(
+                (segment, i) =>
+                    (segment.startsWith("{") && segment.endsWith("}")) || segment === wanted[i]
+            )
+        );
+    });
+}
+
+/** The heading of the panel the app renders instead of a page the signed-in role may not open. */
+export const NO_ACCESS_HEADING = "You do not have access to this page";
+
+/**
+ * Load `route` (a `/#/...` hash route) as a new document, so the app reads the route at start.
+ *
+ * Changing only the hash of a page whose app is still starting — `cachedFeaturesEnabled`,
+ * `featuresEnabled` and `apiContext` load `/` first when the page has no URL yet — can leave it on
+ * Home with the new hash in the address bar: the hash change lands while the app shell is mounting
+ * and the router never renders it (seen on most attempts on a test deployment, D135). Loading
+ * `about:blank` first makes the route a fresh load, as `openViewerFile` does for the file route.
+ */
+export async function gotoFresh(page: Page, route: string): Promise<void> {
+    await page.goto("about:blank");
+    await page.goto(route, { waitUntil: "domcontentloaded" });
+}
+
+/**
+ * Wait until a page shows its heading or the app's "no access" panel, and say which: true when the
+ * role may open the page. A spec skips with the reason on false rather than waiting for a heading the
+ * role never sees.
+ */
+export async function pageAllowed(page: Page, heading: RegExp | string): Promise<boolean> {
+    const shown = page.getByRole("heading", { name: heading }).first();
+    const denied = page.getByText(NO_ACCESS_HEADING, { exact: true }).first();
+    await expect(shown.or(denied)).toBeVisible({ timeout: 30_000 });
+    return !(await denied.isVisible());
+}
+
+/**
  * Open a card's actions menu, filtering the list down to it first so a server-paginated list
  * (pageSize 50) does not hide the target. Returns the menu items locator.
  */

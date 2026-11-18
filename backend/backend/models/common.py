@@ -251,6 +251,9 @@ class VAMSGeneralErrorResponse(VAMSGeneralError):
     def __init__(self, message, status_code=400):
         super().__init__(f"VAMS General Error: {message}")
         self.status_code = status_code
+        # The message as raised, without the "VAMS General Error: " prefix str() carries; a handler
+        # that answers its refusals in the words its documentation quotes uses this (#1638).
+        self.user_message = message
 
 
 class VAMSAuthorizationDeniedResponse(VAMSGeneralErrorResponse):

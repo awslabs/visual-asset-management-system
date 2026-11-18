@@ -8,8 +8,8 @@
  *
  * Most 3D formats name other files: glTF buffers and images, OBJ material libraries and their
  * textures, COLLADA/3DS/FBX textures, USD references, payloads, sublayers and textures. The
- * resolver turns those names into files of the SAME asset, downloaded through the authenticated
- * stream route, and hands them to the three.js loaders through a `LoadingManager` URL modifier.
+ * resolver turns those names into files of the SAME asset, downloaded through presigned URLs of the
+ * authorized download route, and hands them to the three.js loaders through a `LoadingManager` URL modifier.
  *
  * Path rules (security):
  * - A name resolves relative to the directory of the file that names it, then is normalized.
@@ -23,7 +23,7 @@
  * is kept, and the remaining names are recorded so the viewer can say what was not loaded.
  */
 
-import { getDualAuthorizationHeader } from "../../../../utils/authTokenUtils";
+import { fetchPresignedFile } from "../../../core/presignedFetch";
 
 const MiB = 1024 * 1024;
 
@@ -100,15 +100,11 @@ export type NormalizedDependencyPath =
 export interface DependencyResolverContext {
     assetId: string;
     databaseId: string;
-    /** API base URL ending with "/" (config.api). */
-    apiEndpoint: string;
     /** Logical asset version every dependency is resolved from, when viewing a version. */
     assetVersionId?: string;
     /** Aborts in-flight downloads when the viewer closes. */
     signal?: AbortSignal;
     limits?: Partial<DependencyLimits>;
-    /** Defaults to the session's dual authorization header. */
-    getAuthHeader?: () => Promise<string>;
 }
 
 export interface ResolveOptions {
@@ -209,23 +205,6 @@ export function normalizeDependencyPath(
     return { kind: "key", key: resolved.join("/") };
 }
 
-/** Stream route URL for an asset-relative key; every path segment is URL-encoded. */
-export function buildDependencyUrl(key: string, context: DependencyResolverContext): string {
-    const encodedPath = key
-        .split("/")
-        .map((segment) => encodeURIComponent(segment))
-        .join("/");
-    let url = `${context.apiEndpoint}database/${context.databaseId}/assets/${encodeURIComponent(
-        context.assetId
-    )}/download/stream/${encodedPath}`;
-    // A dependency is part of the same asset version as the model, so the S3 versionId of the
-    // model file is never passed on; the logical asset version is.
-    if (context.assetVersionId) {
-        url += `?assetVersionId=${encodeURIComponent(context.assetVersionId)}`;
-    }
-    return url;
-}
-
 const IMAGE_MIME_TYPES: Record<string, string> = {
     png: "image/png",
     jpg: "image/jpeg",
@@ -241,7 +220,8 @@ function mimeTypeFor(key: string): string {
     return IMAGE_MIME_TYPES[extension] || "";
 }
 
-function isAbortError(error: any): boolean {
+/** Whether `error` is an abort (a DOMException or Error named "AbortError"). */
+export function isAbortError(error: any): boolean {
     return error?.name === "AbortError";
 }
 
@@ -271,7 +251,6 @@ export class AssetDependencyResolver {
     private readonly visited = new Set<string>();
     private readonly unloaded = new Map<string, UnloadedDependency>();
     private readonly blobUrls = new Map<string, string>();
-    private authHeader: Promise<string> | null = null;
     private attempts = 0;
     private totalBytes = 0;
     private stopped = false;
@@ -486,15 +465,6 @@ export class AssetDependencyResolver {
         this.blobUrls.clear();
     }
 
-    private getAuthHeader(): Promise<string> {
-        if (!this.authHeader) {
-            this.authHeader = this.context.getAuthHeader
-                ? this.context.getAuthHeader()
-                : getDualAuthorizationHeader();
-        }
-        return this.authHeader;
-    }
-
     private download(key: string): Promise<Uint8Array | null> {
         const existing = this.downloads.get(key);
         if (existing) {
@@ -515,19 +485,23 @@ export class AssetDependencyResolver {
 
         let response: Response;
         try {
-            response = await fetch(buildDependencyUrl(key, this.context), {
-                headers: { Authorization: await this.getAuthHeader() },
-                signal: this.context.signal,
-            });
+            // Straight from S3 through a presigned URL of the authorized download route; a
+            // dependency is part of the same asset version as the model, so the model file's S3
+            // versionId is never passed on, the logical asset version is (#1623).
+            response = await fetchPresignedFile(
+                {
+                    databaseId: this.context.databaseId,
+                    assetId: this.context.assetId,
+                    key,
+                    assetVersionId: this.context.assetVersionId,
+                    signal: this.context.signal,
+                },
+                key
+            );
         } catch (error) {
             if (isAbortError(error)) {
                 throw error;
             }
-            this.recordUnloaded(key, "not-found");
-            return null;
-        }
-
-        if (!response.ok) {
             this.recordUnloaded(key, "not-found");
             return null;
         }
