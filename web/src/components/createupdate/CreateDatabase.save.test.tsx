@@ -28,9 +28,14 @@ jest.mock("../../services/ComplianceService", () => ({
     bindSchemaToDatabase: jest.fn(),
     unbindSchemaFromDatabase: jest.fn(),
 }));
-// An administrator's routes: the bucket list, the schema list and the database binding.
+// An administrator's routes by default: the bucket list, the schema list and the database binding.
+// A test may refuse one "METHOD path-template".
+let mockRefused: string[] = [];
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+    useAllowedRoutes: () => ({
+        loading: false,
+        can: (method: string, path: string) => !mockRefused.includes(`${method} ${path}`),
+    }),
 }));
 
 const api = jest.requireMock("../../services/APIService");
@@ -114,6 +119,7 @@ const closedWith = (setOpen: jest.Mock) => setOpen.mock.calls.some(([open]) => o
 
 beforeEach(() => {
     jest.clearAllMocks();
+    mockRefused = [];
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     api.fetchBuckets.mockResolvedValue({
         Items: [{ bucketId: "b1", bucketName: "bucket-one", baseAssetsPrefix: "/" }],
@@ -366,5 +372,35 @@ describe(`${Synonyms.Database} editor when a compliance read fails`, () => {
         expect(
             screen.getByText("Could not load the compliance schemas: Not Authorized")
         ).toBeInTheDocument();
+    });
+});
+
+describe(`${Synonyms.Database} editor for a role that may bind but not remove a schema`, () => {
+    const optionLabels = () => {
+        const select = present(
+            formField("Compliance Schema").findControl()?.findSelect(),
+            "schema select"
+        );
+        act(() => {
+            select.openDropdown();
+        });
+        return select
+            .findDropdown()
+            .findOptions()
+            .map((option) => option.getElement().textContent);
+    };
+
+    beforeEach(() => {
+        mockRefused = ["DELETE /compliance/bind/{databaseId}"];
+    });
+
+    it("does not offer None for a bound schema", async () => {
+        await openEditor("std");
+        expect(optionLabels().some((label) => label?.includes("None"))).toBe(false);
+    });
+
+    it("offers None while no schema is bound, since choosing it removes nothing", async () => {
+        await openEditor(null);
+        expect(optionLabels().some((label) => label?.includes("None"))).toBe(true);
     });
 });
