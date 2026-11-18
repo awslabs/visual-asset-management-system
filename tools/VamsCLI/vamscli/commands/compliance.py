@@ -1835,7 +1835,7 @@ def reject_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], j
 @click.option('--text', default=None,
               help='Case-insensitive contains on the asset name at the time, asset id or actor')
 @click.option('--event-type', default=None,
-              help='Only entries of this event type (global listing only)')
+              help='Only entries of this event type (with -d -a, read from the global listing)')
 @click.option('--start-date', default=None, help='Earliest entry timestamp (ISO 8601)')
 @click.option('--end-date', default=None, help='Latest entry timestamp (ISO 8601)')
 @click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_AUDIT_PAGE_SIZE), default=None,
@@ -1858,7 +1858,8 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     evaluation_error, quarantine_released, exception_granted, exception_revoked,
     exception_superseded, cascade_triggered, cascade_approved, ...); the listing carries only the
     entries whose database the caller may read. With both, one asset's history is listed; that
-    route has no event-type filter. An evaluation_error entry names the rules that errored
+    route has no event-type or text filter, so with --event-type or --text as well the global trail
+    is read, narrowed to that asset. An evaluation_error entry names the rules that errored
     (ruleNames) in an evaluation, or the schema that could not be loaded.
 
     Entries are returned one page per call, most recent first. The response carries a NextToken

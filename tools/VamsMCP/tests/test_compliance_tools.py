@@ -1,9 +1,9 @@
 """The compliance tools.
 
-Two response shapes. The schema and pending-cascade listings return their WHOLE list in one
-response under a route-specific field with no ``message`` envelope and no continuation token
-(``paginate()`` would find zero rows and ``unwrap_message`` has nothing to unwrap). Every other
-list — the evaluation history, the two audit trails, the quarantine listing — is a real
+Two response shapes. The schema listing returns its WHOLE list in one response under a
+route-specific field with no ``message`` envelope and no continuation token (``paginate()`` would
+find zero rows and ``unwrap_message`` has nothing to unwrap). Every other list — the cascades, the
+evaluation history, the two audit trails, the quarantine listing — is a real
 ``maxItems`` / ``startingToken`` / ``NextToken`` page that reads its page size from ``maxItems``
 rather than ``pageSize``; the database overview and the bindings read are paged the same way but
 returned as the route's own page, because their summary fields describe the full set. Each is
