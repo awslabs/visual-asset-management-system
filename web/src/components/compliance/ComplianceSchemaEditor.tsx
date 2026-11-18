@@ -397,7 +397,7 @@ const EMPTY_RULES_DRAFT: RulesDraft = { extends: "", rules: [] };
 
 const cardStyle: React.CSSProperties = {
     padding: "12px",
-    border: "1px solid var(--color-border-divider-default, #eaeded)",
+    border: "1px solid var(--vams-border-default)",
     borderRadius: "8px",
 };
 
@@ -604,6 +604,15 @@ export default function ComplianceSchemaEditor({
     const [markers, setMarkers] = useState<editor.IMarkerData[]>([]);
     const [activeTab, setActiveTab] = useState("json");
     const [rulesDraft, setRulesDraft] = useState<RulesDraft>(EMPTY_RULES_DRAFT);
+    // Follow the app's theme, which toggles `awsui-dark-mode` on <body>.
+    const [isDark, setIsDark] = useState(() => document.body.classList.contains("awsui-dark-mode"));
+    useEffect(() => {
+        const observer = new MutationObserver(() =>
+            setIsDark(document.body.classList.contains("awsui-dark-mode"))
+        );
+        observer.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        return () => observer.disconnect();
+    }, []);
     // The Visual Builder edits the JSON's rule set, so it is offered only while the JSON parses:
     // a builder edit made from the last parsed draft would overwrite the JSON being edited.
     const jsonParses = useMemo(() => {
@@ -1477,7 +1486,7 @@ export default function ComplianceSchemaEditor({
                                 </Box>
                                 <div
                                     style={{
-                                        border: "1px solid var(--color-border-input-default, #aab7b8)",
+                                        border: "1px solid var(--vams-border-input)",
                                         borderRadius: "8px",
                                         overflow: "hidden",
                                     }}
@@ -1485,7 +1494,7 @@ export default function ComplianceSchemaEditor({
                                     <Editor
                                         height="400px"
                                         language="json"
-                                        theme="vs-dark"
+                                        theme={isDark ? "vs-dark" : "vs"}
                                         value={value}
                                         onChange={handleEditorChange}
                                         onMount={handleEditorMount}
