@@ -1032,6 +1032,11 @@ ready, and VAMS does not stop it, so stop it with `stop_edh_workstation` (with
 `confirm=True`, once the user agrees), then
 start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
 when read) but no `errorCode`.
+A CREATING row with a `sessionId`, `activity` null and `lastError`
+`LAUNCH_STALLED` is a new launch EDH has not placed 3 hours after it was
+accepted. It never ran, so it is not a start to stop: delete it with
+`delete_edh_workstation`, or wait, since EDH may still place it. Its
+`startFailure` carries `observedAt` only.
 They also name the image the workstation was launched from: `imageName` (the EDH
 image name), `recipeId` (the AMI recipe whose build produced it, null for a
 baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),

@@ -158,3 +158,38 @@ def test_the_readme_names_the_stalled_start():
     text = " ".join(README_TEXT.split())
     assert "`START_STALLED`" in text
     assert "30 minutes" in text
+
+
+# --- A new launch EDH never places -----------------------------------------------------------------
+
+LAUNCH_STALLED = {**ACCEPTED, "state": "CREATING", "edhState": "pending", "activity": None,
+                  "lastError": "LAUNCH_STALLED", "startFailure": {"observedAt": "2026-11-18T13:00:00Z"}}
+
+
+@pytest.mark.parametrize("tool", [
+    "list_edh_workstations", "get_edh_workstation", "stop_edh_workstation", "delete_edh_workstation",
+])
+def test_the_workstation_tool_descriptions_name_the_stalled_launch(tools, tool):
+    assert "LAUNCH_STALLED" in _doc(tools, tool), tool
+
+
+@pytest.mark.parametrize("tool", ["list_edh_workstations", "get_edh_workstation", "stop_edh_workstation"])
+def test_the_way_out_of_a_stalled_launch_is_the_delete_tool(tools, tool):
+    doc = _doc(tools, tool)
+    assert "with delete_edh_workstation, or wait" in doc, tool
+
+
+@pytest.mark.parametrize("tool,method,args", [
+    ("list_edh_workstations", "list_edh_workstations", ()),
+    ("get_edh_workstation", "get_edh_workstation", ("s-1",)),
+])
+def test_the_workstation_reads_pass_a_stalled_launch_through(client, tools, tool, method, args):
+    body = {"Items": [LAUNCH_STALLED]} if tool.startswith("list") else dict(LAUNCH_STALLED)
+    getattr(client.api, method).return_value = body
+    assert tools[tool](*args) == body
+
+
+def test_the_readme_names_the_stalled_launch():
+    text = " ".join(README_TEXT.split())
+    assert "`LAUNCH_STALLED`" in text
+    assert "`delete_edh_workstation`, or wait" in text

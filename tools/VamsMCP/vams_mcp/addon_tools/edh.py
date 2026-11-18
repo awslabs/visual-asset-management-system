@@ -78,9 +78,10 @@ def register(
         STOPPED row's last start failed (CAPACITY_UNAVAILABLE, RESERVATION_FULL, RESERVATION_ENDED,
         START_FAILED), with `startFailure` (`errorCode`, `availabilityZone`, `observedAt`). START_STALLED
         on a CREATING row with `activity` null: EDH has not finished a start after 30 minutes; stop it with
-        stop_edh_workstation, then start it again. `edhFailure` is the failure captured from EDH:
-        `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`, `checkpoint`,
-        `observedAt`.
+        stop_edh_workstation, then start it again. LAUNCH_STALLED there: EDH has not placed a new launch
+        after 3 hours; delete it with delete_edh_workstation, or wait. `edhFailure` is the failure
+        captured from EDH: `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`,
+        `checkpoint`, `observedAt`.
 
         Each row names its image in the image fields `imageName`, `recipeId`, `recipeDisplayName`,
         `recipeVersion`, `latestRecipeVersion` and `imageLatest` (`recipeId` null for a baseline image;
@@ -96,7 +97,8 @@ def register(
         """Use to read one of the user's EDH workstations by `session_id` (its `sessionId`, or its
         `bootstrapId`, which works at any time; follow a launch by it). Another user's workstation is not
         found. Carries the fields of a list_edh_workstations row: `activity`, `lastError` (START_STALLED
-        among its codes), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
+        and LAUNCH_STALLED among its codes; delete a LAUNCH_STALLED one with delete_edh_workstation, or
+        wait), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
         checkpoint, VAMS captured from EDH for a failed launch; null when none was captured),
         `connectionAvailable`,
         `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended), and
@@ -439,8 +441,10 @@ def register(
         def stop_edh_workstation(session_id: str, confirm: bool = False) -> Dict[str, Any]:
             """Stop one of the authenticated user's ACTIVE EDH workstations, or a CREATING one whose
             `lastError` is START_STALLED (a start EDH accepted and has not finished after 30 minutes;
-            start it again once it reads STOPPED). Stopping closes the desktop's open applications
-            and interrupts its compute; the disk is kept, and start_edh_workstation starts it again.
+            start it again once it reads STOPPED). LAUNCH_STALLED (a new launch EDH has not placed after
+            3 hours) never ran: delete it with delete_edh_workstation, or wait. Stopping closes the
+            desktop's open applications and interrupts its compute; the disk is kept, and
+            start_edh_workstation starts it again.
             Confirm with the user first, then call with `confirm=True`: without it the tool returns
             an error and stops nothing. Keep it out of `autoApprove`. Returns the updated record,
             whose `activity` reads `stopping` while EDH still stops the desktop (and whose
@@ -757,7 +761,9 @@ def register(
             session are removed. Irreversible. Consider stop_edh_workstation first — it releases the GPU
             and can be undone with start_edh_workstation. `session_id` may be the `bootstrapId` of a
             launch that never received a session id: an ORPHANED launch is deleted at once, a CREATING
-            one only after 15 minutes without progress (younger → 409, returned as the error). The
+            one only after 15 minutes without progress (younger → 409, returned as the error). A
+            CREATING one whose `lastError` is LAUNCH_STALLED (EDH has not placed it after 3 hours) is
+            deleted by its `sessionId`. The
             returned record carries `activity` and `startFailure` as a list_edh_workstations row does,
             and the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
             `latestRecipeVersion` and `imageLatest` as that row does.
