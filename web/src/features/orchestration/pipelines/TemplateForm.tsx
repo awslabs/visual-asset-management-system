@@ -529,30 +529,37 @@ const TemplateForm: React.FC<TemplateFormProps> = ({ mode, databaseId, pipelineI
                                             className="flex flex-wrap gap-1.5"
                                             data-testid="template-tag-chips"
                                         >
-                                            {insertableTags.map((field) => (
-                                                <button
-                                                    key={field.tagKey}
-                                                    type="button"
-                                                    data-testid="tag-chip"
-                                                    data-tag-key={field.tagKey}
-                                                    aria-label={`Insert {{${field.tagKey}}}`}
-                                                    title={`Inserts ${placeholderFor(
-                                                        field,
-                                                        configFormat
-                                                    )} at the cursor`}
-                                                    onClick={() => insertPlaceholder(field)}
-                                                    className="orch-outline inline-flex items-center gap-1 rounded-full border border-border-input bg-surface px-2 py-0.5 font-mono text-xs text-text-primary hover:bg-surface-hover"
-                                                >
-                                                    {`{{${field.tagKey}}}`}
-                                                    <span className="font-sans text-text-secondary">
-                                                        {field.type}
-                                                        {configFormat === "json" &&
-                                                            (rendersJsonValue(field.type)
-                                                                ? " · bare"
-                                                                : " · quoted")}
-                                                    </span>
-                                                </button>
-                                            ))}
+                                            {insertableTags.map((field) => {
+                                                // The chip's name starts with the text it shows
+                                                // (Label in Name, #1592).
+                                                const form =
+                                                    configFormat === "json"
+                                                        ? rendersJsonValue(field.type)
+                                                            ? " · bare"
+                                                            : " · quoted"
+                                                        : "";
+                                                return (
+                                                    <button
+                                                        key={field.tagKey}
+                                                        type="button"
+                                                        data-testid="tag-chip"
+                                                        data-tag-key={field.tagKey}
+                                                        aria-label={`{{${field.tagKey}}} ${field.type}${form}: insert`}
+                                                        title={`Inserts ${placeholderFor(
+                                                            field,
+                                                            configFormat
+                                                        )} at the cursor`}
+                                                        onClick={() => insertPlaceholder(field)}
+                                                        className="orch-outline inline-flex items-center gap-1 rounded-full border border-border-input bg-surface px-2 py-0.5 font-mono text-xs text-text-primary hover:bg-surface-hover"
+                                                    >
+                                                        {`{{${field.tagKey}}}`}{" "}
+                                                        <span className="font-sans text-text-secondary">
+                                                            {field.type}
+                                                            {form}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
                                     ) : (
                                         <p className="text-xs text-text-secondary">

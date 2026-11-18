@@ -5,7 +5,7 @@
 
 /**
  * The five Batch pipelines whose compute runs in the VPC's isolated subnets (Potree viewer, 3D
- * thumbnail, GenAI metadata labeling, coordinate transform, Video SOP/BOM) read an input in another Region only
+ * thumbnail, SYSTEM GenAI metadata, coordinate transform, Video SOP/BOM) read an input in another Region only
  * through the cross-Region S3 interface endpoint the VPC builder creates in those subnets. Their
  * `vamsExecute` Lambdas therefore carry `CROSS_REGION_S3_ENDPOINT_REGIONS`, the Regions such an
  * endpoint exists for, and `manifestHelper.enforce_inputs_in_region` rejects an input anywhere else
@@ -19,7 +19,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import * as Config from "../../config/config";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
-import { Metadata3dLabelingConstruct } from "../../lib/nestedStacks/pipelines/genAi/metadata3dLabeling/constructs/metadata3dLabeling-construct";
+import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { makePipelineHarness, PipelineHarness } from "../support/pipelineConstructHarness";
@@ -76,15 +76,14 @@ const ISOLATED_PIPELINES: {
             ),
     },
     {
-        name: "genAi/metadata3dLabeling",
-        handler: "vamsExecuteGenAiMetadata3dLabelingPipeline.lambda_handler",
+        name: "system/genAiMetadata",
+        handler: "vamsExecuteSystemGenAiMetadataPipeline.lambda_handler",
         enable: (c) => {
-            c.app.pipelines.useGenAiMetadata3dLabeling.enabled = true;
-            c.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterWithVAMS = false;
+            c.app.pipelines.useSystemGenAiMetadata.enabled = true;
         },
         build: (h) =>
             Template.fromStack(
-                new Metadata3dLabelingConstruct(h.stack, "Metadata3dLabelingPipeline", {
+                new SystemGenAiMetadataConstruct(h.stack, "SystemGenAiMetadataPipeline", {
                     config: h.config,
                     storageResources: h.storage,
                     vpc: h.vpc,

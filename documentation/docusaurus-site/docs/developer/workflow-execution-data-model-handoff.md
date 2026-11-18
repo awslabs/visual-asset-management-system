@@ -177,9 +177,13 @@ not with a hook in the workflow core.
 
 The launch path's trust rests on who can invoke the execute function directly: any principal with
 `lambda:InvokeFunction` on `executeWorkflowV2` can send the marked call and start a system run under any
-well-formed system trigger value. Today only the execution service (re-run) and the workflow trigger
-dispatcher hold that grant, and neither sends the marker, so a new invoke grant on that function is a
-grant to launch system runs and is reviewed as one.
+well-formed system trigger value. The execution service (re-run) and the workflow trigger dispatcher hold
+that grant and never send the marker. The features that launch system runs hold it too, each for one
+launcher whose grant names the function's ARN, and send the marker: Download as Zip
+(`zipDownloadService`, deployed with `app.pipelines.useZipDownloads.enabled`, trigger value
+`System-ZipDownload`) and the vector reindexer's launcher (`systemWorkflowLauncher`, trigger value
+`System-Reindex`). A new invoke grant on that function is a grant to launch system runs and is reviewed as
+one.
 
 A re-run (`POST /workflows/executions/{executionId}/rerun`) of a system run is refused with `400`.
 

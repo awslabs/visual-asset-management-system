@@ -78,6 +78,10 @@ function restrictedPartition(c: any) {
     c.app.openSearch.useServerless.enabled = false;
     c.app.openSearch.useServerless.nextGen = false;
     c.app.openSearch.useProvisioned.enabled = true;
+    // The commercial template enables the SYSTEM GenAI metadata pipeline and vector search with
+    // commercial-only model ids, and their model-id rule runs before this pipeline's.
+    c.app.pipelines.useSystemGenAiMetadata.enabled = false;
+    c.app.vectorSearch.enabled = false;
 }
 
 afterEach(() => {
@@ -145,13 +149,13 @@ describe("Video SOP/BOM compute-tied constants", () => {
     });
 });
 
-describe("validateBedrockModelId is one helper for both GenAI pipelines", () => {
-    const FLAG_PATHS = ["pipelines.useGenAiMetadata3dLabeling", "pipelines.useGenAiVideoSopBom"];
+describe("validateBedrockModelId names the pipeline flag it validates", () => {
+    const FLAG_PATHS = ["pipelines.useGenAiVideoSopBom"];
     const GLOBAL_ID = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
     const US_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0";
     const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
 
-    test("[control] the labeling pipeline's two messages are the sentences its tests pin", () => {
+    test("[control] the helper's two messages are the sentences its tests pin", () => {
         // configValidationHardening.test.ts asserts /bedrockModelId is empty/ and /exists only in the
         // commercial partition/; the full sentences are pinned here so a reworded helper is a visible
         // change rather than a silently weaker match. An Error argument makes toThrow compare the
@@ -159,7 +163,7 @@ describe("validateBedrockModelId is one helper for both GenAI pipelines", () => 
         // that appended a clause would still satisfy.
         expect(() => Config.validateBedrockModelId(FLAG_PATHS[0], "", "aws")).toThrow(
             new Error(
-                "Configuration Error: pipelines.useGenAiMetadata3dLabeling is enabled but " +
+                "Configuration Error: pipelines.useGenAiVideoSopBom is enabled but " +
                     "bedrockModelId is empty. Set a model id available in this partition and Region " +
                     "(the restricted-partition templates ship it empty because the commercial " +
                     "cross-Region inference profiles do not exist there)."
@@ -167,10 +171,10 @@ describe("validateBedrockModelId is one helper for both GenAI pipelines", () => 
         );
         expect(() => Config.validateBedrockModelId(FLAG_PATHS[0], GLOBAL_ID, "aws-us-gov")).toThrow(
             new Error(
-                `Configuration Error: pipelines.useGenAiMetadata3dLabeling.bedrockModelId is ` +
+                `Configuration Error: pipelines.useGenAiVideoSopBom.bedrockModelId is ` +
                     `"${GLOBAL_ID}", whose "global." cross-Region inference-profile prefix exists ` +
                     "only in the commercial partition. This deployment targets aws-us-gov. Use a " +
-                    'model id or inference profile offered there (GovCloud uses the "us-gov." prefix).'
+                    "model id or inference profile offered there."
             )
         );
     });
@@ -294,7 +298,8 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
     const PIPELINE_RULE_IDS = [
         "vpc-required-genai-video-sop-bom",
         "video-sop-bom-bedrock-model-id-required",
-        "video-sop-bom-bedrock-model-id-commercial-only-prefix",
+        "video-sop-bom-bedrock-model-id-prefix-partition",
+        "video-sop-bom-bedrock-model-id-prefix-unverified",
         "video-sop-bom-commercial-or-govcloud-only",
         "video-sop-bom-max-video-files-range",
         "video-sop-bom-max-total-duration-range",
@@ -304,7 +309,8 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
         "availability is unverified and the service-helper has no row for this partition; a missing " +
         "endpoint hangs a run until its timeout.";
     const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
-    const EU_ID = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    // A bare model id: no inference-profile prefix for the prefix rule to judge.
+    const BARE_ID = "anthropic.claude-sonnet-4-20250514-v1:0";
 
     /** The ids of this pipeline's rules that fire on `profile`'s preset after `mutate`. */
     const firing = (profile: Profile, mutate: (c: any) => void): string[] => {
@@ -373,7 +379,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
         expect(
             firing("eusovereign", (c) => {
                 c.app.pipelines.useGenAiVideoSopBom.enabled = true;
-                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = BARE_ID;
             })
         ).toEqual(["video-sop-bom-commercial-or-govcloud-only"]);
     });
@@ -381,7 +387,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
     test("getConfig() and the builder state the partition reason in the same words", () => {
         const builder = makeDefaultConfig("eusovereign");
         builder.app.pipelines.useGenAiVideoSopBom.enabled = true;
-        builder.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+        builder.app.pipelines.useGenAiVideoSopBom.bedrockModelId = BARE_ID;
         const rule = evaluateRules(builder).find(
             (r) => r.id === "video-sop-bom-commercial-or-govcloud-only"
         );
@@ -394,7 +400,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
                 restrictedPartition(c);
                 c.env.region = "eusc-de-east-1";
                 c.app.pipelines.useGenAiVideoSopBom.enabled = true;
-                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = EU_ID;
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = BARE_ID;
             })();
         } catch (e) {
             deployMessage = (e as Error).message;
@@ -424,7 +430,27 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
                 c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
                     "global.anthropic.claude-sonnet-5-5";
             })
-        ).toEqual(["video-sop-bom-bedrock-model-id-commercial-only-prefix"]);
+        ).toEqual(["video-sop-bom-bedrock-model-id-prefix-partition"]);
+    });
+
+    test("a geographic prefix the GovCloud partition does not offer raises the prefix rule", () => {
+        expect(
+            firing("govcloud", (c) => {
+                govcloud(c);
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                    "jp.anthropic.claude-sonnet-4-5-20250929-v1:0";
+            })
+        ).toEqual(["video-sop-bom-bedrock-model-id-prefix-partition"]);
+    });
+
+    test('the commercial "us." prefix in GovCloud raises the warning, not the error', () => {
+        expect(
+            firing("govcloud", (c) => {
+                govcloud(c);
+                c.app.pipelines.useGenAiVideoSopBom.bedrockModelId =
+                    "us.anthropic.claude-sonnet-4-20250514-v1:0";
+            })
+        ).toEqual(["video-sop-bom-bedrock-model-id-prefix-unverified"]);
     });
 
     test.each([0, 5, -1, 2.5, "4"])("maxVideoFiles %p raises the range rule", (value) => {

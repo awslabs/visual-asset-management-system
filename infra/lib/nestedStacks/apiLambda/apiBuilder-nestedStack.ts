@@ -52,7 +52,7 @@ import {
     buildAssetLinksService,
     buildCreateAssetLinkFunction,
 } from "../../lambdaBuilder/assetsLinkFunctions";
-import { buildSearchFunction } from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+import { buildSearchFunction } from "../../lambdaBuilder/osSemanticSearchFunctions";
 import { buildRoleService, buildCreateRoleFunction } from "../../lambdaBuilder/roleFunctions";
 import { buildUserRolesService } from "../../lambdaBuilder/userRoleFunctions";
 import { buildSendEmailFunction } from "../../lambdaBuilder/sendEmailFunctions";

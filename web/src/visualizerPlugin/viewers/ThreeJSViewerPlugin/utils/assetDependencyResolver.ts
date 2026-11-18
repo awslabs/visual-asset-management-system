@@ -225,7 +225,8 @@ function mimeTypeFor(key: string): string {
     return IMAGE_MIME_TYPES[extension] || "";
 }
 
-function isAbortError(error: any): boolean {
+/** Whether `error` is an abort (a DOMException or Error named "AbortError"). */
+export function isAbortError(error: any): boolean {
     return error?.name === "AbortError";
 }
 

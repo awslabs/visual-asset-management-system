@@ -207,6 +207,9 @@ ALLOWED_SITES = {
     ("models/common.py", "internal_error", "7fee03a8"):
         "`errorBody` is the generic response body the handler returns (a fixed message), "
         "not the request",
+    ("models/common.py", "service_unavailable", "48e0dd45"):
+        "`errorBody` is the 503 response body the handler returns; every caller passes a fixed "
+        "message constant (search unavailable, index building, search busy), not the request",
     ("common/uploadStatus.py", "_settle", "af896e7c"):
         "logs the upload id from the stored upload record and the exception class; not request text",
     ("handlers/assets/largeObjectCopy.py", "sweep", "7c0e515d"):

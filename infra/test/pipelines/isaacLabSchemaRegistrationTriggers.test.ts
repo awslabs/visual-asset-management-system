@@ -297,16 +297,15 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
     test("the constructs that own a trigger still wire it", () => {
         expect(wiringTriggerEnabled).toEqual([
             "cadStepAgent-construct.ts",
-            "conversionMeshCadMetadataExtraction-construct.ts",
             "coordinateTransform-construct.ts",
             "cosmos3-construct.ts",
             "cosmosPredict-construct.ts",
             "cosmosReason-construct.ts",
             "cosmosTransfer-construct.ts",
             "imageTo3d-construct.ts",
-            "metadata3dLabeling-construct.ts",
             "pcPotreeViewer-construct.ts",
             "preview3dThumbnail-construct.ts",
+            "systemGenAiMetadata-construct.ts",
         ]);
     });
 });

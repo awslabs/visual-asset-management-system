@@ -155,25 +155,34 @@ def check_s3_object_exists(bucket, key, version_id=None):
 # Core Download Logic
 #######################
 
-def get_distributable_asset_context(databaseId, assetId):
-    """Get the asset's bucket and base key, verifying the asset is downloadable"""
-    # The compliance quarantine block runs in the shared checks, after the distributable check and
-    # before the location is read (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The
-    # caller has already passed authorization, so a denied caller never reaches this read.
+def get_distributable_asset_context(databaseId, assetId, quarantine_checked_per_key=False):
+    """Get the asset's bucket and base key, verifying the asset is downloadable.
+
+    The compliance quarantine block runs in the shared checks, after the distributable check and
+    before the location is read (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The
+    caller has already passed authorization, so a denied caller never reaches this read.
+    `quarantine_checked_per_key` leaves the block to `resolve_and_sign_file_key`, which applies it
+    to the one resolved key (a single-file download, whose key may be a preview companion); every
+    other caller is guarded here for the whole asset."""
     return _get_distributable_asset_context(
         databaseId, assetId,
         get_asset=get_asset_details,
         get_bucket_details=get_default_bucket_details,
-        check_quarantine=check_quarantine_block,
+        check_quarantine=None if quarantine_checked_per_key else check_quarantine_block,
     )
 
 def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key, raw_key,
-                              version_id=None, asset_version_id=None, asset_version_alias=None):
+                              version_id=None, asset_version_id=None, asset_version_alias=None,
+                              check_quarantine_for_key=False):
     """Resolve one file key against the asset and generate its presigned URL
 
     The eligibility checks (key containment and length, asset-version pin,
     existence, delete marker, blocklist) run in common.downloadEligibility with
-    this module's clients and helpers; signing stays here.
+    this module's clients and helpers; signing stays here. With
+    `check_quarantine_for_key` (a single-file download) the quarantine block runs
+    there on the resolved key, before any S3 call: a preview companion at its
+    current version is served for a quarantined asset (#1495), any other key, or
+    any version pin, is refused.
 
     Returns:
         (downloadUrl, versionId) tuple
@@ -182,6 +191,9 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         VAMSGeneralErrorResponse for per-file failures (missing, archived, disallowed
         type, key outside the asset's own prefix, resolved key over the S3 key limit)
     """
+    def check_key_quarantine(final_key, version_pinned):
+        check_quarantine_block(databaseId, assetId, object_key=None if version_pinned else final_key)
+
     final_key, version_id = check_file_eligibility(
         databaseId, assetId, s3, asset_bucket, asset_base_key, raw_key,
         version_id=version_id,
@@ -192,7 +204,8 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         max_workers=MAX_PARALLEL_S3_WORKERS,
         list_objects=list_all_objects,
         is_allowed=validateUnallowedFileExtensionAndContentType,
-        object_exists=check_s3_object_exists
+        object_exists=check_s3_object_exists,
+        check_key_quarantine=check_key_quarantine if check_quarantine_for_key else None,
     )
 
     # Generate presigned URL
@@ -227,13 +240,15 @@ def download_asset_file(databaseId, assetId, request_model):
     Returns:
         DownloadAssetResponseModel instance
     """
-    asset_bucket, asset_base_key = get_distributable_asset_context(databaseId, assetId)
+    asset_bucket, asset_base_key = get_distributable_asset_context(
+        databaseId, assetId, quarantine_checked_per_key=True)
 
     url, version_id = resolve_and_sign_file_key(
         databaseId, assetId, asset_bucket, asset_base_key, request_model.key,
         version_id=request_model.versionId,
         asset_version_id=request_model.assetVersionId,
-        asset_version_alias=request_model.assetVersionIdAlias
+        asset_version_alias=request_model.assetVersionIdAlias,
+        check_quarantine_for_key=True
     )
 
     # Return response model
@@ -330,12 +345,17 @@ def download_asset_preview(databaseId, assetId, request_model):
     if not asset.get('isDistributable', False):
         raise VAMSGeneralErrorResponse("Asset not distributable")
 
-    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
-    # already passed authorization, so a denied caller never reaches this read.
-    check_quarantine_block(databaseId, assetId)
-
     # Get preview location
     preview_location = asset.get('previewLocation')
+
+    # Quarantine block (no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). The caller has
+    # already passed authorization, so a denied caller never reaches this read. The asset's preview
+    # image is still served for a quarantined asset (#1495); a preview location without an allowed
+    # preview image extension is guarded like a file.
+    check_quarantine_block(databaseId, assetId,
+                           object_key=(preview_location or {}).get('Key') or None,
+                           asset_preview=True)
+
     if not preview_location:
         raise VAMSGeneralErrorResponse("Asset preview location not found")
         

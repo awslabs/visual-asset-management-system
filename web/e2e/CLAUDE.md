@@ -36,13 +36,13 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                      | **Ad-hoc specs (untracked)**                                |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                        | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes                                                                                                                                                                                                                                                                                                                            | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                            | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                           | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                                                                                                                                                                                                                                                                                                                      | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No — keep out of git                                        |
 
 A `seeded.` spec still hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`, written by `tools/VamsCLI/examples/seed_compare_smoke.py`). A spec's other opt-in variables are listed in its header comment.
 
@@ -133,56 +133,69 @@ skips that case with the reason without it (see "Running the suite").
 locators — the app's markup is not always guessable, and these were established empirically. An
 add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 
-| Helper                                                        | Use for                                                                                            |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                |
-| `cachedFeaturesEnabled(page)`                                 | Same as `featureSwitches(page)` (older name); `test.skip` on an absent flag                        |
-| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                   |
-| `searchBox(page)`                                             | The orchestration filter-bar search input                                                          |
-| `facet(page, label)`                                          | A native `<select>` filter                                                                         |
-| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                             |
-| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                         |
-| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion; takes the page's own empty-state regex       |
-| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                                 |
-| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                                    |
-| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                              |
-| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                              |
-| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does               |
-| `openFileManager(page, databaseId, assetId)`                  | Land on an asset's File Manager tab with its tree rendered (the first half of `openAssetFile`)     |
-| `selectTreePath(page, filename, { modifiers })`               | Select a file in the File Manager tree by path, expanding each folder by its caret as needed       |
-| `compareSeed()`                                               | The `E2E_COMPARE_SEED` seed fixture of `seeded.compare.spec.ts`, or `null` when unset              |
-| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                  |
-| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied               |
-| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator         |
-| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls                    |
-| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context                       |
-| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`                  |
-| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`             |
-| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                             |
-| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)          |
-| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element                  |
-| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                            |
-| `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (seeded public viewer samples), or `null` when unset         |
-| `openViewerFile(page, ref)`                                   | Load a file's ViewFile route as a fresh page and wait for its heading (one reload)                 |
-| `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected             |
-| `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                            |
-| `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                     |
-| `featuresEnabled(page)` / `missingFeatures(list, req)`        | Same as `featureSwitches(page)` (older name) / the required features it lacks                      |
-| `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)         |
-| `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                       |
-| `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box            |
-| `expectCanvasRendered(page, canvas, what, thresholds?)`       | Poll (90 s) until a canvas shows content rather than its clear colour                              |
-| `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)        |
-| `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them) |
-| `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                            |
-| `profileMenuName(page)` / `profileMenuTrigger(page)`          | The signed-in user name / the top-bar profile-menu trigger (named "Profile menu" without a name)   |
-| `openProfileMenu(page)`                                       | Open the profile menu by keyboard; returns `menu`, or `overflow` when it sits under "More" (phone) |
-| `profileMenuLink(page, href)`                                 | A visible page link in the open profile menu, by href (e.g. `#/auth/api-keys/?mode=user`)          |
-| `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                              |
-| `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's           |
-| `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                       |
-| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, from the app's own cache: the harness's one feature reader     |
-| `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                 |
+| Helper                                                        | Use for                                                                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                                  |
+| `cachedFeaturesEnabled(page)`                                 | Same as `featureSwitches(page)` (older name); `test.skip` on an absent flag                                          |
+| `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                                     |
+| `searchBox(page)`                                             | The orchestration filter-bar search input                                                                            |
+| `facet(page, label)`                                          | A native `<select>` filter                                                                                           |
+| `firstCardId(page)`                                           | Id of the first card, or `null` when the list is empty                                                               |
+| `openCardMenu(page, id)`                                      | Filter to a card and open its actions menu                                                                           |
+| `cardSummaries(page)` / `firstCardName(page, { system })`     | Each card's name and whether it is a system record (its System badge) / the first card that is, or is not, one       |
+| `allowedApiRoutes(page)` / `routeAllowed(routes, m, path)`    | The role's allowed API routes (`GET /auth/routes/api/allowed`, what the app's check reads) / whether one is allowed  |
+| `pageAllowed(page, heading)`                                  | Waits for the page heading or the app's "You do not have access to this page" panel; false for a role without access |
+| `tableRows(page)` / `expectTableRendered(page)`               | Table rows / "rendered in any environment" assertion; takes the page's own empty-state regex                         |
+| `menuSurface(items)`                                          | The open menu's own floating surface, from an item                                                                   |
+| `wizardRail(page)`                                            | The execute dialog's step rail (`navigation` "Execution steps")                                                      |
+| `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                                                |
+| `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                                                |
+| `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does                                 |
+| `openFileManager(page, databaseId, assetId)`                  | Land on an asset's File Manager tab with its tree rendered (the first half of `openAssetFile`)                       |
+| `selectTreePath(page, filename, { modifiers })`               | Select a file in the File Manager tree by path, expanding each folder by its caret as needed                         |
+| `compareSeed()`                                               | The `E2E_COMPARE_SEED` seed fixture of `seeded.compare.spec.ts`, or `null` when unset                                |
+| `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                                    |
+| `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied                                 |
+| `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator                           |
+| `apiContext(page)`                                            | The app's API base and Cognito ID token, for authenticated `page.request` calls                                      |
+| `findAssetFiles(page, extensions, options)`                   | First file per extension found via the API, or `null` without an API context                                         |
+| `gotoSearch(page, { databaseId?, tab? })`                     | Navigate to the search page; waits on its h1 + the view's first searchbox                                            |
+| `searchViewSwitch(page)`, `searchViewSegment(page, name)`     | The title row's view switch (`toolbar` "Page view") and one view's segment                                           |
+| `searchPageHeading(page, databaseId?)`                        | The search page h1 every view shares (`… and Files`, `… for <databaseId>`)                                           |
+| `searchCountBadge(page)`, `searchCountBadgeText(total)`       | The h1's result-count badge (any count, `+` or not) and its exact text for a `hits.total`                            |
+| `searchSubmitButton(page)`                                    | The Search view's Search button, scoped to the query band (the switch has a `Search` too)                            |
+| `searchNotice(page)`                                          | The dismissible Search notice above the results (rare warnings, keyword `truncated:time`)                            |
+| `readFeaturesEnabled(page)`                                   | Cached secure-config switches; `null` if none cached                                                                 |
+| `expectSearchRendered(page)`                                  | Rows, "No matches", or "No … to display" — any sandbox                                                               |
+| `findNestedAssetFile(page, options)`                          | First file inside a folder via the API, plus its stored key when known, or `null`                                    |
+| `findAssetsWithFiles(page, count, options)`                   | Up to `count` distributable assets with one top-level file each via the API, or `null`                               |
+| `selectedTreeNode(page)`                                      | The File Manager tree's single-selected row label, in the visible tree                                               |
+| `VIEWPORTS`                                                   | The layout widths: phone 390, tablet 768, laptop 1280, desktop 1440 (use with `test.use`)                            |
+| `pageOverflowX(page)` / `expectNoPageOverflowX(page, where)`  | How far the page scrolls sideways / assert it does not, naming the widest element                                    |
+| `expectReachable(locator, what)`                              | Scroll a control into view and assert it lies fully inside the viewport                                              |
+| `actionDisabledReason(button)`                                | A gated Button's disabled reason once its permission check settles, or `""` if allowed                               |
+| `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (seeded public viewer samples), or `null` when unset                           |
+| `openViewerFile(page, ref)`                                   | Load a file's ViewFile route as a fresh page and wait for its heading (one reload)                                   |
+| `gotoFresh(page, route)`                                      | Load a `/#/...` route as a new document (`about:blank` first), for a page already on `/` (D135)                      |
+| `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected                               |
+| `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                                              |
+| `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                                       |
+| `featuresEnabled(page)` / `missingFeatures(list, req)`        | Same as `featureSwitches(page)` (older name) / the required features it lacks                                        |
+| `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)                           |
+| `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                                         |
+| `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box                              |
+| `expectCanvasRendered(page, canvas, what, thresholds?)`       | Poll (90 s) until a canvas shows content rather than its clear colour                                                |
+| `watchCspViolations(page)`                                    | Record `securitypolicyviolation` events in the page and its frames (call before navigating)                          |
+| `expectNoNewCspViolations(csp, allowed, what)`                | Fail on any recorded violation no `allowed` pattern matches (`unexpectedCspViolations` lists them)                   |
+| `watchRequestHosts(page, { extraHosts })`                     | Record request hosts; `thirdParty()` lists those outside the deployment                                              |
+| `profileMenuName(page)` / `profileMenuTrigger(page)`          | The signed-in user name / the top-bar profile-menu trigger (named "Profile menu" without a name)                     |
+| `openProfileMenu(page)`                                       | Open the profile menu by keyboard; returns `menu`, or `overflow` when it sits under "More" (phone)                   |
+| `profileMenuLink(page, href)`                                 | A visible page link in the open profile menu, by href (e.g. `#/auth/api-keys/?mode=user`)                            |
+| `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                                                |
+| `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's                             |
+| `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                                         |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, from the app's own cache: the harness's one feature reader                       |
+| `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                                   |
 
 **Selector facts worth not rediscovering:**
 
@@ -192,6 +205,11 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 -   Filters are native `<select>`s labelled `Status`, `Execution Type`, `Database`, `Group by`,
     `Filter by status`, `Filter by trigger`, `Filter by group ID`, `Time window`.
 -   Cards expose `Actions for {id}` buttons — the stable way to read a card's identity.
+-   **A system record's card is read-only.** The SYSTEM GenAI, preview and Zip Archive pipelines and
+    workflows (registered by default) carry a `System` badge (`SYSTEM_RECORD_BADGE_TITLE`), offer View
+    instead of Edit, and keep Archive listed but `aria-disabled` with its reason in `aria-description`.
+    A case about Edit, Archive or a new template picks `firstCardName(page, { system: false })`; and a
+    card's menu lists only the actions `routeAllowed` grants the role, so expect each item from that.
 -   The template panel heading is an `h1` reading exactly `Templates`.
 -   Card lists are server-paginated (pageSize 50); filter down to a card before locating it.
 -   Execution trigger values use the **stored** vocabulary (`Manual`, `File-Upload`) — not `fileUpload`.
@@ -215,6 +233,47 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 -   Detail and quick-view panels render a field as a label span plus its value span, so a field's value
     is the label's next sibling. Use `rowValue(page, label)`; a page-wide `getByText` for a value's
     shape (a path, a slash, an id) matches dozens of unrelated elements.
+-   **The search page switches views from its title row**: one h1 every view shares, and a
+    SegmentedControl (`searchViewSwitch`, a `toolbar` of `aria-pressed` buttons; a select below
+    688 px) when more than one view is available. There is no `role=tablist`. The asset list view
+    is always there and the `Search` view only when OpenSearch or vector search is on, so with the
+    asset list alone there is no switch — derive the expectation from `readFeaturesEnabled(page)`
+    (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a fixture. The active view is the
+    `?tab=` hash query (`/#/assets/?tab=asset-list`). Its empty states read `No matches` (search
+    table) and `No assets to display.` (asset list), neither of which `expectTableRendered`'s regex
+    matches — use `expectSearchRendered(page)`.
+-   **The count badge carries a `+` when the total is a minimum** (`hits.total.relation` `gte`, e.g.
+    `9+ results` from a natural-language search). Compare it with the answer the page received
+    through `searchCountBadgeText`, which adds the `+` only for `gte`; a digits-only pattern fails
+    on every lower-bound count.
+-   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment you
+    press by its `data-testid` (the view id) before pressing it, then assert on the pinned locator.
+-   **A permission-gated action depends on the signed-in role.** A role the API refuses sees the
+    Button disabled with its reason (hidden text named by `aria-describedby`), and reads "Checking
+    your permissions." until the allowed-routes check answers. Branch on
+    `actionDisabledReason(button)`: assert the refusal and `test.skip` the steps behind the action,
+    or exercise them when it returns `""`. Never assume the admin role.
+-   **The search page announces a finished search's count, it does not toast it.** "Found N
+    results" goes to a visually hidden polite live region, followed by the Search notice's text
+    when the answer has one. Rare natural-language warnings, and a keyword page the time bound cut short (`truncated:time`), show in that **Search notice**, a
+    dismissible Alert above the results (`searchNotice(page)`), never in a toast; `truncated:window`
+    and `segments:window_full` raise none, and the page states them under the results. Count
+    toasts as a snapshot right after the answer: a toast hides after 5 s, so a polled
+    `toHaveCount(0)` passes once it has gone. The notice stays until dismissed or the answer
+    changes, so poll it.
+-   **A failed search is a toast, not a missing feature.** A `503` from either search route shows a
+    **Search failed** toast with the API's message, and the view switch, the mode switch and the
+    query band stay; do not read a failure as "search is off".
+-   **The count's explanation is a named button.** Beside a minimum count the table header has a
+    `button` named "About this count" (`getByRole("button", { name: "About this count" })`) that
+    opens its popover on click, Enter or Space; an exact count has none.
+-   **A database route locks the Database filter and names it.** On `#/databases/<databaseId>/assets/`
+    the disabled Database multiselect reads the database id, not "All databases", so
+    `getByRole("button", { name: /^All databases/ })` finds nothing there.
+-   **Clear all filters is absent until a criterion is set.** The title row shows the button only
+    once a query, a filter or a metadata filter row is set, and it is gone again after it is pressed.
+    A fresh load, a record type switch and a database route's locked database show none, so set a
+    filter before looking for it, and expect no button on an untouched page.
 
 When a page's markup changes, fix the helper once; every spec follows.
 
@@ -351,9 +410,11 @@ challenge manually.
 ## Adding a core spec for a new page
 
 1. Add the page's route to the `gotoOrchestration` union in `support/fixtures.ts` if it is a new
-   orchestration route.
-2. Create `orchestration.{page}.spec.ts` and assert, in this order: the page renders without a crash;
-   its controls exist; its filters offer the expected values; and one interaction per row action.
+   orchestration route. A page outside the orchestration module gets its own `goto*` helper that
+   waits on its own structure — `gotoSearch` (h1 + the view's first searchbox) is the model.
+2. Create `orchestration.{page}.spec.ts` — or `{page}.spec.ts` for a page outside the module, as
+   `search.spec.ts` is — and assert, in this order: the page renders without a crash; its controls
+   exist; its filters offer the expected values; and one interaction per row action.
 3. Derive every subject from the environment (Rule 1) and mutate nothing (Rule 2).
 4. Add any new selector knowledge to `support/fixtures.ts`, not inline in the spec.
 5. Run against a deployed environment and confirm the result is `passed` or an explicit `skipped` —
@@ -370,3 +431,5 @@ challenge manually.
 5. **Committing an ad-hoc or `_probe` spec** — these are per-change and stay untracked.
 6. **Hardcoding credentials or the base URL** — use `E2E_USERNAME` / `E2E_PASSWORD` / `E2E_BASE_URL`.
 7. **Claiming a web fix is verified without checking the deployed bundle hash** — see the warning above.
+8. **Changing only the hash right after loading `/`** (`page.goto("/#/route")` after `cachedFeaturesEnabled`, `featuresEnabled` or `apiContext` loaded the page) — the app may still be starting and render Home with the new hash in the address bar (D135). Use `gotoFresh(page, route)`.
+9. **Asserting an action a role is not offered** — gate each menu-item or button assertion on the role's allowed routes, as the per-role loop does; Playwright needs the element to check its attributes (D134).

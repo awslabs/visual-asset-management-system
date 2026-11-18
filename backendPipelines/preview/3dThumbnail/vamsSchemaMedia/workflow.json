@@ -1,6 +1,7 @@
 {
     "workflowName": "Media Preview Thumbnail",
-    "category": "Preview",
+    "category": "SYSTEM - Preview",
+    "isSystem": true,
     "description": "Automated workflow for image, TGA/TIFF and video preview thumbnails (JPG/PNG/GIF).",
     "systemConfig": {
         "inputFileArity": "one",
