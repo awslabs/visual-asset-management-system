@@ -10,6 +10,7 @@ handler runs), and returns the parsed body unaltered — the EDH handlers use no
 
 import ast
 import json
+import uuid
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -935,6 +936,41 @@ class TestQuotaRefusal:
             client.list_edh_workstations()
         assert str(excinfo.value) == (
             f"Workstation listing refused (429): {addon_constants.EDH_QUOTA_REACHED_API_MESSAGE}")
+
+
+class TestLaunchCarriesItsBootstrapId:
+    """A launch whose answer was lost may have been accepted: every error names the bootstrapId sent, so
+    the caller can look the launch up and re-send that id, which cannot launch a second workstation."""
+
+    LAUNCH = {"imageId": "12", "instanceType": "g5.2xlarge", "name": "Design desk", "rootSizeGb": 200,
+              "osFamily": "linux"}
+
+    def test_a_missing_bootstrap_id_is_generated_and_sent(self, monkeypatch):
+        client = _client()
+        seen = _capture(monkeypatch, client, "post", body={"state": "CREATING"})
+        client.create_edh_workstation(dict(self.LAUNCH))
+        assert uuid.UUID(seen["kwargs"]["data"]["bootstrapId"]).version == 4
+
+    def test_a_gateway_504_is_not_confirmed_and_names_the_bootstrap_id(self, monkeypatch):
+        client = _client()
+        seen = _capture(monkeypatch, client, "post", error=_http_error(504, {"message": "Endpoint request timed out"}))
+        with pytest.raises(EdhOutcomeUnknownError) as excinfo:
+            client.create_edh_workstation(dict(self.LAUNCH))
+        sent = seen["kwargs"]["data"]["bootstrapId"]
+        assert excinfo.value.json_fields == {"outcomeUnknown": True, "bootstrapId": sent}
+        assert "Run 'vamscli edh workstation list'" in str(excinfo.value)
+        assert EdhOutcomeUnknownError.json_fields == {"outcomeUnknown": True}  # the class is unchanged
+
+    @pytest.mark.parametrize("error", [
+        _http_error(400, {"message": "instanceType is not permitted in this deployment"}),
+        APIError("Request timed out"),
+    ])
+    def test_every_error_names_the_bootstrap_id_sent(self, monkeypatch, error):
+        client = _client()
+        _capture(monkeypatch, client, "post", error=error)
+        with pytest.raises(Exception) as excinfo:
+            client.create_edh_workstation({**self.LAUNCH, "bootstrapId": "b-given"})
+        assert excinfo.value.json_fields["bootstrapId"] == "b-given"
 
 
 class TestStartInProgress:

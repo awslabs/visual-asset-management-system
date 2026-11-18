@@ -1122,8 +1122,11 @@ row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
 returns the stored record (HTTP 200) and launches nothing, while one that another
 user's launch holds is refused (409).
 Its `os_family` (`linux` or `windows`) is the chosen catalog image's `osFamily`
-and is required; its `bootstrap_id` is the idempotency key — re-send the one from
-a call that timed out rather than launching again. Its optional `lease_hours` (1 up to the
+and is required; its `bootstrap_id` is the idempotency key, and an error carries
+the `bootstrapId` that was sent (generated when the call gave none). When the
+answer was lost (`outcomeUnknown`, a timeout), look that id up with
+`get_edh_workstation` and re-send it only if it is not found, rather than
+launching again. Its optional `lease_hours` (1 up to the
 policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch; it is
 refused (400) when leases are disabled and ignored when the policy is `forced`. An
 `instance_type` the image's profile lists only under architectures of another family

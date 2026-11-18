@@ -367,8 +367,8 @@ def register(
             of another family than the image's (`x86_64` and `i386` are one family), and (400) `instanceType
             is not offered for this image` when the image's recipe lists `launchInstanceTypes` that leave the
             type out, and (403) for a session signed in with a VAMS API key. `bootstrap_id` is the
-            idempotency key: re-send the one from a call that timed out to retry without launching twice
-            (409 when another user's launch holds it). `lease_hours` (see get_edh_catalog_lease) applies only when leases
+            idempotency key; an error carries the `bootstrapId` sent: after a lost answer, check
+            get_edh_workstation, then re-send only that id (409 when another user's launch holds it). `lease_hours` (see get_edh_catalog_lease) applies only when leases
             are enabled and not forced. `capacity_reservation_id` launches into a reservation from
             list_edh_catalog_capacity_reservations: a full one without `fallbackToOnDemand` is refused (409,
             `error_type` `EdhReservationFullError`, `code` `RESERVATION_FULL`), one whose `launchAllowed` is
