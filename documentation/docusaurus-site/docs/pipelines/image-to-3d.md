@@ -141,6 +141,7 @@ When `useCodeBuild: true`, each enabled model gets an Amazon ECR repository and 
 -   Each CodeBuild project builds its model's Dockerfile and pushes the image to its own Amazon ECR repository, using the previous image as a layer cache.
 -   Builds re-trigger automatically when the container source changes.
 -   Builds run in the same private VPC subnets as the pipeline AWS Batch compute, with NAT Gateway egress for pulling base images and upstream model repositories.
+-   Python packages are installed through an AWS CodeArtifact pull-through cache of PyPI in the Regions that offer CodeArtifact (13 commercial Regions; see [AWS CodeArtifact](../architecture/aws-resources.md#aws-codeartifact)). In other Regions, including AWS GovCloud (US) and the AWS European Sovereign Cloud, no cache is created and the builds install from the public index.
 
 Builds continue asynchronously after `cdk deploy` returns. A failed build leaves the deployment successful but the AWS Batch job failing on an image pull, so check build status before the first execution:
 
