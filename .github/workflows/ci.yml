@@ -351,12 +351,13 @@ jobs:
                   include-hidden-files: true
                   retention-days: 1
 
-    # Builds the documentation site on every pull request and push, without deploying it. The site
-    # fails its build on a broken link or anchor (docusaurus.config.ts), and docs.yml builds it only on
-    # pushes to main and release/**, so without this job a broken link merged on development would
-    # first fail at release time.
+    # Builds the documentation site on every pull request and on pushes to development and
+    # development-*, without deploying it. The site fails its build on a broken link or anchor
+    # (docusaurus.config.ts), and docs.yml builds it only on pushes to main and release/**, so without
+    # this job a broken link merged on development would first fail at release time. Pushes to main
+    # and release/** skip it: docs.yml builds the site there.
     docs-build:
-        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) && !(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) }}
         runs-on: ubuntu-latest
         timeout-minutes: 30
         steps:
