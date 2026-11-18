@@ -19012,6 +19012,10 @@ components:
                     type: string
                     nullable: true
                     description: "The 12-digit AWS account that owns the bucket when it is not the deployment account; null otherwise."
+                isAccelerated:
+                    type: boolean
+                    description: "Whether S3 Transfer Acceleration is on for the bucket, as the bucket's registration records it. Uploads and downloads for an accelerated bucket use its accelerate endpoint. False when the registration does not say."
+                    default: false
             required:
                 - bucketId
                 - bucketName
