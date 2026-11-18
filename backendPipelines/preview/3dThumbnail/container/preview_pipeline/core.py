@@ -600,9 +600,7 @@ def _complete_without_preview(stage: PipelineStage, results_location: dict, name
 
 def _skipped_prims_sentence(skipped_prims: dict) -> str:
     """'3 Points prims and 2 BasisCurves prims are not drawn by the 3D Preview Thumbnail.'"""
-    named = [f"{entry['count']} {name} {'prim' if entry['count'] == 1 else 'prims'}"
-             for name, entry in skipped_prims.items()]
-    listed = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
+    listed = usd_handler.describe_skipped(skipped_prims)
     total = sum(entry["count"] for entry in skipped_prims.values())
     return f"{listed} {'is' if total == 1 else 'are'} not drawn by the 3D Preview Thumbnail."
 
@@ -640,6 +638,12 @@ def _write_incomplete_result(results_location: dict, incomplete, input_path: str
             document["skippedPrims"] = [{"type": name, "count": entry["count"], "paths": list(entry["paths"])}
                                         for name, entry in skipped_prims.items()]
             body = json.dumps(document, indent=2).encode("utf-8")
+            # The cap holds for the final document: the file list shrinks until it fits. A run without
+            # skipped prims never reaches this, so its document is unchanged.
+            while len(body) > dependencies.MAX_RESULT_DOCUMENT_BYTES and document["skippedFiles"]:
+                document["skippedFiles"] = document["skippedFiles"][:len(document["skippedFiles"]) // 2]
+                document["truncated"] = True
+                body = json.dumps(document, indent=2).encode("utf-8")
         if s3.put_json(results_location["bucketName"], key, body) is None:
             logger.warning("Could not write the incomplete-preview result; the summary is in the job "
                            "log")

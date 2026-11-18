@@ -101,6 +101,17 @@ class TestSkippedPrimsAreNamed:
         _, report = _load(_stage(tmp_path, body))
         assert sorted(report["skippedPrims"]) == ["HermiteCurves", "NurbsCurves", "NurbsPatch"]
 
+    def test_a_plane_and_a_tet_mesh_are_named_and_the_geometry_is_unchanged(self, tmp_path):
+        extra = ('\n    def Plane "Floor"\n    {\n        double width = 20\n        double length = 20\n    }'
+                 '\n    def TetMesh "Block"\n    {\n        point3f[] points = [(0, 0, 0), (9, 0, 0), (0, 9, 0), (0, 0, 9)]\n'
+                 '        int4[] tetVertexIndices = [(0, 1, 2, 3)]\n    }')
+        alone, _ = _load(_stage(tmp_path, _MESH, "alone.usda"))
+        mixed, report = _load(_stage(tmp_path, _MESH + extra, "mixed.usda"))
+        np.testing.assert_array_equal(np.asarray(mixed.points), np.asarray(alone.points))
+        np.testing.assert_array_equal(np.asarray(mixed.faces), np.asarray(alone.faces))
+        assert report["skippedPrims"] == {"Plane": {"count": 1, "paths": ["/World/Floor"]},
+                                          "TetMesh": {"count": 1, "paths": ["/World/Block"]}}
+
     def test_a_point_instancer_prototype_of_points_is_named_once(self, tmp_path):
         body = (_MESH + '\n    def PointInstancer "Inst"\n    {\n        rel prototypes = [</World/Inst/Proto>]\n'
                 '        int[] protoIndices = [0, 0, 0]\n        point3f[] positions = [(0, 0, 0), (5, 0, 0), (9, 0, 0)]\n'
@@ -127,8 +138,21 @@ class TestOnlyPointsOrCurves:
         with pytest.raises(ValueError) as error:
             usd_handler.load(_stage(tmp_path, _POINTS + _POINTS.replace("Dust", "Dust2") + _CURVES))
         assert str(error.value) == ("No valid mesh geometry found in USD stage: the stage holds only "
-                                    "2 Points prims, 1 BasisCurves prim, which the 3D Preview Thumbnail "
+                                    "2 Points prims and 1 BasisCurves prim, which the 3D Preview Thumbnail "
                                     "does not draw")
+
+    def test_three_types_are_joined_with_commas_and_a_last_and(self, tmp_path):
+        plane = '\n    def Plane "Floor"\n    {\n    }'
+        with pytest.raises(ValueError) as error:
+            usd_handler.load(_stage(tmp_path, _POINTS + _CURVES + plane))
+        assert "holds only 1 Points prim, 1 BasisCurves prim and 1 Plane prim, which" in str(error.value)
+
+    def test_the_error_and_the_completion_line_use_one_phrasing(self):
+        skipped = {"Points": {"count": 3, "paths": []}, "BasisCurves": {"count": 1, "paths": []},
+                   "Plane": {"count": 2, "paths": []}}
+        listed = "3 Points prims, 1 BasisCurves prim and 2 Plane prims"
+        assert usd_handler.describe_skipped(skipped) == listed
+        assert core._skipped_prims_sentence(skipped) == f"{listed} are not drawn by the 3D Preview Thumbnail."
 
     def test_every_other_empty_stage_keeps_the_original_text(self, tmp_path):
         with pytest.raises(ValueError) as error:
@@ -201,6 +225,28 @@ class TestTheRunReportsSkippedPrims:
         assert with_none.call_args.args[2] == reference.call_args.args[2]
         document = json.loads(with_none.call_args.args[2])
         assert "skippedPrimTypes" not in document["counts"] and "skippedPrims" not in document
+
+    def test_the_size_cap_holds_for_the_final_document(self, tmp_path, caplog, monkeypatch):
+        put_json = MagicMock(side_effect=lambda bucket, key, body: key)
+        many = tuple((f"scene/parts/{'x' * 200}{i}.usda", "missing from the asset") for i in range(120))
+        worst = {name: {"count": 9, "paths": ["/World/" + "p" * 240] * usd_handler.MAX_SKIPPED_PATHS}
+                 for name in usd_handler._UNDRAWN_TYPES}
+        monkeypatch.setattr(dependencies, "MAX_RESULT_DOCUMENT_BYTES", 12 * 1024)
+        _run_usd(tmp_path, caplog, monkeypatch, {"skippedPrims": worst},
+                 incomplete_tests._fetch_skipping(*many), put_json)
+        body = put_json.call_args.args[2]
+        document = json.loads(body)
+        assert len(body) <= 12 * 1024
+        assert document["truncated"] is True and len(document["skippedPrims"]) == len(worst)
+
+    def test_a_document_without_skipped_prims_is_not_resized(self, tmp_path, caplog, monkeypatch):
+        with_none = MagicMock(side_effect=lambda bucket, key, body: key)
+        reference = MagicMock(side_effect=lambda bucket, key, body: key)
+        many = tuple((f"scene/parts/{'x' * 200}{i}.usda", "missing from the asset") for i in range(120))
+        monkeypatch.setattr(dependencies, "MAX_RESULT_DOCUMENT_BYTES", 12 * 1024)
+        _run_usd(tmp_path, caplog, monkeypatch, {}, incomplete_tests._fetch_skipping(*many), with_none)
+        incomplete_tests._run(tmp_path, caplog, incomplete_tests._fetch_skipping(*many), RESULTS, reference)
+        assert with_none.call_args.args[2] == reference.call_args.args[2]
 
     def test_a_complete_stage_still_writes_nothing(self, tmp_path, caplog, monkeypatch):
         put_json = MagicMock()

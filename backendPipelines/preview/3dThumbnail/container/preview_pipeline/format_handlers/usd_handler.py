@@ -69,7 +69,7 @@ _IMPLICIT_RESOLUTION = 24
 
 # Gprim types the loader does not draw (it tessellates meshes and the built-in solids only). A rendered
 # prim of one of them is named in the job log and the incomplete-preview result, never drawn.
-_UNDRAWN_TYPES = ("Points", "BasisCurves", "NurbsCurves", "HermiteCurves", "NurbsPatch")
+_UNDRAWN_TYPES = ("Points", "BasisCurves", "NurbsCurves", "HermiteCurves", "NurbsPatch", "Plane", "TetMesh")
 # Prim paths named per type in the log and the result.
 MAX_SKIPPED_PATHS = 5
 
@@ -156,7 +156,7 @@ def load(file_path: str, asset_root: str = None, report: dict = None) -> pv.Poly
     if not parts:
         if skipped:
             raise ValueError("No valid mesh geometry found in USD stage: the stage holds only "
-                             + _describe_skipped(skipped)
+                             + describe_skipped(skipped)
                              + ", which the 3D Preview Thumbnail does not draw")
         raise ValueError("No valid mesh geometry found in USD stage")
     if skipped:
@@ -233,9 +233,12 @@ def _skipped_prim_summary(context, left_out):
     return summary
 
 
-def _describe_skipped(skipped):
-    return ", ".join(f"{entry['count']} {name} {'prim' if entry['count'] == 1 else 'prims'}"
-                     for name, entry in skipped.items())
+def describe_skipped(skipped):
+    """'3 Points prims, 2 Plane prims and 1 BasisCurves prim': the counts by type, the last joined with
+    'and'. Shared by the no-geometry error and the run's completion message."""
+    named = [f"{entry['count']} {name} {'prim' if entry['count'] == 1 else 'prims'}"
+             for name, entry in skipped.items()]
+    return named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
 
 
 def _collect_parts(root, xform_cache, context, plan=None):
