@@ -289,6 +289,29 @@ describe("loadFile 3MF", () => {
         expect(parse).toHaveBeenCalledTimes(1);
         expect(result.object.name).toBe("3mf");
     });
+
+    // A zip reader finds the entries from the end of the file, so the check reads every package.
+    it("checks a .3mf package that does not start with a zip entry header", async () => {
+        const prefixed = new Uint8Array([0, 0, 0, 0, 0x50, 0x4b, 0x03, 0x04]).buffer;
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            opts.filter({ name: "3D/model.model", originalSize: 4 * 1024 * 1024 * 1024 });
+            return {};
+        });
+
+        await expect(loadFile(prefixed, "3mf", "part.3mf")).rejects.toThrow(
+            /The 3MF package expands to/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("does not parse a .3mf package when the bundle has no zip reader to check it", async () => {
+        delete (window as any).THREEBundle.fflate;
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(
+            /cannot check the 3MF package's size/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
 });
 
 describe("format helpers", () => {
