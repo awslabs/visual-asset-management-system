@@ -1267,6 +1267,8 @@ Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiB
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 129 nodes from 107 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
 
+A fourth ceiling governs the storage stack: **200 Outputs per template**, not adjustable. `StorageResourcesBuilder` emits 153 of them (commercial template), because every table a sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a `tableArn` where a cross-stack grant needs one. Exceeding 200 is rejected at ValidateTemplate, so roughly 45 more cross-stack-referenced storage resources would hit it. `apiStackCeilings.test.ts` fails above 170, which leaves room to design a split rather than meet the limit at the deploy that crosses it. Counted from a fresh synth, not from `cdk.out`.
+
 ```typescript
 // ✅ CORRECT - Register API routes
 const [domain]Service = build[Domain]Service(
