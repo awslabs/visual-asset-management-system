@@ -38,7 +38,7 @@ from ..utils.exceptions import (
     ZipDownloadTimeoutError,
     ZipDownloadTransferError,
 )
-from ..utils.json_output import output_error, output_result, output_status, output_warning
+from ..utils.json_output import output_error, output_result, output_status, output_warning, output_info
 from ..utils.zip_downloads import (
     build_create_request,
     build_selection,
@@ -47,6 +47,7 @@ from ..utils.zip_downloads import (
     is_terminal,
     progress_text,
     resolve_local_path,
+    check_download_destination,
     wait_for_zip_download,
 )
 
@@ -219,11 +220,15 @@ def create(ctx: click.Context, database_id: str, asset_id: str, files: Tuple[str
                                     archive_format, compression, archive_file_name)
         if download_to:
             # Fail before the job starts when the destination can never be written.
-            resolve_local_path(download_to, archive_file_name or "archive", overwrite)
+            check_download_destination(download_to, overwrite)
 
         output_status(f"Creating a zip download of asset '{asset_id}'...", json_output)
         job = api_client.create_zip_download(database_id, asset_id, body)
+    except _HANDLED_ERRORS as e:
+        _report(e, json_output)
 
+    request_id = job.get('requestId')
+    try:
         if wait or download_to:
             output_status(f"Waiting for zip download '{job.get('requestId')}'...", json_output)
             job = wait_for_zip_download(
@@ -247,6 +252,13 @@ def create(ctx: click.Context, database_id: str, asset_id: str, files: Tuple[str
                       cli_formatter=format_job)
         return job
     except _HANDLED_ERRORS as e:
+        # The job exists: name it, so a retry downloads it instead of creating a second one.
+        if request_id:
+            fields = getattr(e, 'json_fields', None)
+            e.json_fields = {**(fields if isinstance(fields, dict) else {}), 'requestId': request_id}
+            output_info(f"The zip download '{request_id}' was created. Download it later with: "
+                        f"vamscli zip-download download -d {database_id} -a {asset_id} -r {request_id} "
+                        f"-o <path>", json_output)
         _report(e, json_output)
 
 
