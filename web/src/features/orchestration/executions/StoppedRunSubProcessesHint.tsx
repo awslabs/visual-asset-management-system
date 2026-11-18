@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { useExecutionActions } from "../api/queries";
 import { useToast, toastErrorMessage } from "../components/ToastProvider";
+import Dialog from "../components/Dialog";
+import { BusyButton } from "../components/BusyControls";
+import { btnSecondary } from "../components/controlStyles";
 import type { ExecutionDetail, NotAbortableSubExecution } from "../types";
 import { notAbortableSummary } from "./ExecutionsBoard";
 
@@ -38,6 +41,8 @@ export function stillRunningSubProcessCount(execution?: ExecutionDetail): number
 /**
  * Says that a stopped run still has sub-processes running, and offers the Abort that stops them. The
  * abort route sweeps an already-stopped run's pipeline steps again, so it is the remedy here too.
+ * Abort asks first, as the executions board's Abort does, and its controls keep focus while the
+ * request runs (`BusyButton`, the dialog held open with `busy`).
  */
 const StoppedRunSubProcessesHint: React.FC<{
     executionId: string;
@@ -46,6 +51,8 @@ const StoppedRunSubProcessesHint: React.FC<{
 }> = ({ executionId, count, canAbort }) => {
     const { abortExecution } = useExecutionActions();
     const toast = useToast();
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const busy = abortExecution.isPending;
 
     const onAbort = async () => {
         try {
@@ -68,6 +75,8 @@ const StoppedRunSubProcessesHint: React.FC<{
             toast.error("Abort failed", {
                 description: toastErrorMessage(err, "Failed to abort execution"),
             });
+        } finally {
+            setConfirmOpen(false);
         }
     };
 
@@ -84,14 +93,46 @@ const StoppedRunSubProcessesHint: React.FC<{
                 them.
             </p>
             {canAbort && (
-                <button
-                    type="button"
-                    onClick={onAbort}
-                    disabled={abortExecution.isPending}
-                    className="orch-outline mt-2 px-3 py-1 text-sm font-semibold rounded border border-yellow-700 dark:border-yellow-400 text-yellow-800 dark:text-yellow-200 hover:bg-yellow-100 dark:hover:bg-yellow-900/40 disabled:opacity-50"
+                <BusyButton
+                    onClick={() => setConfirmOpen(true)}
+                    busy={busy}
+                    busyLabel="Aborting…"
+                    className="orch-outline mt-2 px-3 py-1 text-sm font-semibold rounded border border-yellow-700 dark:border-yellow-400 text-yellow-800 dark:text-yellow-200 hover:bg-yellow-100 dark:hover:bg-yellow-900/40"
                 >
-                    {abortExecution.isPending ? "Aborting…" : "Abort"}
-                </button>
+                    Abort
+                </BusyButton>
+            )}
+            {canAbort && confirmOpen && (
+                <Dialog
+                    open={confirmOpen}
+                    onOpenChange={setConfirmOpen}
+                    title="Abort Execution"
+                    busy={busy}
+                    footer={
+                        <>
+                            <BusyButton
+                                busy={busy}
+                                onClick={() => setConfirmOpen(false)}
+                                className={btnSecondary}
+                            >
+                                Cancel
+                            </BusyButton>
+                            <BusyButton
+                                busy={busy}
+                                busyLabel="Aborting..."
+                                onClick={onAbort}
+                                className="px-4 py-2 bg-red-600 text-white rounded"
+                            >
+                                Abort
+                            </BusyButton>
+                        </>
+                    }
+                >
+                    <p>
+                        Stop the sub-processes still running? Their compute is released and their
+                        work is lost.
+                    </p>
+                </Dialog>
             )}
         </div>
     );
