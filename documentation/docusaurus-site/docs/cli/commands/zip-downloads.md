@@ -42,6 +42,8 @@ vamscli zip-download create -d my-db -a my-asset --folder /scans/ --wait --downl
 
 A selection holds at most 1,000 entries; select a folder rather than its files one by one to stay within it. The whole job is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type, and when the selection exceeds the deployment's limits. `--json-output` prints the created job.
 
+With `--download-to`, the destination is checked before the job is created: a directory must be writable, and a file path must not exist (without `--overwrite`) and must name an existing directory. The archive's own name is known only once the job has run, so a file of that name in the directory is reported after the job succeeds. When a step after the job was created fails (the wait, the URL request, or the transfer), the error names the job's `requestId` (also under `--json-output`); download it with `zip-download download -r <requestId>` instead of creating another job.
+
 ---
 
 ## zip-download list
