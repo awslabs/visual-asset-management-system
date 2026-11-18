@@ -231,6 +231,39 @@ logs anything and never logs the event, as both handlers do
 (`tests/test_3dbasic_task_token_logging.py`, `tests/test_meshcad_task_token_logging.py`). The 3dBasic
 `.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
 
+**3D Basic Conversion image: how a model is read and written.** `lambdaContainer/lambda.py` is the handler
+and does all Amazon S3 traffic; the parsing runs elsewhere:
+
+-   `requirements.txt` is `poetry export -f requirements.txt` of `poetry.lock` **with hashes** (the export needs
+    `poetry-plugin-export`), and the Dockerfile installs it with `pip install --require-hashes`. Re-lock with
+    `poetry update`, re-export, and bump the base image digest as the Dockerfile comment says.
+    `tests/test_3dbasic_image_build_inputs.py` holds the two files, the hashes and the install flag together.
+-   `size_check.py` refuses an input before it is downloaded. The handler reads the size with `HeadObject` at
+    the launch version and compares it with a limit derived from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and the
+    free space of `/tmp`, using a per-format expansion factor (`MEMORY_EXPANSION_FACTORS`). The factors are the
+    peak resident memory of a load and export divided by the input size, measured with the installed
+    trimesh and numpy; re-measure them when either moves a major version (the module docstring lists the
+    method and the figures). The same limit, less the input, bounds the referenced files.
+-   `conversion_worker.py` loads and exports the model in a child process started by `run_worker`: scrubbed
+    environment (`worker_environment`: no `AWS_*`, `HOME=/tmp`), `RLIMIT_AS` set to the function memory plus
+    `ADDRESS_SPACE_OVERHEAD_BYTES` (OpenBLAS reserves about 1.5 GB of address space at start, so a limit at the
+    function memory alone refuses inputs the size check allows), and a wall-clock limit from
+    `context.get_remaining_time_in_millis()` less `WORKER_RESERVE_SECONDS`. The worker imports neither boto3 nor
+    trimesh at module level and creates no AWS client. A format added to the handler is parsed in
+    `convert_model`, never in `lambda.py`.
+-   `scene_limits.py`, `archive_guard.py` and `xml_guard.py` are vendored from the 3D thumbnail container
+    (`preview/3dThumbnail/container/preview_pipeline/`), because a build context holds only its own directory.
+    `tests/test_3dbasic_vendored_guards.py` compares each with its canonical file apart from the import lines; a
+    fix goes into both.
+-   Handler-flow tests replace `run_worker` with `tests/inprocess_worker.py`, which runs `convert_model` with a
+    stubbed trimesh. The real worker is covered by `tests/test_3dbasic_worker_process.py` and the real
+    conversions; the built image by the golden suite below.
+-   `tests/test_3dbasic_golden_round_trip.py` converts a generated fixture of every accepted input format to every
+    written output format with the built image under the Lambda runtime interface emulator, against moto for
+    Amazon S3. `tests/golden/run_golden.sh` builds the image and runs it (the `conversion-3dbasic-golden` job in
+    `ci.yml` does the same); `GOLDEN_DUMP_DIR` writes the outputs, so two images compare byte for byte. A format
+    added to `SUPPORTED_INPUT_FORMATS` or `SUPPORTED_OUTPUT_FORMATS` needs its fixture or column there.
+
 VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
 that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. Both
 Lambda-container handlers therefore put the body's `workflowExecutionId` on every line with
@@ -1297,6 +1330,8 @@ pass a runner's free disk). A new tests directory therefore runs
 without a workflow edit. One that cannot run on a CPU-only runner (it needs a GPU, a container runtime or a
 model download) goes in `ci/excluded-test-dirs.json` with its reason; a test that needs an optional package
 the default image does not install skips with `pytest.importorskip` rather than being excluded.
+A suite that needs a built image (the 3D Basic Conversion golden round trip) skips without its environment
+variables, so these jobs pass over it, and runs in a job of its own (`conversion-3dbasic-golden`).
 A directory whose tests render (PyVista/VTK, pyrender, Open3D visualization) has a `headlessDisplay` entry
 in `ci/suite-settings.json` stating why (`preview/3dThumbnail/container/tests` does). The runner runs it
 under `xvfb-run -a` with the rendering environment of the thumbnail image (`HEADLESS_DISPLAY_ENV`:
@@ -1351,6 +1386,8 @@ holding:
     (`backendPipelines/tests/test_manifest_helper_byte_identity.py`), and the same check for
     `compliance_output.py` with its backend file-name and flag checks
     (`backendPipelines/tests/test_compliance_output_helper.py`)
+-   the drift check between the 3D Basic Conversion's vendored guards and their canonical files in the 3D
+    thumbnail container (`conversion/3dBasic/lambdaContainer/tests/test_3dbasic_vendored_guards.py`)
 -   the `customLogging/logger.py` byte-identity check and the emitted-line token redaction checks
     (`backendPipelines/tests/test_pipeline_logger_identity.py`, `test_pipeline_logger_formatter.py`) — a
     handler can always be edited back to an f-string event log or a drifting logger copy
