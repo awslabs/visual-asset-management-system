@@ -849,10 +849,10 @@ List the sessions whose state is `STOPPED` or `ORPHANED` and whose record last c
 vamscli edh admin instances stale [OPTIONS]
 ```
 
-| Option           | Type    | Required | Description                                 |
-| ---------------- | ------- | -------- | ------------------------------------------- |
-| `--idle-minutes` | INTEGER | No       | Idle threshold in minutes; 120 when omitted |
-| `--json-output`  | Flag    | No       | Output raw JSON response                    |
+| Option           | Type    | Required | Description                                                            |
+| ---------------- | ------- | -------- | ---------------------------------------------------------------------- |
+| `--idle-minutes` | INTEGER | No       | Idle threshold in minutes, from 1 to 525600 (a year); 120 when omitted |
+| `--json-output`  | Flag    | No       | Output raw JSON response                                               |
 
 ```bash
 vamscli edh admin instances stale
