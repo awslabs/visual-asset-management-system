@@ -83,7 +83,7 @@ export const pageReachable = (
 
 /**
  * The flash of a listing whose load failed: what could not be loaded, then the reason the service
- * or the browser gave ("Could not load the audit log: Failed to fetch").
+ * gave ("Could not load the audit log: The request could not reach the service. ...").
  */
 export const loadFailureMessage = (what: string, reason: unknown): string => {
     const text = typeof reason === "string" ? reason.trim() : "";

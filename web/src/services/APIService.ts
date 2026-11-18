@@ -9,6 +9,7 @@ import {
     isRequestBlocked,
     NETWORK_FAILURE_MESSAGE,
 } from "./apiClient";
+import { requestFailureMessage } from "./networkFailure";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
 
@@ -734,7 +735,7 @@ export const fetchAssetLinks = async ({
         // surface the failure instead of rendering an empty (success-shaped)
         // relationship tree.
         console.log("Error fetching asset links:", error);
-        return [false, error?.message || "An error occurred"];
+        return [false, requestFailureMessage(error, "An error occurred")];
     }
 };
 
@@ -1116,7 +1117,7 @@ export const fetchAllComments = async ({ assetId, showArchived = false }: any) =
         }
     } catch (error: any) {
         console.log(error);
-        return error?.message;
+        return isNetworkFailure(error) ? NETWORK_FAILURE_MESSAGE : error?.message;
     }
 };
 
@@ -3525,8 +3526,19 @@ const zipAssetPath = (databaseId: string, assetId: string) =>
 
 const zipFailure = (error: any, fallback: string): [false, string, number | undefined] => {
     console.log(error);
-    return [false, error?.message || fallback, isRequestBlocked(error) ? undefined : error?.status];
+    return [
+        false,
+        requestFailureMessage(error, fallback),
+        isRequestBlocked(error) ? undefined : error?.status,
+    ];
 };
+
+/**
+ * Shown for a create that got no response: the request may have reached the API, so the job may
+ * exist, and creating it again could start a second one.
+ */
+export const ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE =
+    "The request got no reply, so the zip download may have been created. Check the Download Queue before trying again.";
 
 const zipListQuery = ({ maxItems, pageSize, startingToken }: any): Record<string, string> => {
     const query: Record<string, string> = {};
@@ -3550,6 +3562,10 @@ export const createZipDownload = async ({ databaseId, assetId, body }: any) => {
         }
         return [true, response];
     } catch (error: any) {
+        if (isNetworkFailure(error)) {
+            console.log(error);
+            return [false, ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE, undefined];
+        }
         return zipFailure(error, "Failed to create the zip download");
     }
 };

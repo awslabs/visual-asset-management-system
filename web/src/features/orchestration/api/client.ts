@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { NotAbortableSubExecution } from "../types";
+import { requestFailureMessage } from "../../../services/networkFailure";
 
 export function unwrapMessage(resp: any): any {
     return resp && typeof resp === "object" && "message" in resp ? resp.message : resp;
@@ -14,9 +15,12 @@ export function unwrapMessage(resp: any): any {
  */
 const FAILURE_STATUS = Symbol("failureStatus");
 
-/** The `[false, message]` tuple for a thrown call, tagged with its HTTP status when it has one. */
+/**
+ * The `[false, message]` tuple for a thrown call, tagged with its HTTP status when it has one. A
+ * call that got no response carries `NETWORK_FAILURE_MESSAGE` and no status, so it stays retryable.
+ */
 function failureTuple(e: any): [false, string] {
-    const tuple: [false, string] = [false, e?.message || "Request failed"];
+    const tuple: [false, string] = [false, requestFailureMessage(e, "Request failed")];
     if (typeof e?.status === "number") {
         Object.defineProperty(tuple, FAILURE_STATUS, { value: e.status, enumerable: false });
     }
