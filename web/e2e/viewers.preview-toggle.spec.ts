@@ -83,27 +83,41 @@ async function findFileWithPreview(
 }
 
 /**
- * Open the file's page and wait for the Preview toggle. The toggle is drawn after the asset lookup
- * settles and has been missing on a first load, so the page is loaded once more before the wait fails.
+ * Open the file's page and wait for the Preview toggle. The toggle follows the file the page holds,
+ * so it appears whichever of the file read and the asset details answers first; `assetDetailsDelayMs`
+ * holds the asset details back to make the file read answer first.
  */
-async function openWithPreviewToggle(page: Page, subject: PreviewSubject, version?: string) {
+async function openWithPreviewToggle(
+    page: Page,
+    subject: PreviewSubject,
+    version?: string,
+    assetDetailsDelayMs = 0,
+    held: { count: number } = { count: 0 }
+) {
     const route =
         `/#/databases/${subject.databaseId}/assets/${subject.assetId}` +
         `/file/${encodeURIComponent(subject.key)}` +
         (version ? `?version=${encodeURIComponent(version)}` : "");
-    const toggle = page.getByText("Preview", { exact: true }).first();
-    for (let attempt = 1; ; attempt++) {
-        await page.goto("about:blank");
-        await page.goto(route, { waitUntil: "domcontentloaded" });
-        const shown = await toggle
-            .waitFor({ state: "visible", timeout: 30_000 })
-            .then(() => true)
-            .catch(() => false);
-        if (shown) return toggle;
-        if (attempt === 2) {
-            throw new Error(`the Preview toggle did not appear after two loads of ${route}`);
-        }
+    if (assetDetailsDelayMs > 0) {
+        // The asset details request is `.../assets/<id>?showArchived=true`, so the id may be followed
+        // by a query string; `held.count` lets the caller prove the delay was really applied.
+        const assetDetails = new RegExp(
+            `/database/${subject.databaseId}/assets/${subject.assetId}(\\?|$)`
+        );
+        await page.route(assetDetails, async (route) => {
+            if (route.request().method() !== "GET") return route.continue();
+            held.count += 1;
+            await new Promise((resolve) => setTimeout(resolve, assetDetailsDelayMs));
+            await route.continue();
+        });
     }
+    await page.goto("about:blank");
+    await page.goto(route, { waitUntil: "domcontentloaded" });
+    const toggle = page.getByText("Preview", { exact: true }).first();
+    await expect(toggle, "the Preview toggle is offered for a file with a preview").toBeVisible({
+        timeout: 45_000,
+    });
+    return toggle;
 }
 
 const NOTICE = /This preview belongs to the latest version of the file/;
@@ -164,6 +178,29 @@ test.describe("File page Preview toggle", () => {
         await expectImageShown(page);
         // The latest version (no ?version=) gets no notice.
         await expect(page.getByText(NOTICE)).toHaveCount(0);
+    });
+
+    test("offers the Preview toggle when the asset details answer after the file", async ({
+        page,
+    }) => {
+        const subject = await findFileWithPreview(page);
+        test.skip(!subject, "No distributable asset with a generated preview file here");
+        const s = subject!;
+        const downloads = watchDownloads(page);
+
+        const held = { count: 0 };
+        const started = Date.now();
+        const toggle = await openWithPreviewToggle(page, s, undefined, 6_000, held);
+        const waited = Date.now() - started;
+        expect(held.count, "the asset details request was held back").toBeGreaterThan(0);
+        expect(waited, "the toggle appeared only after the held asset details").toBeGreaterThan(
+            5_500
+        );
+        await toggle.click();
+
+        const request = await expectPreviewRequest(downloads, s.previewKey);
+        expect(request.status, "the preview download is answered").toBe(200);
+        await expectImageShown(page);
     });
 
     test("says the preview belongs to the latest version when an older file version is viewed", async ({
