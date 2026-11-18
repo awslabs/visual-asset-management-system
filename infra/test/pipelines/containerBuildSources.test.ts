@@ -55,6 +55,21 @@ const COORD_DOCKERFILE = path.join(
     "Dockerfile"
 );
 
+/** The Image to 3D models, one Dockerfile each (`Dockerfile.<model>`). */
+const IMAGE_TO_3D_MODELS = [
+    "blenderagent",
+    "hunyuan3d",
+    "sam3d",
+    "stable3dgen",
+    "step1x3d",
+    "trellis2",
+    "triposr",
+] as const;
+const IMAGE_TO_3D_CONTAINER_DIR = path.join(PIPELINES_DIR, "genAi", "imageTo3d", "container");
+function imageTo3dDockerfile(model: string): string {
+    return path.join(IMAGE_TO_3D_CONTAINER_DIR, `Dockerfile.${model}`);
+}
+
 /** Every buildspec.yml under `dir`, recursively. */
 function buildspecs(dir: string): string[] {
     const out: string[] = [];
@@ -290,6 +305,12 @@ const NON_ROOT_IMAGES: {
         // The package the entrypoint imports at run time.
         readSources: ["./video_sop_bom_pipeline/"],
     },
+    // The seven Image to 3D images run as uid 10000 (the #327 design). Their scratch space is /tmp and
+    // their read-bit normalization is one chmod over /opt/ml/code, asserted in the Image to 3D block below.
+    ...IMAGE_TO_3D_MODELS.map((model) => ({
+        label: `Image to 3D ${model}`,
+        file: imageTo3dDockerfile(model),
+    })),
 ];
 
 /**
@@ -300,27 +321,29 @@ const NON_ROOT_IMAGES: {
  * coordinateTransform block above already asserts this for its own image; this widens it to the rest,
  * which is the half of `S4-PIPELINES-053` left open by design (owner question 92, option A).
  *
- * `condaforge/...:24.9.2-0`-style references are accepted without a digest: they carry an immutable
- * upstream build tag rather than a floating one, and pinning those to a digest would be a separate
- * decision about a different registry. The rule is stated as "no FLOATING tag", which is the property
- * that matters, rather than "every reference carries @sha256".
+ * The rule covers every registry and image, not only the docker-library python bases it started with:
+ * a version-looking tag such as `condaforge/...:24.9.2-0` or `nvidia/cuda:12.8.1-...` is still a tag its
+ * publisher can re-point, and the Image to 3D CUDA bases are where that bit (R3-9). A named build stage
+ * (`FROM <stage>`) and an `ARG`-supplied base are not image references and are not matched.
  */
 // `@` is excluded from BOTH groups deliberately. With a plain `(\S+)` the image group matched greedily
 // through `…python:3.12-slim@sha256`, leaving the 64 hex characters to satisfy the tag group — so a
 // digest-pinned line was reported as floating, and the rule would have failed the very lines it exists
-// to require. The positive control below is what caught that.
-const FLOATING_TAG = /^FROM\s+(?:--\S+\s+)*([^\s:@]+(?:\/[^\s:@]+)*):([A-Za-z0-9._-]+)\s*$/;
+// to require. The positive control below is what caught that. The optional trailing `AS <name>` is what
+// lets a builder stage's line be checked at all: without it the `$` anchor made every named stage pass.
+const FLOATING_TAG =
+    /^FROM\s+(?:--\S+\s+)*([^\s:@$]+(?:\/[^\s:@]+)*):([A-Za-z0-9._-]+)(?:\s+(?:AS|as)\s+\S+)?\s*$/;
 
 describe("base images are not pulled from a floating tag", () => {
     const ALL_DOCKERFILES = [COORD_DOCKERFILE, ...NON_ROOT_IMAGES.map((i) => i.file)];
 
     it("examines every Dockerfile it names", () => {
         // Control: a typo'd path would otherwise make the rule below pass over an empty set.
-        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(5);
+        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(12);
         for (const f of ALL_DOCKERFILES) expect(fs.existsSync(f)).toBe(true);
     });
 
-    it.each(ALL_DOCKERFILES)("%s pins each python base image by digest", (file) => {
+    it.each(ALL_DOCKERFILES)("%s pins each base image by digest", (file) => {
         const text = fs.readFileSync(file, "utf-8");
         const offenders: string[] = [];
         for (const line of text.split(/\r?\n/)) {
@@ -328,10 +351,7 @@ describe("base images are not pulled from a floating tag", () => {
             const m = FLOATING_TAG.exec(line.trim());
             if (!m) continue; // already carries @sha256, or is a named build stage
             const [, image, tag] = m;
-            // Only the docker-library python images are in scope here; see the note above.
-            if (/\/python$/.test(image) || /library\/python$/.test(image)) {
-                offenders.push(`${image}:${tag}`);
-            }
+            offenders.push(`${image}:${tag}`);
         }
         expect(offenders).toEqual([]);
     });
@@ -344,13 +364,26 @@ describe("base images are not pulled from a floating tag", () => {
         expect(m![2]).toBe("3.12-slim");
         // And that a digest-pinned line is NOT reported, which is what makes the rule discriminating.
         expect(FLOATING_TAG.exec(`${sample}@sha256:${"a".repeat(64)}`.trim())).toBeNull();
+        // A named stage is checked too, and any registry's tag counts, not only python's.
+        expect(
+            FLOATING_TAG.exec("FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0 as build")
+        ).not.toBeNull();
+        expect(FLOATING_TAG.exec("FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04")).not.toBeNull();
+        expect(
+            FLOATING_TAG.exec(`FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:${"b".repeat(64)}`)
+        ).toBeNull();
+        // A build stage reference and an ARG-supplied base are not image tags.
+        expect(FLOATING_TAG.exec("FROM builder")).toBeNull();
+        expect(FLOATING_TAG.exec("FROM ${BASE_IMAGE}")).toBeNull();
     });
 });
 
 /** The lines from the last `FROM` onwards — the only stage that contributes to the final image. */
 function runtimeStage(text: string): string[] {
     const lines = text.split(/\r?\n/);
-    const lastFrom = lines.reduce((acc, l, i) => (/^FROM\s/i.test(l) ? i : acc), -1);
+    // Case-sensitive on purpose: a `python -c` continuation line can start with `from x import y`, and
+    // matching it as a stage boundary sliced the SAM 3D and TRELLIS.2 images in the middle of a RUN.
+    const lastFrom = lines.reduce((acc, l, i) => (/^FROM\s/.test(l) ? i : acc), -1);
     expect(lastFrom).toBeGreaterThan(-1);
     return lines.slice(lastFrom);
 }
@@ -360,7 +393,10 @@ describe.each(NON_ROOT_IMAGES)(
     ({ file, scratchDir, readSources }) => {
         const text = fs.readFileSync(file, "utf-8");
         const stage = runtimeStage(text);
-        const userAt = stage.findIndex((l) => /^USER\s+\S/.test(l));
+        // The LAST USER is the one the container runs as. An image built on a base that drops root
+        // (micromamba) switches back to root for its installs first, and that earlier USER is not the
+        // runtime one.
+        const userAt = stage.reduce((acc, l, i) => (/^USER\s+\S/.test(l) ? i : acc), -1);
 
         it("the runtime stage is isolated from the build stage", () => {
             // Non-vacuity of the slice itself, and the whole point of slicing. `conda-pack` appears only in
@@ -451,8 +487,8 @@ describe.each(NON_ROOT_IMAGES)(
 );
 
 /**
- * The GPU images that clone an upstream repository at build time -- the five NVIDIA images and the
- * SAM 3D image-to-3D image -- must each clone a fixed revision rather than whatever the default branch
+ * The GPU images that clone an upstream repository at build time -- the five NVIDIA images and all seven
+ * Image to 3D images -- must each clone a fixed revision rather than whatever the default branch
  * holds that day.
  *
  * An unpinned clone makes the framework version part of WHEN the image was built rather than of which
@@ -512,20 +548,11 @@ const UPSTREAM_CLONE_DOCKERFILES: { label: string; file: string }[] = [
         label: "gr00t",
         file: path.join(PIPELINES_DIR, "genAi", "nvidia", "gr00t", "container", "Dockerfile"),
     },
-    {
-        label: "sam 3d",
-        file: path.join(PIPELINES_DIR, "genAi", "imageTo3d", "container", "Dockerfile.sam3d"),
-    },
-    {
-        label: "blender agent",
-        file: path.join(
-            PIPELINES_DIR,
-            "genAi",
-            "imageTo3d",
-            "container",
-            "Dockerfile.blenderagent"
-        ),
-    },
+    // All seven Image to 3D images clone at least one upstream repository.
+    ...IMAGE_TO_3D_MODELS.map((model) => ({
+        label: `image to 3d ${model}`,
+        file: imageTo3dDockerfile(model),
+    })),
 ];
 
 /** Logical Dockerfile instructions: backslash continuations joined, so one RUN is one entry. */
@@ -566,7 +593,7 @@ describe("the container images that clone an upstream repository pin its revisio
     it("[control] the Dockerfiles are all present and all clone something", () => {
         // Both halves matter. A missing file would make every assertion below pass on an empty string,
         // and an image that stopped cloning would make the pin assertions vacuously true.
-        expect(UPSTREAM_CLONE_DOCKERFILES.length).toBe(7);
+        expect(UPSTREAM_CLONE_DOCKERFILES.length).toBe(12);
         const cloneCounts = UPSTREAM_CLONE_DOCKERFILES.map(({ label, file }) => {
             expect(fs.existsSync(file)).toBe(true);
             return `${label}=${cloneInstructions(fs.readFileSync(file, "utf-8")).length}`;
@@ -577,8 +604,19 @@ describe("the container images that clone an upstream repository pin its revisio
             "cosmos transfer=1",
             "cosmos reason=1",
             "gr00t=1",
-            "sam 3d=1",
-            "blender agent=1",
+            // MoGe
+            "image to 3d blenderagent=1",
+            "image to 3d hunyuan3d=1",
+            // SAM 3D Objects, and the DINOv2 checkout torch.hub loads its encoder from
+            "image to 3d sam3d=2",
+            // Stable3DGen, StableNormal, DINOv2
+            "image to 3d stable3dgen=3",
+            // Step1X-3D, nvdiffrast
+            "image to 3d step1x3d=2",
+            // TRELLIS.2, CuMesh, FlexGEMM, nvdiffrast
+            "image to 3d trellis2=4",
+            // TripoSR, torchmcubes
+            "image to 3d triposr=2",
         ]);
     });
 
@@ -679,5 +717,97 @@ describe("the container images that clone an upstream repository pin its revisio
                 'curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip"'
             )
         ).toBe(false);
+    });
+});
+
+/**
+ * What the Image to 3D images download besides their clones -- the Blender tarball, the Codex and bwrap
+ * release binaries, the u2net and DINOv2 weights, the flash-attn wheels, the AWS CLI -- is checked against
+ * a SHA-256 in the same instruction that downloads it, so a changed or substituted file fails the build.
+ * A size check, which is what the weights had, passes any file of the right size.
+ *
+ * A download is a `curl` or `wget` with an option after it; a package NAMED curl in an apt-get list is
+ * not one, which is why the detector does not match on the word alone.
+ */
+const DOWNLOAD = /\b(?:curl|wget)\s+-/;
+const SHA256_CHECK = /sha256sum\s+(?:-c|--check)\b/;
+
+describe("the Image to 3D images check what they download", () => {
+    const images = IMAGE_TO_3D_MODELS.map((model) => ({
+        model,
+        steps: instructions(fs.readFileSync(imageTo3dDockerfile(model), "utf-8")).filter(
+            (step) => !/^\s*#/.test(step)
+        ),
+    }));
+
+    it("[control] every image downloads something, and the detectors tell a download from a package", () => {
+        for (const { model, steps } of images) {
+            expect([model, steps.some((s) => DOWNLOAD.test(s))]).toEqual([model, true]);
+        }
+        expect(DOWNLOAD.test("RUN apt-get install -y curl git unzip")).toBe(false);
+        expect(DOWNLOAD.test('RUN curl -fsSL -o /tmp/x "https://example.com/x"')).toBe(true);
+        expect(SHA256_CHECK.test('echo "${SHA}  /tmp/x" | sha256sum -c -')).toBe(true);
+        expect(SHA256_CHECK.test("python -c \"assert os.path.getsize(p) > 150_000_000\"")).toBe(false);
+    });
+
+    it("every download is checked against a SHA-256 in the same instruction", () => {
+        const offenders: string[] = [];
+        for (const { model, steps } of images) {
+            for (const step of steps) {
+                if (DOWNLOAD.test(step) && !SHA256_CHECK.test(step)) {
+                    offenders.push(`${model}: ${step.trim().slice(0, 100)}`);
+                }
+            }
+        }
+        expect(offenders).toEqual([]);
+    });
+
+    it("every pinned digest is a full SHA-256", () => {
+        const offenders: string[] = [];
+        for (const model of IMAGE_TO_3D_MODELS) {
+            const text = fs.readFileSync(imageTo3dDockerfile(model), "utf-8");
+            for (const [name, value] of Object.entries(argDefaults(text))) {
+                if (/SHA256$/.test(name) && !/^[0-9a-f]{64}$/.test(value)) {
+                    offenders.push(`${model}: ${name}=${value}`);
+                }
+            }
+        }
+        expect(offenders).toEqual([]);
+    });
+});
+
+/**
+ * The Image to 3D images run as uid 10000 (the block above checks the USER), and three more things make
+ * that work: the pipeline code is readable by that user whatever umask the build host had, the HuggingFace
+ * pin guard ships in the image, and the build proves the guard installs against the huggingface_hub that
+ * image resolved.
+ */
+describe.each(IMAGE_TO_3D_MODELS)("the Image to 3D %s image", (model) => {
+    const stage = runtimeStage(fs.readFileSync(imageTo3dDockerfile(model), "utf-8"));
+    const steps = instructions(stage.join("\n")).filter((s) => s.trim() !== "" && !/^\s*#/.test(s));
+    const lastCodeCopy = steps.reduce(
+        (acc, s, i) => (/^COPY\s.*\s\/opt\/ml\/code\S*\s*$/.test(s) ? i : acc),
+        -1
+    );
+    const userAt = steps.reduce((acc, s, i) => (/^USER\s/.test(s) ? i : acc), -1);
+
+    it("runs as uid 10000", () => {
+        expect(steps[userAt]?.trim()).toBe("USER 10000:10000");
+    });
+
+    it("normalizes the read bits of the pipeline code after its last COPY and before USER", () => {
+        const chmodAt = steps.findIndex(
+            (s, i) => i > lastCodeCopy && /chmod -R a\+rX \/opt\/ml\/code(\s|$)/.test(s)
+        );
+        expect(lastCodeCopy).toBeGreaterThan(-1);
+        expect(chmodAt).toBeGreaterThan(lastCodeCopy);
+        expect(chmodAt).toBeLessThan(userAt);
+    });
+
+    it("ships the HuggingFace pin guard and checks at build time that it installs", () => {
+        expect(steps.some((s) => /^COPY hfguard \/opt\/ml\/code\/hfguard\s*$/.test(s))).toBe(true);
+        const check = steps.findIndex((s) => s.includes("from hfguard import hf_pins"));
+        expect(check).toBeGreaterThan(lastCodeCopy);
+        expect(check).toBeLessThan(userAt);
     });
 });

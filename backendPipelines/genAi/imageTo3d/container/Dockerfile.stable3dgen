@@ -10,33 +10,39 @@
 # replaced by its own marching-cubes implementation over scikit-image -- so nothing here is built from
 # source and the image raises no redistribution question. The model produces geometry only.
 
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:24c8e3581ea6330038b0d374920721983312627f8adbfcf390bdb4b399d280ed
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value
-# clones the default branch, which makes the build non-reproducible: set this to a commit that has
-# been reviewed before deploying.
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible; each clone below fails
+# the build if HEAD is anything other than its pin.
 # pragma: allowlist nextline secret
-ARG STABLE3DGEN_COMMIT="c29f668ecec44b197275e9bf77f823c0c8a21076"
+ARG STABLE3DGEN_COMMIT=c29f668ecec44b197275e9bf77f823c0c8a21076
 # The normal predictor is loaded through torch.hub from a local checkout rather than fetched at run
 # time, so its revision is pinned here too. Pinning it is not optional in practice: its hub entry
 # point's signature has already moved away from what Stable3DGen's own demo calls it with, so a
 # floating revision breaks the run rather than merely making the image irreproducible.
 # pragma: allowlist nextline secret
-ARG STABLENORMAL_COMMIT="1b7203c988384cb62286a25865d7354be8fdbbf7"
+ARG STABLENORMAL_COMMIT=1b7203c988384cb62286a25865d7354be8fdbbf7
 # The predictor's backbone is itself pulled through torch.hub, which reaches GitHub at run time
 # unless the checkout is already present. Pinned and baked in for the same reasons.
 # pragma: allowlist nextline secret
-ARG DINOV2_COMMIT="7764ea0f912e53c92e82eb78a2a1631e92725fc8"
+ARG DINOV2_COMMIT=7764ea0f912e53c92e82eb78a2a1631e92725fc8
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
 # which rungs it walks through the template's REPAIR_BACKENDS setting.
 ARG ENABLE_GPL_MESH_REPAIR=true
 
 # Install system dependencies. The GL/EGL libraries back trimesh's rendering paths and pymeshlab's
 # plugins; libopengl0 is what pymeshlab's texture defragmentation filter links against.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     build-essential \
     curl \
     git \
@@ -57,9 +63,13 @@ RUN apt-get update && apt-get install -y \
 
 RUN git lfs install
 
-# Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
@@ -77,7 +87,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 # 'flash_attn' and raises at import for anything else, so unlike the dense path it has no sdpa
 # fallback, and flash_attn would mean the source compile this image exists to avoid.
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
-    torch==2.10.0 torchvision xformers==0.0.34
+    torch==2.10.0 torchvision==0.25.0 xformers==0.0.34
 
 # Shared pipeline dependencies
 COPY requirements.txt /opt/ml/code/requirements.txt
@@ -85,11 +95,10 @@ RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
 
 # Clone Stable3DGen and install its dependency stack. Everything it declares is a plain wheel.
 RUN git clone https://github.com/Stable-X/Stable3DGen.git /opt/stable3dgen && \
-    if [ -n "$STABLE3DGEN_COMMIT" ]; then \
-        git -C /opt/stable3dgen checkout "$STABLE3DGEN_COMMIT"; \
-    else \
-        echo "WARNING: STABLE3DGEN_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
-    fi
+    cd /opt/stable3dgen && \
+    git checkout --detach ${STABLE3DGEN_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${STABLE3DGEN_COMMIT}" && \
+    git rev-parse HEAD > /opt/stable3dgen/VAMS_UPSTREAM_COMMIT
 WORKDIR /opt/stable3dgen
 # No CUDA extension is compiled in this image, so this list only affects any wheel that consults it.
 # Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and g6e / L40S, Hopper (9.0) covers H100.
@@ -114,11 +123,10 @@ RUN pip install --no-cache-dir spconv-cu126
 ENV TORCH_HOME=/opt/torchhome
 RUN mkdir -p /opt/torchhome/hub && \
     git clone https://github.com/hugoycj/StableNormal.git /opt/torchhome/hub/hugoycj_StableNormal_main && \
-    if [ -n "$STABLENORMAL_COMMIT" ]; then \
-        git -C /opt/torchhome/hub/hugoycj_StableNormal_main checkout "$STABLENORMAL_COMMIT"; \
-    else \
-        echo "WARNING: STABLENORMAL_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
-    fi
+    cd /opt/torchhome/hub/hugoycj_StableNormal_main && \
+    git checkout --detach ${STABLENORMAL_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${STABLENORMAL_COMMIT}" && \
+    git rev-parse HEAD > /opt/torchhome/hub/hugoycj_StableNormal_main/VAMS_UPSTREAM_COMMIT
 
 # The predictor loads its DINOv2 backbone through torch.hub as well, which fetches the repository as
 # a zipball from GitHub on any run where the checkout is absent -- a per-run download and a runtime
@@ -126,11 +134,10 @@ RUN mkdir -p /opt/torchhome/hub && \
 # derives for a branch checkout, so a pre-populated checkout is used as-is.
 RUN git clone https://github.com/facebookresearch/dinov2.git \
         /opt/torchhome/hub/facebookresearch_dinov2_main && \
-    if [ -n "$DINOV2_COMMIT" ]; then \
-        git -C /opt/torchhome/hub/facebookresearch_dinov2_main checkout "$DINOV2_COMMIT"; \
-    else \
-        echo "WARNING: DINOV2_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
-    fi
+    cd /opt/torchhome/hub/facebookresearch_dinov2_main && \
+    git checkout --detach ${DINOV2_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${DINOV2_COMMIT}" && \
+    git rev-parse HEAD > /opt/torchhome/hub/facebookresearch_dinov2_main/VAMS_UPSTREAM_COMMIT
 
 # Backend selection read by the upstream modules at import. SPARSE_ATTN_BACKEND is set explicitly
 # because the sparse module falls back to its own default rather than following ATTN_BACKEND when the
@@ -154,12 +161,11 @@ print('diffusers', diffusers.__version__, 'transformers', transformers.__version
 # The normal predictor's DINOv2 backbone is fetched by torch.hub into the hub cache on first use.
 # Baking it in keeps a 1.1 GB download out of every run: the hub cache lives in the image rather than
 # on the shared EFS mount, so nothing would carry it between jobs.
+ARG DINOV2_CHECKPOINT_SHA256=36e4deffbaef061a2576705b0c36f93621e2ae20bf6274694821b0b492551b51
 RUN mkdir -p /opt/torchhome/hub/checkpoints && \
     curl -fsSL -o /opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth \
     https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth && \
-    python -c "import os; p='/opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth'; \
-size=os.path.getsize(p); assert size > 500_000_000, f'the DINOv2 checkpoint is only {size} bytes'; \
-print('dinov2 checkpoint', size, 'bytes')"
+    echo "${DINOV2_CHECKPOINT_SHA256}  /opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth" | sha256sum -c -
 
 # The upstream package is imported by the adapter's driver script, which runs with the repo root as
 # its working directory; adding it to PYTHONPATH keeps the import working from anywhere.
@@ -169,7 +175,7 @@ ENV PYTHONPATH="/opt/stable3dgen:${PYTHONPATH}"
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix pymeshlab; \
+        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -189,19 +195,33 @@ print('trimesh', trimesh.__version__, 'torch', torch.__version__)"
 # re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
 # variable at a baked-in copy removes the download entirely.
 ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
 RUN mkdir -p /opt/rembg && \
     curl -fsSL -o /opt/rembg/u2net.onnx \
     https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
-    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
-assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
 
 # VAMS container code
 COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
 COPY models /opt/ml/code/models
 COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
 # tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
-RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may
+# create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
+# sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
+RUN chgrp vams /opt/stable3dgen && chmod 1775 /opt/stable3dgen && chown -R vams:vams /home/vams
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
 
 WORKDIR /opt/ml/code
+USER 10000:10000
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

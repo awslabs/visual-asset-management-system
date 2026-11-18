@@ -1,7 +1,7 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0 as build
+FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0@sha256:3b5f55c0b2f447cf94b8f67ca9094f9d2a9d316a4506fd5aa915faaf37ae29d4 as build
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
@@ -82,7 +82,7 @@ RUN conda-pack -n pdal --dest-prefix=/opt/conda/envs/pdal -o  /tmp/env.tar && \
     rm /tmp/env.tar
 
 # Runtime stage platform must match the build stage: the PDAL binaries are copied from /venv
-FROM --platform=linux/amd64 condaforge/miniforge3:26.5.3-0
+FROM --platform=linux/amd64 condaforge/miniforge3:26.5.3-0@sha256:66f4b7d5dd07883181ef5370f44b43857008a61e8f5b9bcc07f3f3ee027f7e63
 
 ENV CONDAENV="/opt/conda/envs/pdal"
 COPY --from=build /venv "/opt/conda/envs/pdal"

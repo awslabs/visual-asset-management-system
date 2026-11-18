@@ -17,11 +17,18 @@
 # to avoid. Review kaolin's terms against the deployment before distributing an image built from this
 # file.
 
-FROM mambaorg/micromamba:1.5.8
+FROM mambaorg/micromamba:1.5.8@sha256:475730daef12ff9c0733e70092aeeefdf4c373a584c952dac3f7bdb739601990
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
 
 # The upstream repo is pinned to a reviewed commit so the image is reproducible. Override with
 # --build-arg to move the pin; a full 40-character commit id is required, since the rev-parse check
@@ -60,7 +67,7 @@ ENV PIP_DEFAULT_TIMEOUT=60
 
 # System dependencies. The GL/EGL libraries back trimesh's rendering paths and pymeshlab's plugins;
 # git-lfs is needed for the upstream checkout.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     build-essential \
     curl \
     git \
@@ -78,11 +85,13 @@ RUN apt-get update && apt-get install -y \
 
 RUN git lfs install
 
-# Install AWS CLI v2. The installer URL carries the version, so a rebuild installs the CLI this image
-# was built with rather than whatever is current. Override with --build-arg to move it.
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
 ARG AWS_CLI_VERSION=2.36.39
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
@@ -171,9 +180,16 @@ assert torch.version.cuda and torch.version.cuda.startswith('12.1'), torch.versi
 # on that flag, and the wrong wheel imports cleanly and then fails on a symbol at run time.
 RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; set -eux; \
     abi=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')"); \
-    url="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.5cxx11abi${abi}-cp311-cp311-linux_x86_64.whl"; \
+    case "$abi" in \
+        TRUE) sha=48c648a50f53a47cb74fb8eed63efea1c012f6ec130e35efe1d8bb31da992302 ;; \
+        FALSE) sha=ca5a5614530bad3bcaf936917d53a6d60c9057d1218030efe3ca588cb4f4ebb6 ;; \
+    esac; \
+    wheel="flash_attn-2.8.3+cu12torch2.5cxx11abi${abi}-cp311-cp311-linux_x86_64.whl"; \
     echo "installing flash-attn for cxx11abi=${abi}"; \
-    pip install --no-cache-dir "$url"; \
+    curl -fsSL -o "/tmp/${wheel}" "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/${wheel}"; \
+    echo "${sha}  /tmp/${wheel}" | sha256sum -c -; \
+    pip install --no-cache-dir "/tmp/${wheel}"; \
+    rm -f "/tmp/${wheel}"; \
     python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
 
 # pytorch3d, from the revision upstream pins. No wheel is published for Python 3.11 against this torch,
@@ -199,11 +215,30 @@ RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG
 RUN python /opt/sam3d/patching/hydra && \
     python -c "import hydra; print('hydra', hydra.__version__, 'patched')"
 
+# The generator's image encoder is DINOv2, which upstream loads through torch.hub from GitHub
+# ("facebookresearch/dinov2", source github) with its pretrained weights. Left to run time, every job
+# downloaded the repository's default-branch code and a 1.2 GB checkpoint into a HOME nothing keeps.
+# The checkout is baked in at a pinned commit, under the directory name torch.hub uses for that repo's
+# main branch so it is used as it is, and the checkpoint is checked against its SHA-256.
+# pragma: allowlist nextline secret
+ARG DINOV2_COMMIT=7764ea0f912e53c92e82eb78a2a1631e92725fc8
+ARG DINOV2_CHECKPOINT_SHA256=36e4deffbaef061a2576705b0c36f93621e2ae20bf6274694821b0b492551b51
+ENV TORCH_HOME=/opt/torchhome
+RUN mkdir -p /opt/torchhome/hub/checkpoints && \
+    git clone https://github.com/facebookresearch/dinov2.git /opt/torchhome/hub/facebookresearch_dinov2_main && \
+    cd /opt/torchhome/hub/facebookresearch_dinov2_main && \
+    git checkout --detach ${DINOV2_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${DINOV2_COMMIT}" && \
+    git rev-parse HEAD > /opt/torchhome/hub/facebookresearch_dinov2_main/VAMS_UPSTREAM_COMMIT
+RUN curl -fsSL -o /opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth \
+    https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth && \
+    echo "${DINOV2_CHECKPOINT_SHA256}  /opt/torchhome/hub/checkpoints/dinov2_vitl14_reg4_pretrain.pth" | sha256sum -c -
+
 # GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN --mount=type=secret,id=pipconf,target=/run/secrets/pipconf export PIP_CONFIG_FILE=/run/secrets/pipconf; if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix pymeshlab; \
+        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -248,19 +283,33 @@ print('extensions import against torch', torch.__version__, 'and numpy', numpy._
 # re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
 # variable at a baked-in copy removes the download entirely.
 ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
 RUN mkdir -p /opt/rembg && \
     curl -fsSL -o /opt/rembg/u2net.onnx \
     https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
-    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
-assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
 
 # VAMS container code
 COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
 COPY models /opt/ml/code/models
 COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
 # tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
-RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may
+# create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
+# sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
+RUN chgrp vams /opt/sam3d && chmod 1775 /opt/sam3d && chown -R vams:vams /home/vams
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
 
 WORKDIR /opt/ml/code
+USER 10000:10000
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
