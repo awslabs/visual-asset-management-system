@@ -168,6 +168,8 @@ web/
     __mocks__/              # Jest module mocks (the only .js files in src/)
 ```
 
+The file page (`components/single/ViewFile.tsx`) builds the viewer's single-file entry with `buildSingleViewerEntry` (`components/single/singleViewerEntry.ts`). On the Preview tab the entry carries the preview file's key and NO version ID: a preview file is its own S3 object, the source file's S3 version ID does not exist for it, and an empty version ID asks for its current version. Never pass the source version ID with a preview key. Because a preview is requested without a version, it is the preview of the file's latest version, so for an older file version the tab shows the `OLDER_VERSION_PREVIEW_NOTICE` alert (`previewIsOfLatestVersionOnly`, decided from the file's version list, reusing the versions the direct-path load already read and asking once otherwise; no notice for the latest version, an asset-version view, or a link that names no version; when the latest version cannot be read and the link names a file version, the notice shows).
+
 ---
 
 ## 3. Critical Rules
