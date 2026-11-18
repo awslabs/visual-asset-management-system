@@ -459,15 +459,34 @@ VAMS generates a dynamic Content Security Policy for the web application based o
 | `default-src`     | `'none'`                                                                     |
 | `script-src`      | `'self'`, `'unsafe-hashes'`, `'wasm-unsafe-eval'`, per-script SHA-256 hashes |
 | `style-src`       | `'self'`, `'unsafe-inline'`                                                  |
-| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, Amazon S3 endpoint              |
+| `connect-src`     | `'self'`, `blob:`, `data:`, API Gateway URL, AWS service hosts wildcard      |
 | `worker-src`      | `'self'`, `blob:`, `data:`                                                   |
-| `img-src`         | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
-| `media-src`       | `'self'`, `blob:`, `data:`, Amazon S3 endpoint                               |
+| `img-src`         | `'self'`, `blob:`, `data:`, AWS service hosts wildcard                       |
+| `media-src`       | `'self'`, `blob:`, `data:`, AWS service hosts wildcard                       |
 | `object-src`      | `'none'`                                                                     |
-| `frame-src`       | `'self'`, `blob:`                                                            |
+| `frame-src`       | `'self'`, `blob:`, AWS service hosts wildcard                                |
 | `frame-ancestors` | `'self'`                                                                     |
 | `font-src`        | `'self'`                                                                     |
 | `manifest-src`    | `'self'`                                                                     |
+
+:::note[AWS service hosts wildcard]
+`connect-src`, `img-src`, `media-src` and `frame-src` carry one source, `https://*.<suffix>`, where `<suffix>` is the DNS suffix of the deployment's partition (`amazonaws.com` in the commercial and GovCloud partitions, `amazonaws.com.cn`, `amazonaws.eu` and the isolated partitions' own suffixes elsewhere). The browser fetches presigned Amazon S3 URLs directly, and an asset bucket can be in any Region of the partition (see [Cross-Region buckets](../deployment/external-s3-setup.md#cross-region-buckets)). A CSP wildcard matches only the leading label, and the Region is a label inside the S3 host (`s3.us-west-2.amazonaws.com`), so no narrower single source covers every Region. The wildcard also covers virtual-hosted bucket hosts and `s3-accelerate` hosts.
+
+| Partition                 | Wildcard source in the four directives |
+| ------------------------- | -------------------------------------- |
+| `aws` (commercial)        | `https://*.amazonaws.com`              |
+| `aws-us-gov` (GovCloud)   | `https://*.amazonaws.com`              |
+| `aws-cn` (China)          | `https://*.amazonaws.com.cn`           |
+| `aws-eusc` (EU Sovereign) | `https://*.amazonaws.eu`               |
+| `aws-iso`                 | `https://*.c2s.ic.gov`                 |
+| `aws-iso-b`               | `https://*.sc2s.sgov.gov`              |
+| `aws-iso-e`               | `https://*.cloud.adc-e.uk`             |
+| `aws-iso-f`               | `https://*.csp.hci.ic.gov`             |
+
+The suffix comes from the partition's Amazon S3 hostname in the service table. The source admits every service host under that suffix. Synthesis fails, naming the partition, if a table row does not have the shape `s3.{region}.<suffix>` or its suffix has fewer than two labels or is a bare public suffix such as `com`, so a bad row can never emit `https://*.com`. Only the commercial partition has been verified in a live browser; the other partitions are verified by synthesis-time tests of the emitted policy.
+
+Trade-off: in those four directives the policy admits every AWS service host in the partition, including a bucket or API in another account. The earlier rule already admitted any bucket in the deployment Region, including one in another account. `script-src`, `worker-src`, `object-src`, `style-src` and `font-src` do not carry the wildcard, so a page cannot load script from these hosts. Operators who added another Region's S3 host to `cspAdditionalConfig.json` can remove it.
+:::
 
 :::note[Web workers]
 `worker-src` permits `'self'`, so a viewer can run a decoder in a same-origin web worker. The TIFF/TGA Image Viewer does: its worker is a content-hashed file served from the web application's own `assets/` path (`rasterWorker-<hash>.js`), not a `blob:` or `data:` script, and it loads no other origin. It needs no CSP change and no `allowUnsafeEvalFeatures`: the decoders (`utif2`, `tga-js`, `pako`) are pure JavaScript. If the worker file is blocked or stale, the viewer decodes on the page instead.
@@ -536,7 +555,7 @@ Entries are screened when the file is read at synthesis time. A non-string or em
 
 ### Policy size on the Application Load Balancer path
 
-The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 858 bytes, leaving roughly 166 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
+The two web distributions deliver the policy by different mechanisms with different size limits, and the tighter of the two belongs to the Application Load Balancer. The ALB carries the whole policy in a single listener attribute, whose value Elastic Load Balancing limits to 1 KB; a CloudFront response-headers policy allows 1,783 bytes. The shipped policy measures 794 bytes (GovCloud) and 790 bytes (EU Sovereign), leaving roughly 230 bytes on the ALB path — about three further inline-script hashes, or two to three further host sources.
 
 A policy that exceeds the limit is rejected at synthesis time with a message naming its measured size, so the constraint surfaces before deployment rather than as a load balancer error or a truncated header. Because the limit belongs to the delivery mechanism rather than to the policy, the check applies only where an ALB serves the web front. Restricted partitions use the ALB exclusively, so a deployment that adds several CSP sources should confirm the size there.
 
