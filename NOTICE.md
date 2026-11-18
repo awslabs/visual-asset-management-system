@@ -761,3 +761,19 @@ This software includes third party software subject to the following copyrights:
 | rich       | >=14.2.0   | MIT          |
 | tqdm       | >=4.67.1   | MPL-2.0/MIT  |
 | defusedxml | >=0.7.1    | Python-2.0   |
+
+## THIRD PARTY COMPONENTS - TOOLS (VAMSMCP)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**VamsMCP Python Dependencies**
+
+| Name         | Version                                      | License                    |
+| :----------- | :------------------------------------------- | :------------------------- |
+| mcp          | >=1.10.0,<3.0.0                              | MIT                        |
+| pydantic     | >=2.11.0,<3.0.0                              | MIT                        |
+| requests     | >=2.25.0                                     | Apache-2.0                 |
+| PyJWT        | ==2.15.1 (with the `crypto` extra)           | MIT                        |
+| cryptography | >=3.4.0 (required by PyJWT's `crypto` extra) | Apache-2.0 OR BSD-3-Clause |

@@ -50,6 +50,7 @@ The complete list of third-party dependencies and their licenses is maintained i
 | Media previews   | Pillow, tifffile, imagecodecs, PyAV (3D Preview Thumbnail container) | HPND, BSD-3-Clause, BSD-3-Clause (the imagecodecs wheel bundles permissive codec libraries and the GCC OpenMP runtime; the PyAV wheels bundle LGPL FFmpeg libraries) |
 | Infrastructure   | AWS CDK, cdk-nag, constructs                                         | Apache-2.0                                                                                                                                                           |
 | CLI              | Click, requests, boto3, pycognito                                    | BSD-3-Clause, Apache-2.0                                                                                                                                             |
+| MCP server       | mcp, pydantic, PyJWT, cryptography, requests (VamsMCP)               | MIT, Apache-2.0 OR BSD-3-Clause, Apache-2.0                                                                                                                          |
 
 ### Optional LGPL-Licensed Components
 
