@@ -215,7 +215,8 @@ async function responseBody(response: Response): Promise<any> {
  * The error a viewer throws for a failed streaming-route response it fetched itself: an
  * `ApiRefusalError` carrying the reason when the API refused the file with one, or when a 403 says
  * more than a plain denial (an AWS WAF block with its request ID, an asset that is not
- * distributable), else an Error with the worded 401/403/404/410 sentence or `subject`.
+ * distributable), else an Error with the worded 401/403/404/410 sentence or `subject`, which a
+ * 429 also gets.
  */
 export async function streamResponseFailure(response: Response, subject: string): Promise<Error> {
     const body = await responseBody(response);

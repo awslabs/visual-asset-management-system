@@ -1119,6 +1119,65 @@ manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 
+#### **Authorizer 401 versus 403**
+
+Mirrors `backend/CLAUDE.md` "Key Concepts", "Authorizer 401 versus 403".
+
+`authenticate_request` (`common/auth/authorizerCore.py`) tags every unauthorized result with a `failure` kind:
+
+-   **`FAILURE_UNAUTHENTICATED` answers 401.** A missing or malformed header; a JWT that is malformed, expired, badly signed, or has the wrong aud/iss/token_use or an unknown kid; an API key that is unknown, disabled, expired, has an unreadable expiry or no userId. `apiGatewayAuthorizerRest.lambda_handler` writes the audit record and then raises `Exception("Unauthorized")` outside its catch-all, which API Gateway answers with 401.
+-   **Everything else stays a Deny policy (403)**, `FAILURE_FORBIDDEN` or no kind at all: IP not allowed, an API key whose user has no roles, a misconfigured `AUTH_MODE` or verifier, a JWKS/discovery outage (`TokenVerificationUnavailableError`), an API key table outage (`ApiKeyLookupUnavailableError`), any unexpected error.
+
+Keep three rules:
+
+1. Every API-key "not usable" case gets the same kind as an unknown key (no existence leak).
+2. An outage or configuration fault is never `FAILURE_UNAUTHENTICATED`; it must not tell clients to sign in again.
+3. The raised message is exactly `Unauthorized` (anything else is a 500), and the internal reason never reaches the client.
+
+Tests: `tests/common/auth/test_authorizerCore_failure_kinds.py`, `tests/handlers/auth/test_apiGatewayAuthorizerRest_unauthorized.py`.
+
+#### **Policy Lines as Data (Search Authorization Filters)**
+
+Mirrors `backend/CLAUDE.md` "Key Concepts", "Policy lines as data".
+
+-   `CasbinEnforcer.effective_object_policies(object_type, action)` returns the caller's applicable lines (`effect`, usable `criteriaAnd`/`criteriaOr`), built by the same `_usable_criteria` filter as the policy text, or `None` when the enforcer was not built from them (shared-cache hit, failed build, unloadable text).
+-   Search turns them into OpenSearch filters with `common/searchAuthzFilter.py`: an `upper` bound that fetches every readable document, and a `lower` bound for totals and aggregations that cannot be exact, so counts never include a record the caller cannot open. The per-hit `enforce()` stays authoritative.
+-   **A new operator, constraint field, or change to a rule's regex shape must be mirrored in `searchAuthzFilter.py`.** `tests/handlers/authz/test_search_authz_filter.py` compares both bounds with `enforce()` over every field, operator and value shape and fails otherwise.
+-   A future search mode (for example vector search) reuses `build_search_authz_filters` / `apply_search_authz_filter` in `handlers/search/search.py`; never compute counts from unfiltered results.
+
+#### **Search Fills the Page**
+
+Mirrors `backend/CLAUDE.md` "Key Concepts", "Search fills the page".
+
+-   `_search_until_page_full` in `handlers/search/search.py` wraps every dual-index search (POST and simple search). While fewer than `from + size` hits pass the per-hit check and OpenSearch holds more candidates, it fetches a window up to `SEARCH_FILL_GROWTH_FACTOR` times larger, bounded by `OPENSEARCH_MAX_RESULT_WINDOW` per index and by `SEARCH_FILL_MAX_SECONDS`. The window count is not a bound (each window is at least twice the last).
+-   The time bound covers the fetches and every per-hit check: `DualIndexResponseProcessor.decide_in_order` stops at the deadline, and `_affordable_window` sizes the next window from the measured fetch and check time per hit. A search stopped by a bound answers with the hits checked so far and reports `relation: gte`.
+-   Over both indexes only the merged prefix in true order is answered (`_ordered_prefix_length`), so pages neither skip nor repeat records. Larger windows drop `aggs` and keep the first window's aggregations; per-hit decisions are cached per request in `DualIndexResponseProcessor._decide`.
+-   Both search handlers run inside `deferred_authorization_audit()`, so refused-hit audit entries are written in batches when the search ends.
+-   A new search mode that post-filters hits routes through `_search_until_page_full`; never slice one window.
+
+#### **System Workflow Runs in the Execution Lists**
+
+Mirrors `backend/CLAUDE.md` "System Workflow Runs in the Execution Lists".
+
+`executeWorkflow._persist_execution_records` copies the workflow row's stored `isSystem` onto the execution main row (`build_workflow_execution_record(is_system=)`; only a boolean `True` marks a run). Both list routes in `executionService` hide those rows unless `includeSystem` applies (`INCLUDE_SYSTEM_PARAM`; `vamscli.constants.EXECUTION_LIST_INCLUDE_SYSTEM_PARAM` mirrors the name and a CLI contract test pins it).
+
+-   **Default.** `_resolve_include_system`: an explicit `true`/`false` wins (anything else is `400`); otherwise system runs are hidden, except in a listing scoped to ONE workflow (both halves of its key) that is a system workflow the caller may GET. The applied value is echoed as `includeSystem`.
+-   **Fail-visible.** `er.execution_row_is_system` is the one reader: a missing attribute (older rows, no migration) or any non-boolean reads as a user run. The global list's `FilterExpression` term is `attribute_not_exists(isSystem) OR isSystem <> true` for the same reason, and `_global_list_matches_filters` (`excludeSystem`) is the safety net.
+-   **Paging.** A hidden row is a fully evaluated row: on the global list it advances the cursor like any filtered row; on the asset list it is a post-filter after `build_execution_items`, so short or empty pages with a `NextToken` are possible. The token format is unchanged.
+-   **Not authorization.** It only chooses which rows a page includes; every row still passes `_execution_access_check`. Details, logs, abort, group abort and re-run do not read it.
+
+#### **Workflow Execution Input Metadata: Opt-in Sections**
+
+Mirrors `backend/CLAUDE.md` "Workflow Execution Input Metadata: Opt-in Sections".
+
+`metadataInputs` carries the four metadata types (default ON) and two opt-in keys (default OFF): `assetFileMetadata` and `metadataSchema`. `METADATA_INPUT_DEFAULTS` and `METADATA_INPUT_OPT_IN_KEYS` in `common/workflows/executionRecords.py` define what an omitted key means; `models/pipelines._METADATA_INPUT_KEYS` and `executionValidation._METADATA_KEYS` list all six. A new key goes into all three in the same change.
+
+-   **Off means unchanged.** With both keys absent or `false` the grouped envelope is byte-identical to the one built before they existed (`tests/handlers/workflows/golden/`). Never default an opt-in key ON.
+-   **Gathered only when some step asks.** `executeWorkflow._intake_metadata_inputs` turns an opt-in key on at intake only when the workflow enables it AND a step's effective gate (systemConfig + chosen template overrides) does. `narrow_metadata_envelope` drops the section per step on the step's own gate.
+-   **`assetFileMetadata`** (`_expand_asset_selections`): a `/` or folder selection is listed with `ListObjectsV2` (current objects only, so archived files never appear), skipping folder markers and `PREVIEW_FILE_PATTERN`; at most `MAX_ASSET_FILE_EXPANSION_PER_SELECTION` (500) per selection, explicit plus expanded file records within `MAX_INPUT_FILES_PER_EXECUTION`, and the listing stops counting at `MAX_ASSET_FILE_EXPANSION_SCAN_KEYS`. Each file's reads go through `_fetch_file_metadata` with the request's identity (`_metadata_service_payload`). Records carry `"expanded": true` and the group carries `fileExpansion`; the persisted input-metadata row stores `expanded: True` only on such a row (`build_input_metadata_record(expanded=)`).
+-   **`metadataSchema`** (`_build_metadata_schemas`): Tier-1 on `GET /metadataschema` for the request's identity, Tier-2 on a provisional schema object (no name, no entity type) in the database and in `GLOBAL`, then the per-schema GET the list endpoint filters by. A database left out for any reason gets one generic warning whose text does not depend on whether a schema exists. The schema records come from `metadataSchemaValidation.load_enabled_schemas` (uncached, so a per-caller filtered aggregate is never cached) and `aggregate_schema_field_catalog`, which reports a conflict only for files that two differing schemas both reach. The execute role's reads sit in their own `MetadataSchemaReadPolicy`.
+-   Every cut or omission is an execute warning; neither section ever fails a launch.
+
 #### **System User (`SYSTEM_USER`)**
 
 `SYSTEM_USER` is the **only** valid user ID for system-process actions — never use `SYSTEM`, `system`, or any other variant. It is seeded into the user and user-roles tables during CDK deployment and assigned to the `admin` role, so actions attributed to it pass Casbin authorization. Use it consistently for:
@@ -1207,6 +1266,8 @@ Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiB
 **Do not consolidate the two API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1 MB template body, neither adjustable. In the commercial template `apiBuilder` emits 116 resources in a ~0.51 MB template and `apiBuilder2` emits 179 in ~0.75 MB, so body size fills well ahead of resource count and is what the split buys headroom against.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from both stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 129 nodes from 107 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
+
+A fourth ceiling governs the storage stack: **200 Outputs per template**, not adjustable. `StorageResourcesBuilder` emits 153 of them (commercial template), because every table a sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a `tableArn` where a cross-stack grant needs one. Exceeding 200 is rejected at ValidateTemplate, so roughly 45 more cross-stack-referenced storage resources would hit it. `apiStackCeilings.test.ts` fails above 170, which leaves room to design a split rather than meet the limit at the deploy that crosses it. Counted from a fresh synth, not from `cdk.out`.
 
 ```typescript
 // ✅ CORRECT - Register API routes

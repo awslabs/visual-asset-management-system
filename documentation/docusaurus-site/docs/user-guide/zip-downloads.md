@@ -47,10 +47,10 @@ The search box above each list finds jobs by asset ID, asset name, request ID, a
 | Status        | Meaning                                                                                                     |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
 | **Queued**    | The job is starting.                                                                                        |
-| **Running**   | The archive is being written. The progress bar shows files and bytes written.                               |
-| **Succeeded** | The archive is ready to download.                                                                           |
+| **Preparing** | The archive is being written. The progress bar shows files and bytes written.                               |
+| **Ready**     | The archive is ready to download.                                                                           |
 | **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. |
-| **Cancelled** | You cancelled the job before it finished.                                                                   |
+| **Cancelled** | The job was stopped before it finished: cancelled here, or its run aborted from the **Executions** page.    |
 
 If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory. Create the job again; see [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if it recurs.
 

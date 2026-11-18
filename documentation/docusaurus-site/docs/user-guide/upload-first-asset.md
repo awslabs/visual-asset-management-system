@@ -65,7 +65,9 @@ Fill in the required fields on the **Asset Details** step:
     If your administrator has configured required tag types, you must select at least one tag from each required type before proceeding. Required tag types are listed in the constraint text below the Tags field.
     :::
 
-6. Select **Next** to proceed to the metadata step.
+6. **Compliance Schema** (optional) -- Select a compliance schema to bind to this asset instead of the database's schema, or leave it empty to inherit the database's. VAMS binds it once the upload completes. The field appears only when your role may list compliance schemas and bind one to an asset; see [Compliance](compliance.md#overriding-the-schema-of-one-asset).
+
+7. Select **Next** to proceed to the metadata step.
 
 <!-- The create asset screenshot above shows the Asset Details form -->
 

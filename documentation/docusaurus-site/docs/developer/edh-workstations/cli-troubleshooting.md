@@ -613,7 +613,7 @@ The registry holds VAMS's own entries for EC2 capacity reservations, at most 100
 
 **Symptoms:**
 
--   From a desktop whose `vamscli` was signed in by session bootstrap, `vamscli auth api-key create` (or an update) fails with HTTP 403 `API keys cannot be created or updated with a temporary session key`, while listing and deleting keys work
+-   From a desktop whose `vamscli` was signed in by session bootstrap, `vamscli api-key create` (or `vamscli api-key update`) fails with HTTP 403 `API keys cannot be created or updated with a temporary session key`, while listing and deleting keys work
 
 **Cause:**
 

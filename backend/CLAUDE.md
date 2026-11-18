@@ -485,13 +485,12 @@ backend/
     returned entries therefore attributes a sibling's state to the requested key; match
     each entry's `Key` back to the key being asked about.
 
-            **To check whether a single key or specific `versionId` is archived, do NOT list
-            versions** — use `common.s3.is_object_version_archived(bucket, key, version_id,
-
-        client=...)`. It issues one `HeadObject`(delete-marker → 405, live → 200, missing →
-
-    404), O(1) regardless of version count. Handler-local`is_file_archived` helpers must
-    delegate to it, never re-implement a version scan.
+    **To check whether a single key or specific `versionId` is archived, do NOT list
+    versions** — use
+    `common.s3.is_object_version_archived(bucket, key, version_id, client=...)`. It issues
+    one `HeadObject` (delete-marker → 405, live → 200, missing → 404), O(1) regardless of
+    version count. Handler-local `is_file_archived` helpers must delegate to it, never
+    re-implement a version scan.
 
 15. **Paginate large GET responses; never return an unbounded in-memory set.** A response
     that can exceed the AWS Lambda synchronous response limit (6 MB) must page externally:

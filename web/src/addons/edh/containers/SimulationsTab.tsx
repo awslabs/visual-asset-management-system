@@ -114,7 +114,8 @@ const parseOptionalInt = (
     return { value };
 };
 
-// The floors of the resource overrides: what the inputs declare and the request model accepts.
+// The floors of the resource overrides: what the inputs declare and the container service accepts
+// (the request model takes any memory of at least 1 MiB; the handler refuses less than 512).
 const VCPUS_MIN = 1;
 const MEMORY_MIB_MIN = 512;
 const GPU_MIN = 0;

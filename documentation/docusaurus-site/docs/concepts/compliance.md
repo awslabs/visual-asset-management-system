@@ -164,7 +164,7 @@ From there, the [user guide](../user-guide/compliance.md) covers the Quarantine,
 
 ## Configuration
 
-Compliance is part of every VAMS deployment: five Amazon DynamoDB tables, nine AWS Lambda functions and the `/compliance/*` API routes are always created, and the compliance pages of the web interface appear to a user whose role grants them like every other page. Two configuration settings tune it:
+Compliance is part of every VAMS deployment: five Amazon DynamoDB tables, ten AWS Lambda functions and the `/compliance/*` API routes are always created, and the compliance pages of the web interface appear to a user whose role grants them like every other page. Two configuration settings tune it:
 
 ```json
 {
