@@ -2,7 +2,7 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
-> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its "End-to-End Testing (Playwright)" section is the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
 > **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
 
@@ -929,7 +929,7 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
 
-**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack; full guide: `web/e2e/CLAUDE.md`). A core spec gives a page or shared component permanent smoke coverage, must not require specific data, and is named `orchestration.{page}.spec.ts`, `viewers.spec.ts`, or `{addon}.{page}.spec.ts` for an add-on page. Import locators from `support/fixtures.ts` rather than rewriting them: `cachedFeaturesEnabled(page)` reads the deployment's feature flags from the app's own cache, so a spec can `test.skip` on an absent flag, and `expectTableRendered(page, emptyState?)` takes the page's own empty-state regex when its copy does not read "No … found". An add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`. A spec that mutates data or needs a second user does so only behind an `E2E_*` opt-in variable, documented in `web/e2e/CLAUDE.md` ("Running the suite"), and otherwise skips with the reason: `zipdownloads.spec.ts` takes `E2E_ZIP_CREATE=1` and `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD`.
+**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack) follow the rules in "End-to-End Testing (Playwright)" below.
 
 **Lint and format (from project root):**
 
@@ -939,6 +939,170 @@ npm run lint-fix      # Auto-fix lint issues
 npm run prettier-check
 npm run prettier-fix
 ```
+
+---
+
+## 🧪 **End-to-End Testing (Playwright)**
+
+Mirrors `web/e2e/CLAUDE.md`; a change to either lands in both (root `CLAUDE.md` Rule 11).
+
+Playwright drives the **deployed** application, so it is the only layer that proves a frontend change reached
+users. `E2E_BASE_URL` is required: `playwright.config.ts` throws when it is unset. A fix that exists only in
+`web/src/` fails until the front end is rebuilt (`cd web && npm run build`) and deployed. Confirm the
+deployment took by matching the served main-bundle hash to the local one
+(`curl -s https://<host>/index.html | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js'` against
+`ls web/dist/assets/index-*.js`). A passing jest suite says nothing about what is deployed.
+
+### **Two kinds of spec**
+
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                      | **Ad-hoc specs (untracked)**                                |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                        | Prove one specific change or fix works                      |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                            | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                           | No: keep out of git                                         |
+
+-   Add a core spec only when a new page or shared component is added. A fix to existing behaviour gets an
+    ad-hoc spec, or a new assertion in the relevant core spec when the behaviour is permanent.
+-   A `seeded.` spec hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and
+    the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`).
+-   Prefix throwaway probe specs with `_` and delete them when finished; a probe left behind runs in every
+    later suite.
+
+### **Rule E1: Core specs pass against ANY environment**
+
+-   Never depend on a particular pipeline, workflow, execution, asset or count existing. Derive the subject
+    from whatever exists (`firstCardId(page)`) and `test.skip(!id, "<reason>")` when there is none; never a
+    hardcoded seed id.
+-   Never wait on data to prove the page loaded: wait on the page's own heading (`gotoOrchestration`), then
+    assert the list rendered rows **or** its empty state (`expectTableRendered`).
+-   A spec that needs a file of a particular type finds one with `findAssetFiles` and skips when there is
+    none, never a fixed database and asset id.
+-   A skip with a reason is the honest outcome when a precondition is absent; a test that passes because its
+    assertion never ran is not. Card lists are server-paginated (pageSize 50), so a spec that waits for one
+    seeded id fails once newer items push it off page 1.
+
+### **Rule E2: Core specs do not mutate the environment**
+
+-   Open dialogs and wizards to assert they work, then dismiss them (`Escape`); never Launch.
+-   For a destructive action, assert the confirm appears and says the right thing, then dismiss it (capture a
+    native `confirm()` with `page.once("dialog", …)` and `d.dismiss()`).
+-   Only an ad-hoc spec may create and clean up its own data. A core spec that must mutate data or needs a
+    second user does so only behind an `E2E_*` opt-in variable and otherwise skips with the reason:
+    `zipdownloads.spec.ts` takes `E2E_ZIP_CREATE=1` and `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD`
+    (signed in with `signInAs`, never hardcoded). A spec lists its other opt-in variables in its header comment.
+
+### **Rule E3: Use the shared harness, don't re-derive selectors**
+
+`web/e2e/support/fixtures.ts` holds the durable selector knowledge; import from it, and when a page's markup
+changes fix the helper once. An add-on's page helpers sit beside it in `support/{addon}Fixtures.ts`. The full
+helper table is in `web/e2e/CLAUDE.md` Rule 3; the groups are:
+
+-   **Navigation and page state:** `gotoOrchestration`, `orchestrationRoot`, `searchBox`, `facet`,
+    `firstCardId`, `openCardMenu`, `tableRows` / `expectTableRendered` (takes the page's own empty-state
+    regex), `menuSurface`, `wizardRail`, `rowValue`, `collectPageErrors`, `sideNavigation`,
+    `profileMenuName` / `profileMenuTrigger` / `openProfileMenu` / `profileMenuLink`, `signInAs`.
+-   **Feature switches:** `cachedFeaturesEnabled`, `featuresEnabled` / `missingFeatures`, `featureSwitches`;
+    `test.skip` on an absent switch.
+-   **Files and viewers:** `openAssetFile`, `openFileManager`, `selectTreePath`, `treeNode`,
+    `selectedTreeNode`, `chooseViewer`, `chooseSelectOption`, `apiContext`, `findAssetFiles`,
+    `findNestedAssetFile`, `findAssetsWithFiles`, `viewerSamples`, `compareSeed`, `openViewerFile`,
+    `pickViewerIfAsked`, `expectViewerSelected`, `dataGrid`, `largestCanvas`, `canvasStats`,
+    `expectCanvasRendered`, `expectSuperSplatRendered`.
+-   **Layout:** `VIEWPORTS` (phone 390, tablet 768, laptop 1280, desktop 1440), `pageOverflowX` /
+    `expectNoPageOverflowX`, `expectReachable`.
+-   **Security and hygiene:** `watchConsoleErrors` (ignores only `CONSOLE_ERROR_IGNORE`),
+    `watchCspViolations` (call before navigating) / `expectNoNewCspViolations`, `watchRequestHosts`
+    (`thirdParty()`), `SUPERSPLAT_CSP_ALLOWED`, `CSP_CONSOLE_REPORT`.
+
+Selector facts worth not rediscovering:
+
+-   The orchestration search input is `getByLabel("Search")`, matched by label, not placeholder; there are two
+    "Search" inputs (filter bar and global nav), so scope to `.orchestration-root`.
+-   Filters are native `<select>`s (`Status`, `Execution Type`, `Database`, `Group by`, `Filter by status`,
+    `Filter by trigger`, `Filter by group ID`, `Time window`). Cards expose `Actions for {id}` buttons, the
+    stable way to read a card's identity. The template panel heading is an `h1` reading exactly `Templates`.
+    Execution trigger values use the stored vocabulary (`Manual`, `File-Upload`).
+-   The pipeline form is a three-step wizard ("1 Basic", "2 Execution", "3 Settings"); later steps' fields do
+    not exist until you advance with the form's own `Next`. Never locate a step by name:
+    `getByRole("button", { name: /Settings/ })` matches the global navigation's Settings button.
+-   The execute flow is one dialog: its first step is the workflow picker (`role=option` rows in a
+    `role=listbox`, search labelled `Workflow`) except from a workflow card's Execute action, and `Launch`
+    exists only on the final step; an Inputs-step assertion targets `Next`.
+-   The executions board names the workflow's database `Workflow Database` and has no `Group` column.
+-   `[role="menu"]` is ambiguous on every page: closed Cloudscape Selects keep zero-size menus earlier in
+    document order. Reach the open surface with `menuSurface(items)`.
+-   A detail panel's field value is the label's next sibling; use `rowValue(page, label)`, never a page-wide
+    `getByText` for a value's shape.
+
+### **Rule E4: Assert behaviour, not implementation**
+
+Prefer role-based, user-visible assertions. A crash regression asserts no uncaught errors
+(`collectPageErrors` empty), not only that something rendered. A layering fix proves the dialog receives the
+click (`document.elementFromPoint` at the dialog lands inside it); a z-index alone proves nothing.
+
+### **Viewer render proof (shared by every viewer PR)**
+
+`viewers.spec.ts` "viewer render proof (seeded samples)" proves a viewer DRAWS a known file. Add a viewer's
+cases to `renderCases` there; never start another spec or harness.
+
+-   **Samples** are entries of the tracked `e2e/fixtures/viewer-samples.json` (schema checked by
+    `web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`): `id`, `viewer` (a config viewer id, or
+    `none` for a `not-offered` subject), `path`, `licence`, `source`, and exactly one of a download (`url`
+    pinned to a tag or commit, `size`, `sha256`; the seeder refuses a mismatch), `generated`, or
+    `derivedFrom` plus `transform`. Optional `requiresFeature` and `expect` thresholds. Verify the licence at
+    its source before adding a download; no sample binary is ever committed.
+-   **Seeding:** `tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>` uploads the samples to one
+    distributable asset and writes `e2e/fixtures/viewer-samples-seed.json`; export its path as
+    `E2E_VIEWER_SAMPLES`.
+-   **A case** names `sample`, `viewer` (the exact config `name`; the case asserts that viewer opened) and
+    `kind` (`canvas`, `image`, `raster-notice`, `pdf`, `grid`, `text`, `text-binary`, `text-encoding`,
+    `not-offered`, `potree`, `refused`, `supersplat`), with optional `select`, `requiresFeature` /
+    `withoutFeature`, `fetches`, `thresholds`, `cspAllowed`, `servedBundle`, `consoleAllowed`, `reads` and
+    `selectInPanel`. VNTANA and VEERUM have no feature flag, so their cases skip when the viewer is not
+    offered.
+-   **Every case fails** on console or page errors (`watchConsoleErrors`; never widen
+    `CONSOLE_ERROR_IGNORE` for one case, use `consoleAllowed`), on any CSP violation outside `cspAllowed`
+    (list the development baseline's violations exactly, so only new ones fail) and on any request host
+    outside the deployment (`watchRequestHosts`). Run the spec on the development build first and record its
+    pixel stats; a case that passes there and fails on a change is a regression.
+-   **Potree cases** read the octree the Potree pipeline wrote, so run that pipeline on each `potree-*` sample
+    after seeding; the case skips, naming the pipeline, until `preview/PotreeViewer/metadata.json` exists. It
+    asserts `Potree.lru.numPoints > 0` and point pixels by red channel.
+-   **SuperSplat** renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs those cases
+    in a separate `chromium-webgpu` project and takes them out of `chromium`; without an adapter they skip,
+    and `E2E_REQUIRE_WEBGPU=1` makes that a failure. Run them where a GPU is available: Chromium's software
+    adapter loses the device while the editor loads a file.
+
+### **Running the suite**
+
+```bash
+cd web
+export E2E_BASE_URL=https://<your-deployment-host>   # required
+export E2E_USERNAME=<user> E2E_PASSWORD=<pass>       # never hardcode credentials
+npm run e2e                                           # all specs
+npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
+E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts   # SuperSplat render checks
+```
+
+-   `retries: 1` reports a fail-then-pass as **flaky**, and Playwright's exit code counts flaky as success;
+    read the summary line, not the exit status (a shell pipeline makes the exit code the pipeline's).
+-   `auth.setup.ts` signs in once and saves `e2e/.auth/admin.json` for 45 minutes (rapid Cognito sign-ins can
+    trip the edge WAF); `E2E_FORCE_LOGIN=1` refreshes it, and an MFA account runs `npm run e2e:auth` headed
+    once. Keep `auth.setup.ts` tracked and working: every spec depends on it.
+
+### **Adding a core spec for a new page**
+
+1. Add a new orchestration route to the `gotoOrchestration` union in `support/fixtures.ts`.
+2. Assert, in order: the page renders without a crash; its controls exist; its filters offer the expected
+   values; one interaction per row action.
+3. Derive every subject from the environment (Rule E1) and mutate nothing (Rule E2).
+4. Put new selector knowledge in `support/fixtures.ts`, not inline.
+5. Run against a deployed environment; the result is `passed` or an explicit `skipped`, never a silent pass.
+
+Anti-patterns: hardcoded seed ids; waiting on data to prove page load; mutating shared state in a core spec;
+inline selectors; committing an ad-hoc or `_probe` spec; hardcoded credentials or base URL; calling a web fix
+verified without checking the deployed bundle hash.
 
 ---
 
