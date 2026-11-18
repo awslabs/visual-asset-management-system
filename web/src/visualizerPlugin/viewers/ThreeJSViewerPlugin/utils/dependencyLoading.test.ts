@@ -488,6 +488,26 @@ describe("loadWithDependencies", () => {
         expect(result.warnings).toEqual(["m/name with space.png (not found in this asset)"]);
     });
 
+    it("lists a missing glTF name with an encoded reserved character once", async () => {
+        installFetch({});
+        installBundle();
+        mockedLoadFile.mockImplementation(async (gltf, _ext, _name, manager) => {
+            const json = JSON.parse(new TextDecoder().decode(gltf as ArrayBuffer));
+            json.images.forEach((image: any) => manager.resolveURL(image.uri));
+            return { object: {} };
+        });
+
+        const result = await loadWithDependencies({
+            arrayBuffer: buffer(JSON.stringify({ images: [{ uri: "part%231.png" }] })),
+            extension: "gltf",
+            fileKey: "m/a.gltf",
+            fileName: "a.gltf",
+            resolver: newResolver(),
+        });
+
+        expect(result.warnings).toEqual(["m/part#1.png (not found in this asset)"]);
+    });
+
     it("loads self-contained formats through an isolating manager without downloads", async () => {
         const requested = installFetch({});
         installBundle();
