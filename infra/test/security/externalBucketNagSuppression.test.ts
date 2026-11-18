@@ -74,13 +74,20 @@ describe("the external bucket object pattern", () => {
         expect(literal).not.toBeNull();
     });
 
-    const patternOf = (): RegExp =>
-        new RegExp(
-            (literal?.[1] ?? "")
+    const patternOf = (): RegExp => {
+        // A missing pattern must fail every case below, not match everything through an empty RegExp.
+        if (!literal) {
+            throw new Error(
+                "the literal external bucket ARN pattern is not declared in security.ts"
+            );
+        }
+        return new RegExp(
+            literal[1]
                 .replace(/^\//, "")
                 .replace(/\/[a-z]*$/, "")
                 .replace(/\\\\/g, "\\")
         );
+    };
 
     test.each([
         "Resource::arn:aws:s3:::b/*",
