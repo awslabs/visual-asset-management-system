@@ -302,13 +302,15 @@ def build_tools(state: RunState, search_fn: Optional[Callable] = None, fetch_fn:
 
         The script must read the input STEP from the CAD_INPUT_STEP environment variable when one
         exists, and MUST write its result to the path in CAD_OUTPUT_STEP (cq.exporters.export(shape,
-        os.environ["CAD_OUTPUT_STEP"])). Only the Python standard library and cadquery are available;
-        there is no network access. Returns a JSON result with the validation summary and the tail of the
-        script's output; use it to correct the next attempt. The output keeps solids only: after the script
-        runs, the pipeline drops any geometry outside the solids (annotation planes or curves carried over
-        from an imported file) from the output file, whatever the script exported, and reports it under
-        dropped_non_solid_geometry. Keeping solids only is this pipeline's rule: STEP can carry annotation
-        geometry, and the exporter writes whatever the script exports.
+        os.environ["CAD_OUTPUT_STEP"])). Only the Python standard library and cadquery are available.
+        The script runs with the container's own network access, and nothing blocks a connection; it
+        needs none, so do not attempt network access from it. Returns a JSON result with the
+        validation summary and the tail of the script's output; use it to correct the next attempt.
+        The output keeps solids only: after the script runs, the pipeline drops any geometry outside
+        the solids (annotation planes or curves carried over from an imported file) from the output
+        file, whatever the script exported, and reports it under dropped_non_solid_geometry. Keeping
+        solids only is this pipeline's rule: STEP can carry annotation geometry, and the exporter
+        writes whatever the script exports.
         On a modify run the result also carries deltaVsInput: the volume, hole
         count, solid count and bounding-box change against the input, the volume band under which a
         difference is re-export noise (unchanged_below_mm3: one millionth of the input's volume, at least
