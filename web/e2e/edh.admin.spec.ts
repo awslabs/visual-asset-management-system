@@ -27,7 +27,7 @@ const NO_ACCESS = /You do not have access to/i;
 // tiles are its render signal.
 const PANEL_SIGNAL: Record<string, string> = {
     Sessions: "No sessions are running",
-    Capacity: "Total sessions|No capacity data returned",
+    Capacity: "Total sessions",
     Reservations: "No reservations registered",
     Images: "No images are registered",
     "AMI Recipes": "No AMI recipes are defined",

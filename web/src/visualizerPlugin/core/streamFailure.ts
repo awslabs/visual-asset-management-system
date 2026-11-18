@@ -159,8 +159,8 @@ export function isApiRefusalError(error: unknown): error is ApiRefusalError {
 /**
  * The error a viewer throws for a failed streaming-route response it fetched itself: an
  * `ApiRefusalError` carrying the API's reason when the API refused the file with one, else an Error
- * with `streamResponseFailureMessage`'s text (the worded 401/403/404/410/429 sentences, or
- * `subject`).
+ * with `streamResponseFailureMessage`'s text (the worded 401/403/404/410 sentences, or `subject`,
+ * which a 429 also gets).
  */
 export async function streamResponseFailure(response: Response, subject: string): Promise<Error> {
     const apiMessage = await responseApiMessage(response);

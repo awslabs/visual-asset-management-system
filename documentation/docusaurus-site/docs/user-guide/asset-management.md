@@ -431,11 +431,13 @@ Permanent deletion is irreversible. The asset, all its files in Amazon S3, all v
 
 To permanently delete an asset:
 
-1. On the asset detail page, select the **Delete** button.
-2. In the deletion modal, choose **Permanent Delete**.
-3. Type the confirmation text to acknowledge the irreversible nature of the operation.
-4. Select **Confirm**.
+1. On the asset detail page, select the **Delete** button. The dialog that opens archives the asset unless you change it.
+2. Turn on **Permanently delete asset instead of archiving**.
+3. Type `delete` in the **Confirmation** field to acknowledge the irreversible nature of the operation.
+4. Select **Delete**.
 5. You are redirected to the search page after successful deletion.
+
+An archived asset's page offers **Delete permanently** instead, which opens the same dialog already set to permanent deletion.
 
 ---
 
