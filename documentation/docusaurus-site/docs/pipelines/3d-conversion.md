@@ -34,7 +34,7 @@ Each reference is checked before anything is downloaded:
 -   It must be a path relative to the file that names it (for example `textures/wood.png` or `../shared/wood.png`) that resolves to a file inside the input's own asset. Absolute paths, URLs, and paths that leave the asset are rejected. Data embedded in the model (a `data:` URI) needs no download.
 -   A GLTF or GLB buffer holds the geometry. A rejected buffer reference, or a buffer that is not in the asset, fails the run with a message naming it.
 -   A material library or a texture image only adds appearance. One that is rejected, not in the asset, or over a limit is skipped, the run log records a warning naming it, and the model converts without it: an OBJ without its material library converts as geometry only.
--   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material library is read for further references.
+-   A model may reference at most 1,000 files totalling 2 GiB, and only an OBJ file's material library is read for further references. Texture images are limited by their decoded size, see [Input size limits](#input-size-limits); one left out for size is named in the run's completion message.
 -   Names are read the way the model loader reads them: an OBJ file's material library is everything after `mtllib` on the first line that contains it, and a texture is everything after `map_Kd` on its line, so a name may contain spaces but not texture options such as `-s`.
 
 ## Architecture
@@ -72,9 +72,9 @@ This pipeline must be registered as NOT needing a task token callback. If a work
 
 1. The Lambda function receives the workflow step's request body, which carries the Amazon S3 locations of the workflow input manifest and of the pipeline's input configuration. A request that carries a task token is rejected before anything is logged or read.
 2. The function reads the manifest, which names the input file (its bucket, key, asset-relative path, and the bucket's AWS Region) and the run's output files location, and reads the target format (`outputType`) from the input configuration, which the selected pipeline template supplies.
-3. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory at its path within the asset, followed by the files it references (see [Multi-File Models](#multi-file-models)).
-4. Trimesh loads the model, detecting the format from the file extension, and reads referenced files only from those downloads.
-5. The model is exported to the target format using Trimesh's export capabilities.
+3. The function reads the input's size with a `HeadObject` request at the version the run was launched on and refuses an input larger than the function can convert, before anything is downloaded (see [Input Size Limits](#input-size-limits)).
+4. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory at its path within the asset, followed by the files it references (see [Multi-File Models](#multi-file-models)).
+5. The function starts a worker process that runs Trimesh. The worker has none of the function's AWS credentials in its environment, and the function process closes its own `/proc` files to it. It runs under an address-space limit set from the function's memory, a limit on the size of any one file it writes, no core dumps, and a time limit set from the invocation's remaining time; a limit that cannot be applied fails the run. The worker still runs as the function's user and shares its network namespace, so it can reach whatever network the function reaches, including the Lambda runtime API, which does not return credentials. Trimesh loads the model, detecting the format from the file extension, and reads referenced files only from those downloads. The model is exported to the target format using Trimesh's export capabilities.
 6. The converted file, and any companion files the export writes, are uploaded to the run's output files location using multipart upload for large files. The workflow then writes them back to the output asset in the input's folder, inside a further folder when the export writes several files or keeps the input's format (see [Output Naming](#output-naming)).
 
 ## Configuration
@@ -140,7 +140,7 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 -   **Pillow** -- texture image decoding and encoding for Trimesh
 -   **boto3** -- AWS SDK for Amazon S3 operations, from the base image
 
-The installed versions are those in the container's `poetry.lock`, from which its `requirements.txt` is exported.
+The installed versions are those in the container's `poetry.lock`, from which its `requirements.txt` is exported with the SHA-256 hash of every package. The Dockerfile installs it with `pip install --require-hashes`, so the image holds exactly the locked packages and `NOTICE.md` lists those versions.
 
 ## Infrastructure Components
 
@@ -155,7 +155,7 @@ The installed versions are those in the container's `poetry.lock`, from which it
 
 | Constraint        | Details                                                                                                                                                                             |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Maximum file size | Bounded by function memory, not by disk -- see the note below                                                                                                                       |
+| Maximum file size | Bounded by function memory, not by disk -- see [Input Size Limits](#input-size-limits)                                                                                              |
 | Execution timeout | 15 minutes (Lambda maximum)                                                                                                                                                         |
 | Geometry only     | Converts mesh geometry; complex materials, animations, or scene hierarchies may not transfer between all formats                                                                    |
 | Textures          | The base color texture is carried into OBJ, GLTF, and GLB output; a PLY output keeps texture coordinates without the image. Other texture maps may not transfer, and none are baked |
@@ -172,6 +172,32 @@ Two AWS Lambda quotas bound the largest model the pipeline can convert:
 :::note[Memory is the binding constraint, not disk]
 trimesh loads the whole mesh into memory to export it, so the practical ceiling comes from the configured function memory. The ephemeral storage budget only has to be large enough that disk is not the limit reached first -- raising it past the memory bound moves where the failure happens rather than raising the supported file size. An uncompressed export (STL from GLB, for example) is larger than the input it came from, so both copies count against the same budget.
 :::
+
+### Input Size Limits
+
+The function refuses an input that is too large before it downloads it, and the failed step reports the file, its size, the limit for its format, and the resource that sets the limit, for example `huge.ply is 900.0 MB, over the 179.1 MB limit for .ply inputs. The limit is set by the function memory.`
+
+The limit comes from the running function, not from a fixed number. It is the smaller of two figures:
+
+-   **Memory.** 90% of the function memory, less 300 MB for the runtime, divided by the format's expansion factor, which is the peak memory a conversion used per byte of input when measured. The input and the files it references count together.
+-   **Working disk.** The free space in `/tmp`, less 64 MB, divided by 4.5: the input plus an output up to 3.5 times its size, which is what a binary PLY or GLB written as OBJ text needs.
+
+| Input format | Expansion factor | Limit at 5,308 MB function memory |
+| ------------ | ---------------- | --------------------------------- |
+| `.stl`       | 14               | 319.8 MB                          |
+| `.obj`       | 9                | 497.5 MB                          |
+| `.ply`       | 25               | 179.1 MB                          |
+| `.glb`       | 27               | 165.8 MB                          |
+| `.gltf`      | 27               | 165.8 MB                          |
+| `.xyz`       | 13               | 344.4 MB                          |
+
+A larger function memory raises these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
+
+Texture images are budgeted apart from these figures, by their decoded size. An image's memory follows its pixels, not its file size: a 12,000 x 12,000 PNG of one colour is under 1 MB on disk and needs 576 MB decoded. After the input and the files that carry geometry (GLTF buffers, OBJ material libraries) are counted at the factors above, the memory that remains is divided by 5, the peak memory measured per decoded RGBA byte of texture, and that many decoded bytes of texture images are fetched, so four 4096 x 4096 textures or one 12,000 x 12,000 texture fit at 5,308 MB of function memory. A texture over what remains is skipped and the model converts without it. The run still succeeds, and its completion message says the model is incomplete and names each file left out and why, for example `Converted BoomBox.gltf, but 1 referenced file could not be included because of the function's size limits, so the converted model is incomplete: ...`. A GLTF buffer that does not fit fails the run.
+
+### Run time
+
+Each conversion starts a new worker process, which starts an interpreter and imports Trimesh. A small model takes about 0.4 seconds longer than when the parsers ran inside the function process (median 0.6 seconds against 0.2 seconds measured on a warm function). The worker is not forked from the function process, because a forked worker would inherit the function's AWS credentials from memory.
 
 ## Related Resources
 
