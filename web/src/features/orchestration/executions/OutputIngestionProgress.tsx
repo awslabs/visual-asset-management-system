@@ -154,7 +154,7 @@ const OutputIngestionProgress: React.FC<Props> = ({ executionPhase, outputIngest
                 <div
                     className="mt-3 overflow-x-auto"
                     role="region"
-                    aria-label="Output files being copied"
+                    aria-label="Output files table, scrolls sideways"
                     tabIndex={0}
                 >
                     <table className="w-full text-sm" aria-label="Output files being copied">
