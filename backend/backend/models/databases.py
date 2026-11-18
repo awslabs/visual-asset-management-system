@@ -235,6 +235,9 @@ class BucketModel(BaseModel, extra='ignore'):
     # as the deployment Region and the deployment account.
     bucketRegion: Optional[str] = None
     bucketAccountId: Optional[str] = None
+    # Whether S3 Transfer Acceleration is on for the bucket (#1610), as the row records it. A row
+    # without the attribute reads as false, so a client's boolean check stays total.
+    isAccelerated: bool = False
 
 class GetBucketsRequestModel(BaseModel, extra='ignore'):
     """Request model for listing buckets"""

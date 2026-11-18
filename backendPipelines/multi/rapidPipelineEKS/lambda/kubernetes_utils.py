@@ -265,6 +265,32 @@ def with_retries(func, max_retries=3, backoff_base=2, operation_name="operation"
     logger.error(error_msg)
     raise RuntimeError(error_msg)
 
+def sts_host_for_region(region):
+    """Host of the Regional STS endpoint for ``region``, with that Region's partition DNS suffix.
+
+    The EKS token is a presigned STS ``GetCallerIdentity`` URL, and its host is part of what is
+    signed. The suffix depends on the partition (``amazonaws.com``, ``amazonaws.com.cn``, or
+    ``amazonaws.eu`` in the AWS European Sovereign Cloud), so it is taken from the endpoint botocore
+    resolves for the Region rather than written into the string. When botocore resolves the legacy
+    global host (``sts.amazonaws.com``, under ``AWS_STS_REGIONAL_ENDPOINTS=legacy``) or nothing,
+    the commercial Regional host is used, which matches the previous behaviour.
+    """
+    from urllib.parse import urlparse
+
+    regional_prefix = f'sts.{region}.'
+    # Only the partition's DNS suffix is wanted, so FIPS, dual-stack and configured endpoint URLs are ignored.
+    endpoint_config = Config(
+        use_fips_endpoint=False, use_dualstack_endpoint=False, ignore_configured_endpoint_urls=True
+    )
+    try:
+        host = urlparse(boto3.client('sts', region_name=region, config=endpoint_config).meta.endpoint_url).hostname or ''
+    except Exception as e:
+        logger.warning(f"Could not resolve the STS endpoint for {region}: {e}")
+        host = ''
+    if host.startswith(regional_prefix):
+        return host
+    return f'sts.{region}.amazonaws.com'
+
 def get_k8s_client():
     """
     Get a Kubernetes client configured for the EKS cluster
@@ -547,6 +573,7 @@ def get_k8s_client():
                 session = boto3.Session()
                 credentials = session.get_credentials()
                 region = session.region_name or 'us-west-2'
+                sts_host = sts_host_for_region(region)
 
                 # Log credential details (without exposing secrets)
                 if credentials:
@@ -590,7 +617,7 @@ def get_k8s_client():
                 method = 'GET'
                 canonical_uri = '/'
                 canonical_querystring = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                canonical_headers = f'host:sts.{region}.amazonaws.com\nx-k8s-aws-id:{cluster_name}\n'
+                canonical_headers = f'host:{sts_host}\nx-k8s-aws-id:{cluster_name}\n'
                 signed_headers = 'host;x-k8s-aws-id'
                 payload_hash = hashlib.sha256(b'').hexdigest()
 
@@ -624,7 +651,7 @@ def get_k8s_client():
 
                 # Build final presigned URL
                 query_string = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                presigned_url = f'https://sts.{region}.amazonaws.com/?{query_string}'
+                presigned_url = f'https://{sts_host}/?{query_string}'
 
                 logger.warning(f"⚠️ AUTH DEBUG: Generated presigned URL length: {len(presigned_url)}")
                 logger.warning(f"⚠️ AUTH DEBUG: Contains X-Amz-Signature: {'X-Amz-Signature' in presigned_url}")
@@ -722,7 +749,7 @@ def get_k8s_client():
                     # Create request parameters
                     params = {
                         'method': 'GET',
-                        'url': 'https://sts.{}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15'.format(region),
+                        'url': 'https://{}/?Action=GetCallerIdentity&Version=2011-06-15'.format(sts_host_for_region(region)),
                         'body': {},
                         'headers': {
                             'x-k8s-aws-id': cluster_name
@@ -772,6 +799,7 @@ def get_k8s_client():
                         session = boto3.Session()
                         credentials = session.get_credentials()
                         region = session.region_name or 'us-west-2'
+                        sts_host = sts_host_for_region(region)
 
                         # Check credentials
                         if not credentials:
@@ -881,7 +909,7 @@ def get_k8s_client():
                             method = 'GET'
                             canonical_uri = '/'
                             canonical_querystring = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                            canonical_headers = f'host:sts.{region}.amazonaws.com\nx-k8s-aws-id:{cluster_name}\n'
+                            canonical_headers = f'host:{sts_host}\nx-k8s-aws-id:{cluster_name}\n'
                             signed_headers = 'host;x-k8s-aws-id'
                             payload_hash = hashlib.sha256(b'').hexdigest()
 
@@ -915,7 +943,7 @@ def get_k8s_client():
 
                             # Build final presigned URL
                             query_string = '&'.join([f'{k}={urllib.parse.quote_plus(str(v))}' for k, v in sorted(params.items())])
-                            presigned_url = f'https://sts.{region}.amazonaws.com/?{query_string}'
+                            presigned_url = f'https://{sts_host}/?{query_string}'
 
                             logger.warning(f"⚠️ AUTH DEBUG: Manual presigned URL length: {len(presigned_url)}")
 
