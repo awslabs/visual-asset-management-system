@@ -57,6 +57,7 @@ const sidebars: SidebarsConfig = {
                 "deployment/configuration-reference",
                 "deployment/config-builder",
                 "deployment/external-s3-setup",
+                "deployment/s3-transfer-acceleration",
                 "deployment/update-the-solution",
                 "deployment/uninstall",
             ],

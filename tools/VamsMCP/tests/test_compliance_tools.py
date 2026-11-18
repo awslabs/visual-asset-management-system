@@ -1056,10 +1056,10 @@ def test_the_schema_save_docstring_names_the_run_rights_refusal(gated):
     assert "Not authorized to run the workflow of pipeline rule" in _docstring_of(
         "create_compliance_schema")
     client.api.create_compliance_schema.side_effect = PermissionError(
-        "Access forbidden. Not authorized to run the workflow of pipeline rule 'convert'")
+        "Access forbidden. Not authorized to run the workflow of pipeline rule rules[0]")
     result = srv.create_compliance_schema("s", schema_body={"schemaFormat": "vams-rules-v1",
                                                             "rules": {}})
-    assert "pipeline rule 'convert'" in str(result)
+    assert "pipeline rule rules[0]" in str(result)
 
 
 def test_the_history_tool_explains_an_evaluation_closed_without_a_verdict():

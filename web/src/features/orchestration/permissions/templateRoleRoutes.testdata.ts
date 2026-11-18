@@ -31,6 +31,9 @@ export const DATABASE_READONLY_ROUTES: ListedRoute[] = [
     route("/assets", ["GET"]),
     route("/database/{databaseId}/assets/{assetId}", ["GET"]),
     route("/database/{databaseId}/assets/{assetId}/metadata", ["GET"]),
+    route("/database/{databaseId}/assets/{assetId}/metadata/file", ["GET"]),
+    route("/asset-links/{assetLinkId}/metadata", ["GET"]),
+    route("/database/{databaseId}/metadata", ["GET"]),
     route("/auth/user/api-keys", ["GET"]),
     route("/auth/user/api-keys/{apiKeyId}", ["GET"]),
 ];
@@ -44,6 +47,10 @@ export const DATABASE_USER_ROUTES: ListedRoute[] = [
     route("/database/{databaseId}/assets/{assetId}", ["GET"]),
     route("/database/{databaseId}/assets/{assetId}/archiveAsset", ["DELETE"]),
     route("/database/{databaseId}/assets/{assetId}/metadata", ["GET", "POST"]),
+    route("/database/{databaseId}/assets/{assetId}/metadata/file", ["GET", "POST"]),
+    route("/asset-links/{assetLinkId}/metadata", ["GET", "POST", "PUT", "DELETE"]),
+    // PUT and DELETE are granted for the role's own database only, which the listing cannot report.
+    route("/database/{databaseId}/metadata", ["GET", "POST"]),
     route("/auth/user/api-keys", ["GET", "POST"]),
     route("/auth/user/api-keys/{apiKeyId}", ["GET", "PUT", "DELETE"]),
 ];
@@ -60,6 +67,14 @@ export const ADMIN_ROUTES: ListedRoute[] = [
     route("/database/{databaseId}/assets/{assetId}", ["GET", "PUT"]),
     route("/database/{databaseId}/assets/{assetId}/archiveAsset", ["DELETE"]),
     route("/database/{databaseId}/assets/{assetId}/metadata", ["GET", "POST", "PUT", "DELETE"]),
+    route("/database/{databaseId}/assets/{assetId}/metadata/file", [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE",
+    ]),
+    route("/asset-links/{assetLinkId}/metadata", ["GET", "POST", "PUT", "DELETE"]),
+    route("/database/{databaseId}/metadata", ["GET", "POST", "PUT", "DELETE"]),
     route("/auth/api-keys", ["GET", "POST"]),
     route("/auth/api-keys/{apiKeyId}", ["GET", "PUT", "DELETE"]),
     route("/auth/user/api-keys", ["GET", "POST"]),
