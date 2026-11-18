@@ -164,15 +164,15 @@ vamscli execution details metadata my-execution-id --collection output --auto-pa
 vamscli execution details metadata my-execution-id --pipeline-id my-pipeline --page-size 500
 ```
 
-| Option             | Description                                                                       |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `--collection`     | `input` (default), `inputDatabase`, or `output` — case-sensitive                  |
-| `--pipeline-id`    | Only rows produced or read by this pipeline (one workflow step)                   |
-| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)                |
-| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000)     |
-| `--starting-token` | Continuation token for manual pagination                                          |
-| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
-| `--json-output`    | Output the raw JSON response                                                      |
+| Option             | Description                                                                   |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `--collection`     | `input` (default), `inputDatabase`, or `output` — case-sensitive              |
+| `--pipeline-id`    | Only rows produced or read by this pipeline (one workflow step)               |
+| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)            |
+| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000) |
+| `--starting-token` | Continuation token for manual pagination                                      |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                          |
+| `--json-output`    | Output the raw JSON response                                                  |
 
 `--collection` selects which of the detail view's metadata collections is read: `input` the asset and
 file metadata the run read, `inputDatabase` the metadata-source databases' own metadata, and `output`
@@ -236,15 +236,15 @@ vamscli execution details files my-execution-id --collection output --auto-pagin
 vamscli execution details files my-execution-id --collection output --pipeline-id my-pipeline
 ```
 
-| Option             | Description                                                                       |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `--collection`     | `input` (default) or `output` — case-sensitive                                    |
-| `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                    |
-| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)                |
-| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000)     |
-| `--starting-token` | Continuation token for manual pagination                                          |
-| `--auto-paginate`  | Fetch every page up to `--max-items`                                              |
-| `--json-output`    | Output the raw JSON response                                                      |
+| Option             | Description                                                                   |
+| ------------------ | ----------------------------------------------------------------------------- |
+| `--collection`     | `input` (default) or `output` — case-sensitive                                |
+| `--pipeline-id`    | Only output rows produced by this pipeline (one workflow step)                |
+| `--page-size`      | Rows per page, 1 to 500 (a larger value is clamped with a warning)            |
+| `--max-items`      | Maximum total rows (at least 1) — applies only with `--auto-paginate` (10000) |
+| `--starting-token` | Continuation token for manual pagination                                      |
+| `--auto-paginate`  | Fetch every page up to `--max-items`                                          |
+| `--json-output`    | Output the raw JSON response                                                  |
 
 `input` reads the workflow-level input files, each printed as `databaseId:assetId` and the
 asset-relative path with the S3 version the run read. `output` reads the files the pipelines wrote,
