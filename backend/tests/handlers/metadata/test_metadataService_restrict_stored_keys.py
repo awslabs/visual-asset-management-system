@@ -544,7 +544,7 @@ def test_changing_a_stored_value_to_one_the_schema_refuses_is_still_refused(
             invoke(items, USER_CLAIMS, update_type)
 
     message = str(raised.value)
-    assert "is not in the field's controlled list" in message, f"{path_name}: {message}"
+    assert f"Field '{LIST_KEY}' has a value that is not in its controlled list" in message, f"{path_name}: {message}"
     assert "purple" not in message, f"{path_name}: {message}"
     assert TYPED_KEY not in message, f"{path_name} checked the unchanged stored key: {message}"
     assert not harness.wrote
