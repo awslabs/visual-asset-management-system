@@ -622,9 +622,9 @@ class TestComplianceSchemaCommands:
                                                        command):
         """D150: a parent not found as a vams-rules-v1 schema the caller may read is a save
         warning, printed as the API worded it."""
-        message = ("The parent schema 'base' was not found as a vams-rules-v1 schema you may read. "
-                   "If it does not exist or is not vams-rules-v1, this schema is evaluated with "
-                   "its own rules only.")
+        message = ("The parent schema named in `extends` was not found as a vams-rules-v1 schema you "
+                   "may read. If it does not exist or is not vams-rules-v1, this schema is evaluated "
+                   "with its own rules only.")
         answer = {'message': "Schema 'cad-quality' registered as v2", 'schemaName': 'cad-quality',
                   'internalVersion': 2, 'warnings': [{
                       'code': 'extendsSchemaNotFound', 'message': message, 'extends': 'base'}]}
@@ -2559,11 +2559,12 @@ class TestBindingChangesKeepQuarantine:
 
 
 class TestARefusedPipelineRuleSave:
-    """A schema save whose pipeline rule names a workflow the caller may not run answers 403 naming
-    the rule; the CLI raises the permission error with that message and prints it."""
+    """A schema save whose pipeline rule names a workflow the caller may not run answers 403 locating
+    the rule by its position in the body's rules; the CLI raises the permission error with that
+    message and prints it."""
 
-    REFUSAL = {'message': "Not authorized to run the workflow of pipeline rule 'convert'",
-               'ruleName': 'convert'}
+    REFUSAL = {'message': "Not authorized to run the workflow of pipeline rule rules[0]",
+               'rulePosition': 0}
 
     @pytest.mark.parametrize('call', [
         lambda client: client.create_compliance_schema({'schemaName': 's', 'schemaBody': {}}),
@@ -2588,7 +2589,7 @@ class TestARefusedPipelineRuleSave:
             # which prints its message.
             assert result.exit_code != 0
             assert isinstance(result.exception, PermissionDeniedError)
-            assert "pipeline rule 'convert'" in str(result.exception)
+            assert "pipeline rule rules[0]" in str(result.exception)
 
 
 class TestAnOutrankedEvaluationSaysItWasNotApplied:
