@@ -39,6 +39,7 @@ import CreateApiKey from "./CreateApiKey";
 import UpdateApiKey from "./UpdateApiKey";
 import { usePageTitle } from "../../hooks/usePageTitle";
 import { API_KEYS_ADMIN_NAV_HREF, useActiveNavHref } from "../../layout/activeNavHref";
+import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
 
 export type ApiKeyManagementMode = "admin" | "user"; // pragma: allowlist secret
 
@@ -88,6 +89,31 @@ export function resolveApiKeyMode(
     return adminAllowed ? "admin" : "user";
 }
 
+/** Which key actions the allowed-routes listing offers in one mode. */
+interface ApiKeyActions {
+    create: boolean;
+    update: boolean;
+    remove: boolean;
+}
+
+const NO_API_KEY_ACTIONS: ApiKeyActions = { create: false, update: false, remove: false };
+
+/** The routes each mode's actions call. */
+const API_KEY_ROUTES: Record<ApiKeyManagementMode, { list: string; item: string }> = {
+    admin: { list: "/auth/api-keys", item: "/auth/api-keys/{apiKeyId}" },
+    user: { list: "/auth/user/api-keys", item: "/auth/user/api-keys/{apiKeyId}" },
+};
+
+/** The actions the cached allowed-routes listing offers in a mode (unknown counts as refused). */
+function allowedApiKeyActions(mode: ApiKeyManagementMode): ApiKeyActions {
+    const { list, item } = API_KEY_ROUTES[mode];
+    return {
+        create: isApiRouteAllowed(list, "POST") === true,
+        update: isApiRouteAllowed(item, "PUT") === true,
+        remove: isApiRouteAllowed(item, "DELETE") === true,
+    };
+}
+
 const API_KEY_STATUS_INDICATOR: Record<ApiKeyStatus, "success" | "stopped" | "error"> = {
     Active: "success",
     Inactive: "stopped",
@@ -119,6 +145,10 @@ export default function ApiKeys() {
     // guessing a privilege level.
     const [permissionsUnavailable, setPermissionsUnavailable] = useState(false);
     const [resolveAttempt, setResolveAttempt] = useState(0);
+    // Create, Edit and Delete per mode, from the same listing; the API still authorizes each call.
+    const [actionsByMode, setActionsByMode] = useState<Record<ApiKeyManagementMode, ApiKeyActions>>(
+        { admin: NO_API_KEY_ACTIONS, user: NO_API_KEY_ACTIONS }
+    );
 
     const [mode, setMode] = useState<ApiKeyManagementMode>("admin");
     const [reload, setReload] = useState(false);
@@ -162,6 +192,13 @@ export default function ApiKeys() {
             setPermissionsUnavailable(undeterminable);
             setShowAdminMode(adminMode);
             setShowUserMode(userMode);
+            // With no listing served at all there is nothing to gate on, as for the modes.
+            const allActions: ApiKeyActions = { create: true, update: true, remove: true };
+            setActionsByMode(
+                listingAbsent
+                    ? { admin: allActions, user: allActions }
+                    : { admin: allowedApiKeyActions("admin"), user: allowedApiKeyActions("user") }
+            );
             setMode(resolveApiKeyMode(requestedMode, adminMode, userMode));
             setModesResolved(!undeterminable);
             if (undeterminable) {
@@ -274,6 +311,26 @@ export default function ApiKeys() {
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
+
+    const actions = actionsByMode[mode];
+    const createDisabledReason = routeDisabledReason(
+        !modesResolved,
+        false,
+        actions.create,
+        "Your role does not allow creating API keys."
+    );
+    const editDisabledReason = routeDisabledReason(
+        !modesResolved,
+        false,
+        actions.update,
+        "Your role does not allow editing API keys."
+    );
+    const deleteDisabledReason = routeDisabledReason(
+        !modesResolved,
+        false,
+        actions.remove,
+        "Your role does not allow deleting API keys."
+    );
 
     // Whether the listing spans more than the page shown. Only then are the filter and the
     // column sorting narrower than the whole key set, so only then is it worth saying so.
@@ -515,20 +572,27 @@ export default function ApiKeys() {
                                 actions={
                                     <SpaceBetween direction="horizontal" size="xs">
                                         <Button
-                                            disabled={!modesResolved || selectedItems.length !== 1}
+                                            disabled={
+                                                !!editDisabledReason || selectedItems.length !== 1
+                                            }
+                                            disabledReason={editDisabledReason}
                                             onClick={() => setEditOpen(true)}
                                         >
                                             Edit
                                         </Button>
                                         <Button
-                                            disabled={!modesResolved || selectedItems.length !== 1}
+                                            disabled={
+                                                !!deleteDisabledReason || selectedItems.length !== 1
+                                            }
+                                            disabledReason={deleteDisabledReason}
                                             onClick={() => setDeleteConfirmOpen(true)}
                                         >
                                             Delete
                                         </Button>
                                         <Button
                                             variant="primary"
-                                            disabled={!modesResolved}
+                                            disabled={!!createDisabledReason}
+                                            disabledReason={createDisabledReason}
                                             onClick={() => setCreateOpen(true)}
                                             data-testid="create-api-key-button"
                                         >
@@ -547,7 +611,8 @@ export default function ApiKeys() {
                                     No API keys have been created yet.
                                 </Box>
                                 <Button
-                                    disabled={!modesResolved}
+                                    disabled={!!createDisabledReason}
+                                    disabledReason={createDisabledReason}
                                     onClick={() => setCreateOpen(true)}
                                 >
                                     Create API Key
