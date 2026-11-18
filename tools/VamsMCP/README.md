@@ -173,7 +173,7 @@ most 100 tools per connection.
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
-| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                                         |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, executions, the subscription list, API keys                     |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail                        |
 | `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
@@ -633,8 +633,8 @@ Keep all three out of `autoApprove`, and confirm a group abort with the user fir
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
 execution's group membership rather than selecting a group to re-run. It reads
 each input file at the version the original launch pinned (a `versionId` someone
-chose) and every other file at its current version; executions recorded before
-2.7.0 re-run every file on its current version.
+chose) and every other file at its current version; an execution recorded before
+versions were pinned re-runs every file on its current version.
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no

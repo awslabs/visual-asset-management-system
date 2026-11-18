@@ -124,7 +124,7 @@ Per-node GLB retrieval relies on the spatial GLB combine step (see [Spatial GLB 
 3. If a file is corrupt, re-download and validate it, then re-upload:
 
     ```bash
-    vamscli file download -d database_id -a asset_id -f filename.glb
+    vamscli assets download -d database_id -a asset_id --file-key /filename.glb
     ```
 
 ### File System and Permission Errors

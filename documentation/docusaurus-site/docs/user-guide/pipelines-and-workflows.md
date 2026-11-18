@@ -514,6 +514,18 @@ farm job. When one of those could not be stopped, the abort still succeeds and r
 job, which stays on the page after the notification clears; that work may still be running and billing until
 it is stopped where it runs.
 
+#### Output types and results
+
+The **Output Types** column, on the **Executions** page and on an asset's **Executions** tab, shows what each run produced: **File** (files written into an asset), **Metadata** (metadata written to an asset or its files) and **Result** (result text recorded on the execution, such as a report or a summary). A run that produced none of them shows a dash.
+
+Select the **Result** badge to read the run's result text without leaving the list:
+
+1. The result opens in a scrollable window; select **Copy** to copy the text shown.
+2. A long result arrives in pages. Select **Load more** to append the next page.
+3. Select **Download** to save the whole result as a `.txt` file, for a result too large to read on the page.
+
+A banner marks a result one of whose rows was cut to fit. The execution's detail view lists the same results under **Outputs**.
+
 :::note
 Workflow execution is asynchronous. Results (output files, previews, metadata) appear on the asset after all pipeline steps complete. Changes may take a few minutes to propagate through the system, including search results.
 :::

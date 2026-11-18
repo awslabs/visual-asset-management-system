@@ -24,7 +24,7 @@ When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the followin
 -   Amazon OpenSearch Serverless is not offered at all in the AWS European Sovereign Cloud. Set `app.openSearch.useServerless.enabled` to `false` and use `app.openSearch.useProvisioned` there.
 -   Amazon Cognito advanced security (`AdvancedSecurityMode`) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.
 
-For the authoritative per-field list, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
+Some features are refused in these partitions only when they are turned on, for example an API custom domain in the AWS European Sovereign Cloud or the GenAI CAD STEP agent's `agentcore` runtime outside the commercial partition. For the authoritative per-field list and those feature-level refusals, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
 :::
 
 ## Key decisions
@@ -84,7 +84,7 @@ Amazon OpenSearch Serverless is the recommended option for most deployments. Pro
 | **Import existing VPC** | `useGlobalVpc.enabled: true` with `optionalExternalVpcId` | Import an existing VPC by ID. Requires providing isolated subnet IDs and optionally private and public subnet IDs. See [Deploy the solution](deploy-the-solution.md) for the two-phase deployment process. |
 
 :::warning[VPC is required for some features]
-Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail, media previews, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, Image to 3D, coordinate transform, Video SOP/BOM Extraction, GenAI CAD STEP agent).
+Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, a private OpenSearch Serverless collection (`allowPublic: false`), Download as Zip (`app.pipelines.useZipDownloads`), the EDH Workstations add-on, or any container-based pipeline (Potree viewer, Gaussian splatting, GenAI labeling, RapidPipeline, ModelOps, Isaac Lab, 3D preview thumbnail, media previews, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, Image to 3D, coordinate transform, Video SOP/BOM Extraction, GenAI CAD STEP agent).
 :::
 
 **Subnet sizing guidance:**
