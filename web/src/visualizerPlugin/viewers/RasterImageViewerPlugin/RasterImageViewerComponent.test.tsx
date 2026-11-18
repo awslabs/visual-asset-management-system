@@ -300,3 +300,35 @@ describe("RasterImageViewerComponent", () => {
         warn.mockRestore();
     });
 });
+
+describe("RasterImageViewerComponent text over the striped viewer background", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockCreateWorker.mockReturnValue(null);
+    });
+
+    it("draws the loading text on a theme panel", () => {
+        mockDownloadAsset.mockReturnValue(new Promise(() => undefined));
+        render(<RasterImageViewerComponent {...baseProps} assetKey="/a.tif" />);
+        const panel = screen.getByTestId("raster-viewer-loading-panel");
+        expect(panel.style.background).toBe("var(--vams-bg-primary)");
+        expect(panel).toHaveTextContent("Loading image...");
+    });
+
+    it("draws the error on a theme panel", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "Not Authorized", 403]);
+        render(<RasterImageViewerComponent {...baseProps} assetKey="/a.tif" />);
+        const message = await screen.findByRole("alert");
+        expect(message.style.background).toBe("var(--vams-bg-primary)");
+        expect(message.style.color).toBe("var(--vams-color-error)");
+    });
+
+    it("draws the image's info line on a theme panel", async () => {
+        mockDownloadAsset.mockResolvedValue([true, "https://example.test/file?sig=1"]);
+        const tga = buildTga(1, 1, [[1, 2, 3]]);
+        (global as any).fetch = jest.fn().mockResolvedValue(respond(tga));
+        render(<RasterImageViewerComponent {...baseProps} assetKey="/tex/wall.tga" />);
+        const info = await screen.findByTestId("raster-viewer-info");
+        expect((info.parentElement as HTMLElement).style.background).toBe("var(--vams-bg-primary)");
+    });
+});
