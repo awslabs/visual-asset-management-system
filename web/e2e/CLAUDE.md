@@ -164,6 +164,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `actionDisabledReason(button)`                                | A gated Button's disabled reason once its permission check settles, or `""` if allowed                               |
 | `viewerSamples()`                                             | The `E2E_VIEWER_SAMPLES` seed fixture (seeded public viewer samples), or `null` when unset                           |
 | `openViewerFile(page, ref)`                                   | Load a file's ViewFile route as a fresh page and wait for its heading (one reload)                                   |
+| `gotoFresh(page, route)`                                      | Load a `/#/...` route as a new document (`about:blank` first), for a page already on `/` (D135)                      |
 | `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected                               |
 | `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                                              |
 | `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                                       |
@@ -418,4 +419,5 @@ challenge manually.
 5. **Committing an ad-hoc or `_probe` spec** — these are per-change and stay untracked.
 6. **Hardcoding credentials or the base URL** — use `E2E_USERNAME` / `E2E_PASSWORD` / `E2E_BASE_URL`.
 7. **Claiming a web fix is verified without checking the deployed bundle hash** — see the warning above.
-8. **Asserting an action a role is not offered** — gate each menu-item or button assertion on the role's allowed routes, as the per-role loop does; Playwright needs the element to check its attributes (D134).
+8. **Changing only the hash right after loading `/`** (`page.goto("/#/route")` after `cachedFeaturesEnabled`, `featuresEnabled` or `apiContext` loaded the page) — the app may still be starting and render Home with the new hash in the address bar (D135). Use `gotoFresh(page, route)`.
+9. **Asserting an action a role is not offered** — gate each menu-item or button assertion on the role's allowed routes, as the per-role loop does; Playwright needs the element to check its attributes (D134).

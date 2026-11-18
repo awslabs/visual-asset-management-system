@@ -22,6 +22,7 @@ import {
     apiContext,
     cachedFeaturesEnabled,
     collectPageErrors,
+    gotoFresh,
     gotoSearch,
     readFeaturesEnabled,
     searchCountBadge,
@@ -151,7 +152,9 @@ test.describe("Search counts", () => {
         const pageAnswer = page.waitForResponse(
             (r) => r.request().method() === "POST" && /\/search$/.test(new URL(r.url()).pathname)
         );
-        await page.goto("/#/search");
+        // A fresh load: the page is already on `/` (the switches and the API context were read there),
+        // and a hash change while the app starts can leave it on Home (D135).
+        await gotoFresh(page, "/#/search");
         const shown = await (await pageAnswer).json();
         const total = Math.max(shown.aggregationTotal ?? 0, shown.hits?.total?.value ?? 0);
         test.skip(total === 0, "No search results for this user");

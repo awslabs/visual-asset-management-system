@@ -193,6 +193,20 @@ export function routeAllowed(
 export const NO_ACCESS_HEADING = "You do not have access to this page";
 
 /**
+ * Load `route` (a `/#/...` hash route) as a new document, so the app reads the route at start.
+ *
+ * Changing only the hash of a page whose app is still starting — `cachedFeaturesEnabled`,
+ * `featuresEnabled` and `apiContext` load `/` first when the page has no URL yet — can leave it on
+ * Home with the new hash in the address bar: the hash change lands while the app shell is mounting
+ * and the router never renders it (seen on most attempts on a test deployment, D135). Loading
+ * `about:blank` first makes the route a fresh load, as `openViewerFile` does for the file route.
+ */
+export async function gotoFresh(page: Page, route: string): Promise<void> {
+    await page.goto("about:blank");
+    await page.goto(route, { waitUntil: "domcontentloaded" });
+}
+
+/**
  * Wait until a page shows its heading or the app's "no access" panel, and say which: true when the
  * role may open the page. A spec skips with the reason on false rather than waiting for a heading the
  * role never sees.
