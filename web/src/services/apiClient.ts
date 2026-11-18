@@ -35,6 +35,8 @@ interface ApiClientOptions {
     queryStringParameters?: Record<string, string>;
     body?: any;
     headers?: Record<string, string>;
+    /** Aborts the request in flight. */
+    signal?: AbortSignal;
 }
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -187,6 +189,9 @@ class ApiClient {
 
         const url = this.buildUrl(path, options?.queryStringParameters);
         const init: RequestInit = { method, headers };
+        if (options?.signal) {
+            init.signal = options.signal;
+        }
         if (method !== "GET" && options?.body !== undefined) {
             init.body = JSON.stringify(options.body);
         }

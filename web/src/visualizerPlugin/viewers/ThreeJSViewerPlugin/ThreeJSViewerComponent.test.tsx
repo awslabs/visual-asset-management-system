@@ -15,6 +15,8 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import ThreeJSViewerComponent from "./ThreeJSViewerComponent";
 import { loadFile } from "./utils/fileLoaders";
+import { downloadAsset } from "../../../services/APIService";
+import { clearPresignedUrlCache } from "../../core/presignedFetch";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -22,6 +24,7 @@ jest.mock("../../../services/appCache", () => ({
 jest.mock("../../../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: jest.fn(() => Promise.resolve("Bearer test")),
 }));
+jest.mock("../../../services/APIService", () => ({ downloadAsset: jest.fn() }));
 jest.mock("./dependencies", () => ({
     ThreeJSDependencyManager: {
         loadThreeJS: jest.fn(() => Promise.resolve()),
@@ -45,6 +48,7 @@ jest.mock("./utils/fileLoaders", () => ({
 }));
 
 const mockedLoadFile = loadFile as jest.MockedFunction<typeof loadFile>;
+const mockedDownloadAsset = downloadAsset as jest.Mock;
 
 const CSP_MESSAGE =
     "CAD Format Support Not Available.\n\n" +
@@ -98,6 +102,13 @@ describe("ThreeJSViewerComponent error panel", () => {
     beforeEach(() => {
         createdCanvases = [];
         installFakeThree();
+        clearPresignedUrlCache();
+        // The authorized download route presigns every file (#1623).
+        mockedDownloadAsset.mockReset();
+        mockedDownloadAsset.mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+        ]);
         global.fetch = jest.fn(() =>
             Promise.resolve({
                 ok: true,
@@ -143,5 +154,44 @@ describe("ThreeJSViewerComponent error panel", () => {
         expect(createdCanvases).toHaveLength(1);
         expect(panel.contains(createdCanvases[0])).toBe(false);
         expect(screen.getByText(HINT)).toBeInTheDocument();
+    });
+
+    it("reads the main file from its presigned URL with no Authorization header (#1623)", async () => {
+        mockedLoadFile.mockRejectedValue(new Error("stop after download"));
+
+        renderViewer("models/part.glb");
+
+        await screen.findByText(/stop after download/);
+        expect(mockedDownloadAsset).toHaveBeenCalledWith(
+            expect.objectContaining({
+                databaseId: "db-1",
+                assetId: "asset-1",
+                key: "models/part.glb",
+                signal: expect.any(AbortSignal),
+            })
+        );
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+        const [url, options] = (global.fetch as jest.Mock).mock.calls[0];
+        expect(url).toBe("https://bucket.s3.example.test/models/part.glb?X-Amz-Signature=sig");
+        expect(url).not.toContain("/download/stream/");
+        expect(options.headers).toBeUndefined();
+        expect(options.credentials).toBeUndefined();
+    });
+
+    it("shows a failed presign as an error, not a blank viewer", async () => {
+        mockedDownloadAsset.mockResolvedValue([false, "Forbidden"]);
+
+        renderViewer("models/part.glb");
+
+        expect(await screen.findByText(/Failed to load: part\.glb/)).toBeInTheDocument();
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it("words an S3 refusal of the link as an unavailable link", async () => {
+        global.fetch = jest.fn(() => Promise.resolve({ ok: false, status: 403 })) as any;
+
+        renderViewer("models/part.glb");
+
+        expect(await screen.findByText(/expired or the file is unavailable/)).toBeInTheDocument();
     });
 });

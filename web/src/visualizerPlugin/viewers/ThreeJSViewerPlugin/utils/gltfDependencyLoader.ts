@@ -5,18 +5,19 @@
 
 /**
  * GLTF Dependency Loader
- * Pre-downloads all GLTF dependencies (textures, .bin files) with authentication
- * before passing to ThreeJS loader
+ * Pre-downloads all GLTF dependencies (textures, .bin files) through presigned URLs of the
+ * authorized download route before passing to ThreeJS loader (#1623)
  */
 
-import { getDualAuthorizationHeader } from "../../../../utils/authTokenUtils";
+import { fetchPresignedFile } from "../../../core/presignedFetch";
 
 interface DependencyLoaderConfig {
     assetId: string;
     databaseId: string;
     baseFileKey: string;
-    apiEndpoint: string;
     assetVersionId?: string;
+    /** Aborts the downloads when the viewer closes. */
+    signal?: AbortSignal;
     // Note: versionId is intentionally NOT included here.
     // Dependencies are always loaded without versionId because they are
     // part of the same asset version as the main file.
@@ -52,12 +53,11 @@ function extractGLTFDependencies(gltfJson: any): string[] {
 }
 
 /**
- * Download a dependency file with authentication
+ * Download a dependency file through a presigned URL
  */
 async function downloadDependency(
     relativePath: string,
-    config: DependencyLoaderConfig,
-    authHeader: string
+    config: DependencyLoaderConfig
 ): Promise<ArrayBuffer> {
     // Get base directory from main file
     const baseDir = config.baseFileKey.substring(0, config.baseFileKey.lastIndexOf("/"));
@@ -87,30 +87,20 @@ async function downloadDependency(
         pathSegments.shift();
     }
 
-    // Construct streaming URL
-    const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
-    const encodedPath = encodedSegments.join("/");
-    let url = `${config.apiEndpoint}database/${config.databaseId}/assets/${encodeURIComponent(
-        config.assetId
-    )}/download/stream/${encodedPath}`;
-
     // Note: versionId is intentionally NOT passed for dependencies.
     // Dependencies are always loaded without versionId because they are
     // part of the same asset version as the main file.
-    // However, assetVersionId IS appended so the server resolves from the correct asset version.
-    if (config.assetVersionId) {
-        url += `?assetVersionId=${encodeURIComponent(config.assetVersionId)}`;
-    }
-
-    console.log(`Downloading dependency: ${relativePath} -> ${url}`);
-
-    const response = await fetch(url, {
-        headers: { Authorization: authHeader },
-    });
-
-    if (!response.ok) {
-        throw new Error(`Failed to download ${relativePath}: ${response.status}`);
-    }
+    // However, assetVersionId IS passed so the server resolves from the correct asset version.
+    const response = await fetchPresignedFile(
+        {
+            databaseId: config.databaseId,
+            assetId: config.assetId,
+            key: pathSegments.join("/"),
+            assetVersionId: config.assetVersionId,
+            signal: config.signal,
+        },
+        `Failed to download ${relativePath}`
+    );
 
     return await response.arrayBuffer();
 }
@@ -123,7 +113,6 @@ export async function preloadGLTFDependencies(
     config: DependencyLoaderConfig,
     onProgress?: (current: number, total: number) => void
 ): Promise<{ gltfArrayBuffer: ArrayBuffer; blobUrls: string[] }> {
-    const authHeader = await getDualAuthorizationHeader();
     const blobUrls: string[] = [];
 
     try {
@@ -152,7 +141,7 @@ export async function preloadGLTFDependencies(
 
             const batchPromises = batch.map(async (dep) => {
                 try {
-                    const arrayBuffer = await downloadDependency(dep, config, authHeader);
+                    const arrayBuffer = await downloadDependency(dep, config);
                     const blob = new Blob([arrayBuffer]);
                     const blobUrl = URL.createObjectURL(blob);
                     dependencyMap.set(dep, blobUrl);

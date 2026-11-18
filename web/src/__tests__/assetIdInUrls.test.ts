@@ -64,8 +64,8 @@ describe("asset ids in in-app links and direct API URLs", () => {
 
     it("are found by the scan (control)", () => {
         rawAssetIds();
-        // 40 in-app links, 9 viewer stream URLs and the execution page's link at the time of #1476.
-        expect(rawAssetIds.encoded).toBeGreaterThanOrEqual(50);
+        // 40 in-app links, 7 viewer stream URLs and the execution page's link (the Three.js viewer reads presigned URLs since #1623).
+        expect(rawAssetIds.encoded).toBeGreaterThanOrEqual(48);
     });
 
     it("are decoded back by the router, so the asset page opens the asset itself", () => {
