@@ -49,6 +49,7 @@ import {
     isOAuthCallback,
     oauthNavigation,
 } from "./oauthSignInState";
+import { cacheAllowedApiRoutes } from "./allowedApiRoutesCache";
 
 import Button from "@cloudscape-design/components/button";
 import Box from "@cloudscape-design/components/box";
@@ -931,28 +932,21 @@ const Auth: React.FC<AuthProps> = (props) => {
 
     //Both Effect
     //Once logged in, fetch and cache the API routes the user is authorized to
-    //call, and periodically renew the cache while the session is active. The
-    //cached list feeds isApiRouteAllowed (common/constants/authRoutes.ts), which
-    //API Key Management (pages/auth/ApiKeys.tsx) uses to choose between admin and
-    //self-service mode. The cache key, the cached shape and the TTL must not change
-    //without updating that page.
+    //call, and renew the cache while the session is active. The cached list feeds
+    //isApiRouteAllowed (common/constants/authRoutes.ts), which API Key Management
+    //(pages/auth/ApiKeys.tsx) uses to choose between admin and self-service mode and
+    //the navigation uses for links gated on an API route (requiresApiRoute). The cache
+    //key, the cached shape and the TTL must not change without updating those.
     useEffect(() => {
         if (!isLoggedIn) {
             return;
         }
 
-        const refreshAllowedApiRoutes = (force = false) => {
-            if (!force && appCache.getItemWithExpiry(ALLOWED_API_ROUTES_CACHE_KEY)) {
-                return; // Cache still fresh
-            }
+        const refreshAllowedApiRoutes = () => {
             fetchAllowedApiRoutes()
                 .then((result) => {
                     if (result[0] === true && result[1]?.routes) {
-                        appCache.setItemWithExpiry(
-                            ALLOWED_API_ROUTES_CACHE_KEY,
-                            result[1],
-                            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
-                        );
+                        cacheAllowedApiRoutes(result[1]);
                         console.log("Cached allowed API routes");
                     }
                 })
@@ -961,11 +955,13 @@ const Auth: React.FC<AuthProps> = (props) => {
                 });
         };
 
-        // Fetch on login (uses cache if still fresh), then renew periodically
+        // Fetch on every load, even with a fresh cached copy: that copy may expire long before
+        // a renewal timer started now would fire. Renewing at half the TTL keeps the cache from
+        // expiring between renewals.
         refreshAllowedApiRoutes();
         const renewInterval = setInterval(
-            () => refreshAllowedApiRoutes(true),
-            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS
+            refreshAllowedApiRoutes,
+            ALLOWED_API_ROUTES_CACHE_TTL_MILLIS / 2
         );
         return () => clearInterval(renewInterval);
     }, [isLoggedIn]);

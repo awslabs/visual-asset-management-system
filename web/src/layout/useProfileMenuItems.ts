@@ -13,6 +13,7 @@ import {
     normaliseHref,
     webRouteChecksFor,
 } from "./navigationRegistry";
+import { ALLOWED_API_ROUTES_CACHED_EVENT } from "../FedAuth/allowedApiRoutesCache";
 
 /** The menu item id of Sign out, which App.tsx handles in the menu's onItemClick. */
 export const SIGN_OUT_ITEM_ID = "signout";
@@ -70,8 +71,8 @@ export function toMenuItems(
  * (`checkWebRoutesAllowed`, batched and cached), so this adds no `auth/routes` call. The menu fails
  * closed: page links appear only once the check has succeeded, and Sign out always works. The top bar
  * lives outside the HashRouter and has no Retry control, so a failed check is retried on the next
- * `hashchange`; every `hashchange` also re-renders, so a link gated on the API allowed-routes
- * listing (`requiresApiRoute`) appears once that listing is cached. The check runs again when the
+ * `hashchange`; every `hashchange`, and every new allowed-routes listing the auth flow caches,
+ * also re-renders, so a link gated on that listing (`requiresApiRoute`) appears once it is cached. The check runs again when the
  * deployment's feature switches change, so an entry restricted to a switch
  * (`featuresEnabledRestriction`) appears once the secure config carrying it lands.
  */
@@ -113,6 +114,13 @@ export function useProfileMenuItems(): ButtonDropdownProps.ItemOrGroup[] {
         window.addEventListener("hashchange", onHashChange);
         return () => window.removeEventListener("hashchange", onHashChange);
     }, [state]);
+
+    // A link gated on the API allowed-routes listing appears once the auth flow caches it.
+    useEffect(() => {
+        const onListingCached = () => setHashTick((value) => value + 1);
+        window.addEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+        return () => window.removeEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+    }, []);
 
     const pageItems =
         state === "allowed"

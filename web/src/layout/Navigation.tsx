@@ -11,6 +11,7 @@ import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
 import { allowedEntriesFor, webRouteChecksFor } from "./navigationRegistry";
+import { ALLOWED_API_ROUTES_CACHED_EVENT } from "../FedAuth/allowedApiRoutesCache";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
     href: "#/",
@@ -62,6 +63,14 @@ export function Navigation({
     const [loading, setLoading] = useState(true);
     const [loadFailed, setLoadFailed] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
+    // Render again when the auth flow caches the API allowed-routes listing, so a link gated on it
+    // (`requiresApiRoute`) appears as soon as the listing lands rather than on the next navigation.
+    const [, setListingTick] = useState(0);
+    useEffect(() => {
+        const onListingCached = () => setListingTick((tick) => tick + 1);
+        window.addEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+        return () => window.removeEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+    }, []);
 
     // Re-checked whenever the feature switches change (one arriving after mount adds links that were
     // never checked) or on Retry. A check that resolves after a newer one started is discarded.

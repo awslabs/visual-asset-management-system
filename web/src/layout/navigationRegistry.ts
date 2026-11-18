@@ -321,7 +321,7 @@ function profileLinksOnly(entry: NavEntry): NavEntry {
  * `requiresApiRoute` the cached API listing does not allow are dropped (an unknown listing drops
  * them too), unsupported profile shapes are skipped with a warning, and the registry-only fields are
  * stripped. Evaluated on every call, so a listing cached after the first render is picked up on the
- * next one.
+ * next one (the side navigation and the profile menu render again when a listing is cached).
  */
 export function entriesFor(placement: NavPlacement, enabledFeatures: string[] = []): NavEntry[] {
     const raw = rawEntriesFor(placement, enabledFeatures);
