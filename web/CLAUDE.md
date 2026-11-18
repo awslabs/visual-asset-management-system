@@ -134,7 +134,7 @@ web/
                                 #   folder, drop zone) of Create Asset and Add Files; reports
                                 #   onAdd(roots: UploadRoot[]), never asset paths.
                                 #   uploadPaths.ts — the ONE upload path rule (planUploadPaths,
-                                #   normalizeDestination, root builders); see section 7.7.
+                                #   normalizeDestination, root builders); see section 7.8.
                                 #   UploadPreview.tsx — final-path preview, single-folder override,
                                 #   referencing-format hint.
       compliance/             # ComplianceSchemaEditor.tsx (JSON + visual builder over vams-rules-v1
@@ -193,7 +193,7 @@ web/
                                 #   detail route + the Tier-1 route the link is gated on
       list/                   # TableList.tsx (the standard list page: search + refresh left, filters
                               #   right, collection-hooks filtering/sorting/paging); ListToolbar.tsx (that
-                              #   toolbar for a page with its own Table, 7.6); tableSorting.ts (column
+                              #   toolbar for a page with its own Table, 7.7); tableSorting.ts (column
                               #   comparators byText/byDate/byNumber, useSortedItems for a page the server
                               #   returned, useBrowserPagedItems for a whole list, PAGE_SORTING_NOTE)
       loading/ metadata/ metadataSchema/ metadataV2/ modals/
@@ -228,7 +228,7 @@ web/
       # caller with the route for a stalled one; the API decides each request. Its evaluations
       # phase (`evaluationStatus` queueing/stalled) shows its own line and holds no control.
       # Bind, Change and Remove each open a confirmation first (bindingConfirmations.ts). Each
-      # page's toolbar is ListToolbar (7.6); every sortable column sorts, the server-paged lists
+      # page's toolbar is ListToolbar (7.7); every sortable column sorts, the server-paged lists
       # the page shown (useSortedItems), the schemas page its whole list (useBrowserPagedItems).
       ComplianceSchemas.tsx ComplianceQuarantine.tsx ComplianceCascades.tsx
       ComplianceAuditLog.tsx DatabaseCompliance.tsx
@@ -1016,7 +1016,7 @@ Every page link is declared in one registry, `src/layout/navigationRegistry.ts`,
 
 Both placements use the same `checkWebRoutesAllowed` check and share its one batched `auth/routes` call. They fail closed: the profile menu lists no page links while the check is loading or after it failed (it retries on the next `hashchange`, as the top bar sits outside the HashRouter and has no Retry), and Sign out always works. The page the user is on is shown as current: Cloudscape's public menu items have no current-page state or `aria-current`, so `toMenuItems(entries, currentPath)` renders the item whose route path (`normaliseHref`, so the query is ignored: `#/auth/api-keys/?mode=user` matches `/auth/api-keys`) equals `currentRoutePath()` as a checked `itemType: "checkbox"` item (check mark, `aria-checked`, still selectable) and every other page as a link. A checkbox item takes no `href`, so `App.tsx` follows an item whose id starts with `PAGE_ITEM_ID_PREFIX` (`page:`) by setting `window.location.hash`. The hook re-renders on every `hashchange`, so the mark follows navigation. It applies to every `placement: "profile"` entry (core, add-on and custom lanes). When the side navigation is empty but profile pages are allowed, it says the pages are in the profile menu instead of "No Access". A link may also set `requiresApiRoute: { method, path }`: it is then shown only when the cached API allowed-routes listing (`isApiRouteAllowed`) allows that route, and hidden while the listing is unknown or failed. It is advisory; the API still enforces every call. Core uses it for Admin - Auth's "API Keys (all users)" (`#/auth/api-keys/?mode=admin`, needs `GET /auth/api-keys`), while the profile menu's "API Key Management" opens `?mode=user`; `pages/auth/ApiKeys.tsx` treats `?mode=` as a preference validated against the modes the listing allowed, so a URL never opens admin mode for a role the listing does not allow. `normaliseHref` drops a `?query` before the route check. A route's `active` href is static, so a page serving several views may override the highlighted side link with `useActiveNavHref(href)` (`layout/activeNavHref.tsx`; `null` keeps the route's value, `""` highlights nothing, cleared on unmount); `ApiKeys.tsx` passes the Admin - Auth href only when its resolved mode is admin.
 
-### 7.6 List Toolbar: Search, Refresh and Filters
+### 7.7 List Toolbar: Search, Refresh and Filters
 
 Every list page lays out the toolbar it passes as the Cloudscape Table's `filter` the same way: **the search field on the left with the refresh button right next to it, and the filter drop-downs aligned to the right of the table.** When the filters do not fit beside the search (on a narrow screen, or a page with many filters such as the compliance Audit Log), they wrap onto a line of their own and stay aligned to the right. The refresh is an icon button whose `ariaLabel` names what it reloads; it sits in the toolbar, not in the header actions, and a list without a search keeps it at the toolbar's left.
 
@@ -1043,7 +1043,7 @@ Every list page lays out the toolbar it passes as the Cloudscape Table's `filter
 -   **A list the server pages** (token paging) sorts the page shown with `useSortedItems`. While more than one page exists, the table header's description says `PAGE_SORTING_NOTE` ("Column sorting applies to the page shown."). An order across the whole list is a server-side filter (the database compliance overview's **Sort by**), not a column header. Choosing such an order clears the column-header sort (`clearSorting` from `useSortedItems`), so the rows follow the order just chosen.
 -   **A list the API returns whole** is filtered, sorted and paged in the browser with `useBrowserPagedItems` (15 rows to a page, as `TableList` pages), so its filters and sorting cover the whole list. Call `toFirstPage()` when a filter changes.
 
-### 7.7 The Upload Control and the Upload Path Rule
+### 7.8 The Upload Control and the Upload Path Rule
 
 The Create Asset wizard (`pages/AssetUpload/AssetUpload.tsx`, `AssetFileInfo`) and the Add Files page (`pages/AssetUpload/ModifyAssetsUploads.tsx`) share one upload control, `components/form/DragDropFileUpload.tsx`: **Add files** (a plain multi-file input), **Add folder** (a `webkitdirectory` input in every browser; `showDirectoryPicker` is only an enhancement and falls back to the input on any error other than a cancel) and one drop zone for files and folders together. Its contract is `onAdd(roots: UploadRoot[])`: it reports what the user added, never asset paths.
 
@@ -1546,7 +1546,7 @@ export const myServiceFunction = async ({ databaseId }) => {
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Lay out the toolbar and wire the column sorting per section 7.6
+3. Lay out the toolbar and wire the column sorting per section 7.7
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
 6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)

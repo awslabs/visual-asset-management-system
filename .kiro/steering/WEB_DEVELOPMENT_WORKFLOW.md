@@ -208,7 +208,7 @@ web/
 -   [ ] **Import from service layer**: Never import `apiClient` directly
 -   [ ] **Use Context for shared state**: Follow `AssetDetailContext.ts` patterns
 -   [ ] **Handle API responses**: Check boolean flag before using data
--   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.6)
+-   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.7)
 
 #### **Step 3: Page and Route Setup**
 
@@ -1124,7 +1124,7 @@ verified without checking the deployed bundle hash.
 -   [ ] npm used (no yarn)
 -   [ ] Relative imports used (no path aliases)
 -   [ ] Theme-aware styles (Cloudscape design tokens or theme.css custom properties)
--   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.6)
+-   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.7)
 
 ### **Documentation Checks**
 
@@ -1140,7 +1140,7 @@ verified without checking the deployed bundle hash.
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.6 (search and refresh on the left, filters on the right; every sortable column sorts)
+3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.7 (search and refresh on the left, filters on the right; every sortable column sorts)
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
 6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)
