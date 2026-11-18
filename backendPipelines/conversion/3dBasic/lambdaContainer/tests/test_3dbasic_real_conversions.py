@@ -522,7 +522,8 @@ class TestInputsThatAreNotUtf8Text:
 
     def test_nothing_the_obj_references_is_fetched(self, results):
         # The material library it names is in the asset; only the input itself was downloaded.
-        assert results["obj_latin1"]["requested"] == ["xasset/enc/latin1.obj"], results["obj_latin1"]
+        # (The input is sized with a HEAD before it is downloaded, so it is requested twice.)
+        assert set(results["obj_latin1"]["requested"]) == {"xasset/enc/latin1.obj"}, results["obj_latin1"]
 
     @pytest.mark.parametrize("name", ["obj_utf8_non_ascii", "stl_ascii_utf8", "stl_binary_latin1_header"])
     def test_utf8_text_and_a_binary_stl_header_still_convert(self, results, name):

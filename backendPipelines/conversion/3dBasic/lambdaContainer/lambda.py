@@ -11,6 +11,7 @@ import tempfile
 import threading
 import trimesh
 import referenced_files
+import size_check
 from common.logger import safeLogger
 from botocore.exceptions import ClientError
 from boto3.s3.transfer import TransferConfig
@@ -89,6 +90,19 @@ def input_version_id(entry):
     if not isinstance(value, str):
         return ""
     return value
+
+
+def head_input_size(bucket_name, object_key, version_id=""):
+    """The input's size in bytes at its launch version, read with a HeadObject before anything is
+    downloaded."""
+    try:
+        return size_check.head_size(_s3_client_for_bucket(bucket_name), bucket_name, object_key, version_id)
+    except ClientError as e:
+        logger.exception(e)
+        if version_id and str(e.response.get("Error", {}).get("Code", "")) in _MISSING_VERSION_CODES:
+            raise Exception(f"The input file {object_key} at version {version_id} no longer exists; "
+                            f"it was deleted after the run started.")
+        raise Exception("Could not read the input file's size from S3 bucket")
 
 
 def uploadV2(bucket_name, object_key, file_path):
@@ -479,6 +493,15 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     if output_filetype not in SUPPORTED_OUTPUT_FORMATS:
         raise ValueError(f"Output format {output_filetype} not supported by Trimesh pipeline")
 
+    # The input's size is checked before anything is downloaded: the function's memory and working
+    # disk set what it can convert (see size_check.py), and an input over them fails here naming the
+    # size, the limit and the resource, instead of ending in an out-of-memory kill or a full disk. The
+    # same limit, less the input, bounds the files the input references.
+    input_size = head_input_size(input_bucket, input_key, input_version)
+    size_limit = size_check.check_size(
+        os.path.basename(input_key), input_s3_asset_extension, input_size,
+        memory_bytes=size_check.memory_limit_bytes(), disk_free_bytes=size_check.free_disk_bytes(tempfile.gettempdir()))
+
     # Download, convert and upload inside a working directory of this invocation's own, removed
     # before returning either way. The Lambda execution environment is reused between invocations
     # and its /tmp is a fixed budget set by the function's ephemeralStorageSize (see
@@ -512,7 +535,11 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
         fetched = referenced_files.fetch_referenced_files(
             _s3_client_for_bucket(input_bucket), input_bucket, root_key, input_relative_path,
-            temp_file, input_dir, logger=logger)
+            temp_file, input_dir, limits=referenced_files.FetchLimits(
+                max_total_bytes=min(referenced_files.DEFAULT_MAX_TOTAL_BYTES,
+                                    size_limit - input_size) if size_limit is not None
+                else referenced_files.DEFAULT_MAX_TOTAL_BYTES),
+            logger=logger)
         resolver = referenced_files.ConfinedResolver(
             input_dir, input_relative_path, fetched.by_reference)
 
