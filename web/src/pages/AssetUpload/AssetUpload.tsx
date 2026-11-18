@@ -277,6 +277,12 @@ export const assetDetailReducer = (
             return {
                 ...assetDetailState,
                 databaseId: assetDetailAction.payload.databaseId,
+                // The schemas offered depend on the database, so a choice made for another one
+                // is dropped.
+                complianceSchemaName:
+                    assetDetailAction.payload.databaseId === assetDetailState.databaseId
+                        ? assetDetailState.complianceSchemaName
+                        : undefined,
                 restrictMetadataOutsideSchemas:
                     assetDetailAction.payload.restrictMetadataOutsideSchemas || false,
                 restrictFileUploadsToExtensions:
@@ -372,6 +378,26 @@ export const assetDetailReducer = (
         default:
             return assetDetailState;
     }
+};
+
+/**
+ * Binds the compliance schema chosen on Create Asset to the asset just created. Returns what the
+ * completion screen says when the API refuses the bind, or null when there is nothing to report
+ * (the bind succeeded, or the asset inherits its database's schema).
+ */
+export const bindComplianceSchemaAfterCreate = async (
+    assetDetail: AssetDetail,
+    assetId: string | undefined
+): Promise<string | null> => {
+    if (!assetDetail.complianceSchemaName || !assetDetail.databaseId || !assetId) return null;
+    const [bound, message] = await bindSchemaToAsset(
+        assetDetail.databaseId,
+        assetId,
+        assetDetail.complianceSchemaName
+    );
+    return bound
+        ? null
+        : `${Synonyms.Asset} created; the compliance schema was not bound: ${message}`;
 };
 
 export type AssetDetailContextType = {
@@ -492,16 +518,27 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
         canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
-    const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
+    // Why the schemas could not be read, or null; the field then offers only Inherit.
+    const [schemasError, setSchemasError] = useState<string | null>(null);
+    // The choice lives in the form state, which drops it when the database changes.
+    const selectedSchema: SelectProps.Option | null = assetDetailState.complianceSchemaName
+        ? {
+              label: assetDetailState.complianceSchemaName,
+              value: assetDetailState.complianceSchemaName,
+          }
+        : null;
 
     useEffect(() => {
         if (!canBindComplianceSchema) return;
+        let cancelled = false;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
+            setSchemasError(null);
             const [success, result] = await fetchComplianceSchemas(
                 assetDetailState?.databaseId || undefined
             );
+            if (cancelled) return;
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     bindableSchemas(result).map((s) => ({
@@ -510,10 +547,20 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                         description: s.description,
                     }))
                 );
+            } else {
+                setSchemaOptions([]);
+                setSchemasError(
+                    `Could not load the compliance schemas${
+                        typeof result === "string" && result ? `: ${result}` : "."
+                    }`
+                );
             }
             setLoadingSchemas(false);
         };
         loadSchemas();
+        return () => {
+            cancelled = true;
+        };
     }, [canBindComplianceSchema, assetDetailState?.databaseId]);
 
     useEffect(() => {
@@ -709,17 +756,20 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                         label="Compliance Schema"
                         description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Leave empty to inherit from the ${Synonyms.database}. Offered: the GLOBAL schemas and those available to the chosen ${Synonyms.database} only.`}
                         constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
+                        errorText={schemasError}
                     >
                         <Select
                             selectedOption={selectedSchema}
                             onChange={({ detail }) => {
-                                setSelectedSchema(detail.selectedOption);
                                 assetDetailDispatch({
                                     type: "UPDATE_ASSET_COMPLIANCE_SCHEMA",
                                     payload: detail.selectedOption.value || undefined,
                                 });
                             }}
-                            options={schemaOptions}
+                            options={[
+                                { label: `Inherit from ${Synonyms.database}`, value: "" },
+                                ...schemaOptions,
+                            ]}
                             placeholder={`Inherit from ${Synonyms.database}`}
                             loadingText="Loading schemas"
                             statusType={loadingSchemas ? "loading" : "finished"}
@@ -1451,6 +1501,8 @@ const UploadForm = () => {
     const [fileUploadTableItems, setFileUploadTableItems] = useState<FileUploadTableItem[]>([]);
     const [freezeWizardButtons, setFreezeWizardButtons] = useState(false);
     const [showUploadAndExecProgress, setShowUploadAndExecProgress] = useState(false);
+    // Why the compliance schema chosen for the new asset was not bound after the upload, or null.
+    const [complianceBindWarning, setComplianceBindWarning] = useState<string | null>(null);
     const [uploadExecutionProps, setUploadExecutionProps] = useState<UploadExecutionProps>();
     const [previewUploadProgress, setPreviewUploadProgress] = useState<ProgressBarProps>({
         value: 0,
@@ -1550,17 +1602,12 @@ const UploadForm = () => {
                         fileItems={fileUploadTableItems}
                         onComplete={async (response) => {
                             console.log("Upload completed:", response);
-                            if (
-                                assetDetailState.complianceSchemaName &&
-                                assetDetailState.databaseId &&
-                                response.assetId
-                            ) {
-                                await bindSchemaToAsset(
-                                    assetDetailState.databaseId,
-                                    response.assetId,
-                                    assetDetailState.complianceSchemaName
-                                );
-                            }
+                            setComplianceBindWarning(
+                                await bindComplianceSchemaAfterCreate(
+                                    assetDetailState,
+                                    response.assetId
+                                )
+                            );
                             // Remove window beforeunload handler
                             window.onbeforeunload = null;
                         }}
@@ -1571,6 +1618,11 @@ const UploadForm = () => {
                             window.onbeforeunload = null;
                         }}
                     />
+                    {complianceBindWarning && (
+                        <Alert type="warning" header="Compliance schema not bound">
+                            {complianceBindWarning}
+                        </Alert>
+                    )}
                 </>
             )}
             {!showUploadAndExecProgress && (

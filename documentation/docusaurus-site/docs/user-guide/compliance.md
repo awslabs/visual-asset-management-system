@@ -131,7 +131,7 @@ Removing a database's compliance schema deletes the compliance state of every as
 
 ### Overriding the schema of one asset
 
-An asset can be bound to a schema of its own, which takes precedence over the database binding. In the asset view, choose **Edit**, select the schema in the **Compliance Schema** field of the **Update Asset** modal (or **Inherit from database** to remove the override), and choose **Update Asset**. As in the database editor, the asset save is sent only when an asset field changed and the binding only when the schema selection changed; a refused save sends no binding, and a refused binding is reported in the modal, which stays open. With the API:
+An asset can be bound to a schema of its own, which takes precedence over the database binding. In the asset view, choose **Edit**, select the schema in the **Compliance Schema** field of the **Update Asset** modal (or **Inherit from database** to remove the override), and choose **Update Asset**. As in the database editor, the asset save is sent only when an asset field changed and the binding only when the schema selection changed; a refused save sends no binding, and a refused binding is reported in the modal, which stays open. The **Create Asset** wizard has the same **Compliance Schema** field, set to **Inherit from database** until you choose a schema; choosing another database clears the choice. The schema is bound once the upload completes, and a refused bind is reported on the completion screen (the asset is created without the override). With the API:
 
 ```bash
 PUT /compliance/bind/{databaseId}/{assetId}
