@@ -468,6 +468,16 @@ const DatabaseCompliancePage: React.FC = () => {
         await loadBinding();
     }, [restartWalk, loadBinding]);
 
+    // The page stays mounted when the route moves to another database: what the last action and
+    // Evaluate All left belongs to the database they ran in.
+    useEffect(() => {
+        setEvaluateAllToken(undefined);
+        setActionMessage(null);
+        setActionError(null);
+        setBindingApply(null);
+        followedApply.current = null;
+    }, [databaseId]);
+
     useEffect(() => {
         if (databaseId) {
             restartWalk();
