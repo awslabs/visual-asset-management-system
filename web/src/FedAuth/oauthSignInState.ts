@@ -39,6 +39,21 @@ export function getReturnedOAuthState(href: string): string | null {
 }
 
 /**
+ * Whether a URL is an authorize callback: it carries `code`, `error` or `state` in the query or
+ * the fragment. A page load with a stored attempt and none of these is a sign-in the user left at
+ * the IdP, not a callback.
+ */
+export function isOAuthCallback(href: string): boolean {
+    const url = new URL(href);
+    const carries = (params: URLSearchParams) =>
+        params.has("code") || params.has("error") || params.has("state");
+    return (
+        carries(url.searchParams) ||
+        (url.hash.length > 0 && carries(new URLSearchParams(url.hash.slice(1))))
+    );
+}
+
+/**
  * The stored return page when it is on this origin, otherwise `fallback` (the app root), so a
  * tampered value cannot turn sign-in into an open redirect.
  */
