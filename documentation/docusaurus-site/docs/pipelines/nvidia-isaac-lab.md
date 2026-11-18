@@ -206,7 +206,7 @@ The files that reach `checkpoints/<executionId>/` depend on `rlLibrary` (Isaac L
 | `rl_games`  | `<name>.pth` (best reward) and `last_<name>_ep_<epoch>_rew_<reward>.pth` (periodic and final) |
 | `skrl`      | `agent_<timestep>.pt` and `best_agent.pt`                                                     |
 
-A run that writes none of these still finishes, and its job log carries a `WARNING: no <library> checkpoint found` line. An evaluation with no `checkpointPath` takes the `.pt` or `.pth` file of the chosen library with the highest epoch, iteration or timestep in the run folder written most recently. `best_agent.pt` and the rl_games `<name>.pth` rank below numbered checkpoints, so name them in `checkpointPath` to evaluate the best one.
+A run that writes none of these fails with `no <library> checkpoint was found to upload`, after its logs and configuration are uploaded. An evaluation with no `checkpointPath` takes the `.pt` or `.pth` file of the chosen library with the highest epoch, iteration or timestep in the run folder written most recently. `best_agent.pt` and the rl_games `<name>.pth` rank below numbered checkpoints, so name them in `checkpointPath` to evaluate the best one.
 
 ## Evaluation mode
 

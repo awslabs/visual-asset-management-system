@@ -121,16 +121,19 @@ class TestTrainingUploadsEveryLibrarysCheckpoints:
         assert sorted(os.path.basename(uri) for _, uri in s3.uploads) == sorted(
             os.path.basename(p) for p in LAYOUTS["skrl"]["checkpoints"])
 
-    def test_a_run_that_wrote_nothing_is_reported_in_the_job_log(
+    def test_a_run_that_wrote_nothing_fails_after_keeping_logs_and_config(
             self, main_module, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(main_module, "LOCAL_LOG_PATH", str(tmp_path / "logs"))
-        monkeypatch.setattr(main_module, "upload_logs", lambda s3, config: None)
-        monkeypatch.setattr(main_module, "upload_config", lambda *a, **k: None)
+        kept = []
+        monkeypatch.setattr(main_module, "upload_logs", lambda s3, config: kept.append("logs"))
+        monkeypatch.setattr(main_module, "upload_config", lambda *a, **k: kept.append("config"))
         s3 = RecordingS3()
-        main_module.upload_training_results(s3, _config("rl_games"), str(tmp_path / "efs"), {})
+        with pytest.raises(RuntimeError, match="no rl_games checkpoint"):
+            main_module.upload_training_results(s3, _config("rl_games"), str(tmp_path / "efs"), {})
 
         assert s3.uploads == []
-        assert "WARNING: no rl_games checkpoint found" in capsys.readouterr().out
+        assert kept == ["logs", "config"]
+        assert "ERROR: no rl_games checkpoint found" in capsys.readouterr().out
 
     def test_two_files_with_one_name_upload_the_newer_last_and_warn(
             self, main_module, monkeypatch, tmp_path, capsys):

@@ -482,16 +482,18 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
         uploaded[filename] = policy_path
 
     if not uploaded:
-        # A training run that wrote nothing the pipeline recognizes still reports success; say so in
-        # the job log rather than leaving an empty checkpoints folder unexplained (issue #1315).
-        print(f"WARNING: no {config.rl_library} checkpoint found under {LOCAL_LOG_PATH} or "
+        print(f"ERROR: no {config.rl_library} checkpoint found under {LOCAL_LOG_PATH} or "
               f"{checkpoint_dir}; nothing was uploaded to {checkpoint_output_path}")
 
-    # Upload logs
+    # Upload logs and the input config first, so a failed run keeps its diagnostics
     upload_logs(s3, config)
-
-    # Upload input config
     upload_config(s3, config, job_config)
+
+    if not uploaded:
+        # A training run that produced no policy is a failed run (issue #1315). Raise rather than
+        # exit: main() owns the Step Functions failure callbacks.
+        raise RuntimeError(
+            f"Training finished but no {config.rl_library} checkpoint was found to upload")
 
 
 def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: dict):
