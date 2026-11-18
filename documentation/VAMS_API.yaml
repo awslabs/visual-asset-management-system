@@ -2153,7 +2153,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip:
         post:
             summary: "Create a Download as Zip job for files, folders, or the whole asset."
-            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller and is visible only to that caller. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list, and the download URL route signs its archive for such a caller who may also download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
             requestBody:
                 required: true
                 content:
@@ -2174,7 +2174,8 @@ paths:
                         - Invalid selection: no entries, more than 1000, a whole-asset entry combined with another entry, a path that is not asset-relative or contains backslashes, control characters, empty, '.' or '..' segments, a folder path without a trailing '/', or a versionId on a non-file entry.
                         - assetVersionId combined with assetVersionIdAlias, or an asset version pin combined with a per-file versionId.
                         - compression 'deflate' with a format other than zip.
-                        - Asset not distributable or archived.
+                        - Asset not distributable.
+                        - Asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded').
                         - A selected file or folder does not exist, has a blocked extension or media type, or the selection exceeds the file count or total size limit.
                         - A selected file is archived ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.').
                         - The Zip Archive workflow refused the run before starting it, for example because it is disabled or the selection fails its checks ('The archive job could not be started for this selection'); no job is recorded.
@@ -2189,7 +2190,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Asset not found: the asset does not exist or the caller may not read it (asset GET); both answer alike. Or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
+                    description: "Asset not found: the asset does not exist, is archived, or the caller may not read it (asset GET); all three answer alike. Or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
                     content:
                         application/json:
                             schema:
@@ -2372,7 +2373,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, the asset is not distributable or is archived, or (another user's job) a file in the archive is no longer downloadable."
+                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or (another user's job) a file in the archive is no longer downloadable."
                     content:
                         application/json:
                             schema:
@@ -2384,7 +2385,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Zip download not found, or Download as Zip is not enabled for this deployment."
+                    description: "Zip download not found: the job does not exist, the asset is archived, the caller can no longer read the asset, or (another user's job) the caller may not download from it. Or Download as Zip is not enabled for this deployment."
                     content:
                         application/json:
                             schema:
@@ -20860,7 +20861,7 @@ components:
                     type: integer
         zipDownloadJob:
             type: object
-            description: "A zip download job. The job record never exposes the archive's storage location or the run that produced it. The owner's user ID (requestedBy) and the flags below appear only in the all-users list."
+            description: "A zip download job. The job record never exposes the archive's storage location or the run that produced it. The owner's user ID (requestedBy) and isOwn appear only in the all-users list; canDownload and canRemove appear on every list response (the caller's own lists and the all-users list), not on the create or get answers."
             properties:
                 requestId:
                     type: string
