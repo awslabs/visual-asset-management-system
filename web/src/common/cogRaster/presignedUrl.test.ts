@@ -143,4 +143,48 @@ describe("keepFresh", () => {
         expect(request).toHaveBeenCalledTimes(MAX_REFRESH_FAILURES);
         expect(onRefresh).not.toHaveBeenCalled();
     });
+
+    it.each([
+        ["403", [false, "Forbidden", 403, "Forbidden"], /permission/i],
+        [
+            "quarantine 400",
+            [false, "Bad request", 400, "Asset is quarantined and cannot be downloaded"],
+            /quarantined/,
+        ],
+        ["410 archived", [false, "Gone", 410, "Gone"], /archived|no longer/i],
+    ])(
+        "gives up at once on a refusal (%s) with the API's reason and no backoff",
+        async (_n, response, reason) => {
+            jest.clearAllMocks();
+            (downloadAsset as jest.Mock).mockResolvedValue(response);
+            const onRefresh = jest.fn();
+            const onGiveUp = jest.fn();
+            const handle = keepFresh(
+                FILE,
+                "https://s3/old",
+                onRefresh,
+                requestPresignedUrl,
+                onGiveUp
+            );
+            await handle.refreshNow();
+            expect(downloadAsset).toHaveBeenCalledTimes(1);
+            expect(onGiveUp).toHaveBeenCalledTimes(1);
+            expect(onGiveUp.mock.calls[0][0]).toMatch(reason);
+            await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+            await handle.refreshNow();
+            expect(downloadAsset).toHaveBeenCalledTimes(1);
+            expect(onRefresh).not.toHaveBeenCalled();
+        }
+    );
+
+    it("still retries a transient failure (5xx) with backoff and gives up without a reason", async () => {
+        jest.clearAllMocks();
+        (downloadAsset as jest.Mock).mockResolvedValue([false, "Failed", 500, "boom"]);
+        const onGiveUp = jest.fn();
+        const handle = keepFresh(FILE, "https://s3/old", jest.fn(), requestPresignedUrl, onGiveUp);
+        await handle.refreshNow();
+        await jest.advanceTimersByTimeAsync(RETRY_BASE_MS * 8);
+        expect(downloadAsset).toHaveBeenCalledTimes(MAX_REFRESH_FAILURES);
+        expect(onGiveUp).toHaveBeenCalledWith();
+    });
 });

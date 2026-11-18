@@ -127,6 +127,16 @@ describe("attributes", () => {
         );
     });
 
+    it("names the pinned version in the label, and not for an unpinned file", async () => {
+        attributesByKey({});
+        headers({ [FILE.key]: "cog-3857.tif" });
+        const pinned: any = await prepareRaster({ ...FILE, versionId: "v7" });
+        expect(pinned.label).toBe("site.tif (version v7)");
+        clearRasterAttributeCache();
+        const latest: any = await prepareRaster(FILE);
+        expect(latest.label).toBe("site.tif");
+    });
+
     it("refuses a file with no georeference without requesting it", async () => {
         attributesByKey({ [FILE.key]: { ext_georeferenced: false } });
         const result: any = await prepareRaster(FILE);

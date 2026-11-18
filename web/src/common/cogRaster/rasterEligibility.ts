@@ -88,7 +88,7 @@ export type RasterDecision =
 const ANTIMERIDIAN_TOLERANCE = 1e-6;
 
 export const ANTIMERIDIAN_MESSAGE =
-    "This raster crosses longitude 180 (the antimeridian), so it cannot be shown on the map or converted as it is. Split it, or reproject it so that it does not cross the 180 boundary, and upload it again.";
+    "This raster crosses longitude 180 (the antimeridian), so it cannot be shown on the map or converted as it is. Split it at longitude 180 and upload each part.";
 
 export const APPROXIMATE_PLACEMENT_LABEL = "approximate placement (not reprojected)";
 

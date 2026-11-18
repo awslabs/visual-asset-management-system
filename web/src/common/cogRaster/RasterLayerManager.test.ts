@@ -10,6 +10,7 @@ import {
     firstLayerIdWithPrefix,
 } from "./RasterLayerManager";
 import { PreparedRaster } from "./rasterResolver";
+import { RasterDownloadRefused } from "./presignedUrl";
 
 class FakeMap implements MapLike {
     sources = new Map<string, any>();
@@ -325,37 +326,100 @@ describe("RasterLayerManager", () => {
         }
     });
 
-    it("shows a file once, however its key and version are written (r2-D5)", () => {
+    it("shows a file once, however its key is written, and keeps pinned versions apart (r2-D5, r3-L)", () => {
         const map = new FakeMap();
         const manager = new RasterLayerManager(map, OPTIONS(map));
-        const cog = (key: string, versionId?: string): PreparedRaster => ({
+        const cog = (key: string, versionId?: string, assetId = "a"): PreparedRaster => ({
             ...prepared("x"),
-            id: `db/a/${key}${versionId ? `@${versionId}` : ""}`,
+            id: `db/${assetId}/${key}${versionId ? `@${versionId}` : ""}`,
             label: "a.tif.cog.tif",
-            file: { databaseId: "db", assetId: "a", key, versionId },
+            file: { databaseId: "db", assetId, key, versionId },
         });
         expect(manager.add(cog("/maps/a.tif.cog.tif"))).toEqual({ ok: true });
-        // The same COG with the leading slash dropped, and with a version stamped on it.
+        // The same COG with the leading slash dropped is the same raster.
         expect(manager.add(cog("maps/a.tif.cog.tif"))).toEqual({ ok: true });
-        expect(manager.add(cog("maps/a.tif.cog.tif", "v3"))).toEqual({ ok: true });
         expect(manager.entries()).toHaveLength(1);
         expect(manager.hasFile({ databaseId: "db", assetId: "a", key: "maps/a.tif.cog.tif" })).toBe(
             true
         );
-        // Another asset, another key, or another explicit version is another raster.
-        manager.add(cog("/maps/b.tif.cog.tif"));
-        manager.add({
-            ...cog("/maps/a.tif.cog.tif"),
-            file: { databaseId: "db", assetId: "z", key: "/maps/a.tif.cog.tif" },
-            id: "db/z/maps/a",
-        });
+        // A pinned version is not the unpinned (latest) file: it is a second layer, as is another
+        // version, another key, or another asset.
+        manager.add(cog("maps/a.tif.cog.tif", "v3"));
+        expect(manager.entries()).toHaveLength(2);
+        manager.add(cog("maps/a.tif.cog.tif", "v3"));
+        manager.add(cog("maps/a.tif.cog.tif", "v4"));
         expect(manager.entries()).toHaveLength(3);
+        manager.add(cog("/maps/b.tif.cog.tif"));
+        manager.add(cog("/maps/a.tif.cog.tif", undefined, "z"));
+        expect(manager.entries()).toHaveLength(5);
         manager.dispose();
-        const other = new RasterLayerManager(new FakeMap(), OPTIONS(map));
-        other.add(cog("/maps/a.tif.cog.tif", "v1"));
-        other.add(cog("/maps/a.tif.cog.tif", "v2"));
-        expect(other.entries()).toHaveLength(2);
-        other.dispose();
+    });
+
+    it("gives up at once on a refusal from the API, with its reason and no Retry (r3-D2)", async () => {
+        jest.useFakeTimers();
+        try {
+            for (const reason of [
+                "You do not have permission to view or download this file.",
+                "Asset is quarantined and cannot be downloaded",
+            ]) {
+                const map = new FakeMap();
+                const request = jest.fn().mockRejectedValue(new RasterDownloadRefused(reason));
+                const manager = new RasterLayerManager(map, {
+                    ...OPTIONS(map),
+                    requestUrl: request,
+                });
+                manager.add(prepared("1.tif"));
+                const sourceId = [...map.sources.keys()][0];
+                // A tile read fails; the renewal it triggers is refused.
+                map.listeners.get("error")!({ sourceId, error: new Error("Request failed") });
+                await jest.advanceTimersByTimeAsync(0);
+                expect(request).toHaveBeenCalledTimes(1);
+                let [entry] = manager.entries();
+                expect(entry.failed).toBe(reason);
+                expect(entry.retryable).toBe(false);
+                expect(map.sources.size).toBe(0);
+                await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+                expect(request).toHaveBeenCalledTimes(1);
+                // Retry itself, asked for anyway, shows the reason and stays non-retryable.
+                await expect(manager.retry(entry.id)).resolves.toBe(false);
+                [entry] = manager.entries();
+                expect(entry.failed).toBe(reason);
+                expect(entry.retryable).toBe(false);
+                manager.dispose();
+            }
+        } finally {
+            jest.useRealTimers();
+        }
+    });
+
+    it("Retry refused by the API shows its reason and offers no further Retry (r3-D2)", async () => {
+        jest.useFakeTimers();
+        try {
+            const map = new FakeMap();
+            const request = jest.fn().mockResolvedValue("https://s3/fresh");
+            const manager = new RasterLayerManager(map, { ...OPTIONS(map), requestUrl: request });
+            manager.add(prepared("1.tif"));
+            const err = () => ({
+                sourceId: [...map.sources.keys()][0],
+                error: new Error("Request failed"),
+            });
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(AUTO_RETRY_DELAY_MS);
+            map.listeners.get("error")!(err());
+            await jest.advanceTimersByTimeAsync(0);
+            const [failed] = manager.entries();
+            expect(failed.retryable).toBe(true);
+            request.mockRejectedValue(new RasterDownloadRefused("Gone: this version is archived."));
+            await expect(manager.retry(failed.id)).resolves.toBe(false);
+            const [after] = manager.entries();
+            expect(after.failed).toBe("Gone: this version is archived.");
+            expect(after.retryable).toBe(false);
+            manager.dispose();
+        } finally {
+            jest.useRealTimers();
+        }
     });
 
     it("ignores further errors while a refresh is in flight", async () => {

@@ -91,16 +91,16 @@ export const RETRY_BASE_MS = FALLBACK_REFRESH_MS / 4;
 /**
  * Keeps a presigned URL fresh. `onRefresh` is called with each replacement URL, about 80% of the
  * way through the previous one's lifetime (at most MAX_REFRESH_MS); `refreshNow` is for a failed read.
- * A failed refresh is retried after RETRY_BASE_MS, then twice and four times that; after
- * MAX_REFRESH_FAILURES failures in a row it stops and calls `onGiveUp` (the API keeps refusing, or
- * cannot be reached). Returns a stop function.
+ * A failed refresh (network, 5xx) is retried after RETRY_BASE_MS, then twice and four times that;
+ * after MAX_REFRESH_FAILURES failures in a row it stops and calls `onGiveUp`. A refusal by the API
+ * (RasterDownloadRefused) is not retried: it stops at once and calls `onGiveUp` with the API's reason. Returns a stop function.
  */
 export function keepFresh(
     file: RasterFileRef,
     firstUrl: string,
     onRefresh: (url: string) => void,
     request: (file: RasterFileRef) => Promise<string> = requestPresignedUrl,
-    onGiveUp?: () => void
+    onGiveUp?: (reason?: string) => void
 ): { stop: () => void; refreshNow: () => Promise<void> } {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,8 +123,16 @@ export function keepFresh(
                 onRefresh(url);
                 schedule(url);
             })
-            .catch(() => {
+            .catch((error) => {
                 if (stopped) return;
+                if (error instanceof RasterDownloadRefused) {
+                    // The API refused the file (403, quarantine, archived, missing): asking again
+                    // cannot help, so stop at once and hand the API's own reason on.
+                    stopped = true;
+                    if (timer) clearTimeout(timer);
+                    onGiveUp?.(error.message);
+                    return;
+                }
                 failures += 1;
                 if (failures >= MAX_REFRESH_FAILURES) {
                     stopped = true;

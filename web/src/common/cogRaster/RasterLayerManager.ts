@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { RasterFileRef, keepFresh, requestPresignedUrl } from "./presignedUrl";
+import {
+    RasterDownloadRefused,
+    RasterFileRef,
+    keepFresh,
+    requestPresignedUrl,
+} from "./presignedUrl";
 import { MAX_RASTER_OVERLAYS } from "./rasterEligibility";
 import { PreparedRaster } from "./rasterResolver";
 
@@ -37,6 +42,8 @@ export interface RasterLayerEntry {
     file: RasterFileRef;
     /** Why the raster could not be drawn, once it has failed; null while it draws. */
     failed: string | null;
+    /** False once the API refused the file: a retry would be refused again, so none is offered. */
+    retryable: boolean;
     /** The raster's extent is known, so "Zoom to layer" (and framing on open) can act. */
     framable: boolean;
 }
@@ -92,11 +99,12 @@ const MAX_ERROR_REFRESHES = 3;
  */
 export const AUTO_RETRY_DELAY_MS = 4 * 1000;
 
-/** The same file, whichever way it was named: leading slashes ignored, versions compared when both are given. */
+/** The same file, whichever way it was named: leading slashes ignored; versions must be equal (unpinned equals unpinned only). */
 function sameFile(a: RasterFileRef, b: RasterFileRef): boolean {
     const key = (file: RasterFileRef) => file.key.replace(/^\/+/, "");
     if (a.databaseId !== b.databaseId || a.assetId !== b.assetId || key(a) !== key(b)) return false;
-    return !a.versionId || !b.versionId || a.versionId === b.versionId;
+    // A pinned version and the unpinned (latest) file may be different content: they stay separate.
+    return (a.versionId || "") === (b.versionId || "");
 }
 
 function boundsOfCorners(corners: [number, number][]): [[number, number], [number, number]] {
@@ -172,6 +180,7 @@ export class RasterLayerManager {
                 sourceKey: prepared.sourceKey,
                 file: prepared.file,
                 failed: null,
+                retryable: true,
                 framable: false,
             },
             sourceId: `${ID_PREFIX}-src-${n}`,
@@ -214,7 +223,7 @@ export class RasterLayerManager {
             item.url,
             (url) => this.replaceTileUrl(item, url),
             this.options.requestUrl ?? requestPresignedUrl,
-            () => this.fail(item, REFRESH_GAVE_UP_MESSAGE)
+            (reason) => this.fail(item, reason ?? REFRESH_GAVE_UP_MESSAGE, reason === undefined)
         );
         item.stopRefresh = handle.stop;
         item.refreshNow = handle.refreshNow;
@@ -232,9 +241,13 @@ export class RasterLayerManager {
         let url: string;
         try {
             url = await (this.options.requestUrl ?? requestPresignedUrl)(item.entry.file);
-        } catch {
+        } catch (error) {
             if (this.items.includes(item)) {
-                item.entry.failed = REFRESH_GAVE_UP_MESSAGE;
+                // A refusal shows the API's own reason and offers no Retry; anything else (network,
+                // 5xx) keeps the renewal message and Retry.
+                const refused = error instanceof RasterDownloadRefused;
+                item.entry.failed = refused ? error.message : REFRESH_GAVE_UP_MESSAGE;
+                item.entry.retryable = !refused;
                 this.notify();
             }
             return false;
@@ -243,6 +256,7 @@ export class RasterLayerManager {
         item.stopRefresh?.();
         item.url = url;
         item.entry.failed = null;
+        item.entry.retryable = true;
         item.errorRefreshes = 0;
         item.errorRefreshDoneAt = 0;
         item.errorRefreshInFlight = false;
@@ -364,9 +378,10 @@ export class RasterLayerManager {
     }
 
     /** Marks a raster failed: its layer leaves the map, its row stays with the reason. */
-    private fail(item: Internal, message: string): void {
+    private fail(item: Internal, message: string, retryable = true): void {
         if (item.entry.failed || !this.items.includes(item)) return;
         item.entry.failed = message;
+        item.entry.retryable = retryable;
         item.stopRefresh?.();
         if (item.autoRetryTimer) clearTimeout(item.autoRetryTimer);
         this.removeFromMap(item);

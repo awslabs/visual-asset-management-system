@@ -289,7 +289,9 @@ export async function prepareRaster(
 
         const common = {
             id: rasterId(target),
-            label: rasterLabel(target.key),
+            label:
+                rasterLabel(target.key) +
+                (target.versionId ? ` (version ${target.versionId})` : ""),
             file: target,
             sourceKey,
             usedCog,

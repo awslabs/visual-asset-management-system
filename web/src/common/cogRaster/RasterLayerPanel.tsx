@@ -71,7 +71,7 @@ const LayerRow: React.FC<{
                     type="error"
                     data-testid="raster-layer-failed"
                     action={
-                        entry.mode === "tile" ? (
+                        entry.mode === "tile" && entry.retryable ? (
                             <Button
                                 data-testid="raster-layer-retry"
                                 onClick={() => void layers.retry(entry.id)}
@@ -121,6 +121,7 @@ const LayerRow: React.FC<{
                 <Button
                     iconName="search"
                     variant="inline-icon"
+                    ariaLabel={`Zoom to ${entry.label}`}
                     onClick={() => layers.zoomTo(entry.id)}
                 >
                     Zoom to layer

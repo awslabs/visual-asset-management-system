@@ -86,20 +86,22 @@ describe("useRasterLayers: a raster is listed once (r2-D5)", () => {
         expect(result.current.entries[0].label).toBe("s.tif.cog.tif");
     });
 
-    it("lists the COG once when the COG comes first, and when it carries a version", async () => {
+    it("lists the COG once when the COG comes first, and when its key has no leading slash", async () => {
         const first = await addAll([COG, SOURCE]);
         expect(first.current.entries).toHaveLength(1);
-        const versioned = await addAll([
-            SOURCE,
-            { ...COG, key: "maps/s.tif.cog.tif", versionId: "v7" },
-        ]);
-        expect(versioned.current.entries).toHaveLength(1);
+        const slashless = await addAll([SOURCE, { ...COG, key: "maps/s.tif.cog.tif" }]);
+        expect(slashless.current.entries).toHaveLength(1);
     });
 
     it("lists the COG once when two sources resolve to the same COG", async () => {
         const result = await addAll([SOURCE, { ...SOURCE }]);
         expect(result.current.entries).toHaveLength(1);
         expect(result.current.entries[0].usedCog).toBe(true);
+    });
+
+    it("keeps a pinned version apart from the unpinned file and lists it as its own row (r3)", async () => {
+        const result = await addAll([SOURCE, { ...COG, versionId: "v7" }]);
+        expect(result.current.entries).toHaveLength(2);
     });
 
     it("lists a COG selected alone once", async () => {
@@ -123,6 +125,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
                 staleCog: false,
                 sourceKey: "s",
                 file: COG,
+                retryable: true,
                 failed: "This raster could not be drawn: its map tiles could not be read or decoded.",
                 framable: true,
             },
@@ -143,6 +146,33 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         expect(screen.getByTestId("raster-layer-failed")).toBeInTheDocument();
         await userEvent.click(screen.getByRole("button", { name: "Retry" }));
         expect(retry).toHaveBeenCalledWith("r1");
+    });
+
+    it("offers no Retry when the API refused the file, and shows its reason (r3-D2)", () => {
+        const props = layers(jest.fn(), "tile");
+        props.entries[0].retryable = false;
+        props.entries[0].failed = "Asset is quarantined and cannot be downloaded";
+        render(<RasterLayerPanel layers={props} />);
+        expect(screen.getByTestId("raster-layer-failed")).toHaveTextContent(/quarantined/);
+        expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    });
+
+    it("gives every icon button in a layer row an accessible name (r3-D1)", () => {
+        render(<RasterLayerPanel layers={layers(jest.fn(), "tile")} />);
+        for (const name of [
+            "Zoom to s.tif.cog.tif",
+            "Move s.tif.cog.tif up",
+            "Move s.tif.cog.tif down",
+            "Remove s.tif.cog.tif",
+        ]) {
+            expect(screen.getByRole("button", { name })).toBeInTheDocument();
+        }
+        for (const button of screen.getAllByRole("button")) {
+            expect(button).toHaveAccessibleName();
+        }
+        expect(
+            screen.getByRole("slider", { name: /Opacity of s.tif.cog.tif/ })
+        ).toBeInTheDocument();
     });
 
     it("offers no Retry on a raster that is not drawn from tiles", () => {

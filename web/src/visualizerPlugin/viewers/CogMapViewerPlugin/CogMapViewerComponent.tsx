@@ -119,7 +119,7 @@ const CogMapViewerComponent: React.FC<ViewerPluginProps> = (props) => {
         if (requested.current.key !== filesKey)
             requested.current = { key: filesKey, ids: new Set() };
         for (const file of files) {
-            const id = `${file.databaseId}/${file.assetId}/${file.key}`;
+            const id = `${file.databaseId}/${file.assetId}/${file.key}@${file.versionId ?? ""}`;
             if (requested.current.ids.has(id)) continue;
             requested.current.ids.add(id);
             void addFile(file, { sizeBytes: file.sizeBytes });

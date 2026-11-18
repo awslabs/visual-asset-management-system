@@ -9,12 +9,18 @@ import CogMapViewerComponent, { filesToShow } from "./CogMapViewerComponent";
 import viewerConfig from "../../config/viewerConfig.json";
 import { admitsVisualizeSelection } from "../../core/viewerSelection";
 
+const mockMapLoaded: { value: boolean } = { value: false };
 jest.mock("react-map-gl/maplibre", () => {
     const ReactActual = jest.requireActual("react");
     return {
         __esModule: true,
         default: ReactActual.forwardRef((props: any, ref: any) => {
-            ReactActual.useImperativeHandle(ref, () => ({ getMap: () => null }));
+            ReactActual.useImperativeHandle(ref, () => ({
+                getMap: () => (mockMapLoaded.value ? {} : null),
+            }));
+            ReactActual.useEffect(() => {
+                if (mockMapLoaded.value) props.onLoad?.();
+            }, []);
             return <div data-testid="map">{props.children}</div>;
         }),
         NavigationControl: () => null,
@@ -41,6 +47,7 @@ jest.mock("../../../common/cogRaster/useRasterLayers", () => ({
     useRasterLayers: () => mockLayers.value,
 }));
 beforeEach(() => {
+    mockMapLoaded.value = false;
     mockLayers.value = freshLayers();
 });
 
@@ -146,6 +153,19 @@ describe("CogMapViewerComponent", () => {
         layers.entries = [{ id: "r1", framable: true, failed: null }];
         rerender(<CogMapViewerComponent {...base} assetKey="x.tif" />);
         expect(layers.zoomTo).toHaveBeenCalledTimes(2);
+    });
+    it("asks for a pinned version and the latest file as two rasters (r3)", () => {
+        mockMapLoaded.value = true;
+        const file = { databaseId: "db", assetId: "a1", key: "a.tif", isDirectory: false, size: 5 };
+        render(
+            <CogMapViewerComponent
+                {...base}
+                assetKey="a.tif"
+                multiFiles={[file, { ...file, versionId: "v2" }] as any}
+            />
+        );
+        const calls = mockLayers.value.addFile.mock.calls.map((call: any[]) => call[0].versionId);
+        expect(calls).toEqual([undefined, "v2"]);
     });
     it("renders the map and the layer list", () => {
         render(<CogMapViewerComponent {...base} assetKey="x.tif" />);
