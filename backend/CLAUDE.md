@@ -361,9 +361,12 @@ backend/
 │   │   │                                           #   stays on its evaluation row), writes after the claim also need
 │   │   │                                           #   attribute_exists(databaseId), and a claim on a record naming
 │   │   │                                           #   another schema is refused (CLAIM_REBOUND). A claim whose
-│   │   │                                           #   evaluation raises before its evaluation row exists is undone
-│   │   │                                           #   from the claim's own copy (LandedClaim; _undo_claim, conditional
-│   │   │                                           #   on the claim's revision; after the row, the claim stays);
+│   │   │                                           #   evaluation raises before it launched a workflow (its row lists
+│   │   │                                           #   no pipelineExecutions) is undone from the claim's own copy
+│   │   │                                           #   (LandedClaim; _undo_claim, conditional on the claim's revision;
+│   │   │                                           #   a row written whole is marked notApplied notRecorded; after a
+│   │   │                                           #   launch the claim stays); a fenced write marks the row
+│   │   │                                           #   notApplied bindingChanged;
 │   │   │                                           #   a pending_pipeline claim older than
 │   │   │                                           #   EVALUATION_CLAIM_STALE_SECONDS with no evaluation row no longer
 │   │   │                                           #   covers a change (claim_orphaned). An evaluation naming a schema

@@ -3205,7 +3205,7 @@ if CONFIG.enable_writes:
         (`pipelineRulesPending`): read the verdict with get_asset_compliance_state(); one whose workflow is
         busy WAITS (`pipelineRulesWaiting`). While rules are pending, an asset that was quarantined stays
         `quarantined`. A quarantine-level failure quarantines unless an exception covers that schema version.
-        `notApplied`: a release or exception during the run outranked the verdict. A rule result with
+        `notApplied`: a release, exception or binding change outranked the verdict. A rule result with
         `status` `error` is not a verdict: its enforcement does not apply. All rules errored: `verdict`
         `error`, the state is left unchanged, `lastEvaluationStatus` `error`, an `evaluation_error` audit
         entry. A `schema_name` other than the bound one is a DRY RUN (`dryRun` true, no `evaluationId`):
