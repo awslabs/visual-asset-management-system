@@ -229,7 +229,7 @@ Its result names the failing files, at most ten:
 See [Metadata rules](../concepts/compliance.md#metadata-rules) for the scopes in full.
 
 :::note[Only vams-rules-v1 documents are accepted]
-`schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).
+`schemaBody` must be a `vams-rules-v1` document: an object with `schemaFormat` set to `vams-rules-v1` and at least one rule under `rules`. A rule name may not start with `$`, which is reserved for results an evaluation records itself. A plain JSON Schema, a template file's envelope (`metadata`, `schemaName`, `schemaBody`) or any other object is rejected with `400` and the message `schemaBody must be a vams-rules-v1 document`; the specific validation failure is written to the handler's log. A pipeline rule's `inputFiles` selects which of the asset's files the workflow receives (`matching`, `wholeAsset` or `explicit`); the modes and the arity rule are described in [Pipeline rules](../concepts/compliance.md#pipeline-rules).
 :::
 
 ### Response
