@@ -1500,6 +1500,7 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         delete:
@@ -1784,6 +1785,12 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "Right after an update that adds the compliance evaluation table's PipelineRuleWaitIndex, while Amazon DynamoDB still builds that index ('The database cannot be deleted while compliance finishes building an index after an update. Try again in a few minutes.'). Nothing is changed; the delete works once the index is active."
                     content:
                         application/json:
                             schema:
