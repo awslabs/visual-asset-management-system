@@ -402,6 +402,18 @@ describe("CAD STEP agent on the Fargate runtime", () => {
         expect((jobDef.properties as any).Timeout.AttemptDurationSeconds).toBe(6600);
     });
 
+    test("the job definition is sized for the agent, not the shared 16 vCPU / 64 GiB default", () => {
+        const jobDef = synth
+            .ofType("AWS::Batch::JobDefinition")
+            .find((j) => /CadStepAgent/.test(j.logicalId))!;
+        const requirements = (jobDef.properties as any).ContainerProperties
+            .ResourceRequirements as Array<{ Type: string; Value: string }>;
+        expect(Object.fromEntries(requirements.map((r) => [r.Type, r.Value]))).toEqual({
+            VCPU: "2",
+            MEMORY: "16384",
+        });
+    });
+
     test("the job definition is created only after the image build custom resource completes", () => {
         const jobDef = synth
             .ofType("AWS::Batch::JobDefinition")

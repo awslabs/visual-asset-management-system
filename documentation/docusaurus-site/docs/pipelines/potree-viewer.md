@@ -125,15 +125,15 @@ This pipeline uses a third-party open-source library with a GPL license. Refer t
 
 The following AWS resources are created when this pipeline is enabled:
 
-| Resource                     | Service            | Purpose                                                                                       |
-| :--------------------------- | :----------------- | :-------------------------------------------------------------------------------------------- |
-| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                |
-| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                             |
-| Job Definition               | AWS Batch          | Container configuration and resource limits                                                   |
-| Container Image              | Amazon ECR         | PDAL + PotreeConverter container                                                              |
-| Step Functions State Machine | AWS Step Functions | Workflow orchestration                                                                        |
-| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd) |
-| SQS Queue                    | Amazon SQS         | Event-driven pipeline triggering                                                              |
+| Resource                     | Service            | Purpose                                                                                                                                                                   |
+| :--------------------------- | :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Fargate Compute Environment  | AWS Batch          | Serverless container execution                                                                                                                                            |
+| Job Queue                    | AWS Batch          | Job scheduling and prioritization                                                                                                                                         |
+| Job Definition               | AWS Batch          | Container configuration and resource limits                                                                                                                               |
+| Container Image              | Amazon ECR         | PDAL + PotreeConverter container                                                                                                                                          |
+| Step Functions State Machine | AWS Step Functions | Workflow orchestration with a 3 hour 45 minute timeout; each conversion job (PDAL, then Potree) is bounded at 3 hours 30 minutes, including time waiting in the job queue |
+| Lambda Functions (5)         | AWS Lambda         | Pipeline coordination (vamsExecute, constructPipeline, openPipeline, sqsExecute, pipelineEnd)                                                                             |
+| SQS Queue                    | Amazon SQS         | Event-driven pipeline triggering                                                                                                                                          |
 
 ## Related Resources
 

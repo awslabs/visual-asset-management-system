@@ -2,6 +2,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 import boto3
 import json
 from botocore.exceptions import ClientError
@@ -26,14 +27,25 @@ s3 = boto3.client(
     region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
+batch = boto3.client(
+    'batch',
+    region_name=os.environ["AWS_REGION"],
+    config=retry_config
+)
 
 # The container's SendTaskSuccess payload names itself; a job that exited 0 without calling back
 # returns Batch's job description instead and must not read as success.
 REPORTER_MARKER = "video_sop_bom_pipeline"
-# The run's scratch prefix on the auxiliary bucket is `pipelines/<pipelineId>/<executionId>/`; the
-# cleanup refuses any locator that does not sit under this pipeline's root, so a malformed event
-# cannot aim the delete at another prefix.
-AUX_PREFIX_ROOT = "pipelines/genai-video-sop-bom/"
+# The run's scratch prefix on the auxiliary bucket is `pipelines/<name>/<executionId>/`, where <name>
+# is the workflow step's jobName or, without one, the pipeline id (executionRecords.aux_pipeline_prefix),
+# so a run is not always under the registered id. The cleanup refuses any locator that is not exactly
+# one such execution folder: a name in the API's id character set, then the workflow execution id (the
+# backend's execution id forms), so a malformed event cannot aim the delete at the root, at a whole
+# pipeline's folder, at a deeper folder or at a prefix of another shape.
+AUX_PREFIX_ROOT = "pipelines/"
+AUX_EXECUTION_PREFIX = re.compile(
+    re.escape(AUX_PREFIX_ROOT) + r"[-_a-zA-Z0-9]+/"
+    r"(?:[0-9a-f]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/")
 DEFINITION_FILENAME = "definition.json"
 # One list page; delete_objects takes at most 1000 keys per call.
 DELETE_BATCH = 1000
@@ -49,6 +61,17 @@ ALREADY_REPORTED_CODES = frozenset({"TaskDoesNotExist", "TaskTimedOut", "Invalid
 ATTEMPT_TIMEOUT_MARKER = "attempt duration exceeded timeout"
 ATTEMPT_TIMEOUT_CAUSE = ("the container did not finish within the 6 h bound; last stage per the "
                          "container log")
+# The Batch state's own Step Functions bound, which counts the time the job waited in the AWS Batch
+# queue as well as its run; Step Functions gives that States.Timeout no cause of its own.
+STATE_TIMEOUT_ERROR = "States.Timeout"
+STATE_TIMEOUT_CAUSE = ("the job did not finish within the pipeline's time limit, which counts the time "
+                       "it waited in the AWS Batch queue (for example behind the Fargate vCPU quota) as "
+                       "well as its run")
+# Step Functions cancels a .sync Batch job when the execution is stopped, not when the Batch state's
+# own bound fires, so after that timeout the run's job, still queued or running, is ended here. The
+# queue is the one the state submits to (BATCH_JOB_QUEUES); the job name is unique to the run.
+BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
+LIVE_BATCH_JOB_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"})
 # The stored executionError budget; the SendTaskFailure API itself accepts 32768.
 MAX_CAUSE_CHARS = 16384
 
@@ -114,6 +137,8 @@ def failure_for(error_block):
     cause = str(error_block.get("Cause") or "")
     if error in KNOWN_ERROR_CODES:
         return error, (cause or "the container reported a failure without a cause")[:MAX_CAUSE_CHARS]
+    if error == STATE_TIMEOUT_ERROR:
+        return ERROR_PIPELINE, STATE_TIMEOUT_CAUSE
     parsed = _parse_json_object(cause)
     if parsed is not None:
         if parsed.get("errorMessage"):
@@ -130,8 +155,8 @@ def aux_prefix_location(event):
     constructPipeline hands the state machine `definitionCommand` = ["--definition-s3-uri",
     "s3://<auxBucket>/<auxTempPrefix>definition.json"], and that is the one value on the event that
     names the prefix — the manifest fields do not survive the task's outputPath replacement. The
-    prefix is accepted only when it sits under this pipeline's root and names an execution folder,
-    so a missing, foreign or truncated locator yields None rather than a delete somewhere else."""
+    prefix is accepted only when it is exactly one execution folder under the pipelines root, so a
+    missing, foreign or truncated locator yields None rather than a delete somewhere else."""
     command = event.get("definitionCommand")
     if not isinstance(command, list) or len(command) < 2 or command[0] != "--definition-s3-uri":
         return None
@@ -142,9 +167,7 @@ def aux_prefix_location(event):
     if not bucket or not key.endswith("/" + DEFINITION_FILENAME):
         return None
     prefix = key[:-len(DEFINITION_FILENAME)]
-    execution_folder = prefix[len(AUX_PREFIX_ROOT):]
-    if not prefix.startswith(AUX_PREFIX_ROOT) or not execution_folder.strip("/") \
-            or "/" in execution_folder.rstrip("/"):
+    if not AUX_EXECUTION_PREFIX.fullmatch(prefix):
         return None
     return bucket, prefix
 
@@ -198,6 +221,27 @@ def _send(callback, **kwargs):
         raise
 
 
+def end_batch_job_after_state_timeout(error, job_name):
+    """Terminate the run's Batch job when ``error`` is the Batch state's own timeout.
+
+    Returns how many jobs were ended. Best effort: a failed lookup or terminate is logged, and the
+    failure is still reported to the workflow."""
+    if not isinstance(error, dict) or error.get("Error") != STATE_TIMEOUT_ERROR or not job_name:
+        return 0
+    ended = 0
+    for queue in BATCH_JOB_QUEUES:
+        try:
+            response = batch.list_jobs(
+                jobQueue=queue, filters=[{"name": "JOB_NAME", "values": [job_name]}])
+            for job in response.get("jobSummaryList") or []:
+                if job.get("status") in LIVE_BATCH_JOB_STATUSES:
+                    batch.terminate_job(jobId=job["jobId"], reason="The pipeline's time limit was reached")
+                    ended += 1
+        except Exception as e:
+            logger.warning(f"Could not end the Batch job {job_name}: {e}")
+    return ended
+
+
 def lambda_handler(event, context):
     """
     PipelineEnd - Video SOP/BOM Extraction
@@ -210,6 +254,7 @@ def lambda_handler(event, context):
     external_sfn_task_token = event.get('externalSfnTaskToken', "")
 
     if "error" in event:
+        end_batch_job_after_state_timeout(event["error"], event.get("batchJobName"))
         code, cause = failure_for(event["error"])
         logger.error(f"Pipeline failure: {code}: {cause}")
         if external_sfn_task_token:
