@@ -14,6 +14,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DatabaseCompliancePage, { evaluateAllMessage } from "./DatabaseCompliance";
+import Synonyms from "../synonyms";
 
 jest.mock("react-router-dom", () => ({
     ...jest.requireActual("react-router-dom"),
@@ -182,5 +183,30 @@ describe("DatabaseCompliance Evaluate All", () => {
                 skippedArchived: 0,
             })
         ).toBe("Evaluation triggered for 3 assets.");
+    });
+
+    it("says more remain while a token is returned, also with no count", () => {
+        // The request can end before it has read every asset: none counted, more remain.
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 3 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: 0,
+                NextToken: "tok-2",
+            })
+        ).toBe(
+            `Evaluation triggered for 3 assets; more ${Synonyms.assets} remain; choose Evaluate All again.`
+        );
+        // A count, when there is one, is given instead.
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 3 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: 7,
+                NextToken: "tok-2",
+            })
+        ).toBe("Evaluation triggered for 3 assets; 7 not reached yet; choose Evaluate All again.");
     });
 });

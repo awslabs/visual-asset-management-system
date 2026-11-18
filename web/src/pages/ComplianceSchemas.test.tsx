@@ -312,6 +312,21 @@ describe("ComplianceSchemas sweep message", () => {
             })
         ).toBe(`Sweep of schema "std": 2 ${Synonyms.assets} evaluated.`);
     });
+
+    it("says more remain while a token is returned, also with no count", () => {
+        // The sweep can end before it has read every asset: none counted, more remain.
+        expect(
+            sweepMessage("std", { assetsTriggered: [{}], assetsRemaining: 0, NextToken: "tok-2" })
+        ).toBe(
+            `Sweep of schema "std": 1 ${Synonyms.asset} evaluated; more ${Synonyms.assets} remain; run the sweep again.`
+        );
+        // A count, when there is one, is given instead.
+        expect(
+            sweepMessage("std", { assetsTriggered: [], assetsRemaining: 12, NextToken: "tok-2" })
+        ).toBe(
+            `Sweep of schema "std": 0 ${Synonyms.assets} evaluated; 12 not reached yet; run the sweep again.`
+        );
+    });
 });
 
 describe("ComplianceSchemas rule-name errors", () => {

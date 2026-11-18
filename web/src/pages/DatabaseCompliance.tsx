@@ -185,7 +185,8 @@ export const COMPLIANCE_EXCEPTION_API_ROUTE =
 
 /**
  * The success message of Evaluate All: the API's count, plus how many tracked assets were not
- * reached (the request is bounded like a sweep), how many were registered under the binding, and
+ * reached (the request is bounded like a sweep) or, when it ended before counting them
+ * (`NextToken` with no count), that more remain, how many were registered under the binding, and
  * how many were skipped as archived or as assets the caller may not read.
  */
 export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => {
@@ -209,6 +210,8 @@ export const evaluateAllMessage = (result: EvaluateDatabaseResponse): string => 
         parts.push(
             `${formatCount(result.assetsRemaining)} not reached yet; choose Evaluate All again`
         );
+    } else if (result.NextToken) {
+        parts.push(`more ${Synonyms.assets} remain; choose Evaluate All again`);
     }
     return parts.join("; ") + ".";
 };

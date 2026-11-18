@@ -439,7 +439,8 @@ const DEFAULT_TEMPLATE_BODY = JSON.stringify(SCHEMA_TEMPLATES[DEFAULT_TEMPLATE_K
 
 /**
  * The flash a sweep raises: how many assets it evaluated, how many it skipped (assets in databases
- * the caller may not evaluate, and archived assets) and how many it did not reach (run it again for
+ * the caller may not evaluate, and archived assets) and how many it did not reach, or, when it
+ * ended before counting them (`NextToken` with no count), that more remain (run it again for
  * those).
  */
 export const sweepMessage = (schemaName: string, result: any): string => {
@@ -461,6 +462,8 @@ export const sweepMessage = (schemaName: string, result: any): string => {
     }
     if (result?.assetsRemaining) {
         parts.push(`${result.assetsRemaining} not reached yet; run the sweep again`);
+    } else if (result?.NextToken) {
+        parts.push(`more ${Synonyms.assets} remain; run the sweep again`);
     }
     return parts.join("; ") + ".";
 };
