@@ -112,9 +112,9 @@ class TestEachRunStatus:
         assert _row(env)["status"] == "FAILED"
         assert _row(env)["errorMessage"] == env.zd.MSG_JOB_QUEUED
 
-    def test_a_heartbeat_timeout_after_a_failed_start_says_the_job_could_not_start(self, env):
+    def test_a_heartbeat_timeout_after_a_failed_start_says_the_job_failed_before_it_started(self, env):
         _end(env, "FAILED", "Pipeline Failure: ZipArchiveJobNotStarted")
-        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_NOT_STARTED == "The archive job could not start"
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_NOT_STARTED == "The archive job failed before it started"
 
     def test_the_job_states_own_timeout_reads_timed_out(self, env):
         # pipelineEnd reports the 11-hour state bound as a failure, not as a TIMED_OUT run.
