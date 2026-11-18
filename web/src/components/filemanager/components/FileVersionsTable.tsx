@@ -62,6 +62,7 @@ interface FileVersionsTableProps {
     displayMode?: "modal" | "container"; // Display context
     visible?: boolean; // For modal context
     assetVersionId?: string; // Current asset version context for highlighting
+    previewFile?: string; // The file's preview file, when the hosting page holds it; carried to the page a version opens
     onNavigateAway?: () => void; // Called before a row link leaves the page (closes a hosting modal)
 }
 
@@ -149,6 +150,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
     displayMode = "container",
     visible = true,
     assetVersionId,
+    previewFile,
     onNavigateAway,
 }) => {
     const navigate = useNavigate();
@@ -267,6 +269,7 @@ export const FileVersionsTable: React.FC<FileVersionsTableProps> = ({
                 isDirectory: false,
                 versionId: versionId,
                 isArchived: version?.isArchived,
+                ...(previewFile ? { previewFile } : {}),
             },
         });
     };
