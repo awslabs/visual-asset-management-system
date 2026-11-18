@@ -201,7 +201,16 @@ SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_M
 
 
 class ZipRefusal(VAMSGeneralErrorResponse):
-    """A refused create (400, or the given status)."""
+    """A refused create (400, or the given status). Its text is the refusal sentence alone, as the
+    API pages quote it and as the URL route already answers it, without the "VAMS General Error: "
+    prefix the base class adds."""
+
+    def __init__(self, message, status_code=400):
+        super().__init__(message, status_code=status_code)
+        self.message = message
+
+    def __str__(self):
+        return self.message
 
 
 class ZipLaunchRefused(Exception):

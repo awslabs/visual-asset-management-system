@@ -395,7 +395,7 @@ class TestCreate:
                                                {"type": "file", "relativePath": "/old-part.glb"}]})
         assert response["statusCode"] == 400
         message = h.body_of(response)["message"]
-        assert message.endswith(env.zd.MSG_ARCHIVED_IN_SELECTION)
+        assert message == env.zd.MSG_ARCHIVED_IN_SELECTION
         assert "not found" not in message
         assert "old-part" not in response["body"]
         assert env.zip.items == {}
@@ -403,7 +403,7 @@ class TestCreate:
     def test_a_missing_file_is_still_not_found(self, env):
         response = _create(env, {"selection": [{"type": "file", "relativePath": "/never.glb"}]})
         assert response["statusCode"] == 400
-        assert h.body_of(response)["message"].endswith("File not found in S3")
+        assert h.body_of(response)["message"] == "File not found in S3"
 
     def test_delete_marker_version_refused_410(self, env):
         env.s3.add("xasset1/a.glb", version="dm1", delete_marker=True)
