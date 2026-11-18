@@ -9,10 +9,11 @@ page is full or the indexes are exhausted, within the SEARCH_FILL_* bounds; a se
 reports its total as a minimum. Driven end to end against the in-memory OpenSearch of
 ``opensearch_dsl_oracle``.
 
-Every test runs on a fake monotonic clock (the autouse ``fake_clock`` fixture): each fetch and each
-per-hit decision advances it by a set cost, so the window sizes and the time bound follow those costs and
-never how fast the runner is (#1633). A test that is about the time bound sets its own costs with
-``fake_clock.costs``; the others keep the defaults of a fast runner.
+Every test runs on the harness's fake monotonic clock (the autouse ``fake_clock`` fixture,
+``search_authz_harness.install_fake_clock``): each fetch and each per-hit decision advances it by a set
+cost, so the window sizes and the time bound follow those costs and never how fast the runner is (#1633).
+A test that is about the time bound sets its own costs with ``fake_clock.costs``; the others keep the
+defaults of a fast runner.
 """
 
 import contextlib
@@ -22,7 +23,7 @@ import pytest
 
 from backend.tests.handlers.authz.opensearch_dsl_oracle import FakeSearchManager
 from backend.tests.handlers.authz.search_authz_harness import (
-    CLAIMS, ROLE, authz_module, constraint, crit, load_search_module, policies,
+    CLAIMS, ROLE, authz_module, constraint, crit, install_fake_clock, load_search_module, policies,
 )
 from backend.tests.handlers.authz.test_search_counts_honour_permissions import (
     DB, TYPE_X_ONLY, _asset, _file, _install_rows, _manager,
@@ -39,53 +40,10 @@ def search_module():
     return load_search_module("search_under_test_paging")
 
 
-class _FakeClock:
-    """A monotonic clock the test advances: each fetch and each per-hit decision costs a set time.
-
-    The defaults are a fast runner's: 10 ms a fetch and 0.1 ms a decision, so 2,020 candidates are
-    fetched and checked in well under a second of the 10 s bound and every window grows the full
-    SEARCH_FILL_GROWTH_FACTOR."""
-
-    FETCH_SECONDS = 0.01
-    FETCH_SECONDS_PER_HIT = 0.0
-    DECISION_SECONDS = 0.0001
-
-    def __init__(self):
-        self.now = 1000.0
-        self.costs(self.FETCH_SECONDS, self.FETCH_SECONDS_PER_HIT, self.DECISION_SECONDS)
-
-    def costs(self, fetch_seconds, fetch_seconds_per_hit, decision_seconds):
-        """Set what each fetch (plus a per-hit share) and each decision costs; returns the clock."""
-        self.fetch_seconds = fetch_seconds
-        self.fetch_seconds_per_hit = fetch_seconds_per_hit
-        self.decision_seconds = decision_seconds
-        return self
-
-    def monotonic(self):
-        return self.now
-
-
 @pytest.fixture(autouse=True)
 def fake_clock(search_module, monkeypatch):
-    """The search under test reads this clock, every in-memory fetch and every per-hit decision advances it."""
-    clock = _FakeClock()
-    monkeypatch.setattr(search_module, "time", clock)
-    fetch = FakeSearchManager.search_dual_index
-
-    def timed_fetch(self, asset_query, file_query, entity_types):
-        response = fetch(self, asset_query, file_query, entity_types)
-        clock.now += clock.fetch_seconds + clock.fetch_seconds_per_hit * len(response["hits"]["hits"])
-        return response
-
-    monkeypatch.setattr(FakeSearchManager, "search_dual_index", timed_fetch)
-    decide = search_module.DualIndexResponseProcessor._hit_decision
-
-    def timed_decision(self, hit, claims):
-        clock.now += clock.decision_seconds
-        return decide(self, hit, claims)
-
-    monkeypatch.setattr(search_module.DualIndexResponseProcessor, "_hit_decision", timed_decision)
-    return clock
+    """Every test of this file runs the search on the harness's FakeClock (#1633)."""
+    return install_fake_clock(search_module, monkeypatch)
 
 
 def _sparse_assets(count=300, readable_at=READABLE_AT):
