@@ -244,7 +244,7 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     records = {}
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
-        if ((authorized is None or node["databaseId"] in authorized)
+        if (node["databaseId"] in authorized
                 and (authorized_assets is None or node_key in authorized_assets)):
             records[node_key] = store.get_compliance_record(node["databaseId"], node["assetId"]) or {}
     node_names = {key: record.get("assetName") or "" for key, record in records.items()}
@@ -356,11 +356,12 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
 
 def _authorized_database_ids(cascade: Dict[str, Any]) -> Any:
     """The databases whose descendants this cascade may evaluate, as recorded when a caller started
-    it; None for a cascade without the record (one started before it was kept), whose descendants
-    are all evaluated as before. An unreadable record authorizes nothing."""
+    or approved it (both paths to `executing` record it). A cascade without the record, or with an
+    unreadable one, authorizes nothing."""
     raw = cascade.get("authorizedDatabaseIds")
     if raw is None:
-        return None
+        logger.warning("Cascade carries no authorizedDatabaseIds; no descendant is evaluated")
+        return set()
     try:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, ValueError):

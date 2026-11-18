@@ -24,7 +24,8 @@ TRIGGER = "handlers.compliance.complianceTrigger"
 
 PENDING = {"cascadeId": CASCADE_ID, "state": "pending_approval",
            "triggeredByDatabaseId": DB, "triggeredByAssetId": ASSET}
-EXECUTING = dict(PENDING, state="executing")
+# Started by a caller who may evaluate the cascade's database (both start paths record the reach).
+EXECUTING = dict(PENDING, state="executing", authorizedDatabaseIds=json.dumps([DB]))
 
 
 def _link(from_asset, to_asset, database_id=DB):
