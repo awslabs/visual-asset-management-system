@@ -207,6 +207,10 @@ The deployment-Region queues keep their own CMK; a cross-Region topic delivers i
 
 A generated regional key is retained when the stack is deleted ([Uninstall](./uninstall.md)) and is listed under the cross-Region stack in the [AWS resources](../architecture/aws-resources.md) reference.
 
+### The browser needs no CSP change
+
+The browser downloads and uploads through presigned Amazon S3 URLs, so the web application's Content Security Policy must admit the bucket's host. It does for a bucket in any Region: `connect-src`, `img-src`, `media-src` and `frame-src` carry the partition's AWS service-host wildcard (see [Content Security Policy](../architecture/security.md#content-security-policy-csp)). If you added a bucket Region's S3 host to `cspAdditionalConfig.json` to work around earlier blocking, you can remove it.
+
 ### What the bucket owner grants
 
 The cross-account steps in this guide apply unchanged to a cross-Region bucket: the bucket policy ([Step 1](#step-1-configure-the-s3-bucket-policy)), CORS ([Step 2](#step-2-configure-cors)), the bucket key policy ([Step 3a](#3a-external-bucket-cmk-in-account-b-if-the-bucket-uses-sse-kms)) and the IAM policy ([Step 4](#step-4-configure-cross-account-iam-conditional)). Two details differ:
@@ -334,6 +338,8 @@ Replace the following placeholder values:
 
 The `s3:*` grant intentionally includes `s3:GetBucketNotification`, `s3:PutBucketNotification`, and `s3:GetBucketVersioning`. VAMS calls these during deployment from AWS CloudFormation custom resource Lambda functions in Account A to wire event notifications and detect versioning. If you scope the grant down from `s3:*`, you must include these actions explicitly or deployment will fail. Include `s3:GetObjectVersion` as well: file version downloads and every pipeline read the version selected or recorded at launch, and Amazon S3 authorizes such a read as `s3:GetObjectVersion`, not `s3:GetObject`.
 
+When you use [S3 Transfer Acceleration](#step-5b-enable-s3-transfer-acceleration-optional) on the bucket, the deployment also calls `s3:GetAccelerateConfiguration`. The `s3:*` grant includes it. If you replace `s3:*` with a list of actions, add `s3:GetAccelerateConfiguration` to that list, the same as `s3:GetBucketVersioning`.
+
 The grant also covers `s3:PutObject` and `s3:PutObjectAcl`. Every VAMS write into the bucket — uploads, folder markers, and the in-place object copies that back file move, rename, revert, unarchive, set-primary-type, and pipeline-output ingestion — sets the `bucket-owner-full-control` canned ACL so the object is owned by Account B rather than by the writing Account A role. `s3:PutObjectAcl` authorizes that canned ACL. If you scope the grant down from `s3:*` and the bucket has ACLs enabled (see [object ownership](#object-ownership-cross-account-writes) below), include both `s3:PutObject` and `s3:PutObjectAcl` or writes fail with `AccessDenied`.
 
 :::danger[Do not restrict the bucket policy to an application-prefixed principal]
@@ -381,6 +387,8 @@ Apply a Cross-Origin Resource Sharing (CORS) configuration to the external bucke
 ```
 
 `AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket. The Robotics Data Viewer reads `.mcap` and `.bag` files through these range headers.
+
+A viewer that reads a file straight from the bucket through a presigned URL, such as the Three.js viewer, sends the VAMS web origin with each request, so the single origin listed in `AllowedOrigins` is all the rule needs for it.
 
 Apply the CORS configuration using the AWS Command Line Interface (AWS CLI):
 
@@ -526,7 +534,7 @@ Also ensure the IAM identity used to deploy VAMS can access the external bucket 
 
 ### Step 5: Update VAMS configuration and deploy
 
-1. Edit `infra/config/config.json` and add your external bucket entries to the `externalAssetBuckets` array as shown in the [example configuration](#example-configuration).
+1. Edit `infra/config/config.json` and add your external bucket entries to the `externalAssetBuckets` array as shown in the [example configuration](#example-configuration). If you set `useS3TransferAcceleration` on an entry, complete [Step 5b](#step-5b-enable-s3-transfer-acceleration-optional) on that bucket first, because the deployment fails when acceleration is not enabled on it.
 
 2. Deploy the VAMS stack:
 
@@ -538,6 +546,47 @@ Also ensure the IAM identity used to deploy VAMS can access the external bucket 
 :::info[What happens during deployment]
 For external buckets, the CDK deployment imports the bucket by ARN, creates Amazon Simple Notification Service (Amazon SNS) topics and configures S3 event notifications on the bucket, populates the S3 Asset Buckets DynamoDB table with bucket metadata, and grants the VAMS Lambda and pipeline IAM roles permission to access the bucket. When the bucket entry sets `bucketKmsKeyArn`, it also grants those roles `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key; without the field, no key grant is generated. It does **not** apply bucket-level policies (TLS enforcement, additional policies), the CORS configuration, or the external key's key policy — those are the bucket owner's responsibility in Account B (Steps 1, 2, and 3a).
 :::
+
+### Step 5b: Enable S3 Transfer Acceleration (optional)
+
+Skip this step unless you set `useS3TransferAcceleration: true` on a bucket entry. Complete it **before** the deployment in [Step 5](#step-5-update-vams-configuration-and-deploy) (Step 5 points back here). VAMS does not enable acceleration on a bucket it does not own, so the bucket owner does. See [Amazon S3 Transfer Acceleration](s3-transfer-acceleration.md) for what the option does, its cost and when it helps. The commercial partition is the only one that offers it.
+
+**Prerequisite checklist (bucket owner, Account B, before deploying):**
+
+1. **Bucket name and Region.** The bucket is a general purpose bucket in a Region where S3 supports Transfer Acceleration (AWS keeps the list on the [requirements page](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html#transfer-acceleration-requirements); not every commercial Region is on it). The bucket name is 3 to 63 characters of lowercase letters, digits and hyphens, and has no period. This is an Amazon S3 requirement for acceleration; the VAMS configuration check rejects any other name.
+2. **Enable acceleration on the bucket.** The bucket owner (the principal that holds `s3:PutAccelerateConfiguration` on the bucket; VAMS does not need and is not given this permission) runs:
+
+    ```bash
+    aws s3api put-bucket-accelerate-configuration \
+        --bucket <BUCKET_NAME> \
+        --accelerate-configuration Status=Enabled \
+        --region <BUCKET_REGION> \
+        --profile <ACCOUNT_B_PROFILE>
+    ```
+
+    In the console: **Amazon S3 > Buckets > `<BUCKET_NAME>` > Properties > Transfer acceleration > Edit > Enable > Save changes**.
+
+3. **Allow VAMS to read the setting.** The deployment calls `s3:GetAccelerateConfiguration` on the bucket from Account A. The `s3:*` grant in the [Step 1](#step-1-configure-the-s3-bucket-policy) policy already includes it. If you narrowed that grant to a list of actions, add `s3:GetAccelerateConfiguration`, the same as `s3:GetBucketVersioning`. It is a bucket-level action, so the bucket ARN without `/*` is the resource.
+4. **Check the status.** The deployment reads the status, so it must already be `Enabled` when you deploy. AWS says the transfer speed can take up to 20 minutes to improve after you enable acceleration ([Amazon S3 requirements for Transfer Acceleration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/transfer-acceleration.html#transfer-acceleration-requirements)); you do not need to wait for that before deploying. Check the status:
+
+    ```bash
+    aws s3api get-bucket-accelerate-configuration --bucket <BUCKET_NAME> --region <BUCKET_REGION> --profile <ACCOUNT_B_PROFILE>
+    ```
+
+    The answer must be `{"Status": "Enabled"}`. An empty answer means it was never configured, and `Suspended` means it was turned off.
+
+5. **CORS.** No new rule. The CORS configuration from [Step 2](#step-2-configure-cors) applies to the accelerate host too. Confirm that it exposes `ETag`, because the web application reads it from each multipart upload part.
+6. **Set the flag.** In Step 5, set `"useS3TransferAcceleration": true` on that bucket entry. Every entry for the same bucket ARN must carry the same value.
+
+**Cross-account and cross-Region buckets.** The accelerate endpoint (`<BUCKET_NAME>.s3-accelerate.amazonaws.com`) is global and the same for any Region. VAMS still signs the URL for the bucket's own Region, and the deployment check calls Amazon S3 in the bucket's Region, so for a bucket in another Region the deployment's Lambda function needs a [network path to that Region](#how-the-deployment-reaches-the-bucket-region). For a bucket in another account, the bucket policy in item 3 is what lets the check read the setting.
+
+**What VAMS does at deployment.** For each flagged bucket, the deployment reads the acceleration status in the bucket's Region. If it is not `Enabled`, or the status cannot be read, the deployment fails and the message names the bucket and the fix. When it is `Enabled`, VAMS records the setting in its bucket table, and download, stream, preview and upload URLs for that bucket use the accelerate host. **VAMS never enables, suspends or otherwise changes acceleration on a bucket it does not own.**
+
+:::warning[Do not enable acceleration on VAMS-created buckets by hand]
+For the asset and auxiliary buckets VAMS creates, set `app.assetBuckets.useS3TransferAcceleration` and deploy. AWS CDK owns the setting, and a change made by hand drifts from the stack and is reverted or conflicts at the next deployment.
+:::
+
+**Turning it off.** Set the key to `false` (or remove it) and deploy. URLs return to the regional endpoint. VAMS does not suspend acceleration on your bucket, and leaving it `Enabled` is harmless (it only adds cost for requests that use the accelerate host).
 
 ### Step 6: Configure lifecycle rules for upload staging
 
@@ -583,6 +632,7 @@ VAMS configures automatically (from Account A) for each external bucket entry:
 -   **Bucket import** -- Imports the Amazon S3 bucket reference using the provided ARN.
 -   **Event notifications** -- Creates Amazon SNS topics and configures Amazon S3 event notifications on the bucket to enable automatic file synchronization. For a bucket in another Region the topics and the notification configuration live in the per-Region stack deployed into that Region ([Cross-Region buckets](#cross-region-buckets)). This requires bucket-owner permissions in Account B. Notification entries that VAMS does not own are preserved (see [Event notifications on a shared bucket](#event-notifications-on-a-shared-bucket)).
 -   **DynamoDB registration** -- Populates the S3 Asset Buckets Amazon DynamoDB table with bucket metadata (bucket name, prefix, sync database ID, versioning status, Region and owning account).
+-   **Transfer Acceleration check** -- For an entry that sets `useS3TransferAcceleration`, reads the bucket's acceleration status in the bucket's Region, fails the deployment naming the bucket when it is not `Enabled`, and records the setting. VAMS never enables or disables acceleration on an external bucket ([Step 5b](#step-5b-enable-s3-transfer-acceleration-optional)).
 -   **Cross-Region network path** -- With `app.useGlobalVpc.enabled` and `addCrossRegionS3Endpoints`, creates one Amazon S3 interface endpoint per bucket Region outside the deployment Region ([Variation B](#variation-b-a-cross-region-bucket-with-addcrossregions3endpoints-on-default-commercial-partition)).
 -   **Lambda and pipeline permissions** -- Grants the VAMS Lambda and pipeline IAM roles permission to read from and write to the external bucket ARN.
 -   **External KMS key grant** -- When the bucket entry sets `bucketKmsKeyArn`, grants the VAMS Lambda and pipeline IAM roles `kms:Decrypt`, `kms:GenerateDataKey*`, and `kms:DescribeKey` on that key. Without the field, no grant is generated.
@@ -678,6 +728,7 @@ Because VAMS imports external buckets by ARN — which carries no account identi
 | CDK deployment fails configuring bucket notifications                                                                                                                                          | The notification handler role lacks `s3:PutBucketNotification`/`s3:GetBucketNotification` in Account B.                                                                                                | Ensure the [Step 1](#step-1-configure-the-s3-bucket-policy) grant covers these actions (included in `s3:*`) and is not restricted by a principal condition.                                                                                                    |
 | CDK deployment fails with `baseAssetsPrefix must end in a slash`                                                                                                                               | The prefix value does not end with `/`.                                                                                                                                                                | Update the prefix in `config.json` to end with `/`.                                                                                                                                                                                                            |
 | CDK deployment fails with `overlapping baseAssetsPrefix`                                                                                                                                       | The same bucket is registered with prefixes where one contains the other (or the root with any prefix).                                                                                                | Choose non-overlapping prefixes for each registration of the bucket, or register the bucket once at the root.                                                                                                                                                  |
+| CDK deployment fails with `S3 Transfer Acceleration is requested for bucket <name>`                                                                                                            | Acceleration is not enabled on the bucket, or the bucket policy does not allow `s3:GetAccelerateConfiguration`.                                                                                        | Complete [Step 5b](#step-5b-enable-s3-transfer-acceleration-optional), or set `useS3TransferAcceleration` to `false` for the entry.                                                                                                                            |
 | CDK deployment fails with `inconsistent bucket...` attributes                                                                                                                                  | The same bucket ARN is registered with differing `bucketAccountId` / `bucketRegion` / `bucketKmsKeyArn`.                                                                                               | Make the cross-account and KMS attributes identical across every entry for that bucket ARN.                                                                                                                                                                    |
 | Presigned URLs return CORS errors                                                                                                                                                              | CORS configuration missing or incorrect.                                                                                                                                                               | Verify the CORS policy from [Step 2](#step-2-configure-cors) is applied and `AllowedOrigins` matches your VAMS domain.                                                                                                                                         |
 | Files uploaded to bucket do not appear in VAMS                                                                                                                                                 | SNS event notifications not configured, source-account mismatch, or topic KMS access denied.                                                                                                           | Confirm notifications are configured on the bucket and the VAMS CMK admits the external bucket account ([Step 3b](#3b-vams-owned-cmk-in-account-a-if-usekmscmkencryption-is-enabled)). Review AWS CloudTrail logs for access-denied errors.                    |

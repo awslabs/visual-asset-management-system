@@ -316,6 +316,15 @@ export const AWS_REGION_NAME_PATTERN = /^[a-z]{2,4}(-[a-z]+)+-\d{1,2}$/;
 // has been confirmed.
 export const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
 
+/**
+ * Whether `presignedUrlNetworkRestrictions.allowedIpRanges` may be combined with S3 Transfer
+ * Acceleration (#1610, decision D6). True only if a live test shows that the `aws:SourceIp` condition of
+ * the presigned-URL deny statement sees the client's own address for requests that arrive through the
+ * accelerate endpoint; otherwise every accelerated URL would be denied. The ConfigBuilder carries the
+ * same constant in validation.ts: change both together (a test asserts they agree).
+ */
+export const ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION = true;
+
 // A REST API custom domain host: lowercase labels separated by dots, no scheme, port or path. API
 // Gateway does not accept uppercase letters in a custom domain name.
 export const API_CUSTOM_DOMAIN_HOST_PATTERN =
@@ -1904,6 +1913,9 @@ export function getConfig(app: cdk.App): Config {
     }
 
     // Null/omitted restriction lists mean no restrictions (no bucket policy statement).
+    if (config.app.assetBuckets.useS3TransferAcceleration == undefined) {
+        config.app.assetBuckets.useS3TransferAcceleration = false;
+    }
     if (config.app.assetBuckets.presignedUrlNetworkRestrictions == undefined) {
         config.app.assetBuckets.presignedUrlNetworkRestrictions = {
             allowedIpRanges: [],
@@ -3245,6 +3257,9 @@ export function getConfig(app: cdk.App): Config {
         config.app.assetBuckets.presignedUrlNetworkRestrictions,
         "app.assetBuckets.presignedUrlNetworkRestrictions"
     );
+
+    //Validate S3 Transfer Acceleration (#1610)
+    validateS3TransferAcceleration(config.app.assetBuckets, config.env.partition);
 
     if (
         config.app.useGlobalVpc.enabled &&
@@ -4927,6 +4942,173 @@ export function validateExternalAssetBuckets(
     }
 }
 
+/**
+ * True when S3 Transfer Acceleration is requested for the VAMS-created default asset bucket. Only
+ * meaningful when the bucket is created; with createNewBucket false there is no such bucket.
+ */
+export function createdBucketAccelerated(assetBuckets: {
+    createNewBucket?: boolean;
+    useS3TransferAcceleration?: boolean;
+}): boolean {
+    return !!assetBuckets.createNewBucket && assetBuckets.useS3TransferAcceleration === true;
+}
+
+/**
+ * Whether the effective default asset bucket is accelerated. The effective default is the external
+ * bucket marked isDefault when there is one (it overrides the created bucket), otherwise the
+ * created bucket. The auxiliary bucket follows this value (the backend resolves it the same way),
+ * so the storage stack enables acceleration on the auxiliary bucket exactly when this is true. The
+ * artefacts bucket is never accelerated.
+ */
+export function effectiveDefaultBucketAccelerated(assetBuckets: {
+    createNewBucket?: boolean;
+    useS3TransferAcceleration?: boolean;
+    externalAssetBuckets?: ConfigPublicAssetS3Buckets[] | null;
+}): boolean {
+    const externalDefault = (assetBuckets.externalAssetBuckets || []).find(
+        (bucketConfig) => bucketConfig && bucketConfig.isDefault
+    );
+    if (externalDefault) {
+        return externalDefault.useS3TransferAcceleration === true;
+    }
+    return createdBucketAccelerated(assetBuckets);
+}
+
+/** The bucket name in an S3 bucket ARN (arn:<partition>:s3:::<bucket>), without any key part. */
+export function bucketNameFromArn(bucketArn: string): string {
+    const marker = bucketArn.indexOf(":::");
+    const rest = marker >= 0 ? bucketArn.substring(marker + 3) : bucketArn;
+    return rest.split("/")[0];
+}
+
+/**
+ * A bucket name S3 Transfer Acceleration can serve: 3 to 63 characters of lowercase letters,
+ * digits and hyphens with no period, starting and ending with a letter or digit. Acceleration is
+ * addressed virtual-hosted style on the wildcard certificate of s3-accelerate.amazonaws.com, which
+ * does not cover a name with a period.
+ */
+export function isAccelerateCompatibleBucketName(bucketName: string): boolean {
+    return /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucketName);
+}
+
+/**
+ * Validates app.assetBuckets.useS3TransferAcceleration and the same key on each external bucket
+ * (#1610). Throws a Configuration Error when: the key is true outside the commercial partition;
+ * the top-level key is true while no bucket is created; an accelerated external bucket has a name
+ * Transfer Acceleration cannot serve; entries for one bucket ARN disagree; or an accelerated bucket
+ * (including the auxiliary bucket that follows the default) is combined with a VPC-endpoint-only
+ * presigned URL restriction. Exported for unit testing.
+ */
+export function validateS3TransferAcceleration(
+    assetBuckets: {
+        createNewBucket: boolean;
+        useS3TransferAcceleration?: boolean;
+        presignedUrlNetworkRestrictions?: ConfigPresignedUrlNetworkRestrictions;
+        externalAssetBuckets?: ConfigPublicAssetS3Buckets[] | null;
+    },
+    deploymentPartition: string,
+    allowIpRangeRestriction: boolean = ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION
+): void {
+    const externalBuckets = (assetBuckets.externalAssetBuckets || []).filter(
+        (bucketConfig) => !!bucketConfig
+    );
+
+    // A value that is not a real boolean (the string "true" is the usual one) would silently count as
+    // false, so the operator would believe acceleration is on. Reject it.
+    const typeProblems: string[] = [];
+    if (
+        assetBuckets.useS3TransferAcceleration !== undefined &&
+        typeof assetBuckets.useS3TransferAcceleration !== "boolean"
+    ) {
+        typeProblems.push("app.assetBuckets.useS3TransferAcceleration");
+    }
+    externalBuckets.forEach((bucketConfig, index) => {
+        if (
+            bucketConfig.useS3TransferAcceleration !== undefined &&
+            typeof bucketConfig.useS3TransferAcceleration !== "boolean"
+        ) {
+            typeProblems.push(
+                `app.assetBuckets.externalAssetBuckets[${index}].useS3TransferAcceleration`
+            );
+        }
+    });
+    if (typeProblems.length > 0) {
+        throw new Error(
+            `Configuration Error: ${typeProblems.join(
+                ", "
+            )} must be a boolean (true or false, not a string).`
+        );
+    }
+    const flaggedExternal = externalBuckets.filter(
+        (bucketConfig) => bucketConfig.useS3TransferAcceleration === true
+    );
+    const topLevel = assetBuckets.useS3TransferAcceleration === true;
+
+    if (!topLevel && flaggedExternal.length === 0) {
+        return;
+    }
+
+    if (deploymentPartition !== "aws") {
+        throw new Error(
+            `Configuration Error: S3 Transfer Acceleration (app.assetBuckets.useS3TransferAcceleration, or the same key on an externalAssetBuckets entry) is available in the commercial partition only, and this deployment is in the '${deploymentPartition}' partition. Set it to false.`
+        );
+    }
+
+    if (topLevel && !assetBuckets.createNewBucket) {
+        throw new Error(
+            "Configuration Error: app.assetBuckets.useS3TransferAcceleration is true but app.assetBuckets.createNewBucket is false, so there is no VAMS-created asset bucket to accelerate. Set useS3TransferAcceleration on the externalAssetBuckets entries instead; the auxiliary bucket follows the default asset bucket."
+        );
+    }
+
+    for (const bucketConfig of flaggedExternal) {
+        const bucketName = bucketNameFromArn(bucketConfig.bucketArn);
+        if (!isAccelerateCompatibleBucketName(bucketName)) {
+            throw new Error(
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} sets useS3TransferAcceleration, but its name is not valid for S3 Transfer Acceleration. The name must be 3 to 63 characters of lowercase letters, digits and hyphens with no period.`
+            );
+        }
+    }
+
+    // One ARN is one physical bucket, and the backend reads one row for it, so every entry for the
+    // ARN must carry the same value (a missing value counts as false).
+    const flagByArn = new Map<string, boolean>();
+    for (const bucketConfig of externalBuckets) {
+        const flag = bucketConfig.useS3TransferAcceleration === true;
+        const seen = flagByArn.get(bucketConfig.bucketArn);
+        if (seen !== undefined && seen !== flag) {
+            throw new Error(
+                `Configuration Error: external bucket ${bucketConfig.bucketArn} is registered with inconsistent useS3TransferAcceleration values across entries. One ARN is one physical bucket, so every entry for it must agree.`
+            );
+        }
+        flagByArn.set(bucketConfig.bucketArn, flag);
+    }
+
+    // Accelerated requests reach S3 from the client's public address through CloudFront edge
+    // locations, never through a VPC endpoint, so a VPC-endpoint restriction would deny them.
+    // presignedUrlNetworkRestrictions is applied only to the VAMS-created asset bucket and the
+    // auxiliary bucket (storageBuilder, security.ts addPresignedUrlNetworkRestrictionsToBucketPolicy),
+    // so the rule applies only when one of those two is accelerated: the created bucket, or the
+    // auxiliary bucket, which follows the effective default bucket. An accelerated external bucket
+    // that is neither the default nor created by VAMS carries no VAMS restriction.
+    const restrictions = assetBuckets.presignedUrlNetworkRestrictions;
+    const restrictionCoversAcceleratedBucket =
+        createdBucketAccelerated(assetBuckets) || effectiveDefaultBucketAccelerated(assetBuckets);
+    if (restrictions && restrictionCoversAcceleratedBucket) {
+        const hasVpce = (restrictions.allowedVpceIds || []).length > 0;
+        const hasIpRanges = (restrictions.allowedIpRanges || []).length > 0;
+        if (hasVpce) {
+            throw new Error(
+                "Configuration Error: S3 Transfer Acceleration cannot be combined with app.assetBuckets.presignedUrlNetworkRestrictions.allowedVpceIds. Accelerated requests do not arrive through a VPC endpoint, so the restriction would deny every accelerated presigned URL. Use allowedIpRanges, or turn useS3TransferAcceleration off."
+            );
+        }
+        if (hasIpRanges && !allowIpRangeRestriction) {
+            throw new Error(
+                "Configuration Error: S3 Transfer Acceleration cannot be combined with app.assetBuckets.presignedUrlNetworkRestrictions.allowedIpRanges, because it is not confirmed that aws:SourceIp is the client's address for accelerated requests. Remove the IP-range restriction, or turn useS3TransferAcceleration off."
+            );
+        }
+    }
+}
+
 export interface ConfigPresignedUrlNetworkRestrictions {
     allowedIpRanges: string[];
     allowedVpceIds: string[];
@@ -4950,6 +5132,11 @@ export interface ConfigPublicAssetS3Buckets {
     bucketAccountId?: string;
     bucketRegion?: string;
     bucketKmsKeyArn?: string;
+    // Intent to serve presigned URLs for this bucket through S3 Transfer Acceleration (#1610).
+    // VAMS never enables acceleration on a bucket it does not own: the bucket owner enables it
+    // before deployment and the deployment fails, naming the bucket, when it is not enabled.
+    // Commercial partition only; missing means false. Entries for one bucket ARN must agree.
+    useS3TransferAcceleration?: boolean;
 }
 
 /**
@@ -5046,6 +5233,9 @@ export interface ConfigPublic {
             createNewBucket: boolean;
             defaultNewBucketSyncDatabaseId: string;
             presignedUrlNetworkRestrictions: ConfigPresignedUrlNetworkRestrictions;
+            // S3 Transfer Acceleration for the VAMS-created default asset bucket and, together
+            // with it, the auxiliary bucket (#1610). Commercial partition only. Default false.
+            useS3TransferAcceleration: boolean;
             externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;
