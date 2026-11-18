@@ -29,7 +29,7 @@ from common.eventLogSummary import event_log_summary
 from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
-from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_objects
+from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
@@ -247,12 +247,12 @@ def get_asset_with_permissions(databaseId: str, assetId: str, operation: str, cl
         # Authorize before existence, so a refused caller gets the same answer for a missing asset
         # as for an existing one. A found record is checked as an annotated copy, so the returned
         # record, which callers write back, carries no object type; for a missing one the request's
-        # identifiers stand in (on a showArchived read, as both an archived and a live asset, so the
-        # answer for a missing id matches the one for an asset the caller may not read).
+        # identifiers stand in (on a showArchived read, with the archived database id, so a caller
+        # refused that database's archived records cannot tell an archived asset from a missing one).
+        authorization_object = asset_authorization_object(asset, databaseId, assetId,
+                                                          include_archived=include_archived)
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not all(casbin_enforcer.enforce(authorization_object, operation)
-                   for authorization_object in asset_authorization_objects(
-                       asset, databaseId, assetId, include_archived=include_archived)):
+        if not casbin_enforcer.enforce(authorization_object, operation):
             raise VAMSAuthorizationDeniedResponse()
 
         if not asset:

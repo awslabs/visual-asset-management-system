@@ -25,7 +25,7 @@ from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
 )
-from common.dynamodb import get_asset_record, asset_authorization_objects
+from common.dynamodb import get_asset_record, asset_authorization_object
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -783,9 +783,8 @@ def authorize_asset_read(database_id: str, asset_id: str, claims_and_roles: dict
         return asset
 
     asset = find_asset(database_id, asset_id, include_archived=True)
-    if not all(check_entity_authorization(authorization_object, "GET", claims_and_roles)
-               for authorization_object in asset_authorization_objects(
-                   asset, database_id, asset_id, include_archived=True)):
+    authorization_object = asset_authorization_object(asset, database_id, asset_id, include_archived=True)
+    if not check_entity_authorization(authorization_object, "GET", claims_and_roles):
         raise PermissionError(refusal_message)
     if not asset:
         raise VAMSGeneralErrorResponse("Asset not found")
@@ -920,10 +919,10 @@ def get_asset_link_metadata(asset_link_id: str, query_params: dict, claims_and_r
             ends = [(asset_link['fromAssetDatabaseId'], asset_link['fromAssetId']),
                     (asset_link['toAssetDatabaseId'], asset_link['toAssetId'])]
             records = [find_asset(database_id, asset_id, include_archived=True) for database_id, asset_id in ends]
-            if not all(check_entity_authorization(authorization_object, "GET", claims_and_roles)
-                       for record, (database_id, asset_id) in zip(records, ends)
-                       for authorization_object in asset_authorization_objects(
-                           record, database_id, asset_id, include_archived=True)):
+            if not all(check_entity_authorization(
+                    asset_authorization_object(record, database_id, asset_id, include_archived=True),
+                    "GET", claims_and_roles)
+                    for record, (database_id, asset_id) in zip(records, ends)):
                 raise PermissionError("Not authorized to view metadata for this asset link")
             if not all(records):
                 raise VAMSGeneralErrorResponse("Asset not found")
