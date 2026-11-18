@@ -125,9 +125,13 @@ export const AUDIT_FILTER_KEYS = [
 /** The page's route (routes.tsx); its filters are read from and written to this route's URL only. */
 export const AUDIT_PAGE_ROUTE = "/compliance/audit";
 
-/** A day filter as the inclusive timestamp bound the route takes. */
+/**
+ * A day filter as the inclusive timestamp bound the route takes. The end bound carries the last
+ * microsecond of the day: the route compares bounds with the stored timestamps, which carry
+ * microseconds, so a bound at 23:59:59 would leave out entries from the day's last second.
+ */
 export const dayBound = (day: string, end: boolean): string | undefined =>
-    day ? `${day}T${end ? "23:59:59" : "00:00:00"}Z` : undefined;
+    day ? `${day}T${end ? "23:59:59.999999" : "00:00:00"}Z` : undefined;
 
 /**
  * Minimum widths (px) of the two columns that hold identifiers. Without them the wrapping table
