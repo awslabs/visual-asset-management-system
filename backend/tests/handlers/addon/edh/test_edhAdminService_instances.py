@@ -474,6 +474,21 @@ class TestStopAndDeactivate:
         assert response["statusCode"] == 404
         assert fakes.edh.calls_to("stop_desktop") == []
 
+    @pytest.mark.parametrize("action", ["stop", "deactivate"])
+    def test_a_caller_limited_to_one_os_family_gets_one_answer_for_an_unknown_and_a_refused_session(
+            self, monkeypatch, action):
+        # The role may act on Windows workstations only; s-1 is a Linux one.
+        windows_only = lambda obj, act: obj.get("edhOsFamily") == "windows"
+        answers = []
+        for identifier in ("s-1", "nope"):
+            fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows(), enforce=windows_only)
+            response = fakes.module.lambda_handler(
+                make_event("POST", instance_path(identifier, action), path_params={"sessionId": identifier}), {})
+            answers.append((response["statusCode"], response_body(response)))
+            assert fakes.edh.calls_to("stop_desktop") == []
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 403
+
     def test_a_tier_2_denial_is_403_before_any_edh_action(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows(), enforce=lambda obj, act: False)
 
