@@ -75,6 +75,7 @@ export type RefusalReason =
     | "not-cloud-optimized"
     | "too-large-to-place"
     | "too-many-pixels"
+    | "crosses-antimeridian"
     | "size-unknown"
     | "unreadable";
 
@@ -82,6 +83,12 @@ export type RasterDecision =
     | { kind: "tile" }
     | { kind: "placed"; approximate: boolean; approximateNote: string | null }
     | { kind: "refuse"; reason: RefusalReason; message: string };
+
+/** Degrees of slack, so a raster that ends exactly on longitude 180 is not taken to cross it. */
+const ANTIMERIDIAN_TOLERANCE = 1e-6;
+
+export const ANTIMERIDIAN_MESSAGE =
+    "This raster crosses longitude 180 (the antimeridian), so it cannot be shown on the map or converted as it is. Split it, or reproject it so that it does not cross the 180 boundary, and upload it again.";
 
 export const APPROXIMATE_PLACEMENT_LABEL = "approximate placement (not reprojected)";
 
@@ -224,6 +231,17 @@ export function decideRasterDisplay(facts: RasterFacts): RasterDecision {
             kind: "refuse",
             reason: "unreadable",
             message: "The extent of this raster could not be worked out, so it is not drawn.",
+        };
+    }
+    // Corners are kept continuous across the antimeridian (projections.ts), so a raster that crosses
+    // longitude 180 has a corner beyond +-180. Neither this viewer nor the COG pipeline can draw or
+    // convert it, so the message says to split it, not to convert it.
+    const [west, , east] = facts.bboxWgs84;
+    if (west < -180 - ANTIMERIDIAN_TOLERANCE || east > 180 + ANTIMERIDIAN_TOLERANCE) {
+        return {
+            kind: "refuse",
+            reason: "crosses-antimeridian",
+            message: ANTIMERIDIAN_MESSAGE,
         };
     }
     if (bboxDiagonalKm(facts.bboxWgs84) > PLACED_IMAGE_MAX_DIAGONAL_KM) {

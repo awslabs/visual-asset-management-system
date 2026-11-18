@@ -207,6 +207,37 @@ describe("the placed path fails closed (D2)", () => {
     });
 });
 
+describe("antimeridian (D3)", () => {
+    it("says the raster crosses longitude 180 and cannot be shown or converted, not 'convert it'", () => {
+        const decision = decideRasterDisplay({
+            ...placeable,
+            crs: "EPSG:4326",
+            bboxWgs84: [179.9, 10, 180.2, 10.1],
+        });
+        expect(decision).toMatchObject({ kind: "refuse", reason: "crosses-antimeridian" });
+        expect((decision as any).message).toMatch(/crosses longitude 180/);
+        expect((decision as any).message).toMatch(/cannot be shown on the map or converted/);
+        expect((decision as any).message).not.toMatch(/TIF-to-COG pipeline/);
+        expect(
+            decideRasterDisplay({
+                ...placeable,
+                crs: "EPSG:4326",
+                bboxWgs84: [-180.3, 10, -179.9, 10.1],
+            })
+        ).toMatchObject({ reason: "crosses-antimeridian" });
+    });
+
+    it("does not take a raster that ends exactly on longitude 180 to cross it", () => {
+        expect(
+            decideRasterDisplay({
+                ...placeable,
+                crs: "EPSG:4326",
+                bboxWgs84: [179.9, 10, 180, 10.1],
+            }).kind
+        ).toBe("placed");
+    });
+});
+
 describe("pickOverviewIndex", () => {
     it("takes the smallest image that is still at least the target", () => {
         expect(pickOverviewIndex([10000, 5000, 2500, 1250, 625])).toBe(2);
