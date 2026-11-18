@@ -1713,3 +1713,69 @@ class TestExecutionDetailsResultsPaging:
             assert data['pageCount'] == 3
             assert data['NextToken'] == 'again'
             assert 'Stopped after 3 pages' in data['note']
+
+
+class TestAPageThatFailsKeepsWhatWasRead:
+    """A page that fails part way through an auto-paginated read keeps what was read and names the
+    token that re-reads the failed page."""
+
+    PAGES = TestExecutionDetailsResultsPaging.PAGES
+
+    def test_results_to_a_file_keep_the_pages_written(self, cli_runner, generic_command_mocks, tmp_path):
+        from vamscli.utils.exceptions import APIError
+
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = [
+                self.PAGES[0], APIError("Server error (503): try again later")]
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out),
+                                             '--json-output'])
+            assert result.exit_code == 1
+            assert out.read_text() == 'first-'
+            error = json.loads(result.stdout)
+            assert (error['startingToken'], error['pagesRead'], error['rowsWritten'], error['outputFile']) == (
+                'tok-2', 1, 2, str(out))
+
+            mocks['api_client'].get_execution_results.side_effect = [
+                self.PAGES[0], APIError("Server error (503): try again later")]
+            text = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+            assert text.exit_code == 1
+            assert "Resume with --starting-token tok-2" in text.output
+
+    def test_results_stream_each_page_to_the_file_as_it_arrives(self, cli_runner, generic_command_mocks,
+                                                                tmp_path):
+        out = tmp_path / "result.txt"
+        seen = []
+
+        def page(execution_id, params=None):
+            seen.append(out.read_text() if out.exists() else None)
+            return self.PAGES[len(seen) - 1]
+
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = page
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+        assert result.exit_code == 0, result.output
+        assert seen == ['', 'first-', 'first-second-'] and out.read_text() == 'first-second-third'
+
+    def test_a_first_page_that_fails_names_no_token(self, cli_runner, generic_command_mocks, tmp_path):
+        from vamscli.utils.exceptions import ExecutionNotFoundError
+
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = ExecutionNotFoundError("Execution not found")
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o',
+                                             str(tmp_path / "r.txt"), '--json-output'])
+        assert result.exit_code == 1
+        assert 'startingToken' not in json.loads(result.stdout)
+
+    def test_files_name_the_token_of_the_page_that_failed(self, cli_runner, generic_command_mocks):
+        from vamscli.utils.exceptions import APIError
+
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_files.side_effect = [
+                {'message': {'Items': [{'relativeFilePath': '/a'}], 'NextToken': 'f-2'}},
+                APIError("Server error (503): try again later")]
+            result = cli_runner.invoke(cli, ['execution', 'details', 'files', 'e1', '--collection', 'output',
+                                             '--auto-paginate', '--json-output'])
+        assert result.exit_code == 1
+        error = json.loads(result.stdout)
+        assert (error['startingToken'], error['rowsRead']) == ('f-2', 1)
