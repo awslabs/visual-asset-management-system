@@ -6,7 +6,10 @@
 import React, { useEffect, useMemo } from "react";
 import { useState } from "react";
 import { SideNavigation, SideNavigationProps, Spinner } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
@@ -121,21 +124,22 @@ export function Navigation({
     return loading ? (
         <CenterSpinner />
     ) : loadFailed ? (
-        <div
-            style={{
-                padding: "20px",
-                textAlign: "center",
-                color: "var(--vams-text-secondary)",
-            }}
-        >
-            <div style={{ marginBottom: "10px", fontSize: "16px", fontWeight: "bold" }}>
-                Navigation could not be loaded
-            </div>
-            <div style={{ marginBottom: "10px", fontSize: "14px", lineHeight: "1.5" }}>
-                The check for which pages you can open did not complete.
-            </div>
-            <Button onClick={retryLoad}>Retry</Button>
-        </div>
+        // A status live region, so a screen reader is told the navigation failed to load.
+        <Box padding="l" textAlign="center">
+            <SpaceBetween size="s">
+                <div role="status">
+                    <SpaceBetween size="xs">
+                        <StatusIndicator type="error">
+                            Navigation could not be loaded
+                        </StatusIndicator>
+                        <Box variant="p" color="text-body-secondary">
+                            The check for which pages you can open did not complete.
+                        </Box>
+                    </SpaceBetween>
+                </div>
+                <Button onClick={retryLoad}>Retry</Button>
+            </SpaceBetween>
+        </Box>
     ) : !hasSidePages && hasProfilePages ? (
         <div
             style={{
