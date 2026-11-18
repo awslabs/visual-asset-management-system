@@ -291,6 +291,10 @@ def format_binding_change(result: Dict[str, Any]) -> str:
     lines.extend(format_binding_apply(result.get('apply') or {}))
     if result.get('waitTimedOut'):
         lines.append("Stopped waiting; the change is still being applied.")
+    replaced = result.get('replacedBy')
+    if isinstance(replaced, dict):
+        lines.append(f"Replaced by: {replaced.get('applyId') or 'no change in progress'}"
+                     + (f" ({replaced['status']})" if replaced.get('status') else ""))
     if (result.get('apply') or {}).get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
         lines.append(f"Follow it with: vamscli compliance bindings -d {result.get('databaseId')}"
                      " (or pass --wait)")
@@ -350,6 +354,7 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
         output_result(result, json_output, success_message=success_message)
         return result
     timed_out = False
+    replaced = None
     if wait and apply.get('status') == COMPLIANCE_BINDING_APPLY_APPLYING:
         output_status("Waiting for the binding change to be applied...", json_output)
         last, timed_out = _wait_for_binding_apply(api_client, database_id, apply, wait_timeout,
@@ -357,11 +362,19 @@ def _report_binding_change(ctx: click.Context, api_client: APIClient, database_i
         if last and last.get('applyId') == apply.get('applyId'):
             apply = last
             result = dict(result, apply=last, applyStatus=last.get('status'))
+        elif not timed_out:
+            # The binding read named a later change, or none: this one was replaced before it ended.
+            replaced = {'applyId': (last or {}).get('applyId'), 'status': (last or {}).get('status')}
+            result = dict(result, replacedBy=replaced)
         if timed_out:
             result = dict(result, waitTimedOut=True)
     status = apply.get('status')
     if not wait:
         message = "✓ The binding change was accepted and is being applied."
+    elif replaced is not None:
+        message = ("✗ The binding change was replaced by a later binding change"
+                   + (f" ({replaced['applyId']}, {replaced.get('status')})." if replaced.get('applyId')
+                      else "; the binding read names no change in progress."))
     elif status == COMPLIANCE_BINDING_APPLY_APPLIED:
         message = "✓ The binding change was applied."
     elif status == COMPLIANCE_BINDING_APPLY_FAILED:
@@ -1835,7 +1848,7 @@ def reject_cascade(ctx: click.Context, cascade_id: str, reason: Optional[str], j
 @click.option('--text', default=None,
               help='Case-insensitive contains on the asset name at the time, asset id or actor')
 @click.option('--event-type', default=None,
-              help='Only entries of this event type (global listing only)')
+              help='Only entries of this event type (with -d -a, read from the global listing)')
 @click.option('--start-date', default=None, help='Earliest entry timestamp (ISO 8601)')
 @click.option('--end-date', default=None, help='Latest entry timestamp (ISO 8601)')
 @click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_AUDIT_PAGE_SIZE), default=None,
@@ -1858,7 +1871,8 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     evaluation_error, quarantine_released, exception_granted, exception_revoked,
     exception_superseded, cascade_triggered, cascade_approved, ...); the listing carries only the
     entries whose database the caller may read. With both, one asset's history is listed; that
-    route has no event-type filter. An evaluation_error entry names the rules that errored
+    route has no event-type or text filter, so with --event-type or --text as well the global trail
+    is read, narrowed to that asset. An evaluation_error entry names the rules that errored
     (ruleNames) in an evaluation, or the schema that could not be loaded.
 
     Entries are returned one page per call, most recent first. The response carries a NextToken
@@ -1869,7 +1883,7 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
     Examples:
         vamscli compliance audit
         vamscli compliance audit --event-type quarantine_released --max-items 100
-        vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59Z
+        vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59.999999Z
         vamscli compliance audit --starting-token "token123"
         vamscli compliance audit -d my-database -a my-asset
     """

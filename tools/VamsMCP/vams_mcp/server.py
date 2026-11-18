@@ -470,11 +470,52 @@ def _release_call(user_id: str) -> None:
             _CALLS_IN_FLIGHT.pop(user_id, None)
 
 
-def _run_counted(user_id: str, fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+class _RemoteCall:
+    """Whether a claimed call's body started in its worker thread, or was given up before it did.
+
+    Both flags change only under ``_CALLS_LOCK``, so exactly one side gives the user's slot back: the
+    worker thread when the body ran, the wrapper when the call ended before the body started.
+    """
+
+    __slots__ = ("started", "abandoned")
+
+    def __init__(self) -> None:
+        self.started = False
+        self.abandoned = False
+
+
+def _run_counted(
+    user_id: str, call: _RemoteCall, fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]
+) -> Any:
+    with _CALLS_LOCK:
+        if call.abandoned:
+            # The wrapper already answered this call and gave its slot back: run nothing.
+            return None
+        call.started = True
     try:
         return _run_remote_body(fn, args, kwargs)
     finally:
         _release_call(user_id)
+
+
+def _abandon_if_not_started(user_id: str, call: _RemoteCall) -> bool:
+    """Give back the slot of a call whose body never started; True when nothing ran."""
+    with _CALLS_LOCK:
+        if call.started or call.abandoned:
+            return False
+        call.abandoned = True
+    _release_call(user_id)
+    return True
+
+
+def _remote_busy(tool_name: str) -> Dict[str, Any]:
+    return {
+        "error": (
+            f"The server had no free worker to start {tool_name} within its time budget of "
+            f"{CONFIG.tool_timeout} seconds, so nothing ran. Call the tool again."
+        ),
+        "error_type": "ServerBusy",
+    }
 
 
 def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -496,16 +537,22 @@ def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
                 "error_type": "TooManyConcurrentCalls",
             }
         else:
-            with request_context.time_budget(CONFIG.tool_timeout):
-                # Copied after the budget is set, so the worker thread sees the identity and the deadline.
-                context = contextvars.copy_context()
-                with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
-                    result = await anyio.to_thread.run_sync(
-                        context.run, _run_counted, identity.user_id, fn, args, kwargs,
-                        abandon_on_cancel=True, limiter=_tool_limiter(),
-                    )
+            call = _RemoteCall()
+            try:
+                with request_context.time_budget(CONFIG.tool_timeout):
+                    # Copied after the budget is set, so the worker thread sees the identity and the deadline.
+                    context = contextvars.copy_context()
+                    with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
+                        result = await anyio.to_thread.run_sync(
+                            context.run, _run_counted, identity.user_id, call, fn, args, kwargs,
+                            abandon_on_cancel=True, limiter=_tool_limiter(),
+                        )
+            finally:
+                # Also on a cancellation from outside (the client went away): a call whose body never
+                # started gives its slot back here, and its worker, if one picks it up later, runs nothing.
+                never_started = _abandon_if_not_started(identity.user_id, call)
             if scope.cancelled_caught:
-                result = _remote_timeout(fn.__name__)
+                result = _remote_busy(fn.__name__) if never_started else _remote_timeout(fn.__name__)
         outcome = result.get("error_type", "ok") if isinstance(result, dict) else "ok"
         _REMOTE_LOG.info(
             "[vams-mcp] tool=%s user=%s client=%s outcome=%s ms=%d",
@@ -709,10 +756,10 @@ def _paginate_with_page_metadata(
 def _single_response_list(page: Any, items_key: str) -> Dict[str, Any]:
     """Shape a route that returns its whole list in ONE response, under its own field name.
 
-    The compliance schema and pending-cascade listings carry no ``message`` envelope and no
-    continuation token, so ``paginate()`` has nothing to follow and a bare ``Items`` read finds
-    nothing. The list is lifted onto ``Items`` with a ``count`` so the tool matches every other list
-    tool, and every other top-level field is carried through.
+    The compliance schema listing carries no ``message`` envelope and no continuation token, so
+    ``paginate()`` has nothing to follow and a bare ``Items`` read finds nothing. The list is lifted
+    onto ``Items`` with a ``count`` so the tool matches every other list tool, and every other
+    top-level field is carried through.
     """
     items = page.get(items_key) if isinstance(page, dict) else None
     if not isinstance(items, list):

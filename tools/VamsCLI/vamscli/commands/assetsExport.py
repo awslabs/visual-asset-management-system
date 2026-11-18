@@ -25,7 +25,7 @@ from ..utils.exceptions import (
 )
 from ..utils.download_manager import (
     DownloadManager, DownloadFileInfo, DownloadProgress, format_file_size, format_duration,
-    parse_remote_timestamp
+    parse_remote_timestamp, confined_local_path, DOWNLOAD_PATH_OUTSIDE_TARGET_REASON,
 )
 
 
@@ -260,6 +260,8 @@ async def download_export_files(
     """
     # Extract download info from export result
     download_files = []
+    # Files whose path would put them outside local_path: reported as failed, never written.
+    refused_files = []
     skipped_unauthorized = 0
     
     for asset in export_result.get('assets', []):
@@ -281,14 +283,21 @@ async def download_export_files(
             
             # Determine local path based on organization strategy
             if flatten_downloads:
-                file_local_path = local_path / Path(file['fileName'])
+                relative_target = file['fileName']
             elif organize_by_asset:
-                file_local_path = local_path / asset_id / Path(file['fileName'])
+                relative_target = f"{asset_id}/{file['fileName']}"
             else:
                 # Preserve full structure
-                relative_path = file['relativePath'].lstrip('/')
-                file_local_path = local_path / asset_id / relative_path
-            
+                relative_target = f"{asset_id}/{file['relativePath'].lstrip('/')}"
+            file_local_path = confined_local_path(local_path, relative_target)
+            if file_local_path is None:
+                refused_files.append({
+                    "relative_key": f"{asset_id}/{file['relativePath']}",
+                    "local_path": "",
+                    "error": DOWNLOAD_PATH_OUTSIDE_TARGET_REASON,
+                })
+                continue
+
             download_files.append(DownloadFileInfo(
                 relative_key=f"{asset_id}/{file['relativePath']}",
                 local_path=file_local_path,
@@ -297,7 +306,7 @@ async def download_export_files(
                 last_modified=parse_remote_timestamp(file.get('dateCreatedCurrentVersion'))
             ))
     
-    if not download_files:
+    if not download_files and not refused_files:
         message = 'No files to download'
         if skipped_unauthorized > 0:
             message += f' ({skipped_unauthorized} unauthorized asset(s) skipped)'
@@ -325,12 +334,18 @@ async def download_export_files(
         progress_callback=progress_callback
     ) as manager:
         result = await manager.download_files(download_files)
-        
-        # Add unauthorized asset count to result
-        if skipped_unauthorized > 0:
-            result['skipped_unauthorized_assets'] = skipped_unauthorized
-        
-        return result
+
+    if refused_files:
+        result['failed_downloads'] = [*(result.get('failed_downloads') or []), *refused_files]
+        result['failed_files'] = result.get('failed_files', 0) + len(refused_files)
+        result['total_files'] = result.get('total_files', 0) + len(refused_files)
+        result['overall_success'] = False
+
+    # Add unauthorized asset count to result
+    if skipped_unauthorized > 0:
+        result['skipped_unauthorized_assets'] = skipped_unauthorized
+
+    return result
 
 
 def combine_download_results(download_results: List[Dict[str, Any]]) -> Dict[str, Any]:

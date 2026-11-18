@@ -849,6 +849,30 @@ class TestExecutionDetailsMetadata:
             assert result.exit_code != 0
             assert '--collection' in result.output
 
+    @pytest.mark.parametrize('command, method', [
+        ('metadata', 'get_execution_details_metadata'), ('files', 'get_execution_details_files')])
+    def test_a_400_without_a_token_does_not_blame_a_token(self, cli_runner, generic_command_mocks, command,
+                                                          method):
+        """The route also answers 400 for an invalid --pipeline-id or --page-size."""
+        with generic_command_mocks('execution') as mocks:
+            getattr(mocks['api_client'], method).side_effect = InvalidExecutionDataError(
+                "pipelineId is invalid.")
+            result = cli_runner.invoke(cli, ['execution', 'details', command, 'e1', '--pipeline-id', 'x y'])
+            assert result.exit_code != 0
+            assert 'pipelineId is invalid' in result.output
+            assert 'pagination token' not in result.output
+
+    @pytest.mark.parametrize('command', ['metadata', 'files'])
+    @pytest.mark.parametrize('option, value', [('--page-size', '0'), ('--page-size', '-5'),
+                                               ('--max-items', '0')])
+    def test_a_page_size_below_one_is_refused(self, cli_runner, generic_command_mocks, command, option, value):
+        with generic_command_mocks('execution') as mocks:
+            result = cli_runner.invoke(cli, ['execution', 'details', command, 'e1', option, value,
+                                             '--auto-paginate'])
+            assert result.exit_code == 2
+            mocks['api_client'].get_execution_details_metadata.assert_not_called()
+            mocks['api_client'].get_execution_details_files.assert_not_called()
+
     def test_empty_collection_message(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('execution') as mocks:
             mocks['api_client'].get_execution_details_metadata.return_value = {'message': {
@@ -1713,3 +1737,82 @@ class TestExecutionDetailsResultsPaging:
             assert data['pageCount'] == 3
             assert data['NextToken'] == 'again'
             assert 'Stopped after 3 pages' in data['note']
+
+
+class TestAPageThatFailsKeepsWhatWasRead:
+    """A page that fails part way through an auto-paginated read keeps what was read and names the
+    token that re-reads the failed page."""
+
+    PAGES = TestExecutionDetailsResultsPaging.PAGES
+
+    def test_results_to_a_file_keep_the_pages_written(self, cli_runner, generic_command_mocks, tmp_path):
+        from vamscli.utils.exceptions import APIError
+
+        out = tmp_path / "result.txt"
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = [
+                self.PAGES[0], APIError("Server error (503): try again later")]
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out),
+                                             '--json-output'])
+            assert result.exit_code == 1
+            assert out.read_text() == 'first-'
+            error = json.loads(result.stdout)
+            assert (error['startingToken'], error['pagesRead'], error['rowsWritten'], error['outputFile']) == (
+                'tok-2', 1, 2, str(out))
+
+            mocks['api_client'].get_execution_results.side_effect = [
+                self.PAGES[0], APIError("Server error (503): try again later")]
+            text = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+            assert text.exit_code == 1
+            assert "Resume with --starting-token tok-2" in text.output
+
+    def test_results_stream_each_page_to_the_file_as_it_arrives(self, cli_runner, generic_command_mocks,
+                                                                tmp_path):
+        out = tmp_path / "result.txt"
+        seen = []
+
+        def page(execution_id, params=None):
+            seen.append(out.read_text() if out.exists() else None)
+            return self.PAGES[len(seen) - 1]
+
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = page
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+        assert result.exit_code == 0, result.output
+        # The file is created once the first page has arrived.
+        assert seen == [None, 'first-', 'first-second-'] and out.read_text() == 'first-second-third'
+
+    def test_a_first_page_that_fails_leaves_an_existing_file_as_it_was(self, cli_runner, generic_command_mocks,
+                                                                       tmp_path):
+        from vamscli.utils.exceptions import APIError
+
+        out = tmp_path / "result.txt"
+        out.write_text("an earlier run's results")
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = APIError("Server error (503): try again later")
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o', str(out)])
+        assert result.exit_code == 1
+        assert out.read_text() == "an earlier run's results"
+
+    def test_a_first_page_that_fails_names_no_token(self, cli_runner, generic_command_mocks, tmp_path):
+        from vamscli.utils.exceptions import ExecutionNotFoundError
+
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_results.side_effect = ExecutionNotFoundError("Execution not found")
+            result = cli_runner.invoke(cli, ['execution', 'details', 'results', 'e1', '-o',
+                                             str(tmp_path / "r.txt"), '--json-output'])
+        assert result.exit_code == 1
+        assert 'startingToken' not in json.loads(result.stdout)
+
+    def test_files_name_the_token_of_the_page_that_failed(self, cli_runner, generic_command_mocks):
+        from vamscli.utils.exceptions import APIError
+
+        with generic_command_mocks('execution') as mocks:
+            mocks['api_client'].get_execution_details_files.side_effect = [
+                {'message': {'Items': [{'relativeFilePath': '/a'}], 'NextToken': 'f-2'}},
+                APIError("Server error (503): try again later")]
+            result = cli_runner.invoke(cli, ['execution', 'details', 'files', 'e1', '--collection', 'output',
+                                             '--auto-paginate', '--json-output'])
+        assert result.exit_code == 1
+        error = json.loads(result.stdout)
+        assert (error['startingToken'], error['rowsRead']) == ('f-2', 1)
