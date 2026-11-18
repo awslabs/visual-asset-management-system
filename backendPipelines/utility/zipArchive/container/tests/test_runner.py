@@ -185,6 +185,16 @@ class FakeDynamo:
         return self.table
 
 
+class FakeVersionsTable:
+    """The asset file versions table: one asset version's rows, in one page."""
+
+    def __init__(self, items):
+        self.items = items
+
+    def query(self, KeyConditionExpression, **_):
+        return {"Items": list(self.items)}
+
+
 class OneClient(runner.Clients):
     def __init__(self, s3):
         super().__init__(factory=lambda region: s3)
@@ -388,13 +398,26 @@ class TestZipDownloadMode:
 
 
 class TestZipArchiveRunMode:
-    def _job(self, s3, inputs, config=None):
+    def _job(self, s3, inputs, config=None, dynamodb=None):
         s3.add("pipelines/run/manifest.json", json.dumps({"inputFiles": inputs}).encode(), bucket=ASSETS)
         definition = {"mode": "archiveRun", "archiveRun": {
             "runManifest": {"bucket": ASSETS, "key": "pipelines/run/manifest.json"}, "assetId": "xasset1",
             "databaseId": "db1", "outputBucket": ASSETS, "outputDir": "pipelines/run/output/files/",
             "config": config or {}}}
-        return runner.Job(definition, OneClient(s3), None, logger=lambda *a: None)
+        return runner.Job(definition, OneClient(s3), dynamodb, logger=lambda *a: None)
+
+    def test_a_pinned_file_selects_itself_and_not_a_sibling_its_path_prefixes(self, s3, monkeypatch):
+        monkeypatch.setenv("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME", "versions")
+        s3.add(BASE + "scan", b"S")
+        s3.add(BASE + "scan2.las", b"S2")
+        s3.add(BASE + "texture.png", b"TX", content_type="image/png")
+        rows = [{"fileKey": key, "versionId": "v1", "size": size} for key, size in (
+            ("/scan", 1), ("/scan2.las", 2), ("/tex/t1.png", 2), ("/tex/t2.png", 2), ("/texture.png", 2))]
+        job = self._job(s3, [{"bucket": ASSETS, "key": BASE + "scan"}, {"bucket": ASSETS, "key": BASE + "tex/"}],
+                        {"format": "zip", "assetVersionId": "3"}, FakeDynamo(FakeVersionsTable(rows)))
+        result = job.run()
+        with zipfile.ZipFile(io.BytesIO(s3.completed[(ASSETS, result["archiveKey"])])) as z:
+            assert sorted(z.namelist()) == ["scan", "tex/t1.png", "tex/t2.png"]
 
     def test_archive_into_outputs(self, s3):
         job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}],

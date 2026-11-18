@@ -455,7 +455,10 @@ class Job:
         pinned = []
         for item in items:
             rel = "/" + (item.get("fileKey") or "").lstrip("/")
-            if not item.get("versionId") or not any(rel.startswith(p) or rel == p for p in prefixes):
+            # A prefix ending in '/' selects a folder (or, as '/', the whole asset); any other selects
+            # that one file.
+            if not item.get("versionId") or not any(rel == p or (p.endswith("/") and rel.startswith(p))
+                                                    for p in prefixes):
                 continue
             pinned.append({"key": run["assetBaseKey"] + rel.lstrip("/"), "versionId": item["versionId"],
                            "size": int(item.get("size") or 0)})
