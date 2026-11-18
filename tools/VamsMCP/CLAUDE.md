@@ -516,7 +516,10 @@ asymmetry other callers rely on):
       verification on another (`http_app._verify_limiter`), and the verifier never holds its cache lock
       across a key-set download. A user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in
       progress, counted until each worker thread really ends; a call past it is answered
-      `TooManyConcurrentCalls` without running.
+      `TooManyConcurrentCalls` without running. A call whose body never started in a worker thread
+      (still waiting for a thread at its budget, or cancelled first) gives its slot back in the async
+      wrapper and is answered `ServerBusy`, which invites a retry because nothing ran; `server._RemoteCall`
+      decides under `_CALLS_LOCK` which side releases, so a worker that starts late runs nothing.
     - **The request body is read whole in the gate** (at most 1 MiB, declared or chunked; `413`
       otherwise) before the SDK sees the request.
     - The gate is ours, not the SDK's auth middleware, because the SDK's resource-server wiring

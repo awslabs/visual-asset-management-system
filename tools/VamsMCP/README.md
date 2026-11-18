@@ -138,7 +138,8 @@ The default tool set is the read-only `consumer` set, and each call has a time b
 (`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it. A write,
 delete or compute call still running at the budget may yet complete, so its answer says the outcome is
 unknown (`outcomeUnknown`) and names the read tool to check with (`checkWith`) instead of inviting a
-retry. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
+retry. A call that could not start before its budget ran out is answered `ServerBusy`: nothing ran,
+so it can be called again. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
 
 ## Configure (optional)
 
