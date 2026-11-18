@@ -215,6 +215,9 @@ export default function CreateDatabase({
     const canBindComplianceSchema =
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
         canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
+    // None removes a bound schema through the binding's DELETE; while none is bound it removes
+    // nothing, so it stays offered then.
+    const canUnbindComplianceSchema = canCallRoute("DELETE", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const canListBuckets = canCallRoute("GET", BUCKETS_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
@@ -677,7 +680,14 @@ export default function CreateDatabase({
                                             )
                                         }
                                         options={[
-                                            { label: "None (no compliance schema)", value: "" },
+                                            ...(canUnbindComplianceSchema || !initialSchemaValue
+                                                ? [
+                                                      {
+                                                          label: "None (no compliance schema)",
+                                                          value: "",
+                                                      },
+                                                  ]
+                                                : []),
                                             ...schemaOptions,
                                         ]}
                                         placeholder="Select a compliance schema"

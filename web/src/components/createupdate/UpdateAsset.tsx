@@ -36,6 +36,8 @@ import {
 // Compliance routes behind the schema-binding field.
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
+// The field reads the asset's override from its compliance state.
+const COMPLIANCE_ASSET_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 
 interface UpdateAssetProps {
     asset: any;
@@ -136,7 +138,11 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const { can: canCallRoute } = useAllowedRoutes();
     const canBindComplianceSchema =
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
-        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE) &&
+        canCallRoute("GET", COMPLIANCE_ASSET_STATE_API_ROUTE);
+    // Inherit removes an override through the binding's DELETE; while the asset has none it removes
+    // nothing, so it stays offered then.
+    const canUnbindComplianceSchema = canCallRoute("DELETE", COMPLIANCE_BIND_ASSET_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
@@ -507,7 +513,9 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 setIsFormTouched(true);
                             }}
                             options={[
-                                { label: `Inherit from ${Synonyms.database}`, value: "" },
+                                ...(canUnbindComplianceSchema || !initialSchemaValue
+                                    ? [{ label: `Inherit from ${Synonyms.database}`, value: "" }]
+                                    : []),
                                 ...schemaOptions,
                             ]}
                             placeholder={`Inherit from ${Synonyms.database}`}
