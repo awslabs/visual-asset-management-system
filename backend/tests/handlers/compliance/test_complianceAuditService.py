@@ -253,6 +253,24 @@ class TestValidation:
         assert bad not in response["body"]
         table.query.assert_not_called()
 
+    @pytest.mark.parametrize("path,params", [(LIST_PATH, None), (ASSET_PATH, ASSET_PARAMS)],
+                             ids=["listing", "asset"])
+    @pytest.mark.parametrize("field,value", [("startDate", "yesterday"), ("endDate", "2026-13-01"),
+                                             ("startDate", "2026-01-01T25:00:00Z")])
+    def test_a_date_filter_that_is_not_iso_8601_is_rejected_before_any_read(
+            self, path, params, field, value):
+        response, table = _run(rest_event("GET", path, params, query_params={field: value}))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == svc.INVALID_DATE_MESSAGE
+        table.query.assert_not_called()
+
+    @pytest.mark.parametrize("value", ["2026-01-01", "2026-01-01T00:00:00Z",
+                                       "2026-01-01T00:00:00.000001+00:00"])
+    def test_an_iso_8601_date_filter_is_accepted(self, value):
+        response, _ = _run(rest_event("GET", ASSET_PATH, ASSET_PARAMS,
+                                      query_params={"startDate": value, "endDate": value}))
+        assert response["statusCode"] == 200
+
     @pytest.mark.parametrize("token", [
         {"partition": "compliance_check", "key": None},
         {"entryId": "e", "eventType": "compliance_check", "timestamp": "t"},
