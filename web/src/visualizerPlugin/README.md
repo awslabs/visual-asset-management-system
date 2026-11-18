@@ -925,7 +925,7 @@ interface ViewerPluginProps {
     viewerMode: string; // Display mode ("collapse", "wide", "fullscreen")
     onViewerModeChange: (mode: string) => void;
     onDeletePreview?: () => void;
-    isPreviewFile?: boolean; // Is this a preview file
+    isPreviewFile?: boolean; // Is this a preview file (its entry carries no versionId: a preview is its own S3 object)
     customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
 }
 ```

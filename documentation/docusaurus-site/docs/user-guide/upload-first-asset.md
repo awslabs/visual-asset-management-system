@@ -226,7 +226,7 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 | `.csv`                                  | Columnar Data Viewer | Tabular data browsing                 |
 
 :::tip
-If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer.
+If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer. When you view an older version of the file, a notice on **Preview** says the preview belongs to the latest version.
 :::
 
 ---

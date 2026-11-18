@@ -44,6 +44,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **File page Preview toggle** — The Preview toggle requests the preview file without the source file's version ID, so a generated preview shows instead of failing with "File not found in S3". When an older version of the file is viewed, a notice on the Preview tab says the preview belongs to the latest version. (issue #1656)
 -   **External asset buckets synthesize with CDK Nag on** — A deployment that registers an external asset bucket no longer fails `cdk synth` with an unsuppressed CDK Nag `AwsSolutions-IAM5` finding on the bucket's object ARN. (issue #415)
 -   **File manager keeps a Ctrl or Shift selection while files load** — A selection made with Ctrl- or Shift-click while the file list was still loading lost every item but the first one clicked when the next page of files arrived. The selection now stays as more files load. (issue #1497)
 -   **DeadlineCloud job settings** — A DeadlineCloud pipeline whose priority, max retries per task or max failed tasks count is fractional, a boolean or outside the range AWS Deadline Cloud accepts (priority 0 to 100, the two counts 0 to 2,147,483,647) is refused with a message that names the range, in the pipeline form and as a `400` from the API, instead of answering `500` for a fractional value or saving a value that fails every workflow run at job creation. (issues #1582, #1581)
