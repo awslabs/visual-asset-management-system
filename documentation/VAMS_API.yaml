@@ -18242,7 +18242,7 @@ components:
                     $ref: '#/components/schemas/asset_id_regex'
                 status:
                     type: string
-                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED)."
+                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED). A workflow-output upload record can also report initialized (created by the output step, not yet completed), processing (a completion is running) or failed (the completion raised)."
                 asyncFiles:
                     type: array
                     description: "One entry per file accepted for asynchronous ingestion, sorted by relativeKey; empty when the upload tracks none."
