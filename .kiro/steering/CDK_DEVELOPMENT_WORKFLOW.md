@@ -79,6 +79,7 @@ CoreVAMSStack (root)
   |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
   |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
+  |     +-- ApiBuilder3 (audit log search; own template body budget)   -> storage, resourceNames
   |     +-- SearchBuilder (OpenSearch)                       -> storage, resourceNames
   |     +-- PipelineBuilder (all use-case pipelines)         -> storage, ApiBuilder2
   |     |    (its vamsSchema registration custom resources invoke an ApiBuilder2 Lambda)
@@ -88,7 +89,7 @@ CoreVAMSStack (root)
   |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder,
+  |     |                                                       ApiBuilder2, ApiBuilder3, SearchBuilder, AddonBuilder,
   |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage, RestApi, AuthBuilder
   |
