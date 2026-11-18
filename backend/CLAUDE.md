@@ -648,9 +648,10 @@ assetVersions route answers `VAMSAuthorizationDeniedResponse` with 403; the writ
 and keep their 400 for a missing asset. A route that does not catch them keeps its 400 with the same
 message. The assetFiles and assetVersions helpers take `include_archived` (set only by read routes
 called with `showArchived`): the record comes from `common.dynamodb.get_asset_record` and the Tier-2
-object from `asset_authorization_object`, whose stand-in for a missing id carries the archived
-`<databaseId>#deleted` id, so a caller refused that database's archived records gets the same 403
-for an archived asset as for a missing one. Write routes never pass it.
+objects from `asset_authorization_objects`. A missing id is decided on two stand-ins, the archived
+`<databaseId>#deleted` id first and then the live id, so a caller gets "not found" only when it may
+read both, and is otherwise refused with the same 403 it gets for the archived or the live record it
+may not read. Write routes never pass it.
 
 ---
 

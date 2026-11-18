@@ -24,7 +24,7 @@ from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import delete_s3_prefix_all_versions, aux_bucket_asset_file_base
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
-from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_object, ARCHIVED_ASSET_DATABASE_SUFFIX
+from common.dynamodb import validate_pagination_info, to_update_expr, query_all_items, batch_get_items, BATCH_GET_CHUNK_SIZE, get_asset_record, asset_authorization_objects, ARCHIVED_ASSET_DATABASE_SUFFIX
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
 from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_ASSET_ARCHIVE,
@@ -1075,8 +1075,8 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles,
         assetId: The asset ID from the request
         action: The Casbin action for the operation (GET / PUT / DELETE)
         claims_and_roles: User claims and roles for authorization
-        include_archived: The read also resolves archived assets, so a missing asset's stand-in
-            carries the archived database id
+        include_archived: The read also resolves archived assets, so a missing asset is decided
+            as both an archived and a live asset
 
     Returns:
         True if the caller is authorized for the operation
@@ -1084,9 +1084,10 @@ def authorize_single_asset(asset, databaseId, assetId, action, claims_and_roles,
     if len(claims_and_roles["tokens"]) == 0:
         return False
 
-    authorization_object = asset_authorization_object(asset, databaseId, assetId,
-                                                      include_archived=include_archived)
-    return CasbinEnforcer(claims_and_roles).enforce(authorization_object, action)
+    enforcer = CasbinEnforcer(claims_and_roles)
+    return all(enforcer.enforce(authorization_object, action)
+               for authorization_object in asset_authorization_objects(
+                   asset, databaseId, assetId, include_archived=include_archived))
 
 def get_assets(databaseId, query_params, showArchived=False):
     """Get assets for a database
