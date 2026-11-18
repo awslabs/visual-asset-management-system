@@ -11650,7 +11650,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the compliance schema. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: Schema retrieved successfully.
@@ -11687,7 +11687,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the compliance schema to update. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: true
                 content:
@@ -11736,7 +11736,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the compliance schema to delete. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: Schema deleted.
@@ -11774,7 +11774,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - $ref: "#/components/parameters/complianceBindingsMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
@@ -11813,7 +11813,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: true
                 content:
@@ -11868,7 +11868,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: The database had no binding.
@@ -11918,13 +11918,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: true
                 content:
@@ -11973,13 +11973,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             responses:
                 "200":
                     description: Override removed, or the asset had no override.
@@ -12023,13 +12023,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: false
                 content:
@@ -12079,7 +12079,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: false
                 content:
@@ -12129,7 +12129,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the schema to sweep."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: false
                 content:
@@ -12174,12 +12174,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
                 - $ref: "#/components/parameters/complianceEvaluationsMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
@@ -12220,12 +12221,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             responses:
                 "200":
                     description: Compliance state retrieved successfully.
@@ -12264,6 +12266,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: state
                   in: query
                   description: "Only assets in this compliance state."
@@ -12389,13 +12392,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: false
                 content:
@@ -12445,13 +12448,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: true
                 content:
@@ -12500,13 +12503,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             responses:
                 "200":
                     description: Exception revoked.
@@ -12651,7 +12654,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Cascade identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/uuid_regex'
             responses:
                 "200":
                     description: Cascade retrieved successfully.
@@ -12689,7 +12692,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Cascade identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/uuid_regex'
             requestBody:
                 required: false
                 content:
@@ -12733,7 +12736,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Cascade identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/uuid_regex'
             requestBody:
                 required: false
                 content:
@@ -12839,12 +12842,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
                 - $ref: "#/components/parameters/complianceAuditStartDateParam"
                 - $ref: "#/components/parameters/complianceAuditEndDateParam"
                 - $ref: "#/components/parameters/complianceAuditMaxItemsParam"
@@ -21528,14 +21532,21 @@ components:
             properties:
                 schemaName:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Name of the schema (3-63 characters; letters, digits, hyphens, underscores)."
                 schemaBody:
                     $ref: "#/components/schemas/vamsRulesV1Schema"
                 description:
                     type: string
+                    maxLength: 1024
                     description: "Human-readable description."
                 databaseId:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Database to scope the schema to. Defaults to `GLOBAL`."
                     default: GLOBAL
                 isSystem:
@@ -21554,9 +21565,13 @@ components:
                     $ref: "#/components/schemas/vamsRulesV1Schema"
                 description:
                     type: string
+                    maxLength: 1024
                     description: "Replacement description."
                 databaseId:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Replacement database scope, or `GLOBAL`."
 
         writeComplianceSchemaResponse:
@@ -21639,6 +21654,9 @@ components:
             properties:
                 schemaName:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Name of a GLOBAL schema or a schema scoped to the target database."
                 complianceAutoEval:
                     type: boolean
@@ -21902,6 +21920,9 @@ components:
             properties:
                 schemaName:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Schema to evaluate against. When omitted, the asset's bound schema is used."
 
         complianceRuleResult:
@@ -22430,6 +22451,7 @@ components:
             properties:
                 reason:
                     type: string
+                    maxLength: 1024
                     description: "Reason recorded in the audit entry. Defaults to `released via API`."
 
         grantExceptionRequest:
@@ -22437,7 +22459,9 @@ components:
             properties:
                 reason:
                     type: string
-                    description: "Justification recorded on the compliance record and in the audit entry."
+                    minLength: 1
+                    maxLength: 1024
+                    description: "Justification recorded on the compliance record and in the audit entry. Surrounding whitespace is removed before the length check."
             required:
                 - reason
 
@@ -22592,12 +22616,18 @@ components:
             properties:
                 databaseId:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Database of the asset whose downstream assets are re-evaluated."
                 assetId:
                     type: string
+                    maxLength: 256
+                    pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
                     description: "Asset whose downstream assets are re-evaluated."
                 reason:
                     type: string
+                    maxLength: 1024
                     description: "Reason recorded on the cascade. Defaults to `manual trigger`."
                 requireApproval:
                     type: boolean
@@ -22629,6 +22659,7 @@ components:
             properties:
                 reason:
                     type: string
+                    maxLength: 1024
                     description: "Reason recorded on the cascade and in the audit entry. Defaults to `approved` or `rejected`."
 
         approveCascadeResponse:
