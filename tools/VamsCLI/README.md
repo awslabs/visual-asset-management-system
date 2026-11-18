@@ -101,6 +101,8 @@ vamscli assets --help
 | `profile`          | Multi-environment profile management                           |
 | `industry`         | Industry commands (BOM, PLM, spatial GLB)                      |
 | `compliance`       | Compliance schemas, evaluation, quarantine                     |
+| `zip-download`     | Background zip, tar and tar.gz archives of asset files         |
+| `edh`              | EDH Workstations add-on (the deployment must enable it)        |
 
 ## Global Options
 
