@@ -21,8 +21,10 @@ it, and its key is not a UUID, so no route addresses it):
 (`moving`), closes the database's cascades awaiting approval (`aborted`, `abortReason` "The database
 was deleted", a `cascade_database_deleted` audit entry each) and ends its pipeline rules that wait
 for a running execution of their workflow (`completed` with an error result, the evaluation
-`error`), so nothing of the deleted database can be approved or launched later. `run` moves rows,
-phase by phase (`PHASES`), one page at a time, saving the phase and cursor on the record after each
+`error`), so nothing of the deleted database can be approved or launched later. A delete that
+fails after `begin`, while moving the database row, puts back the record `begin` replaced
+(`cancel`), so the database, still live, is not left `moving`. `run` moves rows, phase by phase
+(`PHASES`), one page at a time, saving the phase and cursor on the record after each
 page, until the deadline it is given; it is resumable and idempotent (a row is moved conditionally
 on still carrying the database id, so a page read twice moves nothing twice). The delete request
 queues `move_message` on the compliance job queue; the compliance job Lambda (`complianceJobs`)
@@ -414,10 +416,7 @@ def begin(tables: Tables, database_id: str, actor: str,
         closed_cascades = close_pending_cascades(tables, database_id, now)
     except Exception:
         # The delete fails; the database stays live, so its record must not hide its data.
-        if previous:
-            tables.evaluation.put_item(Item=previous)
-        else:
-            tables.evaluation.delete_item(Key=record_key(database_id))
+        cancel(tables, database_id, previous)
         raise
     tables.evaluation.update_item(
         Key=record_key(database_id),
@@ -429,6 +428,17 @@ def begin(tables: Tables, database_id: str, actor: str,
                          "waitingPipelineRulesClosed": closed_rules})
     record.update(closedCascades=closed_cascades, closedWaitingRules=closed_rules)
     return record
+
+
+def cancel(tables: Tables, database_id: str, previous: Optional[Dict[str, Any]]) -> None:
+    """Undo `begin`'s record when the delete fails after it, so the database, which stays live,
+    shows and changes its compliance data again: the record `begin` replaced (`previous`, from
+    `get_record` before `begin`) is written back, or the record is removed when there was none. The
+    cascades and waiting pipeline rules `begin` closed stay closed."""
+    if previous:
+        tables.evaluation.put_item(Item=previous)
+    else:
+        tables.evaluation.delete_item(Key=record_key(database_id))
 
 
 def close_pending_cascades(tables: Tables, database_id: str,

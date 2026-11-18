@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from backend.tests.handlers.compliance import _cdkTables
@@ -381,6 +382,57 @@ class TestTheDeleteClosesWhatCouldStillAct:
             assert retirement.get_record(world.t["complianceEvaluationStorage"], DB) is None
             assert world.queued == []
 
+    @pytest.mark.parametrize("failing_write", ["put_item", "delete_item"])
+    def test_a_failed_row_move_fails_the_delete_and_leaves_the_database_live(self, failing_write):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            with patch.object(databaseService, "dynamodb",
+                              _RowWriteFails(databaseService.dynamodb, failing_write)):
+                with pytest.raises(Exception):
+                    databaseService.delete_database(DB, {"tokens": [USER], "roles": []})
+            evaluation = world.t["complianceEvaluationStorage"]
+            assert world.t["databaseStorage"].get_item(Key={"databaseId": DB}).get("Item")
+            assert retirement.get_record(evaluation, DB) is None
+            assert not retirement.move_in_progress(evaluation, DB)
+            assert world.queued == []
+
+    def test_a_failed_row_move_on_a_second_delete_restores_the_earlier_record(self):
+        with World(_stand_in({"*"})) as world:
+            world.seed()
+            world.delete()
+            world.recreate()
+            evaluation = world.t["complianceEvaluationStorage"]
+            earlier = retirement.get_record(evaluation, DB)
+            with patch.object(databaseService, "dynamodb",
+                              _RowWriteFails(databaseService.dynamodb, "put_item")):
+                with pytest.raises(Exception):
+                    databaseService.delete_database(DB, {"tokens": [USER], "roles": []})
+            assert retirement.get_record(evaluation, DB) == earlier
+            assert not retirement.move_in_progress(evaluation, DB)
+            assert world.queued == [DB]
+
+
+class _RowWriteFails:
+    """A DynamoDB resource whose database-table handle fails one write (`put_item` or
+    `delete_item`) the way a throttled write does after its retries."""
+
+    def __init__(self, resource, failing_write):
+        self._resource, self._failing_write = resource, failing_write
+
+    def Table(self, name):
+        table = self._resource.Table(name)
+        failing_write = self._failing_write
+
+        class _Table:
+            def __getattr__(self, attribute):
+                if attribute == failing_write:
+                    def fail(**_kwargs):
+                        raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException",
+                                                     "Message": "throttled"}}, failing_write)
+                    return fail
+                return getattr(table, attribute)
+
+        return _Table()
 
 @pytest.mark.unit
 class TestTheHistoryStaysReadable:
