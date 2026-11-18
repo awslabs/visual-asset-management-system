@@ -239,19 +239,45 @@ def _as_utc(last_modified) -> datetime:
     return last_modified
 
 
-def checkpoint_iteration(key: str) -> int:
+# What each RL library names the checkpoints it writes (issue #1315): the file names the evaluation
+# may pick (``name``) and the number that orders them (``iteration``, group 1). The container uploads
+# every library's checkpoints flat into the run's checkpoints/ folder; the layouts and the matching
+# table of paths are in container/utils/training/checkpoints.py (CHECKPOINT_PATTERNS), and
+# tests/test_policy_discovery.py asserts that the two agree. Isaac Lab 2.3.0 layouts:
+#   rsl_rl:   model_<iteration>.pt
+#   rl_games: <name>.pth (best reward, no number), last_<name>_ep_<epoch>_rew_<reward>.pth
+#   skrl:     agent_<timestep>.pt, best_agent.pt (no number)
+CHECKPOINT_RANKING = {
+    "rsl_rl": {"name": r"^model_\d+\.pt$", "iteration": r"^model_(\d+)\.pt$"},
+    "rl_games": {"name": r"\.pth$", "iteration": r"^last_.*?_(?:ep|frame)_(\d+)(?:_.*)?\.pth$"},
+    "skrl": {"name": r"^(?:agent_\d+|best_agent)\.pt$", "iteration": r"^agent_(\d+)\.pt$"},
+}
+
+# File suffixes a policy can carry. rl_games writes .pth; every other library and any hand-made
+# policy uses .pt.
+POLICY_SUFFIXES = (".pt", ".pth")
+
+
+def checkpoint_iteration(key: str, rl_library: str = None) -> int:
     """The training iteration encoded in a checkpoint file name (``model_1500.pt`` -> 1500).
 
-    Reads the last run of digits in the file name; a name carrying no digits yields -1 so it sorts
-    below every numbered checkpoint.
+    With ``rl_library`` the file name is read the way that library writes it (``agent_30000.pt`` for
+    skrl, ``last_Cartpole_ep_150_rew__12.5_.pth`` for rl_games), and a name that carries no iteration
+    (``best_agent.pt``, ``Cartpole.pth``) yields -1. Without it, or for a library not in the table,
+    the last run of digits in the file name is read, and a name carrying no digits yields -1, so it
+    sorts below every numbered checkpoint.
     """
     file_name = key.rsplit("/", 1)[-1]
+    ranking = CHECKPOINT_RANKING.get(rl_library)
+    if ranking:
+        match = re.search(ranking["iteration"], file_name)
+        return int(match.group(1)) if match else -1
     digits = re.findall(r"\d+", file_name)
     return int(digits[-1]) if digits else -1
 
 
-def discover_policy_file(bucket: str, asset_location_key: str) -> str:
-    """Discover .pt policy file anywhere under the asset root in S3.
+def discover_policy_file(bucket: str, asset_location_key: str, rl_library: str = None) -> str:
+    """Discover a .pt or .pth policy file anywhere under the asset root in S3.
 
     Searches under bucketAsset + inputAssetLocationKey (the authoritative asset
     root), not under the input file's parent directory. The asset root is the
@@ -262,9 +288,14 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
     per-run: the run folder holding the most recently written checkpoint wins, and within it the
     highest training iteration (numeric, not lexicographic).
 
+    When ``rl_library`` is given, files named the way that library names its checkpoints are
+    preferred (CHECKPOINT_RANKING), so a newer run of another library on the same asset is not
+    picked and then fails to load. A file of any other name is still chosen when none matches.
+
     Args:
         bucket: The asset S3 bucket name (bucketAsset).
         asset_location_key: The asset root prefix within the bucket (inputAssetLocationKey).
+        rl_library: The RL library the evaluation runs, or None to consider every .pt/.pth file alike.
 
     Returns:
         S3 URI of the discovered .pt file, or empty string if not found.
@@ -275,31 +306,40 @@ def discover_policy_file(bucket: str, asset_location_key: str) -> str:
     try:
         prefix = asset_location_key if asset_location_key.endswith("/") else asset_location_key + "/"
 
-        logger.info(f"Searching for .pt files under asset root s3://{bucket}/{prefix}")
+        logger.info(f"Searching for .pt and .pth files under asset root s3://{bucket}/{prefix}")
 
-        # Per run folder (the checkpoint's parent prefix): its checkpoints and its newest write time.
-        runs = {}
+        # The candidate files, with their write times, in listing order.
+        candidates = []
         paginator = s3_client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                if not key.endswith(".pt"):
-                    continue
-                run_prefix = key.rsplit("/", 1)[0]
-                run = runs.setdefault(run_prefix, {"keys": [], "lastModified": _EPOCH})
-                run["keys"].append(key)
-                last_modified = _as_utc(obj.get("LastModified"))
-                if last_modified > run["lastModified"]:
-                    run["lastModified"] = last_modified
+                if key.endswith(POLICY_SUFFIXES):
+                    candidates.append((key, _as_utc(obj.get("LastModified"))))
+
+        ranking = CHECKPOINT_RANKING.get(rl_library)
+        if ranking:
+            named = [c for c in candidates if re.search(ranking["name"], c[0].rsplit("/", 1)[-1])]
+            candidates = named or candidates
+
+        # Per run folder (the checkpoint's parent prefix): its checkpoints and its newest write time.
+        runs = {}
+        for key, last_modified in candidates:
+            run_prefix = key.rsplit("/", 1)[0]
+            run = runs.setdefault(run_prefix, {"keys": [], "lastModified": _EPOCH})
+            run["keys"].append(key)
+            if last_modified > run["lastModified"]:
+                run["lastModified"] = last_modified
 
         if runs:
             newest_run_prefix = max(runs, key=lambda p: (runs[p]["lastModified"], p))
-            policy_key = max(runs[newest_run_prefix]["keys"], key=checkpoint_iteration)
+            policy_key = max(runs[newest_run_prefix]["keys"],
+                             key=lambda k: checkpoint_iteration(k, rl_library))
             policy_uri = f"s3://{bucket}/{policy_key}"
             logger.info(f"Discovered policy file: {policy_uri}")
             return policy_uri
 
-        logger.info("No .pt files found under asset root")
+        logger.info("No .pt or .pth files found under asset root")
         return ""
     except Exception as e:
         logger.warning(f"Failed to discover policy file: {e}")
@@ -479,7 +519,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
     Policy file discovery (in priority order):
     1. checkpointPath - relative path within asset directory (e.g., "checkpoints/model_300.pt")
     2. policyS3Uri - explicit full S3 URI
-    3. Auto-discover .pt files in input directory (backward compatibility)
+    3. Auto-discover .pt and .pth files under the asset root (backward compatibility)
     """
     num_envs = whole_number("numEnvs", training_config.get("numEnvs"),
                             DEFAULT_NUM_ENVS_EVAL, maximum=MAX_NUM_ENVS)
@@ -518,7 +558,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
 
     # 3. Fall back to auto-discovery across the entire asset root
     if not policy_s3_uri:
-        policy_s3_uri = discover_policy_file(bucket, asset_location_key)
+        policy_s3_uri = discover_policy_file(bucket, asset_location_key, rl_library)
         if policy_s3_uri:
             logger.info(f"Auto-discovered policy: {policy_s3_uri}")
     
@@ -526,7 +566,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
         raise ValueError(
             "No policy file found for evaluation. Provide one of: "
             "'checkpointPath' (relative path like 'checkpoints/model_300.pt'), "
-            "'policyS3Uri' (full S3 URI), or place a .pt file in the config directory."
+            "'policyS3Uri' (full S3 URI), or place a .pt or .pth file in the asset."
         )
 
     # The checkpoint reaches torch.load in the container, so the same bucket scope applies as to the

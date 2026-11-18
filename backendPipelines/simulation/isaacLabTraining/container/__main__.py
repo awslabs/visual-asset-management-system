@@ -18,6 +18,7 @@ import traceback
 import boto3
 from utils.aws.s3 import S3Client
 from utils.training.config import PipelineConfig
+from utils.training.checkpoints import find_checkpoints
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -449,7 +450,8 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
     """Upload trained policy and checkpoints to VAMS asset bucket.
 
     Output structure:
-    - {output_s3_path}checkpoints/*.pt (model checkpoints)
+    - {output_s3_path}checkpoints/* (model checkpoints: model_*.pt for rsl_rl, *.pth for rl_games,
+      agent_*.pt and best_agent.pt for skrl)
     - {output_s3_path}metrics.csv (training metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
     - {output_s3_path}train-config.json (input configuration)
@@ -463,20 +465,27 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
 
     print(f"Uploading training results for execution {job_uuid} to {base_output_path}")
 
-    # Upload model checkpoints
+    # Upload model checkpoints. Each library lays its run folder out differently, so the files come
+    # from the per-library table in utils/training/checkpoints.py. They are stored flat under
+    # checkpoints/ by file name, as the rsl_rl ones always were.
     checkpoint_output_path = f"{base_output_path}checkpoints/"
-    
-    policy_patterns = [
-        f"{LOCAL_LOG_PATH}/**/model_*.pt",
-        f"{checkpoint_dir}/**/model_*.pt",
-    ]
 
-    for pattern in policy_patterns:
-        for policy_path in glob.glob(pattern, recursive=True):
-            filename = os.path.basename(policy_path)
-            s3_path = f"{checkpoint_output_path}{filename}"
-            print(f"Uploading {policy_path} -> {s3_path}")
-            s3.upload_file(policy_path, s3_path)
+    uploaded = {}
+    for policy_path in find_checkpoints([LOCAL_LOG_PATH, checkpoint_dir], config.rl_library):
+        filename = os.path.basename(policy_path)
+        if filename in uploaded:
+            print(f"WARNING: {policy_path} has the same file name as {uploaded[filename]}; "
+                  f"the newer file replaces it in {checkpoint_output_path}")
+        s3_path = f"{checkpoint_output_path}{filename}"
+        print(f"Uploading {policy_path} -> {s3_path}")
+        s3.upload_file(policy_path, s3_path)
+        uploaded[filename] = policy_path
+
+    if not uploaded:
+        # A training run that wrote nothing the pipeline recognizes still reports success; say so in
+        # the job log rather than leaving an empty checkpoints folder unexplained (issue #1315).
+        print(f"WARNING: no {config.rl_library} checkpoint found under {LOCAL_LOG_PATH} or "
+              f"{checkpoint_dir}; nothing was uploaded to {checkpoint_output_path}")
 
     # Upload logs
     upload_logs(s3, config)
