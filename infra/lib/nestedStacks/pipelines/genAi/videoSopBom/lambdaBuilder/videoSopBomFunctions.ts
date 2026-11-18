@@ -39,9 +39,9 @@ const LAMBDA_CODE_PATH = path.join(
  * Root of the pipelines' scratch prefixes on the auxiliary bucket. `executionRecords.aux_pipeline_prefix`
  * places a run at `pipelines/<name>/<executionId>/`, where <name> is the workflow step's jobName or,
  * without one, the pipeline id, so a run of this pipeline can sit under any name below this root.
- * pipelineEnd's cleanup grant is bounded to it, and the handler itself refuses a locator that is not
- * exactly one such execution folder. The storage stack's lifecycle expiry names the registered id's
- * folder (`pipelines/genai-video-sop-bom/`) only.
+ * pipelineEnd's cleanup grant and the container job role's object grants are bounded to it, and the
+ * handler itself refuses a locator that is not exactly one such execution folder. The storage stack's
+ * lifecycle expiry names the registered id's folder (`pipelines/genai-video-sop-bom/`) only.
  */
 export const VIDEO_SOP_BOM_AUX_PREFIX_ROOT = "pipelines/";
 

@@ -35,6 +35,7 @@ import {
     buildPipelineEndFunction,
     buildVamsExecuteVideoSopBomFunction,
     resolveVideoSopBomBedrockModelId,
+    VIDEO_SOP_BOM_AUX_PREFIX_ROOT,
 } from "../lambdaBuilder/videoSopBomFunctions";
 import { VideoSopBomCodeBuildConstruct } from "./videoSopBomCodeBuild-construct";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
@@ -136,21 +137,24 @@ export class VideoSopBomConstruct extends Construct {
         });
 
         // Working objects (definition document, FLAC audio, Transcribe output, analysis artefacts) live
-        // under the auxiliary bucket's pipelines/ prefix; the container deletes them as it goes.
+        // under the run's pipelines/<name>/<executionId>/ prefix of the auxiliary bucket; the container
+        // deletes them as it goes. Object access is limited to the pipelines root (the name segment is
+        // the workflow step's, so the run prefix cannot be named exactly); the preflight's HeadBucket and
+        // the prefix listing are bucket-level actions.
         const auxBucketPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
-                    actions: [
-                        "s3:GetObject",
-                        "s3:PutObject",
-                        "s3:DeleteObject",
-                        "s3:ListBucket",
-                        "s3:GetBucketLocation",
-                    ],
+                    actions: ["s3:ListBucket", "s3:GetBucketLocation"],
+                    resources: [props.assetAuxiliaryBucket.bucketArn],
+                }),
+                new iam.PolicyStatement({
+                    effect: iam.Effect.ALLOW,
+                    actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
                     resources: [
-                        props.assetAuxiliaryBucket.bucketArn,
-                        props.assetAuxiliaryBucket.bucketArn + "/*",
+                        props.assetAuxiliaryBucket.arnForObjects(
+                            `${VIDEO_SOP_BOM_AUX_PREFIX_ROOT}*`
+                        ),
                     ],
                 }),
             ],
