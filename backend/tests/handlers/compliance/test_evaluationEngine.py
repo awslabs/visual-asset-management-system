@@ -454,6 +454,35 @@ class TestSchemaResolution:
         assert set(parsed) == {"base", "shared"}
         assert isinstance(parsed["base"], RelationshipRule)
 
+    def test_the_rules_left_out_of_parsing_get_error_results(self):
+        rules = dict(self.PARENT["rules"], bad={"ruleType": "nope", "enforcement": "warn"},
+                     worse="text",
+                     broken={"ruleType": "relationship", "enforcement": "inform", "checks": []})
+        parsed = engine.parse_resolved_rules(rules)
+        results = {r.ruleName: r for r in engine.unreadable_rule_results(rules, parsed, [])}
+        assert set(results) == {"bad", "worse", "broken"}
+        assert {r.status for r in results.values()} == {"error"}
+        assert (results["broken"].ruleType, results["broken"].enforcement) == (
+            "relationship", "inform")
+        assert results["worse"].enforcement == "quarantine"
+
+    @pytest.mark.parametrize("loader", [lambda name: None, lambda name: {"type": "object"}],
+                             ids=["missing", "not-vams-rules"])
+    def test_a_parent_that_does_not_resolve_is_reported(self, loader):
+        unresolved = []
+        rules = engine.resolve_rules(self.CHILD, loader, unresolved=unresolved)
+        assert unresolved == ["parent"]
+        results = engine.unreadable_rule_results(rules, engine.parse_resolved_rules(rules),
+                                                 unresolved)
+        assert [r.ruleName for r in results] == [engine.UNRESOLVED_PARENT_RULE_NAME]
+        assert results[0].message == engine.UNRESOLVED_PARENT_MESSAGE
+
+    def test_a_resolved_chain_reports_nothing(self):
+        unresolved = []
+        engine.resolve_rules(self.CHILD, lambda name: {"parent": self.PARENT}.get(name),
+                             unresolved=unresolved)
+        assert unresolved == []
+
     @pytest.mark.parametrize("raw,expected", [
         (json.dumps({"a": 1}), {"a": 1}), ({"a": 1}, {"a": 1}),
         ("not json", None), (json.dumps([1]), None), (7, None),
