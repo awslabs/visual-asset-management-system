@@ -912,7 +912,7 @@ class AuditSearchError(BusinessLogicError):
 
 
 class AuditSearchNotSupportedError(AuditSearchError):
-    """Raised when the deployment does not have the audit search routes (an older VAMS)."""
+    """Raised when the deployment does not have the audit search routes."""
     pass
 
 

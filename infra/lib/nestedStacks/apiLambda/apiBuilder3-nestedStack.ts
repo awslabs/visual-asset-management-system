@@ -37,10 +37,10 @@ export interface ApiBuilder3NestedStackProps {
  * `test/api/nestedTemplateSizeGuard.test.ts` fails the build when a template nears the limit in the
  * shipped cells, so the next stack to fill up is caught before a deploy.
  *
- * The audit service is core VAMS with no feature switch: it deploys unconditionally and access is
- * decided only by authorization (Tier 1 route, Tier 2 per log group). Its handle table lives in the
- * storage stack. The audit function is new in this release, so no existing deployment re-keys or
- * replaces anything because it is built here.
+ * The audit service deploys when `app.auditLogging.search.enabled` is true (the default) and access is
+ * decided by authorization (Tier 1 route, Tier 2 per log group). Its handle table lives in the
+ * storage stack. Building the function here moves no logical id of any other function, so no other
+ * function is re-keyed or replaced because of it.
  *
  * Routes register into the same RouteRegistry as every other API stack and the REST API stack
  * (built last) renders them, so the API Gateway deployment and the path-tree quota are unchanged by

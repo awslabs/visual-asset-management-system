@@ -8516,8 +8516,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         return APIError(f"Failed to {action}: {message}")
 
     def _audit_request(self, method: str, endpoint: str, action: str, **kwargs) -> Dict[str, Any]:
-        """Issue one audit call and map its errors. A deployment without the routes (an older VAMS
-        answers a path it does not have with the gateway's 'Missing Authentication Token' 403)
+        """Issue one audit call and map its errors. A deployment without the routes (the gateway
+        answers a path it does not have with a 'Missing Authentication Token' 403)
         raises AuditSearchNotSupportedError."""
         try:
             response = self._make_request(method, endpoint, include_auth=True,

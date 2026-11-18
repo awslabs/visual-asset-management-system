@@ -417,11 +417,10 @@ FEATURE_ZIPDOWNLOADS = "ZIPDOWNLOADS"
 # app.auditLogging.search.enabled is false (off in the EU Sovereign template).
 FEATURE_AUDITLOGSEARCH = "AUDITLOGSEARCH"
 AUDIT_SEARCH_DISABLED_MESSAGE = "Audit Log Search is not enabled on this deployment"
-# The deployment answered an /audit path as an unrouted one. The cause is either the switch turned off
-# after this profile read its feature list, or a VAMS older than 2.7.0, so the text names neither alone.
+# The deployment answered an /audit path as an unrouted one: the search is not available there, for
+# example because the switch was turned off after this profile read its feature list.
 AUDIT_SEARCH_UNAVAILABLE_MESSAGE = (
-    "Audit Log Search is not enabled on this deployment, or the deployment runs a VAMS version "
-    "older than 2.7.0. Sign in again to refresh the feature list.")
+    "Audit Log Search is not available on this deployment. Sign in again to refresh the feature list.")
 
 # Download as Zip. The archive formats and compressions the create route accepts
 # (CreateZipDownloadRequestModel in backend/backend/models/assetsV3.py), the job statuses, and

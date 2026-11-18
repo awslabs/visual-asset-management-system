@@ -122,10 +122,10 @@ class TestErrorMapping:
         _Wire(monkeypatch, client, _response(
             {"message": "Missing Authentication Token"}, status=403,
             headers={"x-amzn-ErrorType": "MissingAuthenticationTokenException"}))
-        with pytest.raises(AuditSearchNotSupportedError, match="not enabled on this deployment") as raised:
+        with pytest.raises(AuditSearchNotSupportedError, match="not available on this deployment") as raised:
             client.list_audit_log_groups()
-        # A stale feature list after the switch flips off gets the same answer as an older VAMS, so the
-        # text must not tell the user to upgrade a 2.7.0 deployment: it says to sign in again.
+        # A stale feature list after the switch flips off gets the unrouted-path answer. The text must not
+        # tell the user to upgrade: it says to sign in again.
         message = str(raised.value)
         assert "Sign in again" in message and "upgrade" not in message.lower()
 
