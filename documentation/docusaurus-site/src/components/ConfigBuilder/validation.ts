@@ -658,6 +658,15 @@ function externalPrefixesOverlap(a: string, b: string): boolean {
     return a === b || a.startsWith(b) || b.startsWith(a);
 }
 
+/**
+ * True when a `bucketArn` is exactly `arn:<partition>:s3:::<name>` (config.ts:
+ * `assertExternalBucketArnShape`): no wildcard, key prefix or trailing path, and a name of 1 to 255
+ * letters, digits, `.`, `_` and `-`.
+ */
+function isValidExternalBucketArn(arn: unknown): boolean {
+    return typeof arn === "string" && /^arn:[a-z-]+:s3:::[A-Za-z0-9._-]{1,255}$/.test(arn);
+}
+
 /** A per-bucket attribute reduced to undefined when unset (config.ts: `normalizeOptional`). */
 function normalizeExternalAttribute(value: unknown): string | undefined {
     return isUnset(value) ? undefined : String(value);
@@ -1813,6 +1822,14 @@ const CORE_RULES: Rule[] = [
         },
         message:
             "Every app.assetBuckets.externalAssetBuckets bucketArn must use the same AWS partition as the deployment region.",
+    },
+    {
+        id: "externalbucket-arn-shape",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) => externalBuckets(c).some((b) => !isValidExternalBucketArn(b.bucketArn)),
+        message:
+            "Every app.assetBuckets.externalAssetBuckets bucketArn must be arn:<partition>:s3:::<bucket-name> naming one bucket, with no wildcard (* or ?), no key prefix and no trailing path; the name is 1 to 255 characters of letters, digits, '.', '_' and '-'. List each bucket by name.",
     },
     {
         id: "externalbucket-overlapping-prefixes",

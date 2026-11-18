@@ -4787,6 +4787,24 @@ export function validateExecutionLogReadPrefixes(prefixes: string[]): void {
 }
 
 /**
+ * Throws a Configuration Error unless `bucketArn` is exactly `arn:<partition>:s3:::<name>`: no key
+ * prefix or trailing segment, and a name of 1 to 255 characters made only of letters, digits, `.`,
+ * `_` and `-` (legacy bucket names can carry uppercase letters and underscores). `*` and `?` are
+ * rejected, because the bucket grant and its CDK Nag suppression are built from this value and a
+ * wildcard would widen the grant to every matching bucket. Exported for unit testing.
+ */
+export function assertExternalBucketArnShape(bucketArn: unknown): void {
+    if (
+        typeof bucketArn !== "string" ||
+        !/^arn:[a-z-]+:s3:::[A-Za-z0-9._-]{1,255}$/.test(bucketArn)
+    ) {
+        throw new Error(
+            `Configuration Error: external bucket ARN ${bucketArn} is not valid. It must be arn:<partition>:s3:::<bucket-name> naming one bucket, with no wildcard (* or ?), no key prefix and no trailing path; the name is 1 to 255 characters of letters, digits, '.', '_' and '-'. List each bucket by name.`
+        );
+    }
+}
+
+/**
  * Validates the externalAssetBuckets configuration. A single bucket ARN may be
  * registered under multiple prefixes, but the prefixes must not overlap (S3 permits
  * only one notification configuration per bucket and cannot route an object to an
@@ -4837,6 +4855,10 @@ export function validateExternalAssetBuckets(
         value && value != "" && value != "UNDEFINED" ? value : undefined;
 
     for (const bucketConfig of externalAssetBuckets) {
+        // The external bucket ARN must name exactly one bucket: no wildcard, no key prefix. The
+        // grants and the CDK Nag suppression on the bucket's objects are built from this value.
+        assertExternalBucketArnShape(bucketConfig.bucketArn);
+
         // The external bucket ARN must use the same partition as the deployment.
         const arnPartition = bucketConfig.bucketArn.split(":")[1];
         if (arnPartition && arnPartition != deploymentPartition) {

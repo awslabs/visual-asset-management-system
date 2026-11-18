@@ -456,7 +456,8 @@ export interface ConfigPublic {
         };
         // assetBuckets: createNewBucket, defaultNewBucketSyncDatabaseId, useS3TransferAcceleration (created default + auxiliary bucket; commercial partition only; default false),
         // externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId,
-        // optional bucketAccountId/bucketRegion/bucketKmsKeyArn),
+        // optional bucketAccountId/bucketRegion/bucketKmsKeyArn; bucketArn must be exactly
+        // arn:<partition>:s3:::<name> with no * or ?, key prefix or path, #1650),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
         // pipelines.useMediaPreviews: {enabled, autoRegisterAutoTriggerOnFileUpload, downscaleSelfPreviewableImages}, a sibling of

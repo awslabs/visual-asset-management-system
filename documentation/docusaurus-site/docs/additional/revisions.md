@@ -191,6 +191,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **External bucket ARNs name one bucket** — An `externalAssetBuckets` `bucketArn` with a wildcard (`*` or `?`), a key prefix or a trailing path fails the synth with `Configuration Error: external bucket ARN <arn> is not valid.`, and its object grant is no longer hidden from the CDK Nag check. List each bucket by name. (issue #1650)
 -   **Cross-Region bucket downloads** — The web Content Security Policy admits presigned Amazon S3 URLs for an asset bucket in any Region of the partition, not only the deployment Region. (issue #1616)
 -   **API document parses strictly** — `VAMS_API.yaml` no longer defines `errorMessage` twice in the `complianceEvaluation` schema, so strict YAML and OpenAPI tools accept it. (issue #1498)
 -   A file manager selection made with Ctrl- or Shift-click while the file list is still loading keeps every selected item when more files arrive (#1497).
