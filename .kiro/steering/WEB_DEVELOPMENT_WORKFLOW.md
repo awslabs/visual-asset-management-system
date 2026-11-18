@@ -987,10 +987,11 @@ deployment took by matching the served main-bundle hash to the local one
 -   Open dialogs and wizards to assert they work, then dismiss them (`Escape`); never Launch.
 -   For a destructive action, assert the confirm appears and says the right thing, then dismiss it (capture a
     native `confirm()` with `page.once("dialog", …)` and `d.dismiss()`).
--   Only an ad-hoc spec may create and clean up its own data. A core spec that must mutate data or needs a
-    second user does so only behind an `E2E_*` opt-in variable and otherwise skips with the reason:
-    `zipdownloads.spec.ts` takes `E2E_ZIP_CREATE=1` and `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD`
-    (signed in with `signInAs`, never hardcoded). A spec lists its other opt-in variables in its header comment.
+-   Only an ad-hoc spec may create and clean up its own data. The one core exception is
+    `zipdownloads.spec.ts`, which creates one zip job and deletes it again only behind `E2E_ZIP_CREATE=1`,
+    and skips that case with the reason without it. A core spec that needs a second user reads it from
+    `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` (signed in with `signInAs`, never hardcoded) and skips
+    without them. A spec lists its other opt-in variables in its header comment.
 
 ### **Rule E3: Use the shared harness, don't re-derive selectors**
 

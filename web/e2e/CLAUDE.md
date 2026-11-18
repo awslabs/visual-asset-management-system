@@ -116,7 +116,9 @@ await deleteButton.click();
 await expect.poll(() => confirmText).toMatch(/cannot be undone/i);
 ```
 
-An ad-hoc spec may create and clean up its own throwaway data. A core spec may not.
+An ad-hoc spec may create and clean up its own throwaway data. A core spec may not, with one exception:
+`zipdownloads.spec.ts` creates one zip job and deletes it again, only behind `E2E_ZIP_CREATE=1`, and
+skips that case with the reason without it (see "Running the suite").
 
 ---
 
