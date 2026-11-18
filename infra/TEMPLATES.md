@@ -53,7 +53,7 @@ export function buildMyNewFunction(
 
 ---
 
-## New API Route Wiring (in apiBuilder2-nestedStack.ts)
+## New API Route Wiring (in apiBuilder3-nestedStack.ts)
 
 ```typescript
 // Build the function

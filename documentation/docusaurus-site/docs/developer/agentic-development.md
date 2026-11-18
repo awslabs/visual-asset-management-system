@@ -89,7 +89,7 @@ Adding a new API endpoint in VAMS requires coordinated changes across as many as
 | 2    | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement                                                                    |
 | 3    | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic v1)                                                                        |
 | 4    | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with environment variables, permissions, VPC config                                                    |
-| 5    | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route                                                                                  |
+| 5    | `infra/lib/nestedStacks/apiLambda/apiBuilder3-nestedStack.ts` | Attach Lambda to API Gateway route                                                                                  |
 | 6    | `web/src/services/APIService.ts`                              | Add API call method                                                                                                 |
 | 7    | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command, and the endpoint path to `constants.py`                                                            |
 | 8    | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it, and record the CLI method in `tools/VamsMCP/tests/api_coverage.py` |

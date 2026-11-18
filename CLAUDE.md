@@ -179,19 +179,19 @@ A change that meets any of the three conditions and lands in core is a review fi
 
 Adding a new API endpoint requires coordinated changes across multiple components:
 
-| Step                      | File                                                          | What to do                                                                                                       |
-| ------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                         | Define the `ApiRoute` constant AND add it to the appropriate category group array                                |
-| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()`                              |
-| 2a. Audit action          | `backend/backend/common/auditActions.py`                      | Register each new route-method's action (or exemption with a reason); call `log_action` after the write succeeds |
-| 3. Pydantic model         | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic **v1**)                                                                 |
-| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                              |
-| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts` | Attach Lambda to API Gateway route (prefer `apiBuilder2`; the two API stacks stay split — see `infra/CLAUDE.md`) |
-| 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                              |
-| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable) — also add the endpoint path to `vamscli/constants.py` (Rule 7)                  |
-| 8. MCP server             | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it (see Pattern 7)                                                  |
-| 9. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                    |
-| 10. API reference (docs)  | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                              |
+| Step                      | File                                                          | What to do                                                                                                                |
+| ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 1. Master route (backend) | `backend/backend/common/apiRoutes.py`                         | Define the `ApiRoute` constant AND add it to the appropriate category group array                                         |
+| 2. Backend handler        | `backend/backend/handlers/{domain}/{handler}.py`              | Implement Lambda handler with Casbin enforcement; dispatch via `ApiRoute.matches()`                                       |
+| 2a. Audit action          | `backend/backend/common/auditActions.py`                      | Register each new route-method's action (or exemption with a reason); call `log_action` after the write succeeds          |
+| 3. Pydantic model         | `backend/backend/models/{domain}.py`                          | Define request/response models (Pydantic **v1**)                                                                          |
+| 4. Lambda builder         | `infra/lib/lambdaBuilder/{domain}Functions.ts`                | Build Lambda with env vars, permissions, VPC config                                                                       |
+| 5. API route              | `infra/lib/nestedStacks/apiLambda/apiBuilder3-nestedStack.ts` | Attach Lambda to API Gateway route (new endpoints go in `apiBuilder3`; the API stacks stay split — see `infra/CLAUDE.md`) |
+| 6. Frontend service       | `web/src/services/APIService.ts`                              | Add API call method                                                                                                       |
+| 7. CLI command            | `tools/VamsCLI/vamscli/commands/{group}.py`                   | Add CLI command (if applicable) — also add the endpoint path to `vamscli/constants.py` (Rule 7)                           |
+| 8. MCP server             | `tools/VamsMCP/vams_mcp/server.py`                            | Expose as an MCP tool if agents should reach it (see Pattern 7)                                                           |
+| 9. OpenAPI spec (docs)    | `documentation/VAMS_API.yaml`                                 | Add/update the path and its component schemas                                                                             |
+| 10. API reference (docs)  | `documentation/docusaurus-site/docs/api/{domain}.md`          | Add/update the human-readable endpoint reference (e.g. `api/auth.md` for `/auth/*`)                                       |
 
 **Never** add an endpoint without updating all required files. A handler without a route is dead code; a route without a handler will 500. The route group arrays in `apiRoutes.py` feed handler dispatch and the `GET /auth/routes/api` listing, so a missing entry is invisible to constraint authoring and the CLI. **API documentation lives in two places — the OpenAPI `VAMS_API.yaml` AND the Docusaurus `api/{domain}.md` reference page — and both must be updated together.** The parity test `infra/test/api/apiRouteBackendCdkParity.test.ts` proves backend ⊆ CDK with every route-contributing add-on enabled by its `withRouteContributingFeatures` mutate, which calls `enableRouteContributingAddons()` in `infra/test/addon/support/addonTestHooks.ts`, so a new add-on that registers routes extends that hook in the same change.
 
