@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Badge from "@cloudscape-design/components/badge";
 import Box from "@cloudscape-design/components/box";
@@ -54,16 +54,13 @@ const NoticeAlert: React.FC<{ notice: RasterNotice; onDismiss: (id: string) => v
     </Alert>
 );
 
-const HIDDEN_ROW_OPACITY = 0.55;
-
 const LayerRow: React.FC<{
     entry: RasterLayerEntry;
     index: number;
     count: number;
     layers: RasterLayerPanelProps["layers"];
     visibilityToggle: boolean;
-    announce: (message: string) => void;
-}> = ({ entry, index, count, layers, visibilityToggle, announce }) => (
+}> = ({ entry, index, count, layers, visibilityToggle }) => (
     <div
         data-testid="raster-layer-row"
         data-hidden={entry.visible ? undefined : "true"}
@@ -71,11 +68,15 @@ const LayerRow: React.FC<{
     >
         <SpaceBetween size="xs">
             <SpaceBetween direction="horizontal" size="xs">
-                <span style={{ opacity: entry.visible ? 1 : HIDDEN_ROW_OPACITY }}>
-                    <Box variant="strong" data-testid="raster-layer-label">
-                        {entry.label}
-                    </Box>
-                </span>
+                {/* A hidden row's label takes the secondary text colour, a theme token that keeps at
+                    least 4.5:1 contrast in the light and dark themes (an opacity would not). */}
+                <Box
+                    variant="strong"
+                    color={entry.visible ? "inherit" : "text-body-secondary"}
+                    data-testid="raster-layer-label"
+                >
+                    {entry.label}
+                </Box>
                 {!entry.visible && <Badge data-testid="raster-hidden-badge">Hidden</Badge>}
                 {entry.mode === "tile" && <Badge color="green">COG tiles</Badge>}
                 {entry.approximate && (
@@ -113,7 +114,7 @@ const LayerRow: React.FC<{
                     Showing the COG made from {entry.sourceKey.split("/").pop()}.
                 </Box>
             )}
-            <div style={{ opacity: entry.visible ? 1 : HIDDEN_ROW_OPACITY }}>
+            <div>
                 <Slider
                     value={Math.round(entry.opacity * 100)}
                     min={0}
@@ -151,18 +152,16 @@ const LayerRow: React.FC<{
                 </Button>
                 {visibilityToggle && layers.setVisible && !entry.failed ? (
                     <span data-testid="raster-layer-visibility">
+                        {/* One name for both states, and the state in aria-pressed: a screen reader
+                            says "Hide <label>, toggle button, pressed" while the raster is hidden. */}
                         <ToggleButton
                             pressed={!entry.visible}
-                            ariaLabel={
-                                entry.visible ? `Hide ${entry.label}` : `Show ${entry.label}`
-                            }
+                            ariaLabel={`Hide ${entry.label}`}
                             onChange={({ detail }) => {
-                                // `pressed` is "hidden": pressing hides, pressing again shows.
                                 void layers.setVisible!(entry.id, !detail.pressed);
-                                announce(`${entry.label} ${detail.pressed ? "hidden" : "shown"}`);
                             }}
                         >
-                            {entry.visible ? "Hide" : "Show"}
+                            Hide
                         </ToggleButton>
                     </span>
                 ) : (
@@ -193,8 +192,28 @@ const RasterLayerPanel: React.FC<RasterLayerPanelProps> = ({
     visibilityToggle = false,
 }) => {
     const { entries, notices, busy } = layers;
-    // Said to screen readers when a raster is hidden or shown (the button's own label changes too).
+    // Said to screen readers when a raster is hidden, shown again, or could not be shown: read from
+    // each entry's own state once the manager has applied it, never at the press.
     const [announcement, setAnnouncement] = useState("");
+    const previous = useRef<Map<string, { visible: boolean; failed: boolean }>>(new Map());
+    useEffect(() => {
+        const next = new Map<string, { visible: boolean; failed: boolean }>();
+        for (const entry of entries) {
+            const now = { visible: entry.visible, failed: !!entry.failed };
+            const before = previous.current.get(entry.id);
+            if (before) {
+                if (!before.failed && now.failed && !before.visible) {
+                    setAnnouncement(`${entry.label} could not be shown`);
+                } else if (before.visible && !now.visible) {
+                    setAnnouncement(`${entry.label} hidden`);
+                } else if (!before.visible && now.visible) {
+                    setAnnouncement(`${entry.label} shown`);
+                }
+            }
+            next.set(entry.id, now);
+        }
+        previous.current = next;
+    }, [entries]);
     // Listed top layer first, as map layer lists usually are.
     const topFirst = [...entries].reverse();
     return (
@@ -218,7 +237,6 @@ const RasterLayerPanel: React.FC<RasterLayerPanelProps> = ({
                     count={entries.length}
                     layers={layers}
                     visibilityToggle={visibilityToggle}
-                    announce={setAnnouncement}
                 />
             ))}
             <div

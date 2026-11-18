@@ -243,18 +243,19 @@ test.describe("GeoTIFF Map Viewer layout", () => {
         await expect(hide).toHaveAttribute("aria-pressed", "false");
         await hide.click();
 
-        // It stays in the list, marked hidden, with Zoom disabled, and the change is announced.
-        const show = row.getByRole("button", { name: `Show ${label}` });
-        await expect(show).toHaveAttribute("aria-pressed", "true");
+        // It stays in the list, marked hidden, with Zoom disabled, and the change is announced. The
+        // toggle keeps its name; its pressed state says it is hidden.
+        await expect(hide).toHaveAttribute("aria-pressed", "true");
         await expect(row.getByTestId("raster-hidden-badge")).toBeVisible();
         await expect(row.getByRole("button", { name: `Zoom to ${label}` })).toBeDisabled();
         await expect(page.getByTestId("raster-visibility-status")).toHaveText(`${label} hidden`);
         await expect(page.getByTestId("raster-layer-row")).toHaveCount(1);
 
-        // Show brings it back (the keyboard works as well as the mouse).
-        await show.focus();
+        // Pressing it again shows it (the keyboard works as well as the mouse).
+        await hide.focus();
         await page.keyboard.press("Enter");
-        await expect(row.getByRole("button", { name: `Hide ${label}` })).toBeVisible();
+        await expect(hide).toHaveAttribute("aria-pressed", "false");
+        await expect(page.getByTestId("raster-visibility-status")).toHaveText(`${label} shown`);
         await expect(row.getByTestId("raster-hidden-badge")).toHaveCount(0);
         await expect(row.getByRole("button", { name: `Zoom to ${label}` })).toBeEnabled();
     });

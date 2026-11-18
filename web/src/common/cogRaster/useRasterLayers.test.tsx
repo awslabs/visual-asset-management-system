@@ -216,7 +216,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         ).toBeInTheDocument();
     });
 
-    it("offers Hide in place of Remove, with a name, a pressed state and a status message (item 1)", async () => {
+    it("offers Hide in place of Remove, with one name and the state in aria-pressed (item 1, r5-D2)", async () => {
         const props = layers(jest.fn(), "tile");
         props.entries[0].failed = null as any;
         render(<RasterLayerPanel layers={props} visibilityToggle />);
@@ -225,28 +225,51 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         expect(hide).toHaveAttribute("aria-pressed", "false");
         await userEvent.click(hide);
         expect(props.setVisible).toHaveBeenCalledWith("r1", false);
-        expect(screen.getByTestId("raster-visibility-status")).toHaveTextContent(
-            "s.tif.cog.tif hidden"
-        );
+        // Nothing is said at the press: only once the manager has applied it.
+        expect(screen.getByTestId("raster-visibility-status")).toHaveTextContent("");
     });
 
-    it("lists a hidden raster dimmed and labelled, with Show, and Zoom disabled (item 1)", async () => {
+    it("keeps the name and says pressed while hidden, dimmed by a theme token, Zoom disabled (item 1, r5-D2, r5-D8)", async () => {
         const props = layers(jest.fn(), "tile");
         props.entries[0].failed = null as any;
         props.entries[0].visible = false;
         render(<RasterLayerPanel layers={props} visibilityToggle />);
         expect(screen.getByTestId("raster-hidden-badge")).toHaveTextContent("Hidden");
         expect(screen.getByTestId("raster-layer-row")).toHaveAttribute("data-hidden", "true");
-        const show = screen.getByRole("button", { name: "Show s.tif.cog.tif" });
-        expect(show).toHaveAttribute("aria-pressed", "true");
+        expect(screen.queryByRole("button", { name: /^Show / })).not.toBeInTheDocument();
+        const toggle = screen.getByRole("button", { name: "Hide s.tif.cog.tif" });
+        expect(toggle).toHaveAttribute("aria-pressed", "true");
+        // No opacity on the label: its colour comes from the secondary text token.
+        const label = screen.getByTestId("raster-layer-label");
+        expect(label.closest("[style*='opacity']")).toBeNull();
         expect(screen.getByRole("button", { name: "Zoom to s.tif.cog.tif" })).toBeDisabled();
-        // Move stays available, and the opacity slider keeps its value for when it is shown again.
         expect(screen.getByRole("button", { name: "Move s.tif.cog.tif down" })).toBeInTheDocument();
-        await userEvent.click(show);
+        await userEvent.click(toggle);
         expect(props.setVisible).toHaveBeenCalledWith("r1", true);
-        expect(screen.getByTestId("raster-visibility-status")).toHaveTextContent(
-            "s.tif.cog.tif shown"
+    });
+
+    it("announces hidden, shown and could-not-be-shown from the entry's state (r5-D2)", () => {
+        const props = layers(jest.fn(), "tile");
+        props.entries[0].failed = null as any;
+        const { rerender } = render(<RasterLayerPanel layers={props} visibilityToggle />);
+        const status = () => screen.getByTestId("raster-visibility-status");
+        const withEntry = (patch: any) => ({
+            ...props,
+            entries: [{ ...props.entries[0], ...patch }],
+        });
+        rerender(<RasterLayerPanel layers={withEntry({ visible: false })} visibilityToggle />);
+        expect(status()).toHaveTextContent("s.tif.cog.tif hidden");
+        rerender(<RasterLayerPanel layers={withEntry({ visible: true })} visibilityToggle />);
+        expect(status()).toHaveTextContent("s.tif.cog.tif shown");
+        rerender(<RasterLayerPanel layers={withEntry({ visible: false })} visibilityToggle />);
+        // A Show the API refused: the row fails while still hidden, and that is what is said.
+        rerender(
+            <RasterLayerPanel
+                layers={withEntry({ visible: false, failed: "Quarantined.", retryable: false })}
+                visibilityToggle
+            />
         );
+        expect(status()).toHaveTextContent("s.tif.cog.tif could not be shown");
     });
 
     it("is operable from the keyboard (item 1)", async () => {
