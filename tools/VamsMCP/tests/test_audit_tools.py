@@ -388,7 +388,7 @@ def test_api_refusals_are_returned_as_error_data(client, raised, error_type):
 
 def test_a_stale_feature_list_after_the_switch_goes_off_gives_no_upgrade_advice(client):
     """The snapshot still lists AUDITLOGSEARCH, the deployment has since switched it off, and the gateway
-    answers the unrouted path. The answer must not say to upgrade a 2.7.0 deployment."""
+    answers the unrouted path. The answer must not tell the user to upgrade."""
     from vamscli.utils.api_client import APIClient
     from vamscli.utils.exceptions import RouteNotDeployedError
 
@@ -400,7 +400,7 @@ def test_a_stale_feature_list_after_the_switch_goes_off_gives_no_upgrade_advice(
     client.api = real
     result = server_module.vams_audit_groups()
     assert result["error_type"] == "AuditSearchNotSupportedError"
-    assert "not enabled on this deployment" in result["error"]
+    assert "not available on this deployment" in result["error"]
     assert "Sign in again" in result["error"] and "upgrade" not in result["error"].lower()
 
 
