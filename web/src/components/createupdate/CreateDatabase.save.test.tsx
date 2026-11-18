@@ -404,3 +404,27 @@ describe(`${Synonyms.Database} editor for a role that may bind but not remove a 
         expect(optionLabels().some((label) => label?.includes("None"))).toBe(true);
     });
 });
+
+describe(`${Synonyms.Database} editor for a role that may bind but not read a binding`, () => {
+    beforeEach(() => {
+        mockRefused = ["GET /compliance/bind/{databaseId}"];
+    });
+
+    it("does not offer the schema field when editing, and reads no binding", async () => {
+        render(
+            <CreateDatabase
+                open={true}
+                setOpen={jest.fn()}
+                setReload={jest.fn()}
+                initState={database}
+            />
+        );
+        await waitFor(() => expect(api.fetchBuckets).toHaveBeenCalled());
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(screen.queryByText("Compliance Schema")).not.toBeInTheDocument();
+        expect(compliance.getDatabaseBindings).not.toHaveBeenCalled();
+        expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    });
+});
