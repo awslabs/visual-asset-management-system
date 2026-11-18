@@ -175,10 +175,10 @@ describe("Stepper", () => {
                 <span>Pipeline overrides</span>
             </button>
         );
-        const joined = container.querySelector("button")!;
+        const joined = screen.getByRole("button", { name: "2 Pipeline overrides: go to step 2" });
         expect(axeVisibleWords(joined)).toEqual(["2pipeline", "overrides"]);
         expect(
-            labelInName(axeVisibleWords(joined), axeWords(joined.getAttribute("aria-label")!))
+            labelInName(axeVisibleWords(joined), axeWords(joined.getAttribute("aria-label") ?? ""))
         ).toBe(false);
         container.remove();
 
