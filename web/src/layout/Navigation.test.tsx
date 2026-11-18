@@ -138,6 +138,15 @@ describe("Navigation", () => {
         expect(findNavLink(container, "#/")).toBeTruthy();
     });
 
+    it("announces the could-not-load message as a status", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
+        await renderNavigation();
+
+        await waitFor(() =>
+            expect(screen.getByRole("status")).toHaveTextContent("Navigation could not be loaded")
+        );
+    });
+
     it("shows a could-not-load message with Retry when the permission check fails", async () => {
         mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
         allowRoutes("/databases");
