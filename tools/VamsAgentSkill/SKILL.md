@@ -404,8 +404,12 @@ success from the launch alone — read the execution back.
     workflows** unless asked (`--include-system`; MCP `include_system`), except a
     listing narrowed to one system workflow; `includeSystem` in the response says
     which applied, so do not report a history as complete without checking it.
--   **Statuses** are `NEW`, `RUNNING`, `SUCCEEDED`, `FAILED`, `TIMED_OUT`, and
-    `ABORTED`. The last four are terminal.
+-   **Statuses** are `NEW`, `RUNNING`, `SUCCEEDED`, `FAILED`, `TIMED_OUT`,
+    `ABORTED` and `SKIPPED`. The last five are terminal. A `SKIPPED` row is a
+    file-upload trigger launch a concurrency restriction refused: nothing ran, and
+    `skippedLaunchCount` says how many refused launches it stands for. Do not count
+    it as a run or a failure; to answer "what ran", list with
+    `--exclude-status SKIPPED` (MCP `exclude_status`).
 -   **Details** give per-step status, the rendered config each step ran with,
     inputs, gathered metadata, and outputs — this is what to read when asked why a
     run failed. The response can be **partial**: bounded collections are named in a
