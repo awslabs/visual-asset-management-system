@@ -31,17 +31,19 @@ if [[ -z "${GOLDEN_SKIP_BUILD:-}" ]]; then
     docker build --platform linux/amd64 -t "$IMAGE" "$LAMBDA_DIR"
 fi
 
-# The container reaches the stand-in through the docker bridge gateway, an IP address, so the S3 client
+# The stand-in listens on the docker bridge gateway only (not on every interface) and the emulator port
+# is published on the loopback only, so neither is reachable from the network. The container reaches the
+# stand-in through the gateway, an IP address, so the S3 client
 # addresses buckets by path rather than by a host name that does not resolve.
 GATEWAY="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')"
-"$PYTHON" -m moto.server -H 0.0.0.0 -p "$S3_PORT" >"$LOG_DIR/moto.log" 2>&1 &
+"$PYTHON" -m moto.server -H "$GATEWAY" -p "$S3_PORT" >"$LOG_DIR/moto.log" 2>&1 &
 MOTO_PID=$!
 for _ in $(seq 1 60); do
-    if curl -s -o /dev/null "http://127.0.0.1:${S3_PORT}/"; then break; fi
+    if curl -s -o /dev/null "http://${GATEWAY}:${S3_PORT}/"; then break; fi
     sleep 0.5
 done
 
-docker run -d --name "$NAME" --platform linux/amd64 -p "${RIE_PORT}:8080" \
+docker run -d --name "$NAME" --platform linux/amd64 -p "127.0.0.1:${RIE_PORT}:8080" \
     -e AWS_REGION=us-east-1 -e AWS_DEFAULT_REGION=us-east-1 \
     -e AWS_ACCESS_KEY_ID=test -e AWS_SECRET_ACCESS_KEY=test \
     -e AWS_LAMBDA_FUNCTION_MEMORY_SIZE=5308 \
@@ -54,7 +56,7 @@ done
 
 status=0
 GOLDEN_RIE_URL="http://127.0.0.1:${RIE_PORT}/2015-03-31/functions/function/invocations" \
-GOLDEN_S3_ENDPOINT="http://127.0.0.1:${S3_PORT}" \
+GOLDEN_S3_ENDPOINT="http://${GATEWAY}:${S3_PORT}" \
     "$PYTHON" -m pytest -q -m golden "$LAMBDA_DIR/tests/test_3dbasic_golden_round_trip.py" "$@" || status=$?
 
 if [[ $status -ne 0 ]]; then
