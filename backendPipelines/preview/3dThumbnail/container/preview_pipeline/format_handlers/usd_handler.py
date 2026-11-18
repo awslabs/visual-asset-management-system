@@ -67,6 +67,12 @@ MAX_POINTS = 30_000_000
 _RENDERED_PURPOSES = ("default", "render")
 _IMPLICIT_RESOLUTION = 24
 
+# Gprim types the loader does not draw (it tessellates meshes and the built-in solids only). A rendered
+# prim of one of them is named in the job log and the incomplete-preview result, never drawn.
+_UNDRAWN_TYPES = ("Points", "BasisCurves", "NurbsCurves", "HermiteCurves", "NurbsPatch")
+# Prim paths named per type in the log and the result.
+MAX_SKIPPED_PATHS = 5
+
 # A root prim beside the default prim is left out of the preview only when it looks like a thumbnail rig
 # by both tests: it is at least RIG_SCALE times larger than the default prim, and it holds both a camera
 # and a light (a rig is a huge environment with its own lights and camera). A root that fails either test
@@ -130,11 +136,13 @@ def load(file_path: str, asset_root: str = None, report: dict = None) -> pv.Poly
     # root prim beside it that clearly is a rig (a huge environment with its own lights and camera) is
     # not drawn; every other root prim is, as it is for a stage without a default prim.
     parts, part_roots = _collect_scene(stage.GetPseudoRoot(), xform_cache, context)
+    left_out = set()
     default_prim = _default_prim(stage)
     if default_prim is not None and parts:
         rigs = _find_rigs(stage, default_prim, parts, part_roots)
         if rigs:
             parts = [part for part, root in zip(parts, part_roots) if root not in rigs]
+            left_out = set(rigs)
             if report is not None:
                 report["leftOut"] = sorted(rigs)
             logger.info("Leaving out the root prims that look like a thumbnail rig: "
@@ -142,8 +150,19 @@ def load(file_path: str, asset_root: str = None, report: dict = None) -> pv.Poly
     elif default_prim is not None:
         logger.info(f"The default prim {default_prim.GetPath()} draws no geometry; drawing the whole stage")
 
+    skipped = _skipped_prim_summary(context, left_out)
+    if report is not None and skipped:
+        report["skippedPrims"] = skipped
     if not parts:
+        if skipped:
+            raise ValueError("No valid mesh geometry found in USD stage: the stage holds only "
+                             + _describe_skipped(skipped)
+                             + ", which the 3D Preview Thumbnail does not draw")
         raise ValueError("No valid mesh geometry found in USD stage")
+    if skipped:
+        for type_name, entry in skipped.items():
+            logger.warning(f"{entry['count']} {type_name} prims are not drawn by the 3D Preview Thumbnail; "
+                           f"first {len(entry['paths'])}: " + ", ".join(entry["paths"]))
     if any(context.mdl_unread.values()):
         logger.info(f"{sum(context.mdl_unread.values())} prims are not coloured by their MDL material: "
                     + _counted(context.mdl_unread))
@@ -184,6 +203,41 @@ def _root_name(prim):
     return prim.GetPath().GetPrefixes()[0].name
 
 
+def _undrawn_type(prim):
+    """The type name of a rendered prim the loader does not draw (a point, curve or patch prim), or None."""
+    from pxr import UsdGeom
+
+    for name in _UNDRAWN_TYPES:
+        schema = getattr(UsdGeom, name, None)
+        if schema is not None and prim.IsA(schema):
+            return name
+    return None
+
+
+def _note_undrawn(prim, context):
+    """Count a rendered prim of an undrawn type, with the root prim it sits under."""
+    type_name = _undrawn_type(prim)
+    if type_name is not None:
+        context.skipped_prims.append((type_name, str(prim.GetPath()), _root_name(prim)))
+
+
+def _skipped_prim_summary(context, left_out):
+    """{type name: {"count": n, "paths": first few paths}} of the undrawn prims outside the left-out
+    root prims, types in the order of _UNDRAWN_TYPES; empty when there are none."""
+    summary = {}
+    for name in _UNDRAWN_TYPES:
+        paths = list(dict.fromkeys(path for type_name, path, root in context.skipped_prims
+                                   if type_name == name and root not in left_out))
+        if paths:
+            summary[name] = {"count": len(paths), "paths": [path[:256] for path in paths[:MAX_SKIPPED_PATHS]]}
+    return summary
+
+
+def _describe_skipped(skipped):
+    return ", ".join(f"{entry['count']} {name} {'prim' if entry['count'] == 1 else 'prims'}"
+                     for name, entry in skipped.items())
+
+
 def _collect_parts(root, xform_cache, context, plan=None):
     """(parts, roots): the (points, triangles, colours) parts of the gprims at and under ``root`` in
     traversal order, and the name of the root prim each part came from.
@@ -211,6 +265,8 @@ def _collect_parts(root, xform_cache, context, plan=None):
             if plan is None and context.capped:
                 break
             continue
+        if prim.IsA(UsdGeom.Gprim):
+            _note_undrawn(prim, context)
         if plan is not None:
             if not prim.IsA(UsdGeom.Gprim):
                 continue
@@ -584,11 +640,14 @@ class _LoadContext:
         self.points_total = 0
         # Set when a walk stopped at MAX_POINTS vertices; ``_collect_scene`` then samples the stage.
         self.capped = False
+        # (type name, path, root prim name) of each rendered prim of an undrawn type met by the walk.
+        self.skipped_prims = []
 
     def reset_counts(self):
         """Forget what a discarded walk counted, so a second walk of the stage starts clean."""
         self.points_total = 0
         self.capped = False
+        self.skipped_prims = []
         self.mdl_unread.clear()
         self.mdl_approximated.clear()
 
@@ -818,6 +877,7 @@ def _expand_point_instancer(prim, xform_cache, context, plan=None):
                 if not _is_rendered(child, time):
                     continue
                 relative, _ = xform_cache.ComputeRelativeTransform(child, root)
+                _note_undrawn(child, context)
                 part = _gprim_part(child, np.array(relative), context)
                 if part is not None:
                     geometry.append(part)
