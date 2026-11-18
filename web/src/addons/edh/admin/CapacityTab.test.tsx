@@ -423,6 +423,24 @@ describe("CapacityTab", () => {
         expect(screen.getByRole("table", { name: "Capacity reservation use" })).toBeInTheDocument();
     });
 
+    // Capacity and reservations are not polled: a failed Refresh shows their error panels, and the
+    // tiles beside them show no numbers from the earlier answer.
+    it("shows no earlier capacity or reservation numbers beside a failed refresh's error", () => {
+        mount(() => true, {
+            capacity: query(CAPACITY, { error: new Error("EDH refused") }),
+            reservations: query([RENDER_POOL, ENDED, SMALL_POOL], {
+                error: new Error("EC2 could not be read"),
+            }),
+        });
+        expect(screen.getByText(/Error loading capacity: EDH refused/)).toBeInTheDocument();
+        expect(tile("Total sessions")).toHaveTextContent(/^—$/);
+        expect(tile("Distinct owners")).toHaveTextContent(/^—$/);
+        expect(tile("Registered reservations")).toHaveTextContent(/^—$/);
+        expect(tile("Reserved slots")).toHaveTextContent(/^—$/);
+        // The polled sessions keep theirs.
+        expect(tile("Running")).toHaveTextContent(/^4$/);
+    });
+
     it("refreshes every part it reads from the one button", async () => {
         const user = userEvent.setup();
         const parts = {
