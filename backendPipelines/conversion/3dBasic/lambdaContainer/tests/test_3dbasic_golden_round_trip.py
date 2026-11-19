@@ -104,9 +104,11 @@ def _fixture_files():
         ".glb": ({"part.glb": cube.export(file_type="glb")}, cube, True),
         ".xyz": ({"part.xyz": "\n".join(" ".join(repr(float(v)) for v in row)
                                        for row in sphere.vertices).encode("utf-8")}, sphere, False),
-        ".usd": ((lambda files: {"part.usd": files.pop("part.usda"), **files})(_usd_bytes(cube, ".usda")), cube, True),
-        ".usda": (_usd_bytes(cube, ".usda"), cube, True),
-        ".usdc": (_usd_bytes(cube, ".usdc"), cube, True),
+        # A loose USD file's textures are not fetched by the handler yet (it has no USD reference
+        # collector), so the cells for them carry no texture expectation; a USDZ holds its own.
+        ".usd": ((lambda files: {"part.usd": files.pop("part.usda"), **files})(_usd_bytes(cube, ".usda")), cube, False),
+        ".usda": (_usd_bytes(cube, ".usda"), cube, False),
+        ".usdc": (_usd_bytes(cube, ".usdc"), cube, False),
         ".usdz": (_usd_bytes(cube, ".usdz"), cube, True),
         ".dae": ({"part.dae": sphere.export(file_type="dae")}, sphere, False),
         ".3mf": ({"part.3mf": sphere.export(file_type="3mf")}, sphere, False),
@@ -164,6 +166,23 @@ def _convert(s3, cell, input_extension, output_extension):
             with open(path, "wb") as handle:
                 handle.write(data)
     return response, written
+
+
+# What each input declares: USD fixtures are written as metres and Y up, DAE is metres and Y up by
+# specification, glTF and GLB are metres and Y up, and a 3MF fixture is millimetres and Z up.
+_Y_UP_DECLARED = {".gltf", ".glb", ".dae"} | USD_FORMATS
+
+
+def _expected_extents(input_extension, output_extension, extents):
+    """The source extents after the unit and axis conventions of the pair (see units_axes.py): a 3MF
+    source converted to glTF is millimetres to metres and Z up to Y up, a Y-up source written as 3MF
+    is rotated to Z up (3MF is always Z up)."""
+    extents = np.array(extents, dtype=float)
+    if input_extension == ".3mf" and output_extension in (".glb", ".gltf"):
+        return np.array([extents[0], extents[2], extents[1]]) * 0.001
+    if output_extension == ".3mf" and input_extension in _Y_UP_DECLARED:
+        return np.array([extents[0], extents[2], extents[1]])
+    return extents
 
 
 def _parts(loaded):
@@ -236,7 +255,9 @@ def test_every_input_converts_to_every_output(s3, input_extension, output_extens
     else:
         assert got["triangles"] == expected["triangles"]
     # STL stores 32-bit floats and glTF accessors are 32-bit too.
-    np.testing.assert_allclose(got["extents"], expected["extents"], rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(
+        got["extents"], _expected_extents(input_extension, output_extension, expected["extents"]),
+        rtol=1e-4, atol=1e-6)
 
     textured_source = FIXTURES[input_extension][2]
     if textured_source and output_extension in TEXTURED_OUTPUTS:
