@@ -13,8 +13,8 @@ that lacks the operation.
 
 The second half pins the version itself. The runtime pin, the dev-group pin, the Lambda base-layer
 pin and the three exported requirements files must carry one identical version. The layer bundling
-build re-exports from poetry.lock (infra/lib/helper/lambda.ts) and installs that export, while this
-suite's venv installs from the checked-in requirements-dev.txt, so the lock and the checked-in
+build installs the checked-in requirements.txt exported from uv.lock (infra/lib/helper/lambda.ts),
+while this suite's venv installs from the checked-in requirements-dev.txt, so the lock and the checked-in
 exports must all agree with the pin or the suite runs against a different SDK than Lambda.
 """
 
@@ -36,14 +36,14 @@ _PIN_FILES = {
     "pyproject.toml": (
         r'"boto3 \(==([0-9.]+)\)"',
         r'"botocore \(==([0-9.]+)\)"',
-        r'^boto3 = "([0-9.]+)"',
-        r'^botocore = "([0-9.]+)"',
+        r'^\s*"boto3==([0-9.]+)",',
+        r'^\s*"botocore==([0-9.]+)",',
     ),
     "requirements.txt": (r"^boto3==([0-9.]+)", r"^botocore==([0-9.]+)"),
     "requirements-dev.txt": (r"^boto3==([0-9.]+)", r"^botocore==([0-9.]+)"),
     os.path.join("lambdaLayers", "base", "pyproject.toml"): (
-        r'^boto3 = "([0-9.]+)"',
-        r'^botocore = "([0-9.]+)"',
+        r'^\s*"boto3==([0-9.]+)",',
+        r'^\s*"botocore==([0-9.]+)",',
     ),
     os.path.join("lambdaLayers", "base", "requirements.txt"): (
         r"^boto3==([0-9.]+)",
