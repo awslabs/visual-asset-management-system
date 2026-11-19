@@ -55,6 +55,7 @@ import json
 import os
 import secrets
 import shutil
+import socket
 
 from agent_broker import ImageEditBroker
 import signal
@@ -109,6 +110,26 @@ BRIDGE_MODEL_ALIAS = "agent"
 # retries it with its history. A call the model completes takes seconds to about two minutes; a stream
 # Bedrock never finishes would otherwise wait out the run budget.
 BRIDGE_CALL_TIMEOUT_SECONDS = 180
+# Starts of the bridge on a freshly picked port before the run fails. Another process can take the port
+# between free_loopback_port reading it and the bridge binding it; the bridge then exits and the next
+# start picks another.
+BRIDGE_START_ATTEMPTS = 3
+
+
+class BridgeExited(RuntimeError):
+    """The bridge process ended before it was ready, for example because its port was taken."""
+
+
+def free_loopback_port() -> int:
+    """A loopback port no process holds when it is read, for this run's model bridge.
+
+    Batch places several Blender agent jobs on one CPU instance and they share the host's network, so a
+    fixed port lets only the first run's bridge bind it.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
 
 # What a run does: the agent alone, the scripted refit alone, or the refit and then the agent from its result.
 RUN_MODES = ("agent", "refit", "refit-agent")
@@ -495,22 +516,62 @@ class BlenderAgentAdapter(ModelAdapter):
         )  # nosemgrep: dangerous-subprocess-use-audit
         return process
 
+    def _start_ready_bridge(self, bridge_dir: Path, model_id: str, region: str, port_setting: int, key: str,
+                            env: dict):
+        """Start this run's bridge and wait until it answers with this run's key; returns (process, port).
+
+        ``port_setting`` 0 picks a free loopback port for each start and starts again on another when the
+        bridge exits before it is ready (its port was taken in between); a positive value is used as it is,
+        once.
+        """
+        attempts = BRIDGE_START_ATTEMPTS if port_setting == 0 else 1
+        for attempt in range(1, attempts + 1):
+            port = port_setting or free_loopback_port()
+            process = self._start_bridge(bridge_dir, model_id, region, port, key, env)
+            try:
+                self._wait_for_bridge(port, key, process, bridge_dir / "bridge.log")
+                return process, port
+            except Exception as e:
+                _stop_process(process)
+                if not isinstance(e, BridgeExited) or attempt == attempts:
+                    raise
+                logger.warning(f"The model bridge exited before it was ready on port {port}; starting it on "
+                               f"another (attempt {attempt + 1} of {attempts})")
+        raise AssertionError("unreachable")  # pragma: no cover
+
     @staticmethod
-    def _wait_for_bridge(port: int, process: subprocess.Popen, log_path: Path, timeout: int = 120) -> None:
+    def _wait_for_bridge(port: int, key: str, process: subprocess.Popen, log_path: Path,
+                         timeout: int = 120) -> None:
+        """Return once the bridge on ``port`` lists its models for this run's key.
+
+        The key is what proves the answer comes from this run's bridge: another run's bridge on the same
+        host refuses it, and so is never taken for this one.
+        """
+        import urllib.error
         import urllib.request
 
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+        refused = False
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                raise RuntimeError(
+                raise BridgeExited(
                     f"The model bridge exited with code {process.returncode} before it was ready. "
                     f"Last of its log:\n{_tail(log_path)}")
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/liveliness", timeout=3):
-                    return
+                with urllib.request.urlopen(request, timeout=3) as response:  # nosec B310 - loopback only
+                    if response.status == 200:
+                        return
+            except urllib.error.HTTPError as e:
+                refused = refused or e.code in (401, 403)
             except Exception:
-                time.sleep(2)
-        raise RuntimeError(f"The model bridge did not become ready within {timeout}s:\n{_tail(log_path)}")
+                pass
+            time.sleep(2)
+        detail = (" A bridge on that port answered and refused this run's key, so it is not this run's."
+                  if refused else "")
+        raise RuntimeError(
+            f"The model bridge did not become ready on port {port} within {timeout}s.{detail}\n{_tail(log_path)}")
 
     # ------------------------------------------------------------------ run
 
@@ -620,7 +681,11 @@ class BlenderAgentAdapter(ModelAdapter):
         render_engine = str(setting(params, "BLENDERAGENT_RENDER_ENGINE", "CYCLES")).upper()
         render_samples = int(setting(params, "BLENDERAGENT_RENDER_SAMPLES", 32))
         guidance = str(setting(params, "BLENDERAGENT_GUIDANCE", "")).strip()
-        bridge_port = int(setting(params, "BLENDERAGENT_BRIDGE_PORT", 4000))
+        # 0, the default, gives each run a free loopback port; a positive value fixes the port, which two runs
+        # Batch places on one instance cannot share.
+        bridge_port_setting = int(setting(params, "BLENDERAGENT_BRIDGE_PORT", 0))
+        if bridge_port_setting < 0 or bridge_port_setting > 65535:
+            raise ValueError(f"BLENDERAGENT_BRIDGE_PORT must be 0 or a port number, not {bridge_port_setting}")
         target_size = float(setting(params, "TARGET_SIZE_MM", 0) or 0)
 
         dirs = self._fresh_root()
@@ -673,11 +738,11 @@ class BlenderAgentAdapter(ModelAdapter):
         bridge_key = "sk-" + secrets.token_hex(24)
         bridge_key_env = "BLENDERAGENT_BRIDGE_KEY"
         base_env = {k: v for k, v in os.environ.items() if k != "HF_TOKEN"}
-        bridge = self._start_bridge(dirs["bridge"], model_id, region, bridge_port, bridge_key, base_env)
         started = time.monotonic()
+        bridge, bridge_port = self._start_ready_bridge(dirs["bridge"], model_id, region, bridge_port_setting,
+                                                       bridge_key, base_env)
         broker = None
         try:
-            self._wait_for_bridge(bridge_port, bridge, dirs["bridge"] / "bridge.log")
             logger.info(f"Model bridge ready on 127.0.0.1:{bridge_port} -> {model_id}")
             # The agent's one route to an image model: request files in its workspace, served here with
             # the task role. Its own commands keep having no network and no credentials.
@@ -748,11 +813,7 @@ class BlenderAgentAdapter(ModelAdapter):
                 broker.join(timeout=10)
                 if broker.served:
                     logger.info(f"Image edits served for the agent: {broker.served}")
-            bridge.terminate()
-            try:
-                bridge.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                bridge.kill()
+            _stop_process(bridge)
         elapsed = time.monotonic() - started
 
         # The deliverable, checked as a file rather than believed from the message.
@@ -894,6 +955,15 @@ def _tail(path: Path, lines: int = 40) -> str:
         return "\n".join(content[-lines:])
     except OSError:
         return "(no log)"
+
+
+def _stop_process(process: subprocess.Popen, grace_seconds: int = 20) -> None:
+    """Terminate a child process, and kill it if it has not exited after the grace period."""
+    process.terminate()
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
 
 
 def _read_json(path: Path):

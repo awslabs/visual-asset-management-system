@@ -178,6 +178,122 @@ class TestTheBridgeRoutesToBedrockOnTheTaskRole:
         assert blenderagent.image_editing_enabled() is False
 
 
+class _FakeBridgeProcess:
+    """A stand-in for the LiteLLM process: alive unless built with an exit code."""
+
+    def __init__(self, returncode=None):
+        self.returncode = returncode
+        self.stopped = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.stopped = True
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.stopped = True
+
+
+def _bridge_stand_in(accepted_key: str):
+    """A loopback server answering /v1/models with 200 for ``accepted_key`` and 401 for any other key."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            ok = self.path == "/v1/models" and self.headers.get("Authorization") == f"Bearer {accepted_key}"
+            body = b'{"data": [{"id": "agent"}]}' if ok else b'{"error": "Authentication Error"}'
+            self.send_response(200 if ok else 401)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.mark.unit
+class TestEachRunHasItsOwnBridge:
+    """Batch places several Blender agent runs on one CPU instance, and they share its network."""
+
+    def test_the_port_default_is_picked_per_run(self):
+        with open(os.path.join(_CONTAINER_DIR, "config.json"), encoding="utf-8") as handle:
+            defaults = json.load(handle)
+        assert re.search(r'"BLENDERAGENT_BRIDGE_PORT": "0"', json.dumps(defaults))
+
+    def test_a_run_is_never_given_a_port_another_process_holds(self):
+        import socket
+
+        held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        held.bind(("127.0.0.1", blenderagent.free_loopback_port()))
+        held.listen(1)
+        try:
+            taken = held.getsockname()[1]
+            assert {blenderagent.free_loopback_port() for _ in range(5)}.isdisjoint({taken})
+        finally:
+            held.close()
+
+    def test_readiness_refuses_a_bridge_that_rejects_this_runs_key(self, tmp_path, monkeypatch):
+        real_sleep = blenderagent.time.sleep
+        monkeypatch.setattr(blenderagent.time, "sleep", lambda s: real_sleep(0.05))
+        server = _bridge_stand_in("sk-another-run")
+        try:
+            port = server.server_address[1]
+            with pytest.raises(RuntimeError, match="refused this run's key"):
+                BlenderAgentAdapter._wait_for_bridge(port, "sk-this-run", _FakeBridgeProcess(), tmp_path / "log",
+                                                     timeout=1)
+            # [control] the same bridge is accepted with its own key.
+            BlenderAgentAdapter._wait_for_bridge(port, "sk-another-run", _FakeBridgeProcess(), tmp_path / "log",
+                                                 timeout=1)
+        finally:
+            server.shutdown()
+
+    def test_a_bridge_that_exits_is_reported_as_exited(self, tmp_path):
+        with pytest.raises(blenderagent.BridgeExited):
+            BlenderAgentAdapter._wait_for_bridge(1, "sk-x", _FakeBridgeProcess(returncode=1), tmp_path / "log",
+                                                 timeout=5)
+
+    def test_a_bridge_that_loses_its_port_is_started_again_on_another(self, tmp_path, monkeypatch):
+        ports = iter([41001, 41002])
+        monkeypatch.setattr(blenderagent, "free_loopback_port", lambda: next(ports))
+        started = []
+
+        def start(self, bridge_dir, model_id, region, port, key, env):
+            started.append((port, _FakeBridgeProcess()))
+            return started[-1][1]
+
+        def wait(port, key, process, log_path, timeout=120):
+            if port == 41001:
+                raise blenderagent.BridgeExited("address in use")
+
+        monkeypatch.setattr(BlenderAgentAdapter, "_start_bridge", start)
+        monkeypatch.setattr(BlenderAgentAdapter, "_wait_for_bridge", staticmethod(wait))
+        process, port = BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 0, "sk-x", {})
+        assert port == 41002 and process is started[1][1]
+        assert started[0][1].stopped, "the bridge that lost its port is left running"
+
+    def test_a_fixed_port_is_tried_once(self, tmp_path, monkeypatch):
+        started = []
+        monkeypatch.setattr(BlenderAgentAdapter, "_start_bridge",
+                            lambda self, *a: started.append(a) or _FakeBridgeProcess())
+
+        def wait(port, key, process, log_path, timeout=120):
+            raise blenderagent.BridgeExited("address in use")
+
+        monkeypatch.setattr(BlenderAgentAdapter, "_wait_for_bridge", staticmethod(wait))
+        with pytest.raises(blenderagent.BridgeExited):
+            BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 4000, "sk-x", {})
+        assert len(started) == 1
+
+
 @pytest.mark.unit
 class TestTheInputContract:
     def test_the_agent_declares_every_input_it_can_take(self):

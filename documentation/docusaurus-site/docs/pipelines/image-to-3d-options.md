@@ -481,7 +481,7 @@ any other model's and flows into the same cleanup, gate and export.
 | `BLENDERAGENT_RENDER_ENGINE`    | `CYCLES`, `BLENDER_WORKBENCH`, `BLENDER_EEVEE_NEXT` | `CYCLES` | The engine for comparison renders. Cycles uses the GPU when the driver exposes one and the CPU otherwise; an engine that cannot start headless falls back. |
 | `BLENDERAGENT_RENDER_SAMPLES`   | integer                                             | `32`     | Cycles samples per comparison render.                                                                                                                      |
 
-Off-form: `BLENDERAGENT_BRIDGE_PORT`, the loopback port of the model bridge.
+Off-form: `BLENDERAGENT_BRIDGE_PORT`, the loopback port of the model bridge. The default `0` gives each run a free port, so two runs that Batch places on the same instance (they share its network) each get a bridge of their own; a fixed port lets only one of them start.
 
 The Amazon Bedrock model the agent reasons with is deployment configuration,
 `app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId`, and not a run option: the job role's
