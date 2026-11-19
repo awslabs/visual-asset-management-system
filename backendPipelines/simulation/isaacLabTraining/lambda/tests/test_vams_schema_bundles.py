@@ -98,8 +98,11 @@ class TestEvaluationBundle:
         task_timeout = int(_load("evaluation", "pipeline.json")["executionConfig"]["taskTimeout"])
         training_timeout = int(_load("training", "pipeline.json")["executionConfig"]["taskTimeout"])
         assert task_timeout >= cap + 5400
-        # The shared Batch job definition timeout (8 hours) is the backstop for both bundles.
-        assert task_timeout <= training_timeout
+        # Evaluation is the longer mode (9 hours); training keeps 8. The shared Batch job definition
+        # takes the larger value as its backstop (infra/test/pipelines/isaacLabTimeoutChain.test.ts).
+        assert task_timeout == 32400
+        assert training_timeout == 28800
+        assert task_timeout > training_timeout
 
     def test_shipped_evaluation_template_selects_evaluate_mode(self):
         template = _template("evaluation")

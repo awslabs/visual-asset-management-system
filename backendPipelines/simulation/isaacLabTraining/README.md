@@ -430,7 +430,7 @@ One job asks for 8 vCPUs, 32,768 MiB and 1 GPU, and every type in `instanceTypes
 
 ### Training job times out
 
--   A training run is limited to 8 hours, including the wait for a GPU instance and the image pull; an evaluation to 4 hours, of which playback itself is limited to at most 110 minutes
+-   A training run is limited to 8 hours, including the wait for a GPU instance and the image pull; an evaluation to 9 hours, of which playback itself is limited to at most 7.5 hours
 -   Consider using more GPUs or reducing `maxIterations`
 
 ---

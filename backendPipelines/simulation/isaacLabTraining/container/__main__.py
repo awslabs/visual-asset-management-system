@@ -64,7 +64,9 @@ NEWTON_VIDEO_VISUALIZER = "newton_gl"
 # Wall-clock bound on the play process (see evaluation_time_limit).
 EVALUATION_TIME_LIMIT_FLOOR_SECONDS = 1800
 EVALUATION_SECONDS_PER_STEP = 0.1
-EVALUATION_TIME_LIMIT_CAP_SECONDS = 6600
+# 7.5 hours: the evaluation workflow step allows 9 hours from its start, and the 1.5 hour margin covers
+# the wait for a GPU instance and the image pull, so the watchdog's readable failure comes first.
+EVALUATION_TIME_LIMIT_CAP_SECONDS = 27000
 
 # Get region from environment (set by Batch job definition)
 AWS_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-west-2"))
@@ -384,7 +386,7 @@ def evaluation_time_limit(config: PipelineConfig) -> int:
     Play did not terminate in some runs (a Kit visualizer under Newton; a Newton checkpoint played
     on PhysX), and a hung run would otherwise hold the GPU until the workflow's timeout. The limit
     is a floor plus a per-step allowance for the bounded playback (``--video_length``), capped below
-    the workflow's own 7,200 second bound. The constants are first estimates, to be tuned from the
+    the workflow's own 32,400 second (9 hour) bound. The constants are first estimates, to be tuned from the
     live smoke runs.
     """
     steps = config.num_episodes * config.steps_per_episode

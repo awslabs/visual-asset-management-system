@@ -51,6 +51,13 @@ DEFAULT_MAX_ITERATIONS = 1500
 DEFAULT_NUM_EPISODES = 50
 DEFAULT_STEPS_PER_EPISODE = 1000
 
+# Seconds the run's workflow step may take, per mode: the bound for the state machine's batch task and
+# for the AWS Batch attempt (executeBatchJob.py). Each equals that mode's vamsSchema bundle taskTimeout
+# (training/pipeline.json, evaluation/pipeline.json), so the internal task fires at the parent's
+# deadline and its Catch reports a readable failure. infra/test/pipelines/isaacLabTimeoutChain.test.ts
+# and lambda/tests/test_vams_schema_bundles.py assert the copies agree.
+TASK_TIMEOUT_SECONDS = {"train": 28800, "evaluate": 32400}
+
 # The RL libraries the container has an Isaac Lab script for. A third copy of the list held in
 # container/utils/training/config.py (RL_LIBRARIES) and container/__main__.py (the train and play
 # script maps): the lambda's code bundle is this directory alone, so the container package is not
@@ -248,6 +255,7 @@ def build_job_config_payload(event):
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "outputS3AssetFilesPath": job_config.get("outputS3AssetFilesPath", ""),
+        "taskTimeoutSeconds": TASK_TIMEOUT_SECONDS[mode],
         "status": "STARTING",
     }
 

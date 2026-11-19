@@ -125,6 +125,12 @@ def lambda_handler(event, context):
         },
     }
 
+    # The mode's own bound on this attempt (openPipeline's taskTimeoutSeconds); the job definition's
+    # value is the largest mode's, so it only backstops a submission that carries none.
+    attempt_seconds = event.get("taskTimeoutSeconds")
+    if attempt_seconds:
+        submit_params["timeout"] = {"attemptDurationSeconds": int(attempt_seconds)}
+
     logger.info(f"Submitting Batch job: {submit_params}")
     response = batch.submit_job(**submit_params)
 

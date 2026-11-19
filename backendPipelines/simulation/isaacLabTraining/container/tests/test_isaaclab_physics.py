@@ -226,7 +226,7 @@ class TestPlayWatchdog:
         big = main_module.evaluation_time_limit(_config(num_episodes=50, steps_per_episode=1000))
         huge = main_module.evaluation_time_limit(
             _config(num_episodes=10000, steps_per_episode=100000))
-        assert small == 1801 and 1800 < small < big <= huge == 6600
+        assert small == 1801 and 1800 < small < big <= huge == 27000
 
     def test_the_play_process_gets_the_limit(self, main_module, monkeypatch):
         seen = {}
