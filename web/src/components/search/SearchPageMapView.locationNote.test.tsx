@@ -10,7 +10,7 @@
  * raster draws the raster from the file's own tags.
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import SearchPageMapView from "./SearchPageMapView";
 import { INITIAL_STATE } from "./SearchPageTypes";
@@ -110,5 +110,31 @@ describe("Map view note for results without location data", () => {
             },
         ]);
         expect(screen.queryByTestId("map-note-raster")).not.toBeInTheDocument();
+    });
+
+    it("explains in the normal Map view that rasters load separately from location metadata", () => {
+        renderMap([
+            {
+                ...unlocated,
+                _source: {
+                    ...unlocated._source,
+                    geo_MD_location: { type: "Point", coordinates: [-122.3, 47.6] },
+                },
+            },
+        ]);
+        const trigger = screen.getByRole("button", { name: "About raster files on the map" });
+        fireEvent.click(trigger);
+        const info = screen.getByTestId("map-raster-info");
+        expect(info).toHaveTextContent("come from the location or latitude / longitude metadata");
+        expect(info).toHaveTextContent("loaded separately");
+        expect(info).toHaveTextContent("Show raster");
+        expect(info).toHaveTextContent("not from any metadata field");
+    });
+
+    it("keeps the info control out of the empty state", () => {
+        renderMap([unlocated]);
+        expect(
+            screen.queryByRole("button", { name: "About raster files on the map" })
+        ).not.toBeInTheDocument();
     });
 });

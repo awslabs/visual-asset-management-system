@@ -510,17 +510,58 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     return (
         <SpaceBetween direction="vertical" size="m">
             {/* Header with result count */}
-            {getTotalResultCount(state?.result) ? (
-                <Box variant="h2">
-                    {locationData.length} of {formatTotalResultCount(state.result)} result
-                    {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
-                        ? "s"
-                        : ""}{" "}
-                    with location data
-                </Box>
-            ) : (
-                <Box variant="h2">No search results with location data</Box>
-            )}
+            <div
+                data-testid="map-results-title-row"
+                style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px 16px",
+                }}
+            >
+                {getTotalResultCount(state?.result) ? (
+                    <Box variant="h2">
+                        {locationData.length} of {formatTotalResultCount(state.result)} result
+                        {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
+                            ? "s"
+                            : ""}{" "}
+                        with location data
+                    </Box>
+                ) : (
+                    <Box variant="h2">No search results with location data</Box>
+                )}
+                {locationData.length > 0 && (
+                    <div
+                        data-testid="map-raster-info-wrap"
+                        style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                    >
+                        <Popover
+                            triggerType="custom"
+                            size="large"
+                            position="bottom"
+                            header="Raster files and location data"
+                            dismissButton
+                            content={
+                                <Box data-testid="map-raster-info">
+                                    Footprint boxes and pins come from the <code>location</code> or
+                                    latitude / longitude metadata. GeoTIFF and COG rasters are
+                                    loaded separately: <strong>Show raster</strong> draws the raster
+                                    itself from the file&apos;s own georeferencing tags, not from
+                                    any metadata field.
+                                </Box>
+                            }
+                        >
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="About raster files on the map"
+                                data-testid="map-raster-info-button"
+                            />
+                        </Popover>
+                    </div>
+                )}
+            </div>
 
             {/* Warning when no location data */}
             {locationData.length === 0 && state?.result?.hits?.total?.value > 0 && (

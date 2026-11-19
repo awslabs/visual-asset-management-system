@@ -45,7 +45,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Added:**
 
 -   GeoTIFF Map Viewer for `.tif` and `.tiff` files (requires location services). Cloud Optimized GeoTIFFs in Web Mercator (EPSG:3857) stream as exact map overlays, small georeferenced files in other common coordinate systems are placed approximately and labelled so, and other files show a message that says what is wrong (the file's projection by EPSG code, not cloud-optimized, too many pixels, no georeferencing, or a crossing of longitude 180) and points to the COG Conversion pipeline where conversion helps. Each raster has opacity, order, zoom and hide/show controls. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
--   Search map: a **Show raster** action for TIFF file results with a footprint. The note for results without location data lists GeoTIFF and COG files and how their footprint box is derived. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
+-   Search map: a **Show raster** action for TIFF file results with a footprint. An info icon beside the results title explains that rasters load separately from location metadata. The note for results without location data lists GeoTIFF and COG files and how their footprint box is derived. ([#1599](https://github.com/awslabs/visual-asset-management-system/issues/1599))
 
 **Key fixes:**
 
