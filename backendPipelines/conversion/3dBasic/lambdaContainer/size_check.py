@@ -33,6 +33,7 @@ storage moves them with it.
 
 import os
 import shutil
+import zipfile
 
 MB = 1024 ** 2
 
@@ -217,7 +218,6 @@ def uncompressed_expansion_factor(extension, output_extension=None):
 def declared_uncompressed_bytes(path):
     """Total uncompressed size the zip's central directory declares, or None when the file is not a
     zip (the format's own check reports that). Reads no member data."""
-    import zipfile
     try:
         with zipfile.ZipFile(path) as archive:
             return sum(info.file_size for info in archive.infolist())

@@ -58,6 +58,15 @@ class TestDeclaredUncompressedSize:
         assert "part.3mf" in message and "40.0 MB uncompressed" in message
         assert "converting .3mf to .glb" in message and "function memory" in message
 
+    def test_the_dae_limit_applies_end_to_end(self):
+        mod = _load()
+        # 20 MB declared: over the 16.8 MB limit at 37 per byte (.dae), under the 23.9 MB at 26 (.glb).
+        with pytest.raises(size_check.InputTooLargeError) as excinfo:
+            _run(mod, 20 * MB, output=".dae")
+        assert "20.0 MB uncompressed" in str(excinfo.value) and "to .dae" in str(excinfo.value)
+        with pytest.raises(AssertionError, match="the package was parsed"):
+            _run(mod, 20 * MB, output=".glb")
+
     def test_the_collada_output_has_its_own_lower_limit(self):
         assert size_check.uncompressed_expansion_factor(".3mf") == 26
         assert size_check.uncompressed_expansion_factor(".3mf", ".dae") == 37
