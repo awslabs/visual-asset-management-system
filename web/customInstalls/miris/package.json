@@ -1,0 +1,20 @@
+{
+    "name": "miris-sdk-bundle",
+    "version": "1.0.0",
+    "description": "Miris Spatial Streaming web SDK bundle for the VAMS Miris Spatial Streaming viewer",
+    "private": true,
+    "license": "Apache-2.0",
+    "scripts": {
+        "build": "webpack --mode production"
+    },
+    "dependencies": {
+        "@miris-inc/components": "0.0.8-5ac04cf",
+        "@miris-inc/core": "0.0.8-5ac04cf",
+        "@miris-inc/three": "0.0.8-5ac04cf",
+        "three": "0.185.1"
+    },
+    "devDependencies": {
+        "webpack": "^5.89.0",
+        "webpack-cli": "^5.1.4"
+    }
+}

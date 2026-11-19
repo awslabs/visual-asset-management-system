@@ -1,0 +1,42 @@
+{
+    "workflowName": "Miris Spatial Streaming Upload",
+    "category": "Conversion",
+    "description": "Packages a USD asset and uploads it to Miris Spatial Streaming so it becomes streamable in the VAMS Miris viewer.",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.usd", "*.usda", "*.usdc", "*.usdz"],
+                "exclude": []
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:miris-upload": "miris-stream"
+            },
+            "enabled": false
+        }
+    ],
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "crossAssetAllowed": false,
+            "singleAssetOnly": true,
+            "wholeAssetAllowed": false,
+            "folderAllowed": false
+        },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "inputFileFilters": {
+            "allow": ["*.usd", "*.usda", "*.usdc", "*.usdz"],
+            "exclude": []
+        },
+        "concurrencyRestriction": "none",
+        "outputTarget": {
+            "locationType": "asset",
+            "allowOverride": false
+        },
+        "allowWorkflowTriggerChaining": false
+    }
+}

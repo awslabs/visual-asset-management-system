@@ -399,6 +399,8 @@ The value is still present in that Lambda's deployment package. Two consequences
 
 Where a credential must be reachable only through Secrets Manager, create the secret out of band and have VAMS reference it. The Physna add-on supports this with `app.addons.usePhysnaSync.credentialsSecretArn`; on that path no credential passes through synthesis and the populate custom resource is not created. The NVIDIA pipelines accept the token value only, so their credential does pass through synthesis — scope `lambda:GetFunction` and access to the CDK assets bucket accordingly, and rotate the HuggingFace token on the HuggingFace side when a principal's access is revoked.
 
+The Miris Spatial Streaming add-on reads its Integration Key from a secret the operator creates (`app.addons.useMirisStreaming.apiKeySecretArn`), so the key never passes through synthesis. Its `static` mode viewer key (`viewerKey`) is a configuration value and is in the synthesized template. A viewer key authorizes streaming only and reaches the browser, so scope it in Miris with tags and an expiry, or use `perView` mode, which deploys no shared viewer key.
+
 The temporary directory that carries a credential into a code asset is removed as soon as CDK has staged it, so a build or CI host does not accumulate cleartext copies across synthesis runs.
 
 ### Encryption in Transit
@@ -541,6 +543,7 @@ when `app.webUi.allowUnsafeEvalFeatures` is enabled.
 | Amazon Location Service enabled  | Maps endpoint in `connect-src`                                                                                                        |
 | API custom domain enabled        | `https://{domainHost}` of `app.api.apiGatewayRest.customDomain` in `connect-src`, beside the API Gateway URL                          |
 | Physna Sync add-on enabled       | Physna viewer origin in `connect-src` and `frame-src`. The add-on adds no `script-src` source, and in particular no `'unsafe-inline'` |
+| Miris Streaming add-on enabled   | `https://*.miris.com` and `wss://*.miris.com` in `connect-src`, and `blob:` in `script-src` for the Miris web SDK                     |
 
 :::note[The Physna add-on does not relax inline-script protection]
 The Physna viewer embeds Physna's hosted viewer URL directly as the `src` of an `<iframe>`, so the framed

@@ -41,7 +41,7 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 24 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 25 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation (3D files, images, TGA/TIFF and video), and AI-powered metadata generation
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service, and natural-language (vector) search powered by Amazon Bedrock embeddings in a DynamoDB vector index, across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
@@ -60,7 +60,7 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
 | **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 25 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
-| **3D Viewing**        | 24 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **3D Viewing**        | 25 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
 | **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
 | **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
@@ -189,6 +189,7 @@ VAMS integrates with a range of AWS partner solutions and open-source projects f
 | [Garnet Framework](https://garnet-framework.tech/)                                                                                                          | Addon             | Data synchronization to external NGSI-LD knowledge graphs                                     |
 | [Physna](https://physna.com/)                                                                                                                               | Addon             | One-way sync to Physna of supported 3D/CAD files and metadata for geometric 3D search         |
 | [EDH](https://github.com/awslabs/engineering-development-hub)                                                                                               | Addon             | Amazon DCV desktops, desktop AMIs and container jobs on an EDH cluster                        |
+| [Miris](https://miris.com/)                                                                                                                                 | Addon             | Progressive spatial streaming of USD assets in the file viewer, with an upload pipeline       |
 | [NVIDIA Isaac Lab](https://github.com/isaac-sim/IsaacSim)                                                                                                   | Pipeline          | Reinforcement learning training and evaluation                                                |
 | [FFmpeg](https://ffmpeg.org/)                                                                                                                               | Pipeline          | Audio extraction, FLAC encoding, and key-frame extraction from teardown videos (GPL-licensed) |
 

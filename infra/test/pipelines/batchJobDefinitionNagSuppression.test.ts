@@ -22,6 +22,7 @@
 import * as cdk from "aws-cdk-lib";
 import * as fs from "fs";
 import * as path from "path";
+import { PIPELINE_SOURCE_DIRS, pipelineSourceLabel } from "../support/addonPipelines";
 import { Annotations, Match, Template } from "aws-cdk-lib/assertions";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
@@ -129,7 +130,6 @@ describe.each([
  * appliesTo matches only when the account resolves.
  */
 describe("pipeline constructs suppress job-definition/* by pattern, not by an interpolated account", () => {
-    const PIPELINES_DIR = path.join(__dirname, "../../lib/nestedStacks/pipelines");
     const INTERPOLATED =
         /Resource::arn:<AWS::Partition>:batch:\$\{region\}:\$\{account\}:job-definition/;
     const PATTERN_FORM = "(?:\\\\d{12}|<AWS::AccountId>):job-definition";
@@ -140,8 +140,8 @@ describe("pipeline constructs suppress job-definition/* by pattern, not by an in
             if (entry.isDirectory()) return sources(full);
             return entry.name.endsWith(".ts") ? [full] : [];
         });
-    const files = sources(PIPELINES_DIR).map((file) => ({
-        file: path.relative(PIPELINES_DIR, file),
+    const files = PIPELINE_SOURCE_DIRS.flatMap((dir) => sources(dir)).map((file) => ({
+        file: pipelineSourceLabel(file),
         text: fs.readFileSync(file, "utf-8"),
     }));
 

@@ -68,6 +68,59 @@ export function addonReadOnlyApiRouteCriteria(config: Config.Config, roleIdClean
                   },
               ]
             : []),
+        ...(config.app.addons?.useMirisStreaming?.enabled
+            ? [
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `19_${roleIdClean}_api_paths`,
+                          },
+                          operator: {
+                              S: "equals",
+                          },
+                          value: {
+                              S: "/addon/miris/asset-status", //Miris stream status (per-asset authorization is enforced server-side)
+                          },
+                      },
+                  },
+              ]
+            : []),
+    ];
+}
+
+/**
+ * `route__path` criteria the enabled add-ons add to the basic read-only role's
+ * "Allow POST on API Paths" constraint (`dynamodb-authdefaults-ro-construct.ts`), for add-on routes
+ * that read through a POST body, in that constraint's DynamoDB attribute-value shape.
+ */
+export function addonReadOnlyApiPostRouteCriteria(
+    config: Config.Config,
+    roleIdClean: string
+): any[] {
+    return [
+        ...(config.app.addons?.useMirisStreaming?.enabled
+            ? [
+                  {
+                      M: {
+                          field: {
+                              S: "route__path",
+                          },
+                          id: {
+                              S: `17_${roleIdClean}_api_paths_post`,
+                          },
+                          operator: {
+                              S: "equals",
+                          },
+                          value: {
+                              S: "/addon/miris/viewer-key", //Miris viewer key for one asset file (per-asset authorization is enforced server-side)
+                          },
+                      },
+                  },
+              ]
+            : []),
     ];
 }
 

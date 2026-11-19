@@ -647,6 +647,12 @@ Tags and tag types are database-namespaced. The partition key is the `databaseId
 
 An enabled add-on can add tables of its own; the add-on's page describes their schemas (see [Add-ons Overview](../developer/addons-overview.md)).
 
+### Miris Viewer Key Storage Table (add-on)
+
+Created only by the Miris Spatial Streaming add-on in `perView` mode, with one row per minted viewer key and no key material. The partition key is `mirisViewerKeyId` (String); the table has no index.
+
+Each row carries `databaseId`, `assetId`, `filePath` (asset-relative), `userId`, `mirisAssetUuid`, `createdAt` and `expiresAt` (RFC 3339 UTC), and `ttl`, the key's expiry plus one hour in epoch seconds. Its `KEYS_ONLY` stream feeds the cleanup Lambda function, which deletes the key from Miris when Amazon DynamoDB TTL removes the row.
+
 ## Amazon S3 Bucket Organization
 
 ### Asset Buckets
@@ -690,6 +696,8 @@ by the input file that the data was derived from and one keyed by the execution 
 pipelines/{pipelineName}/{executionId}/{working_files}
 vams.preparedDownloads/{databaseId}/{assetId}/{userHash}/{requestId}/{archiveFileName | manifest.json | resolved-manifest.jsonl}
 ```
+
+The Miris Upload pipeline also keeps its duplicate-upload claims at the bucket root, under `locks/miris-upload/<databaseId>/<assetId>/<fingerprint>.claim`. See [Miris Upload](../pipelines/miris-upload.md#duplicate-uploads-and-re-runs).
 
 Where:
 

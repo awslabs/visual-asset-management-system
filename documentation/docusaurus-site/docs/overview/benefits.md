@@ -35,7 +35,7 @@ VAMS leverages Amazon S3 as its storage layer, providing 99.999999999% (11 nines
 
 ## Interactive Visualization
 
-VAMS includes 24 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
+VAMS includes 25 built-in viewer plugins that allow users to visualize a wide range of 3D, media, and document file formats directly in the browser, without requiring specialized desktop software or file downloads.
 
 -   View 3D meshes (GLTF, GLB, OBJ, FBX, STL, and more) with the Three.js viewer, including scene graph navigation, material editing, and transform controls
 -   Explore point clouds (E57, LAS, LAZ) through the Potree viewer with octree-based streaming
@@ -59,6 +59,7 @@ VAMS provides a configurable pipeline and workflow system that automates common 
 -   **GenAI Metadata Generation** -- Analyze every uploaded file: extract geometric and media attributes, describe it with Amazon Bedrock when the GenAI layer is on, write typed and descriptive file metadata, and embed each file version for natural-language search
 -   **Video SOP/BOM Extraction** -- Transcribe narrated teardown videos with Amazon Transcribe and derive a step-by-step procedure, a bill of materials, a lab summary, and verification key frames with Amazon Bedrock
 -   **GenAI CAD STEP Agent** -- Create or modify a CAD STEP file from a natural-language instruction with a Strands agent that writes, runs and checks CadQuery scripts
+-   **Miris Upload** -- Upload USD assets to Miris Spatial Streaming and stream them progressively in the VAMS file viewer
 -   **NVIDIA Isaac Lab Training** -- Run reinforcement learning training and evaluation workloads
 -   **Image to 3D** -- Generate a 3D mesh from a single photograph with a selectable open-weight model, with an optional print-readiness cleanup toward a watertight STL
 -   **RapidPipeline and VNTANA ModelOps** -- Licensed pipeline integrations for advanced spatial data optimization

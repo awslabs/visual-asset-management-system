@@ -136,6 +136,7 @@ const sidebars: SidebarsConfig = {
                                 "developer/edh-workstations/cli-troubleshooting",
                             ],
                         },
+                        "developer/miris-spatial-streaming",
                     ],
                 },
                 {
@@ -160,6 +161,7 @@ const sidebars: SidebarsConfig = {
                         "pipelines/genai-cad-step-agent",
                         "pipelines/gaussian-splatting",
                         "pipelines/video-sop-bom",
+                        "pipelines/miris-upload",
                         "pipelines/nvidia-isaac-lab",
                         "pipelines/nvidia-cosmos-predict",
                         "pipelines/nvidia-cosmos-reason",

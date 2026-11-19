@@ -70,3 +70,6 @@ EDH_AMI_RECIPES_DISABLED_MESSAGE = (
     "EDH AMI recipes are not enabled for this deployment. If they were enabled after you logged "
     "in, run 'vamscli auth login' again to refresh the feature switches."
 )
+# Miris Spatial Streaming
+FEATURE_MIRIS_ADDON = "MIRIS_ADDON"
+FEATURE_MIRIS_UPLOAD = "MIRIS_UPLOAD"

@@ -159,7 +159,7 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 ### Supported Viewer Types
 
-VAMS includes 24 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images (including TIFF and TGA, which browsers cannot show, plus WebP and BMP), video, audio, documents, text files such as NVIDIA MDL materials, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
+VAMS includes 25 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images (including TIFF and TGA, which browsers cannot show, plus WebP and BMP), video, audio, documents, text files such as NVIDIA MDL materials, and tabular data. The viewer is selected automatically when exactly one viewer supports the file extension, or when the top-priority viewer is configured to open automatically, as the Miris Spatial Streaming viewer is for USD files. Otherwise, when multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 

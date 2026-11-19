@@ -1366,10 +1366,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
-    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
-    KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
+    Which group that is depends on the compute family. The eight **Fargate** job definitions (coordinate
+    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, the GenAI CAD
+    STEP agent on its `fargate` runtime, and Miris upload) write through the `awslogs` driver to a
+    VAMS-owned, KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
     so theirs is AWS Batch's default `/aws/batch/job`. In both families the stream is
@@ -1500,7 +1500,7 @@ so no suite there runs `--strict-markers` and an unregistered marker only warns.
 `unit` through a `pytest_configure` hook in their `conftest.py`; none registers `temporary`.
 
 **A rule that must hold for EVERY pipeline goes in `backendPipelines/tests/`.**
-`test_open_pipeline_extension_gates.py` is the worked example: it loads all eight `openPipeline.py`
+`test_open_pipeline_extension_gates.py` is the worked example: it loads all nine `openPipeline.py`
 handlers by path under per-pipeline module names and asserts each tests EXACT membership of its parsed
 `ALLOWED_INPUT_FILEEXTENSIONS` list. `in` against the joined env string is substring containment, which
 admits any prefix of a listed extension (`.us` passes for `.usd,.usda`), and the loose form spread by

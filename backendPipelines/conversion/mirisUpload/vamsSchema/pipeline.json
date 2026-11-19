@@ -1,0 +1,27 @@
+{
+    "pipelineName": "Miris Spatial Streaming Upload",
+    "category": "Conversion",
+    "description": "Packages a USD asset and uploads it to Miris Spatial Streaming, then writes the Miris stream metadata (asset UUID, source version, upload time, display name) to the USD file so it becomes streamable in the VAMS Miris viewer.",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "172800",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": { "wholeAsset": false },
+        "metadataInputs": {
+            "assetMetadata": true,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": false,
+        "inputFileFilters": {
+            "allow": ["*.usd", "*.usda", "*.usdc", "*.usdz"],
+            "exclude": []
+        }
+    }
+}

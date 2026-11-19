@@ -34,6 +34,8 @@ ADDON_FEATURE_PHYSNA = "PHYSNA_ADDON"
 ADDON_FEATURE_EDH_WORKSTATIONS = "EDH_WORKSTATIONS"
 ADDON_FEATURE_EDH_CONTAINERS = "EDH_CONTAINERS"
 ADDON_FEATURE_EDH_AMI_RECIPES = "EDH_AMI_RECIPES"
+ADDON_FEATURE_MIRIS = "MIRIS_ADDON"
+ADDON_FEATURE_MIRIS_UPLOAD = "MIRIS_UPLOAD"
 
 # A core feature a deployment can switch off is gated by the same mechanism: its routes carry the
 # switch in ``ApiRoute.addon_feature``, and the core stack adds the name to the same environment
@@ -47,6 +49,8 @@ ADDON_FEATURES = (
     ADDON_FEATURE_EDH_WORKSTATIONS,
     ADDON_FEATURE_EDH_CONTAINERS,
     ADDON_FEATURE_EDH_AMI_RECIPES,
+    ADDON_FEATURE_MIRIS,
+    ADDON_FEATURE_MIRIS_UPLOAD,
 )
 
 # The environment variable the core stack sets on the listing Lambdas.

@@ -10,8 +10,8 @@ VAMS is an AWS-native Visual Asset Management System for managing, visualizing, 
 -   **Python Lambda backend** (`backend/`) — Casbin ABAC/RBAC auth, DynamoDB, S3
 -   **CDK TypeScript infrastructure** (`infra/`) — 14 nested stacks, multi-partition support
 -   **Python CLI tool** (`tools/VamsCLI/`) — Click framework, profile-based config
--   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, SYSTEM GenAI metadata generation (Amazon Bedrock analysis, attributes, and vector-search embeddings for every uploaded file: dedicated extraction for the types it recognizes, a generic probe for the rest) and its asset summary (one description of a whole asset or folder from its files' descriptions), video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, SYSTEM 3D preview thumbnails, media previews (images, TGA/TIFF, video; `useMediaPreviews`), NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, the zipArchive system pipeline (Download as Zip), and more
--   **Add-ons** (`infra/lib/nestedStacks/addon/`, `backend/backend/handlers/addon/`) — optional, feature-gated integrations deployed from their own nested stacks: Garnet Framework, Physna Sync, EDH Workstations (see `documentation/docusaurus-site/docs/developer/addons-overview.md`)
+-   **Processing pipelines** (`backendPipelines/`) — 3D conversion, coordinate transform, SYSTEM GenAI metadata generation (Amazon Bedrock analysis, attributes, and vector-search embeddings for every uploaded file: dedicated extraction for the types it recognizes, a generic probe for the rest) and its asset summary (one description of a whole asset or folder from its files' descriptions), video SOP/BOM extraction, GenAI CAD STEP agent (Strands), Gaussian splatting, point cloud, SYSTEM 3D preview thumbnails, media previews (images, TGA/TIFF, video; `useMediaPreviews`), NVIDIA Cosmos Predict, NVIDIA Cosmos Reason, NVIDIA Cosmos Transfer, NVIDIA Cosmos 3 (omni), NVIDIA GR00T fine-tuning, NVIDIA Isaac Lab training, image to 3D, the zipArchive system pipeline (Download as Zip), Miris Spatial Streaming upload (built by the Miris add-on), and more
+-   **Add-ons** (`infra/lib/nestedStacks/addon/`, `backend/backend/handlers/addon/`) — optional, feature-gated integrations deployed from their own nested stacks: Garnet Framework, Physna Sync, EDH Workstations, Miris Spatial Streaming (see `documentation/docusaurus-site/docs/developer/addons-overview.md`)
 
 ### **Version Info**
 
@@ -71,7 +71,10 @@ root/
 │   │   └── genAiMetadata/     # SYSTEM - GenAI metadata pipeline (lambda/, containers/{blender,media}, vamsSchema/; vamsSchema/assetSummary/ = the asset summary workflow)
 │   ├── utility/
 │   │   └── zipArchive/        # zipArchive system pipeline (utility-zip-archive): streaming ZIP64/tar writer for Download as Zip and zipArchive runs
-│   ├── conversion/, preview/, 3dRecon/, simulation/, multi/
+│   ├── conversion/
+│   │   ├── 3dBasic/, coordinateTransform/
+│   │   └── mirisUpload/       # Miris Spatial Streaming upload (USD to a streamable Miris asset; built by the Miris add-on)
+│   └── preview/, 3dRecon/, simulation/, multi/
 ├── backendAddons/             # Add-on build sources shipped with the repo, one folder per add-on
 ├── documentation/             # User guides, API spec, permission templates
 │   └── CLAUDE.md              # Documentation development guide

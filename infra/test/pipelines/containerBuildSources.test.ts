@@ -312,6 +312,11 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
         file: path.join(PIPELINES_DIR, "genAi", "videoSopBom", "container", "Dockerfile"),
         scratchDir: "/app/tmp",
     },
+    {
+        label: "Miris upload",
+        file: path.join(PIPELINES_DIR, "conversion", "mirisUpload", "container", "Dockerfile"),
+        scratchDir: "/workdir",
+    },
 ];
 
 /**
@@ -447,6 +452,76 @@ describe.each(NON_ROOT_IMAGES)(
         }
     }
 );
+
+/**
+ * The Miris upload image installs its Python dependencies from a hash-locked set.
+ *
+ * `requirements.txt` lists the direct dependencies and `requirements.lock` is generated from it with
+ * every package, transitive ones included, pinned by version and hash. `pip --require-hashes` refuses
+ * a requirement that carries no hash, so the install is only as reproducible as the lock is complete:
+ * a lock entry without a hash fails the BUILD, and a Dockerfile that installs from `requirements.txt`
+ * instead resolves whatever the index serves that day.
+ */
+describe("the Miris upload image installs from its hash-locked requirements", () => {
+    const containerDir = path.join(PIPELINES_DIR, "conversion", "mirisUpload", "container");
+    const dockerfile = fs.readFileSync(path.join(containerDir, "Dockerfile"), "utf-8");
+    const lock = fs.readFileSync(path.join(containerDir, "requirements.lock"), "utf-8");
+
+    /** Each requirement in the lock with its continuation lines joined. */
+    const lockEntries = lock
+        .replace(/\\\r?\n\s*/g, " ")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"));
+
+    it("pip installs the lock with --require-hashes, and never requirements.txt", () => {
+        const installs = dockerfile
+            .replace(/\\\r?\n\s*/g, " ")
+            .split(/\r?\n/)
+            .filter((line) => /\bpip3? install\b/.test(line));
+        expect(installs.length).toBeGreaterThan(0);
+        for (const install of installs) {
+            expect(install).toContain("--require-hashes");
+            expect(install).toMatch(/-r \S*requirements\.lock\b/);
+            expect(install).not.toMatch(/requirements\.txt/);
+        }
+    });
+
+    it("every lock entry pins an exact version and carries a sha256 hash", () => {
+        // Control: an empty lock would satisfy the loop below.
+        expect(lockEntries.length).toBeGreaterThanOrEqual(5);
+        for (const entry of lockEntries) {
+            expect([entry.split(" ")[0], /^[A-Za-z0-9._-]+(\[[^\]]+\])?==\S+/.test(entry)]).toEqual(
+                [entry.split(" ")[0], true]
+            );
+            expect([entry.split(" ")[0], /--hash=sha256:[0-9a-f]{64}/.test(entry)]).toEqual([
+                entry.split(" ")[0],
+                true,
+            ]);
+        }
+    });
+
+    it("the lock covers every direct dependency", () => {
+        const direct = fs
+            .readFileSync(path.join(containerDir, "requirements.txt"), "utf-8")
+            .split(/\r?\n/)
+            .map((line) => line.replace(/#.*$/, "").trim())
+            .filter(Boolean)
+            .map((line) =>
+                line
+                    .split(/[=<>~!;[ ]/)[0]
+                    .toLowerCase()
+                    .replace(/_/g, "-")
+            );
+        expect(direct.length).toBeGreaterThan(0);
+        const locked = new Set(
+            lockEntries.map((entry) => entry.split("==")[0].toLowerCase().replace(/_/g, "-"))
+        );
+        for (const name of direct) {
+            expect([name, locked.has(name)]).toEqual([name, true]);
+        }
+    });
+});
 
 /**
  * The GPU images that clone an upstream repository at build time -- the five NVIDIA images and the

@@ -1192,6 +1192,8 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `FEATURE_EDH_WORKSTATIONS` (`addon_constants.py`) | `"EDH_WORKSTATIONS"`              | EDH Workstations add-on  |
 | `FEATURE_EDH_CONTAINERS` (`addon_constants.py`)   | `"EDH_CONTAINERS"`                | EDH container jobs       |
 | `FEATURE_EDH_AMI_RECIPES` (`addon_constants.py`)  | `"EDH_AMI_RECIPES"`               | EDH AMI recipe builds    |
+| `FEATURE_MIRIS_ADDON` (`addon_constants.py`)      | `"MIRIS_ADDON"`                   | Miris streaming add-on   |
+| `FEATURE_MIRIS_UPLOAD` (`addon_constants.py`)     | `"MIRIS_UPLOAD"`                  | Miris upload pipeline    |
 | `FEATURE_VECTORSEARCH`                            | `"VECTORSEARCH"`                  | `search nlp` available   |
 
 ---

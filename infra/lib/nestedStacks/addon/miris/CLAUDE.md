@@ -1,0 +1,46 @@
+# CLAUDE.md -- Miris Spatial Streaming add-on (CDK)
+
+> Auto-loaded when Claude Code works within `infra/lib/nestedStacks/addon/miris/`. Covers the Miris Spatial Streaming add-on's nested stacks, Lambda builders and constructs, the add-on lane entries it contributes to the CDK app, and the tests that pin them. Every rule in `infra/CLAUDE.md` applies here as well; this file adds what is specific to Miris. The backend side is `backend/backend/handlers/addon/miris/CLAUDE.md`, the upload pipeline's Lambdas and container are steered by `backendPipelines/conversion/mirisUpload/CLAUDE.md`, the viewer by `web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/CLAUDE.md`, and the operator page is `documentation/docusaurus-site/docs/developer/miris-spatial-streaming.md`. The Kiro mirror is `.kiro/steering/ADDON_MIRIS_SPATIAL_STREAMING.md` (root `CLAUDE.md` Rule 11).
+
+---
+
+## Layout
+
+| File                                                    | What it is                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mirisBuilder-nestedStack.ts`                           | `MirisBuilderNestedStack`, nested in `AddonBuilderNestedStack` while `app.addons.useMirisStreaming.enabled`; registers `GET /addon/miris/asset-status` and `POST /addon/miris/viewer-key` with `registry: props.registry`, builds the perView viewer key table, its TTL cleanup consumer and the two alarms |
+| `lambdaBuilder/mirisFunctions.ts`                       | `buildGetMirisAssetStatusFunction`, `buildMintMirisViewerKeyFunction`, `buildMirisViewerKeyCleanupFunction`, `mirisMetricsNamespace()`; each grants `secretsmanager:GetSecretValue` on exactly `apiKeySecretArn`                                                                                            |
+| `constructs/dynamodb-metadataschema-miris-construct.ts` | Seeds the GLOBAL "Miris stream" file metadata schema (`miris-stream-file-schema`) from `dynamodb-metadataschema-miris-stream.json`                                                                                                                                                                          |
+| `upload/mirisUploadBuilder-nestedStack.ts`              | `MirisUploadBuilderNestedStack`, built by `AddonBuilderNestedStack` while `upload.enabled`; returns `pipelineVamsLambdaFunctionName` for registration                                                                                                                                                       |
+| `upload/constructs/mirisUpload-construct.ts`            | The AWS Batch Fargate job, its state machine and the vamsSchema registration                                                                                                                                                                                                                                |
+| `upload/lambdaBuilder/mirisUploadFunctions.ts`          | The pipeline's Lambdas, `MIRIS_DEPENDENCY_MANIFEST_PREFIX` (`pipelines/miris-upload/manifests`, auxiliary bucket)                                                                                                                                                                                           |
+
+The configuration lives in `infra/config/addon/mirisStreamingConfig.ts` (interface, defaults, validation, `mirisVpcRequiringFeatures`), joined through `config/addon/addonConfig.ts`, and the ConfigBuilder mirror in `documentation/docusaurus-site/src/components/ConfigBuilder/addon/mirisStreaming.ts`. Keep the two in step by hand: `infra/test/config/configBuilderSync.test.ts` checks fields and defaults only.
+
+## Configuration (`app.addons.useMirisStreaming`)
+
+`enabled`, `viewerKeyMode` (`perView` default, or `static`), `viewerKey` (static mode only), `viewerKeyTtlMinutes` (1 to 60, default 15), `apiKeySecretArn` (the complete Secrets Manager ARN, suffix included), `mirisApiBaseUrl` (https, not a private or link-local host), and `upload` (`enabled`, `autoRegisterWithVAMS`, `autoRegisterAutoTriggerOnFileUpload`, `triggerExtensions`, `taskTimeoutSeconds`, `maxAssetSizeBytes`). `getConfig()` rejects the add-on outside the `aws` partition (on `config.env.partition`, whatever `govCloud.enabled` says) and without `app.webUi.allowUnsafeEvalFeatures`; `upload.enabled` requires the add-on, the global VPC and, with an imported VPC, private subnet ids. `triggerExtensions` may list only extensions the stream schema accepts (`MIRIS_STREAM_SCHEMA_EXTENSIONS`). Tests: `infra/test/config/mirisConfig.test.ts`, which also checks each rule against the ConfigBuilder.
+
+## Lane entries
+
+-   **Feature switches.** `MIRIS_ADDON` (the add-on) and `MIRIS_UPLOAD` (the upload pipeline, which gates the viewer's Stream with Miris button), pushed by `AddonBuilderNestedStack`.
+-   **Resource name.** The viewer key table is published as `addon/miris/viewerKeyStorage` (`infra/common/addonResourceParamKeys.ts`, mirrored in `backend/backend/common/addonResourceNames.py`).
+-   **Read-only role.** `addonDefaultRoutes.ts` adds criterion `19_<role>_api_paths` (`equals` `/addon/miris/asset-status`) to the GET constraint and `17_<role>_api_paths_post` (`equals` `/addon/miris/viewer-key`) to the POST constraint; exact matches, so no later route under `/addon/miris/` is granted with them.
+-   **CSP.** `addonCsp.ts` adds `blob:` to `script-src` (the SDK loads its engine glue from a `blob:` URL) and `https://*.miris.com` and `wss://*.miris.com` to `connect-src`. `'unsafe-eval'` comes only from `app.webUi.allowUnsafeEvalFeatures` (the SDK's generated bindings use `new Function`). Tests: `infra/test/addon/mirisAddonCsp.test.ts`, `addonCspScriptSrc.test.ts`.
+-   **VPC.** `addonVpcEndpoints.ts`: `addonNeedsPrivateSubnets()` is true while `upload.enabled`, so a VPC VAMS creates gets private subnets and NAT gateways (the Fargate jobs reach `*.miris.com` through them), and `addonInterfaceEndpoints()` adds the Batch, ECR API and ECR Docker endpoints under the core blocks' ids, so a core pipeline's endpoint is not repeated. No ECS endpoint: that is the control plane an EC2-launch-type instance's agent uses, and Fargate tasks do not. Test: `infra/test/addon/mirisUploadVpcPlacement.test.ts` (synth).
+-   **Stack order.** The upload pipeline's vamsSchema registration custom resources invoke the import Lambda built in ApiBuilder2, so `AddonBuilderNestedStack.invokesVamsSchemaImportFunction` is true and the core stack deploys AddonBuilder after ApiBuilder2.
+-   **Route parity.** `enableRouteContributingAddons()` (`infra/test/addon/support/addonTestHooks.ts`) enables the add-on in perView mode, so `test/api/apiRouteBackendCdkParity.test.ts` sees both routes.
+
+## Viewer keys and the Integration Key
+
+perView mode creates a retained, auto-named DynamoDB table (one row per minted key, TTL on `expiresAt`) and a stream consumer, `viewerKeyCleanup`, that deletes a key from Miris when TTL removes its row, with a dead-letter queue. Static mode builds neither. The status, mint and cleanup Lambdas read the Integration Key from Secrets Manager and get `MIRIS_METRICS_NAMESPACE` (`VAMS/<configuration name>-<baseStackName>/Miris`), where the backend publishes `MirisAuthFailures` in embedded metric format.
+
+Two CloudWatch alarms, with no action attached: `<name>-<baseStackName>-mirisAuthFailures` (Sum over 5 minutes above 0) and, in perView mode, `<name>-<baseStackName>-mirisViewerKeyCleanupDLQ` (messages visible in the DLQ). Tests: `infra/test/addon/mirisAddonStack.test.ts`.
+
+## Upload pipeline (CDK)
+
+`AddonBuilderNestedStack` builds a `SecurityGroupGatewayPipelineConstruct` and passes `privateSubnets.pipeline` to `MirisUploadBuilderNestedStack`. The job is AWS Batch on Fargate (`awslogs` driver to a VAMS-owned `/aws/vendedlogs/Pipelines/...` group, counted with the core Fargate job definitions in `infra/test/pipelines/batchFargatePipelineProps.test.ts`).
+
+The state machine starts at `ConstructPipelineTask`, whose `Catch` (`ResultPath: "$.error"`, keeping `externalSfnTaskToken`) leads to `MirisUploadEndFailure`, a Lambda invoke of `pipelineEnd` that reports on the parent workflow's callback token before its `Fail` state. Without it a timeout, out-of-memory kill or import error in that first state reports nothing and the parent task waits out its whole `taskTimeout` (`infra/test/pipelines/constructPipelineTaskErrorRoute.test.ts`).
+
+Tests: `mirisUploadPipeline.test.ts` (harness `mirisUploadHarness.ts`), `mirisUploadNag.test.ts`, `mirisUploadNagRegexes.test.ts`, `mirisAddonNag.test.ts`, `mirisStreamSchemaSeed.test.ts`.
