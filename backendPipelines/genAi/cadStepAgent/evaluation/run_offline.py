@@ -294,8 +294,7 @@ def run_one(case_id, corpus_path, container_dir, out_root, model_id, fake_script
             return holder["rec"]
         from strands.models import BedrockModel  # noqa: WPS433 - only a model-driven run needs it
 
-        model = BedrockModel(model_id=model_id, region_name=region,
-                             temperature=agent_module.TEMPERATURE, max_tokens=agent_module.MAX_TOKENS)
+        model = BedrockModel(model_id=model_id, region_name=region, max_tokens=agent_module.MAX_TOKENS)
         holder["rec"] = AgentRecorder(agent_module.build_agent(model, bound_tools))
         return holder["rec"]
 

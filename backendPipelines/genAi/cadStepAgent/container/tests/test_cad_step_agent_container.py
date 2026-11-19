@@ -1593,6 +1593,51 @@ class TestRunJob:
             with patch.dict(sys.modules, {"strands.models": fake_models}):
                 agent_module.build_model("bedrock", "global.model", region="us-east-1")
 
+    def test_neither_provider_is_given_a_temperature(self):
+        # Some models refuse the parameter outright ("`temperature` is deprecated for this model").
+        captured = {}
+        fake_models = types.ModuleType("strands.models")
+        fake_openai = types.ModuleType("strands.models.openai")
+
+        class BedrockModel:
+            def __init__(self, **kwargs):
+                captured["bedrock"] = kwargs
+
+        class OpenAIModel:
+            def __init__(self, **kwargs):
+                captured["openai"] = kwargs
+        fake_models.BedrockModel = BedrockModel
+        fake_openai.OpenAIModel = OpenAIModel
+        with patch.dict(sys.modules, {"strands.models": fake_models, "strands.models.openai": fake_openai}):
+            agent_module.build_model("bedrock", "global.model", region="us-east-1", guardrail=_FakeGuardrail())
+            agent_module.build_model("openai", "gpt-model", api_key="test-key")
+        assert "temperature" not in captured["bedrock"]
+        assert captured["bedrock"]["max_tokens"] == agent_module.MAX_TOKENS
+        assert captured["openai"]["params"] == {"max_tokens": agent_module.MAX_TOKENS}
+
+    def test_the_converse_request_for_each_shipped_default_model_carries_no_temperature(self):
+        # The request the real Strands Bedrock provider builds, for the bedrockModelId each config
+        # template ships. A template that ships none (the operator picks the model) is skipped.
+        repo = os.path.abspath(os.path.join(_CONTAINER_DIR, "..", "..", "..", ".."))
+        defaults = {}
+        for partition in ("commercial", "govcloud", "eusovereign"):
+            with open(os.path.join(repo, "infra", "config", f"config.template.{partition}.json")) as fh:
+                config = json.load(fh)
+            defaults[partition] = config["app"]["pipelines"]["useGenAiCadStepAgent"]["bedrockModelId"]
+        assert defaults["commercial"] == "global.anthropic.claude-sonnet-5-5"
+        with patch.dict(sys.modules):
+            del sys.modules["strands"]  # the autouse fake; this test needs the real provider
+            strands_models = pytest.importorskip("strands.models")
+            assert strands_models.BedrockModel.__module__.startswith("strands.")
+            for partition, model_id in defaults.items():
+                if not model_id:
+                    continue
+                model = agent_module.build_model("bedrock", model_id, region="us-east-1",
+                                                 guardrail=_FakeGuardrail())
+                request = model.format_request([{"role": "user", "content": [{"text": "a 10 mm cube"}]}])
+                assert request["modelId"] == model_id, partition
+                assert request["inferenceConfig"] == {"maxTokens": agent_module.MAX_TOKENS}, partition
+
     def test_unresolved_items_make_the_run_partial_but_still_a_success_token(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MODEL_ID", "global.model")
         s3, sfn = _FakeS3(), MagicMock()
