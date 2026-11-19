@@ -6737,9 +6737,9 @@ export interface ConfigPublic {
                 autoTriggerOnFileExtensionsUpload: string;
                 instanceTypes: string[];
                 maxVCpus: number;
-                // Raise by one to start every model on an empty weight cache at its next run (a new
-                // EFS directory and S3 prefix per generation; 0 is the original layout). The run setting
-                // INVALIDATE_MODEL_CACHE it replaces could clear a cache other runs were reading.
+                // Raise by one to start every model on an empty weight cache at its next run: generation N
+                // reads and writes `hf_cache/gN/<model>` on EFS and `imageTo3d/hf_cache/gN/<model>/` in S3,
+                // and 0 uses `hf_cache/<model>` and `imageTo3d/hf_cache/<model>/`. Running jobs keep theirs.
                 modelCacheGeneration: number;
                 models: {
                     sam3d: { enabled: boolean };

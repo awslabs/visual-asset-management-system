@@ -151,7 +151,7 @@ aws codebuild batch-get-builds --ids <build-id>
 ```
 
 :::warning[Docker Hub rate limiting]
-Builds pull their base images (`nvidia/cuda`, and `mambaorg/micromamba` for `sam3d`) from Docker Hub without credentials, so they are subject to Docker Hub's anonymous pull rate limits and can fail with "429 Too Many Requests". Neither the CodeBuild project nor `buildspec.yml` takes registry credentials. Rerun a failed build with `aws codebuild start-build --project-name <ImageTo3d CodeBuild project>`, or mirror the base images into a private Amazon ECR repository and point the `FROM` line of each affected Dockerfile at the mirror.
+Builds pull their base images (`nvidia/cuda`, and `mambaorg/micromamba` for `sam3d`) from Docker Hub without credentials, so they are subject to Docker Hub's anonymous pull rate limits and can fail with "429 Too Many Requests". Neither the CodeBuild project nor `buildspec.yml` takes registry credentials. Rerun a failed build with `aws codebuild start-build --project-name <ImageTo3d CodeBuild project>`, or mirror the base images into a private Amazon ECR repository and point the `FROM` line of each affected Dockerfile at the mirror. Each `FROM` pins its image by digest (`@sha256:...`), so copy the image with its digest preserved (for example `crane copy` or `skopeo copy --all`, which keep the multi-platform index), or replace the `@sha256:` value with the digest the mirror reports. A `docker pull` and `docker push` of the tag gives the mirror a different digest from the one pinned, and the build then fails to find it.
 :::
 
 ### Local Docker asset
