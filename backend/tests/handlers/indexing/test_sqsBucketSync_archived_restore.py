@@ -112,10 +112,23 @@ class TestProcessRecordRestoresArchivedAsset:
 
 @pytest.mark.unit
 class TestRestoreArchivedAsset:
+    @staticmethod
+    def _routed_table(archived_row):
+        """One handle for both tables: the database read and the archived row's consistent re-read
+        are told apart by their key. `archived_row` None means the archived row is already gone."""
+        mock_table = MagicMock()
+
+        def get_item(Key, **kwargs):
+            if Key.get("databaseId") == "db1#deleted":
+                return {"Item": archived_row} if archived_row is not None else {}
+            return {"Item": {"databaseId": "db1"}}
+
+        mock_table.get_item.side_effect = get_item
+        return mock_table
+
     def test_moves_record_to_live_partition(self):
         m = _load()
-        mock_table = MagicMock()
-        mock_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
+        mock_table = self._routed_table(_archived_asset())
         m.dynamodb = MagicMock()
         m.dynamodb.Table.return_value = mock_table
         m.update_asset_count = MagicMock()
@@ -131,10 +144,45 @@ class TestRestoreArchivedAsset:
         mock_table.delete_item.assert_called_once_with(
             Key={"databaseId": "db1#deleted", "assetId": "x-asset-1"})
 
+    def test_restore_copies_the_archived_row_as_stored_not_the_callers_image(self):
+        # The caller's image comes from an eventually consistent index read and a container cache.
+        # Attributes written to the row after that image (the location index attributes) are kept.
+        m = _load()
+        stored = {**_archived_asset(), "locationBucket": "bucket-name", "locationKey": "x-asset-1/"}
+        mock_table = self._routed_table(stored)
+        m.dynamodb = MagicMock()
+        m.dynamodb.Table.return_value = mock_table
+        m.update_asset_count = MagicMock()
+
+        result = m.restore_archived_asset("bucket-1", "x-asset-1", _archived_asset())
+
+        assert result == "db1"
+        archived_reads = [c for c in mock_table.get_item.call_args_list
+                          if c.kwargs["Key"] == {"databaseId": "db1#deleted", "assetId": "x-asset-1"}]
+        assert len(archived_reads) == 1
+        assert archived_reads[0].kwargs.get("ConsistentRead") is True
+        put_item = mock_table.put_item.call_args.kwargs["Item"]
+        assert put_item["locationBucket"] == "bucket-name"
+        assert put_item["locationKey"] == "x-asset-1/"
+        assert put_item["databaseId"] == "db1"
+
+    def test_restore_falls_back_to_the_callers_image_when_the_archived_row_is_gone(self):
+        m = _load()
+        mock_table = self._routed_table(None)
+        m.dynamodb = MagicMock()
+        m.dynamodb.Table.return_value = mock_table
+        m.update_asset_count = MagicMock()
+
+        result = m.restore_archived_asset("bucket-1", "x-asset-1", _archived_asset())
+
+        assert result == "db1"
+        put_item = mock_table.put_item.call_args.kwargs["Item"]
+        assert put_item["assetName"] == "x-asset-1"
+        assert put_item["databaseId"] == "db1"
+
     def test_concurrent_restore_is_idempotent(self):
         m = _load()
-        mock_table = MagicMock()
-        mock_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
+        mock_table = self._routed_table(_archived_asset())
         mock_table.put_item.side_effect = ClientError(
             {"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
         m.dynamodb = MagicMock()

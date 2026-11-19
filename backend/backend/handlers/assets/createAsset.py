@@ -28,6 +28,7 @@ from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
+from common.assetLocations import derive_location, location_attributes
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -831,7 +832,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         logger.info(f"Using existing S3 key: {s3_key} in bucket: {s3_bucket}")
     else:
         # Create a new prefix folder
-        s3_key = s3_bucket_prefix + assetId + '/'
+        s3_key = derive_location(bucketDetails, databaseId, assetId)
         logger.info(f"Validating new prefix uniqueness: {s3_key} in bucket: {s3_bucket}")
 
         # Two layers guard this location, each covering the other's blind spot. The
@@ -889,7 +890,8 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         'bucketId': s3_bucket_id,
         'assetLocation' : {
             'Key': s3_key,
-        }
+        },
+        **location_attributes(s3_bucket, s3_key),
     }
     
     # Save asset to DynamoDB

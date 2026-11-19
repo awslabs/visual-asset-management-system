@@ -1329,6 +1329,21 @@ export function storageResourcesBuilder(
         },
     });
 
+    // Asset rows by bucket name and stored location (backend/backend/common/assetLocations.py)
+    assetStorageTable.addGlobalSecondaryIndex({
+        indexName: "AssetLocationGSI",
+        partitionKey: {
+            name: "locationBucket",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "locationKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+        projectionType: dynamodb.ProjectionType.INCLUDE,
+        nonKeyAttributes: ["bucketId"],
+    });
+
     const databaseStorageTable = new dynamodb.Table(scope, "DatabaseStorageTable", {
         ...dynamodbDefaultProps,
         partitionKey: {

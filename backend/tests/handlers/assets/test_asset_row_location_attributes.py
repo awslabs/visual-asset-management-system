@@ -1,0 +1,332 @@
+# Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Every asset-row writer sets or keeps the location index attributes.
+
+`locationBucket` and `locationKey` (common/assetLocations.py) are what AssetLocationGSI indexes. An
+asset is created with them, and the writers that put a whole row back (archive, unarchive, the
+version reference, preview delete, the bucket-sync restore) must carry them over, or the asset drops
+out of the index. Two parts:
+
+- an inventory of every write on the asset table handle under backend/backend, found by reading
+  the source: a new writer fails it until it is listed here, and a new whole-row put also needs a
+  preservation test below;
+- one behaviour test per whole-row writer, each driven with a stored row that carries the
+  attributes.
+
+The inventory finds writes made through a module's asset table handle (`asset_table`,
+`asset_storage_table`, a local `table = dynamodb.Table(asset_table_name)`). A helper that receives
+the table as a parameter (`common/assetProvenance.record_indexed_change`, an attribute-scoped
+UpdateItem) is outside it.
+"""
+
+import ast
+import os
+import sys
+from unittest.mock import MagicMock
+
+import pytest
+
+from backend.backend.handlers.assets import assetFiles as _assetFiles
+from backend.backend.handlers.assets import assetVersions as _assetVersions
+from tests.handlers.assets.test_assetService_history import _load as _load_asset_service
+from tests.handlers.assets.test_createAsset_conditional_put import _load as _load_create_asset
+from tests.handlers.indexing.test_sqsBucketSync_recreation_guard import _load as _load_bucket_sync
+
+al = sys.modules['common.assetLocations']
+
+BACKEND_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend")
+WRITE_METHODS = {"put_item", "update_item", "delete_item", "batch_writer", "transact_write_items",
+                 "batch_write_item"}
+
+# (module, function, method) for every write on an asset table handle.
+EXPECTED_ASSET_ROW_WRITES = {
+    ("handlers/assets/createAsset.py", "save_asset_details", "put_item"),
+    ("handlers/assets/assetService.py", "update_asset", "update_item"),
+    ("handlers/assets/assetService.py", "archive_asset", "put_item"),
+    ("handlers/assets/assetService.py", "archive_asset", "delete_item"),
+    ("handlers/assets/assetService.py", "unarchive_asset", "put_item"),
+    ("handlers/assets/assetService.py", "unarchive_asset", "delete_item"),
+    ("handlers/assets/assetService.py", "delete_asset_permanent", "delete_item"),
+    ("handlers/assets/assetVersions.py", "update_asset_current_version_reference", "put_item"),
+    ("handlers/assets/assetFiles.py", "delete_asset_preview", "put_item"),
+    ("handlers/assets/largeObjectCopy.py", "_after_landing", "update_item"),
+    ("handlers/assets/sqsUploadFileLarge.py", "update_asset_attributes", "update_item"),
+    ("handlers/assets/uploadFile.py", "update_asset_attributes", "update_item"),
+    ("handlers/indexing/sqsBucketSync.py", "_update_asset_type_attribute", "update_item"),
+    ("handlers/indexing/sqsBucketSync.py", "restore_archived_asset", "put_item"),
+    ("handlers/indexing/sqsBucketSync.py", "restore_archived_asset", "delete_item"),
+    ("handlers/subscription/subscriptionService.py", "add_sns_topic_in_asset", "update_item"),
+    ("handlers/subscription/subscriptionService.py", "delete_sns_subscriptions", "update_item"),
+    ("handlers/subscription/unsubscribeService.py", "delete_sns_subscriptions", "update_item"),
+}
+
+# The whole-row puts, each with a preservation test in this file (createAsset sets them instead).
+WHOLE_ROW_PUTS_WITH_TESTS = {
+    ("handlers/assets/createAsset.py", "save_asset_details"),
+    ("handlers/assets/assetService.py", "archive_asset"),
+    ("handlers/assets/assetService.py", "unarchive_asset"),
+    ("handlers/assets/assetVersions.py", "update_asset_current_version_reference"),
+    ("handlers/assets/assetFiles.py", "delete_asset_preview"),
+    ("handlers/indexing/sqsBucketSync.py", "restore_archived_asset"),
+}
+
+INDEX_ATTRIBUTES = {al.LOCATION_BUCKET_ATTRIBUTE: "vams-assets", al.LOCATION_KEY_ATTRIBUTE: "a1/"}
+
+
+def _is_asset_table_name_call(node):
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "get_table_name" and node.args
+            and isinstance(node.args[0], ast.Attribute) and node.args[0].attr == "ASSET_STORAGE_TABLE")
+
+
+def _assigned_names(tree, predicate):
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and predicate(node.value):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
+def _asset_table_writes(path, relpath):
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    table_name_vars = _assigned_names(tree, _is_asset_table_name_call)
+    if not table_name_vars:
+        return set()
+
+    def is_table_handle(value):
+        return (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "Table" and value.args
+                and isinstance(value.args[0], ast.Name) and value.args[0].id in table_name_vars)
+
+    module_handles = set()
+    pending = list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Assign) and is_table_handle(node.value):
+            module_handles.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, (ast.Try, ast.If)):
+            pending.extend(node.body + node.orelse + getattr(node, "finalbody", [])
+                           + [s for h in getattr(node, "handlers", []) for s in h.body])
+    writes = set()
+    for function in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        handles = module_handles | _assigned_names(function, is_table_handle)
+        for call in ast.walk(function):
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in WRITE_METHODS and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in handles):
+                writes.add((relpath, function.name, call.func.attr))
+    return writes
+
+
+def _all_asset_table_writes():
+    writes = set()
+    for dirpath, _, filenames in os.walk(BACKEND_ROOT):
+        for name in filenames:
+            if name.endswith(".py"):
+                path = os.path.join(dirpath, name)
+                relpath = os.path.relpath(path, BACKEND_ROOT).replace(os.sep, "/")
+                writes |= _asset_table_writes(path, relpath)
+    return writes
+
+
+@pytest.mark.unit
+class TestAssetRowWriterInventory:
+    def test_every_asset_row_write_is_listed(self):
+        found = _all_asset_table_writes()
+        assert found == EXPECTED_ASSET_ROW_WRITES, (
+            "An asset-row write was added or removed. A new writer must set or keep "
+            f"{sorted(INDEX_ATTRIBUTES)} (a whole-row put needs a preservation test here). "
+            f"Added: {sorted(found - EXPECTED_ASSET_ROW_WRITES)}; "
+            f"removed: {sorted(EXPECTED_ASSET_ROW_WRITES - found)}")
+
+    def test_every_whole_row_put_has_a_preservation_test(self):
+        puts = {(module, function) for module, function, method in EXPECTED_ASSET_ROW_WRITES
+                if method == "put_item"}
+        assert puts == WHOLE_ROW_PUTS_WITH_TESTS
+
+    def test_inventory_detects_a_write_through_a_local_handle(self, tmp_path):
+        # Control: the reader finds the local `table = dynamodb.Table(asset_table_name)` form.
+        source = tmp_path / "writer.py"
+        source.write_text(
+            "asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)\n"
+            "def rewrite(row):\n"
+            "    table = dynamodb.Table(asset_table_name)\n"
+            "    table.put_item(Item=row)\n"
+            "def other(row):\n"
+            "    table = dynamodb.Table(other_table_name)\n"
+            "    table.put_item(Item=row)\n")
+        assert _asset_table_writes(str(source), "writer.py") == {("writer.py", "rewrite", "put_item")}
+
+    def test_only_the_location_module_names_the_index_attributes(self):
+        # Writers set the attributes through common.assetLocations, so an expression that drops them
+        # cannot be written without naming them here.
+        offenders = []
+        for dirpath, _, filenames in os.walk(BACKEND_ROOT):
+            for name in filenames:
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, name)
+                relpath = os.path.relpath(path, BACKEND_ROOT).replace(os.sep, "/")
+                if relpath == "common/assetLocations.py":
+                    continue
+                text = open(path, encoding="utf-8").read()
+                if "locationBucket" in text or "'locationKey'" in text or '"locationKey"' in text:
+                    offenders.append(relpath)
+        assert offenders == []
+
+
+def _stored_row(database_id="db1", asset_id="a1", **extra):
+    row = {
+        "databaseId": database_id, "assetId": asset_id, "assetName": "N1", "description": "d1",
+        "isDistributable": True, "tags": [], "bucketId": "b1", "assetLocation": {"Key": f"{asset_id}/"},
+        **INDEX_ATTRIBUTES,
+    }
+    row.update(extra)
+    return row
+
+
+def _put_item(table):
+    return table.put_item.call_args.kwargs["Item"]
+
+
+@pytest.mark.unit
+class TestCreateAssetSetsTheAttributes:
+    def _wire(self, m, base_prefix):
+        m.asset_table = MagicMock()
+        m.asset_table.get_item.return_value = {}
+        m.database_table = MagicMock()
+        m.database_table.get_item.return_value = {"Item": {"databaseId": "testdb1"}}
+        m.get_default_bucket_details = MagicMock(return_value={
+            "bucketId": "b1", "bucketName": "vams-assets", "baseAssetsPrefix": base_prefix})
+        m.assert_existing_key_not_owned = MagicMock()
+        m.assert_derived_asset_key_not_owned = MagicMock()
+        m.resolve_colocated_bucket_ids = MagicMock(return_value=["b1"])
+        m.check_s3_prefix_exists = MagicMock(return_value=False)
+        m.check_s3_key_exists = MagicMock(return_value=True)
+        m.create_prefix_folder = MagicMock()
+        m.create_initial_version_record = MagicMock(return_value="0")
+        m.create_sns_topic_for_asset = MagicMock(return_value="arn:sns")
+        m.update_asset_count = MagicMock()
+        m.write_asset_history_record = MagicMock()
+        m.validate_tags_exist = MagicMock(return_value=True)
+        m.verify_all_required_tags_satisfied = MagicMock(return_value=True)
+
+    @staticmethod
+    def _request(m, **extra):
+        return m.CreateAssetRequestModel(databaseId="testdb1", assetId="asset-1", assetName="asset-1",
+                                         description="location attributes", isDistributable=True, tags=[], **extra)
+
+    @pytest.mark.parametrize("base_prefix,expected_key", [("", "asset-1/"), ("assets/", "assets/asset-1/")])
+    def test_derived_location(self, base_prefix, expected_key):
+        m = _load_create_asset(fresh=True)
+        self._wire(m, base_prefix)
+        m.create_asset(self._request(m), {"tokens": ["user1"]})
+        row = _put_item(m.asset_table)
+        assert row["assetLocation"] == {"Key": expected_key}
+        assert row[al.LOCATION_BUCKET_ATTRIBUTE] == "vams-assets"
+        assert row[al.LOCATION_KEY_ATTRIBUTE] == expected_key
+        # The derived key is what the create path composed before the shared helper existed.
+        assert expected_key == base_prefix + "asset-1/"
+
+    @pytest.mark.parametrize("existing_key,expected_key", [
+        ("projects/alpha/", "projects/alpha/"),
+        ("/projects/alpha/", "projects/alpha/"),
+        ("projects/model.glb", "projects/model.glb"),
+    ])
+    def test_existing_key_location(self, existing_key, expected_key):
+        m = _load_create_asset(fresh=True)
+        self._wire(m, "")
+        m.create_asset(self._request(m, bucketExistingKey=existing_key), {"tokens": ["user1"]})
+        row = _put_item(m.asset_table)
+        assert row["assetLocation"] == {"Key": expected_key}
+        assert row[al.LOCATION_BUCKET_ATTRIBUTE] == "vams-assets"
+        assert row[al.LOCATION_KEY_ATTRIBUTE] == expected_key
+
+    def test_bucket_sync_auto_create_sets_them(self):
+        m = _load_create_asset(fresh=True)
+        self._wire(m, "")
+        m.check_s3_prefix_exists = MagicMock(return_value=True)
+        m.create_asset(self._request(m), {"tokens": ["SYSTEM_USER"]}, True)
+        row = _put_item(m.asset_table)
+        assert (row[al.LOCATION_BUCKET_ATTRIBUTE], row[al.LOCATION_KEY_ATTRIBUTE]) == ("vams-assets", "asset-1/")
+
+
+@pytest.mark.unit
+class TestWholeRowWritersKeepTheAttributes:
+    @pytest.fixture
+    def asset_service(self, monkeypatch):
+        m = _load_asset_service()
+        stored = {"row": _stored_row()}
+        asset_table = MagicMock()
+        asset_table.get_item.side_effect = lambda Key, **_: (
+            {"Item": dict(stored["row"])} if Key["databaseId"] == stored["row"]["databaseId"] else {})
+        db_table = MagicMock()
+        db_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
+        for name, value in {
+            "asset_table": asset_table, "db_table": db_table,
+            "write_asset_history_record": MagicMock(), "send_subscription_email": MagicMock(),
+            "get_asset_bucket_details": MagicMock(return_value={"bucketName": "vams-assets"}),
+            "archive_multi_assetFiles": MagicMock(), "archive_file_preview": MagicMock(),
+            "unarchive_multi_assetFiles": MagicMock(return_value=0), "unarchive_file_preview": MagicMock(),
+            "update_asset_count": MagicMock(),
+        }.items():
+            monkeypatch.setattr(m, name, value)
+        return m, stored, asset_table
+
+    def test_archive(self, asset_service):
+        m, _, asset_table = asset_service
+        request = MagicMock(reason="cleanup")
+        m.archive_asset("db1", "a1", request, {"tokens": ["u1"]})
+        row = _put_item(asset_table)
+        assert row["databaseId"] == "db1#deleted"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_unarchive(self, asset_service):
+        m, stored, asset_table = asset_service
+        stored["row"] = _stored_row(database_id="db1#deleted", status="archived")
+        request = MagicMock(reason="restore", unarchiveFiles=False)
+        m.unarchive_asset("db1", "a1", request, {"tokens": ["u1"]})
+        row = _put_item(asset_table)
+        assert row["databaseId"] == "db1"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_current_version_reference(self, monkeypatch):
+        asset_table = MagicMock()
+        monkeypatch.setattr(_assetVersions, "asset_table", asset_table)
+        assert _assetVersions.update_asset_current_version_reference(_stored_row(), "3") is True
+        row = _put_item(asset_table)
+        assert row["currentVersionId"] == "3"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_preview_delete(self, monkeypatch):
+        asset_table = MagicMock()
+        monkeypatch.setattr(_assetFiles, "asset_table", asset_table)
+        monkeypatch.setattr(_assetFiles, "get_asset_with_permissions",
+                            MagicMock(return_value=_stored_row(previewLocation={"Key": "previews/a1/p.png"})))
+        monkeypatch.setattr(_assetFiles, "get_default_bucket_details",
+                            MagicMock(return_value={"bucketName": "vams-assets"}))
+        monkeypatch.setattr(_assetFiles, "delete_s3_object_all_versions", MagicMock(return_value=True))
+        monkeypatch.setattr(_assetFiles, "send_subscription_email", MagicMock())
+        _assetFiles.delete_asset_preview("db1", "a1", {"tokens": ["u1"]})
+        row = _put_item(asset_table)
+        assert "previewLocation" not in row
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_bucket_sync_restore(self, monkeypatch):
+        m = _load_bucket_sync()
+        archived = _stored_row(database_id="db1#deleted", status="archived")
+        table = MagicMock()
+        table.get_item.side_effect = lambda Key, **_: (
+            {"Item": dict(archived)} if Key.get("databaseId") == "db1#deleted" else {"Item": {"databaseId": "db1"}})
+        dynamodb = MagicMock()
+        dynamodb.Table.return_value = table
+        monkeypatch.setattr(m, "dynamodb", dynamodb)
+        monkeypatch.setattr(m, "update_asset_count", MagicMock())
+        monkeypatch.setattr(m, "write_asset_history_record", MagicMock())
+        # The caller's image predates the attributes; the row as stored carries them.
+        image = {k: v for k, v in archived.items() if k not in INDEX_ATTRIBUTES}
+        assert m.restore_archived_asset("b1", "a1", image) == "db1"
+        row = _put_item(table)
+        assert row["databaseId"] == "db1"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES

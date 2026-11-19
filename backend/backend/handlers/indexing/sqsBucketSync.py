@@ -880,7 +880,11 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
             logger.warning(f"Not restoring archived asset {asset_id}: database {live_db_id} has been deleted")
             return None
 
-        restored = {k: v for k, v in archived_asset.items()
+        # Copy the archived row as stored now: the caller's image comes from an eventually consistent
+        # index read and a container cache, and can predate a write to the row.
+        current = table.get_item(Key={'databaseId': archived_db_id, 'assetId': asset_id},
+                                 ConsistentRead=True).get('Item')
+        restored = {k: v for k, v in (current or archived_asset).items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
         restored['databaseId'] = live_db_id
         restored['unarchivedAt'] = utc_now().isoformat()
