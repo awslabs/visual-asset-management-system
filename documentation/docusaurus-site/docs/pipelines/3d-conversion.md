@@ -243,10 +243,10 @@ The installed versions are those in the container's `poetry.lock`, from which it
 
 Two AWS Lambda quotas bound the largest model the pipeline can convert:
 
-| Bound             | Value                                                            | What it holds                                                                                                                |
-| ----------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Function memory   | `LAMBDA_MEMORY_SIZE` (`infra/config/config.ts`)                  | The whole mesh, loaded by trimesh before it is exported                                                                      |
-| Ephemeral storage | `CONVERSION_EPHEMERAL_STORAGE` (`conversion3dBasicFunctions.ts`) | The downloaded input and the files it references, the export, and any companion files the export writes -- all in one `/tmp` |
+| Bound             | Value                                                                                          | What it holds                                                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Function memory   | 10,240 MB, the Lambda maximum (`CONVERSION_MEMORY_SIZE_MB` in `conversion3dBasicFunctions.ts`) | The whole mesh, loaded by trimesh before it is exported                                                                      |
+| Ephemeral storage | `CONVERSION_EPHEMERAL_STORAGE` (`conversion3dBasicFunctions.ts`)                               | The downloaded input and the files it references, the export, and any companion files the export writes -- all in one `/tmp` |
 
 :::note[Memory is the binding constraint, not disk]
 trimesh loads the whole mesh into memory to export it, so the practical ceiling comes from the configured function memory. The ephemeral storage budget only has to be large enough that disk is not the limit reached first -- raising it past the memory bound moves where the failure happens rather than raising the supported file size. An uncompressed export (STL from GLB, for example) is larger than the input it came from, so both copies count against the same budget.
@@ -254,51 +254,51 @@ trimesh loads the whole mesh into memory to export it, so the practical ceiling 
 
 ### Input Size Limits
 
-The function refuses an input that is too large before it downloads it, and the failed step reports the file, its size, the limit for its format and the output format, and the resource that sets the limit, for example `huge.ply is 900.0 MB, over the 109.2 MB limit for converting .ply to .usdc. The limit is set by the function memory. Reduce the model's size and run the conversion again. A conversion to another format may accept it.`
+The function refuses an input that is too large before it downloads it, and the failed step reports the file, its size, the limit for its format and the output format, and the resource that sets the limit, for example `huge.ply is 900.0 MB, over the 217.5 MB limit for converting .ply to .usdc. The limit is set by the function memory. Reduce the model's size and run the conversion again. A conversion to another format may accept it.`
 
 The limit comes from the running function, not from a fixed number. It is the smaller of two figures:
 
 -   **Memory.** 90% of the function memory, less 300 MB for the runtime, divided by the format's expansion factor, which is the peak memory a conversion used per byte of input when measured. The input and the files it references count together.
--   **Working disk.** The free space in `/tmp`, less 64 MB, divided by 4.5: the input plus an output up to 3.5 times its size, which is what a binary PLY or GLB written as OBJ text needs.
+-   **Working disk.** The free space in `/tmp`, less 64 MB, divided by 4.5: the input plus an output up to 3.5 times its size, which is what a binary PLY or GLB written as OBJ text needs. The function has 6 GiB of `/tmp`, so disk allows about 1,300 MB and memory is the smaller figure for every format.
 
-| Input format    | Expansion factor | Limit at 5,308 MB function memory |
-| --------------- | ---------------- | --------------------------------- |
-| `.stl`          | 14               | 319.8 MB                          |
-| `.obj`          | 9                | 497.5 MB                          |
-| `.ply`          | 25               | 179.1 MB                          |
-| `.glb`          | 27               | 165.8 MB                          |
-| `.gltf`         | 27               | 165.8 MB                          |
-| `.xyz`          | 13               | 344.4 MB                          |
-| `.usd`          | 46               | 97.3 MB                           |
-| `.usda`         | 15               | 298.5 MB                          |
-| `.usdc`         | 46               | 97.3 MB                           |
-| `.usdz`         | 46               | 97.3 MB                           |
-| `.dae`          | 18               | 248.7 MB                          |
-| `.3mf`          | 106              | 42.2 MB                           |
-| `.off`          | 20               | 223.9 MB                          |
-| `.fbx`          | 27               | 165.8 MB                          |
-| `.step`, `.stp` | 70               | 64.0 MB                           |
+| Input format    | Expansion factor | Limit at 10,240 MB function memory |
+| --------------- | ---------------- | ---------------------------------- |
+| `.stl`          | 14               | 636.9 MB                           |
+| `.obj`          | 9                | 990.7 MB                           |
+| `.ply`          | 25               | 356.6 MB                           |
+| `.glb`          | 27               | 330.2 MB                           |
+| `.gltf`         | 27               | 330.2 MB                           |
+| `.xyz`          | 13               | 685.8 MB                           |
+| `.usd`          | 46               | 193.8 MB                           |
+| `.usda`         | 15               | 594.4 MB                           |
+| `.usdc`         | 46               | 193.8 MB                           |
+| `.usdz`         | 46               | 193.8 MB                           |
+| `.dae`          | 18               | 495.3 MB                           |
+| `.3mf`          | 106              | 84.1 MB                            |
+| `.off`          | 20               | 445.8 MB                           |
+| `.fbx`          | 27               | 330.2 MB                           |
+| `.step`, `.stp` | 70               | 127.4 MB                           |
 
-The factors above apply to conversions to STL, OBJ, PLY, GLTF, GLB, OFF, and 3MF. A conversion to USD holds the scene as USD data beside the model, and one to COLLADA holds it as Python objects as well, so those outputs need more memory per input byte and have factors of their own wherever they need more than 10 percent above the input's factor. With them the peak at every limit stays at about 70 to 85 percent of the function memory. Limits at 5,308 MB function memory:
+The factors above apply to conversions to STL, OBJ, PLY, GLTF, GLB, OFF, and 3MF. A conversion to USD holds the scene as USD data beside the model, and one to COLLADA holds it as Python objects as well, so those outputs need more memory per input byte and have factors of their own wherever they need more than 10 percent above the input's factor. Limits at 10,240 MB function memory:
 
 | Input format (factor and limit) | To `.usdc`    | To `.usda`    | To `.usdz`    | To `.dae`     |
 | ------------------------------- | ------------- | ------------- | ------------- | ------------- |
-| `.stl`                          | 22 (203.5 MB) | 21 (213.2 MB) | 21 (213.2 MB) | 26 (172.2 MB) |
-| `.obj`                          | 13 (344.4 MB) | 13 (344.4 MB) | 13 (344.4 MB) | 13 (344.4 MB) |
-| `.ply`                          | 41 (109.2 MB) | 41 (109.2 MB) | 41 (109.2 MB) | 43 (104.1 MB) |
-| `.glb`, `.gltf`, `.fbx`         | 42 (106.6 MB) | 41 (109.2 MB) | 42 (106.6 MB) | 52 (86.1 MB)  |
-| `.off`                          | 24 (186.5 MB) | 24 (186.5 MB) | 24 (186.5 MB) | 29 (154.4 MB) |
-| `.usda`                         | 15 (298.5 MB) | 17 (263.4 MB) | 15 (298.5 MB) | 27 (165.8 MB) |
-| `.usdc`                         | 54 (82.9 MB)  | 54 (82.9 MB)  | 46 (97.3 MB)  | 90 (49.7 MB)  |
-| `.usdz`                         | 54 (82.9 MB)  | 54 (82.9 MB)  | 54 (82.9 MB)  | 88 (50.9 MB)  |
-| `.3mf`                          | 106 (42.2 MB) | 106 (42.2 MB) | 106 (42.2 MB) | 149 (30.0 MB) |
-| `.step`, `.stp`                 | 109 (41.1 MB) | 107 (41.8 MB) | 109 (41.1 MB) | 135 (33.2 MB) |
+| `.stl`                          | 22 (405.3 MB) | 21 (424.6 MB) | 21 (424.6 MB) | 26 (342.9 MB) |
+| `.obj`                          | 13 (685.8 MB) | 13 (685.8 MB) | 13 (685.8 MB) | 13 (685.8 MB) |
+| `.ply`                          | 41 (217.5 MB) | 41 (217.5 MB) | 41 (217.5 MB) | 43 (207.3 MB) |
+| `.glb`, `.gltf`, `.fbx`         | 42 (212.3 MB) | 41 (217.5 MB) | 42 (212.3 MB) | 52 (171.5 MB) |
+| `.off`                          | 24 (371.5 MB) | 24 (371.5 MB) | 24 (371.5 MB) | 29 (307.4 MB) |
+| `.usda`                         | 15 (594.4 MB) | 17 (524.5 MB) | 15 (594.4 MB) | 27 (330.2 MB) |
+| `.usdc`                         | 54 (165.1 MB) | 54 (165.1 MB) | 46 (193.8 MB) | 90 (99.1 MB)  |
+| `.usdz`                         | 54 (165.1 MB) | 54 (165.1 MB) | 54 (165.1 MB) | 88 (101.3 MB) |
+| `.3mf`                          | 106 (84.1 MB) | 106 (84.1 MB) | 106 (84.1 MB) | 149 (59.8 MB) |
+| `.step`, `.stp`                 | 109 (81.8 MB) | 107 (83.3 MB) | 109 (81.8 MB) | 135 (66.0 MB) |
 
 The conversions between STL, OBJ, PLY, GLTF, GLB, and XYZ keep the limits they had before USD and COLLADA output were added. The factors of the formats added with USD, DAE, 3MF, and OFF were measured on a model of 0.33 to 1.3 million triangles and rounded up by at least 15 percent. A 3MF package and a binary USD layer are compressed on disk, which is why their factors are high.
 
-A larger function memory raises these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
+The function runs at 10,240 MB, the Lambda maximum, rather than the 5,308 MB of the other VAMS functions, so it can take the larger CAD and USD files; a run bills at that memory size for its duration (see [Costs](../overview/costs.md)). The factors were measured at 5,308 MB and checked again at 10,240 MB, where a conversion at its limit peaked at 16 to 69 percent of the function memory (STL to STL 618 MB: 69 percent; STL to USDA 412 MB: 47 percent; STEP to USDC 54.6 MB: 16 percent and 70 seconds) and every measured run finished in under 2 minutes, well inside the 15-minute timeout. A different function memory moves these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
 
-Texture images are budgeted apart from these figures, by their decoded size. An image's memory follows its pixels, not its file size: a 12,000 x 12,000 PNG of one colour is under 1 MB on disk and needs 576 MB decoded. After the input and the files that carry geometry (GLTF buffers, OBJ material libraries) are counted at the factors above, the memory that remains is divided by 5, the peak memory measured per decoded RGBA byte of texture, and that many decoded bytes of texture images are fetched, so four 4096 x 4096 textures or one 12,000 x 12,000 texture fit at 5,308 MB of function memory. A texture over what remains is skipped and the model converts without it. The run still succeeds, and its completion message says the model is incomplete and names each file left out and why, for example `Converted BoomBox.gltf, but 1 referenced file could not be included because of the function's size limits, so the converted model is incomplete: ...`. A GLTF buffer that does not fit fails the run.
+Texture images are budgeted apart from these figures, by their decoded size. An image's memory follows its pixels, not its file size: a 12,000 x 12,000 PNG of one colour is under 1 MB on disk and needs 576 MB decoded. After the input and the files that carry geometry (GLTF buffers, OBJ material libraries) are counted at the factors above, the memory that remains is divided by 5, the peak memory measured per decoded RGBA byte of texture, and that many decoded bytes of texture images are fetched, so four 4096 x 4096 textures or one 12,000 x 12,000 texture fit even at 5,308 MB of function memory, and at 10,240 MB about twice as much does. A texture over what remains is skipped and the model converts without it. The run still succeeds, and its completion message says the model is incomplete and names each file left out and why, for example `Converted BoomBox.gltf, but 1 referenced file could not be included because of the function's size limits, so the converted model is incomplete: ...`. A GLTF buffer that does not fit fails the run.
 
 ### Run time
 

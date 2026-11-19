@@ -439,7 +439,11 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     where an output needs clearly more memory per input byte (USD and COLLADA). Each entry is the pair's
     measured peak per input byte times 1.26, the margin the input factors keep. Measure in the built image (no
     SciPy), and keep the peak at the limit under about 85 percent of the function memory: a 330 MB STL admitted
-    for USDA peaked at 5,307 of 5,308 MB before the table existed. The refusal names the output format. A format
+    for USDA peaked at 5,307 of 5,308 MB before the table existed. The function runs at 10,240 MB
+    (`CONVERSION_MEMORY_SIZE_MB` in `conversion3dBasicFunctions.ts`, not the shared `LAMBDA_MEMORY_SIZE`); the
+    factors are per input byte, so they hold at any memory, but check a changed memory size with the
+    worker's own limits (`RLIMIT_AS` = memory + 2 GiB) and keep `CONVERSION_EPHEMERAL_STORAGE` above every
+    memory limit (the disk check divides free `/tmp` by 4.5). The refusal names the output format. A format
     added to the handler needs its input factor and the pairs that need more.
 -   Tests that convert real files (`test_3dbasic_new_formats.py`, `test_3dbasic_units_axes.py`,
     `test_3dbasic_usd_and_guards.py`) need real trimesh and usd-core, so `tests/conftest.py` imports them before the

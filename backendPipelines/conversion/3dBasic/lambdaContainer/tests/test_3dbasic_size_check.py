@@ -86,6 +86,40 @@ class TestTheLimitDependsOnTheOutput:
 
 
 @pytest.mark.unit
+class TestTheDeployedFunctionMemory:
+    """The function runs at 10,240 MB (CONVERSION_MEMORY_SIZE_MB in conversion3dBasicFunctions.ts): the
+    limits the pipeline page lists at that memory, and the peaks measured there in the built image with
+    the worker's limits, scaled to each pair's limit, at or under 85 percent of the function memory."""
+
+    MEMORY = 10240 * MB
+
+    @pytest.mark.parametrize("source,output,limit_mb", [
+        (".step", ".usdc", 81.8), (".stl", ".usda", 424.6), (".glb", ".glb", 330.2), (".stl", ".stl", 636.9),
+        (".obj", ".obj", 990.7), (".3mf", ".usdc", 84.1), (".usdc", ".dae", 99.1),
+    ])
+    def test_the_documented_limits(self, source, output, limit_mb):
+        limit, resource = size_check.limits(source, self.MEMORY, None, output)
+        assert round(limit / MB, 1) == limit_mb and resource == size_check.MEMORY_RESOURCE
+
+    def test_six_gib_of_disk_keeps_memory_the_binding_limit(self):
+        disk = 6 * 1024 * MB - 200 * MB  # less what the image and the runtime keep in /tmp
+        for source in size_check.MEMORY_EXPANSION_FACTORS:
+            assert size_check.limits(source, self.MEMORY, disk)[1] == size_check.MEMORY_RESOURCE, source
+
+    @pytest.mark.parametrize("source,output,input_mb,peak_mb", [
+        # Measured at 10,240 MB with the worker's address-space and file-size limits (built image);
+        # peak_mb includes the interpreter and library baseline of about 100 MB.
+        (".stl", ".stl", 617.8, 7063), (".stl", ".usda", 411.8, 4764), (".glb", ".glb", 384.4, 2017),
+        (".step", ".usdc", 54.6, 1681), (".obj", ".obj", 550.2, 3249), (".obj", ".usdc", 378.3, 4071),
+    ])
+    def test_the_measured_peak_scaled_to_the_limit_keeps_the_headroom(self, source, output, input_mb, peak_mb):
+        limit, _ = size_check.limits(source, self.MEMORY, None, output)
+        per_byte = peak_mb / input_mb
+        assert per_byte * limit <= 0.85 * self.MEMORY, (source, output, per_byte * limit / self.MEMORY)
+        assert peak_mb * MB <= size_check.address_space_limit_bytes({"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"})
+
+
+@pytest.mark.unit
 class TestLimits:
     def test_the_memory_limit_is_the_usable_share_less_the_base_over_the_format_factor(self):
         limit, resource = size_check.limits(".ply", FUNCTION_MEMORY_MB * MB, BIG_DISK * 100)
