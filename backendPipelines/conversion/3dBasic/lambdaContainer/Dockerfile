@@ -39,7 +39,11 @@ RUN git -c advice.detachedHead=false clone --quiet --depth 1 --branch "${ASSIMP_
     && install -m 0755 /tmp/assimp/build/bin/assimp /opt/assimp \
     && /opt/assimp version
 
-FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12@sha256:a53086fc3118c5457097083ba3d1ccf1d8fdfcba9e7a90fbfc5d2b06c625215b
+# One image source, two final targets (`--target lambda` or `--target batch`). Everything up to
+# `base-with-code` is shared, so both targets hold the same glibc, libstdc++, Assimp binary, locked
+# wheels and conversion code; they differ only in the last layer (how the container starts). A build
+# without --target produces the last stage, `lambda`, which is the image the function has always run.
+FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12@sha256:a53086fc3118c5457097083ba3d1ccf1d8fdfcba9e7a90fbfc5d2b06c625215b AS base-with-code
 
 #Note: Lambda containers automatically use a non-root user that is created in the base image
 
@@ -65,6 +69,20 @@ COPY --from=assimp-builder /opt/assimp /opt/assimp/bin/assimp
 # local caches out of this copy, so the image holds the runtime modules only.
 COPY . .
 
+# The AWS Batch (Fargate) target: the same code, started by batch_entry.py instead of the Lambda runtime
+# interface client, as a non-root user. A Batch job definition can override a container's command but
+# not its entrypoint, so the entrypoint is set here, and the image's Lambda entrypoint
+# (/lambda-entrypoint.sh) is replaced. The files are made readable by every user, since the task user
+# is not the one that owns them.
+FROM base-with-code AS batch
+RUN chmod -R a+rX /var/task /opt/assimp
+USER 10001:10001
+ENTRYPOINT ["python", "-u", "batch_entry.py"]
+CMD []
+
+# The Lambda target, last so that a build without --target produces it. It is the previous final stage
+# unchanged: the same CMD, no USER.
+FROM base-with-code AS lambda
 # Points to the handler function of your lambda function
 # AWS Lambda runs container-image functions as its own non-root sandbox user regardless of a
 # Dockerfile USER, so adding one here changes nothing at runtime.

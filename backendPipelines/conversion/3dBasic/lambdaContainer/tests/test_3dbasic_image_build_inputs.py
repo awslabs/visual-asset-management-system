@@ -25,7 +25,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The modules lambda.py imports from the build context. A runtime module the ignore file excluded would
 # fail at container RUNTIME, not at the image build.
-_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "fbx_scene.py", "vertex_normals.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
+_RUNTIME_PATHS = ("lambda.py", "conversion_service.py", "batch_entry.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "fbx_scene.py", "vertex_normals.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
 
 
 def _read(name):
@@ -113,17 +113,18 @@ class TestRequirementsAreTheLockExport:
 @pytest.mark.unit
 class TestBaseImage:
     def test_the_base_image_is_pinned_by_digest_for_amd64(self):
-        # Two stages: the Assimp builder and the function image, both from the same pinned digest, so
-        # the binary the builder compiles links against the libraries the function runs with.
+        # Four stages from one pinned digest: the Assimp builder, the shared function image
+        # (`base-with-code`) and its two final targets, so the binary the builder compiles links against
+        # the libraries both tiers run with. The Lambda target is last: a build without --target is
+        # the image the function has always run.
         froms = [line for line in _read("Dockerfile").splitlines() if line.startswith("FROM")]
-        assert len(froms) == 2, froms
-        assert re.match(
-            r"^FROM --platform=linux/amd64 public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64} AS assimp-builder$",
-            froms[0]), froms[0]
-        assert re.match(
-            r"^FROM --platform=linux/amd64 public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64}$",
-            froms[1]), froms[1]
+        assert len(froms) == 4, froms
+        digest = r"public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64}"
+        assert re.match(rf"^FROM --platform=linux/amd64 {digest} AS assimp-builder$", froms[0]), froms[0]
+        assert re.match(rf"^FROM --platform=linux/amd64 {digest} AS base-with-code$", froms[1]), froms[1]
         assert froms[0].split()[2] == froms[1].split()[2]
+        assert froms[2] == "FROM base-with-code AS batch", froms[2]
+        assert froms[3] == "FROM base-with-code AS lambda", froms[3]
 
     def test_the_assimp_source_is_a_tag_clone_checked_against_a_pinned_commit(self):
         # GitHub generates a tag's source archive, so its bytes can change; the commit cannot. The

@@ -210,7 +210,7 @@ def _load_fbx(job, trimesh, resolver):
     ``resolver``, so only the files fetched with the input can reach the model."""
     path = job["input_file"]
     name = os.path.basename(path)
-    check_fbx_scene(path, name)
+    check_fbx_scene(path, name, job.get("max_triangles"))
     if not os.path.isfile(ASSIMP_BIN):
         raise RuntimeError("The Assimp tool is not in this image, so FBX cannot be read.")
     intermediate = os.path.join(tempfile.mkdtemp(prefix="fbx_", dir=os.path.dirname(job["input_dir"].rstrip("/"))),
@@ -257,7 +257,7 @@ def _load_step(job, trimesh):
     except ImportError:
         raise ValueError(f"{name} is a STEP file, and this deployment does not read STEP: set "
                          f"app.pipelines.useConversion3dBasic.enableStepInput to true and deploy again.")
-    limit = scene_limits.SceneLimit("STEP assembly")
+    limit = scene_limits.SceneLimit("STEP assembly", job.get("max_triangles"))
     if not limit.expect(step_limits.assembly_occurrences(path, limit.max_nodes)):
         raise ValueError(f"{name}: the STEP assembly places more than {limit.max_nodes:,} components, more "
                          f"than this function converts.")
@@ -282,7 +282,11 @@ def load_model(job, trimesh):
     path = job["input_file"]
     extension = os.path.splitext(job["input_name"])[1].lower()
     if extension in USD_EXTENSIONS:
-        scene, meters, up = usd_io.read_usd(path, job["input_dir"])
+        import scene_limits
+        # The triangle budget follows the task's memory on the AWS Batch tier (job["max_triangles"]);
+        # None keeps the constant budget the Lambda tier has always used.
+        scene, meters, up = usd_io.read_usd(
+            path, job["input_dir"], limit=scene_limits.SceneLimit(os.path.basename(path), job.get("max_triangles")))
         return scene, meters, up
     declared_meters = declared_up = None
     if extension == '.dae':

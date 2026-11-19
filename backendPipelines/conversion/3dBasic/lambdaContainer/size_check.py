@@ -25,8 +25,8 @@ times the input (a binary PLY or GLB written as OBJ text), so the disk need is t
 the input and the referenced files.
 
 The limits come from the running function (``AWS_LAMBDA_FUNCTION_MEMORY_SIZE`` and the free space of
-the working directory), never from a constant, so a change to the function's memory or ephemeral
-storage moves them with it.
+the working directory), or, on the AWS Batch tier, from the task (``VAMS_TASK_MEMORY_MIB``), never from a
+constant, so a change to the function's memory or ephemeral storage moves them with it.
 """
 
 import os
@@ -119,13 +119,54 @@ DISK_RESOURCE = "working disk (/tmp)"
 
 
 class InputTooLargeError(ValueError):
-    """The input is larger than this function can convert."""
+    """The input is larger than this function can convert.
+
+    ``total_bytes``, ``limit_bytes`` and ``resource`` carry what the message says, so the AWS Batch tier's
+    router can choose a job size from them without parsing the text; they are None when not known."""
+
+    def __init__(self, message, total_bytes=None, limit_bytes=None, resource=None):
+        super().__init__(message)
+        self.total_bytes = total_bytes
+        self.limit_bytes = limit_bytes
+        self.resource = resource
+
+
+# The compute tier a run executes on, from the environment the tier's launcher sets: the AWS Batch
+# container carries the task's memory, the Lambda runtime its function's.
+TIER_LAMBDA = "lambda"
+TIER_BATCH = "batch"
+TASK_MEMORY_VARIABLE = "VAMS_TASK_MEMORY_MIB"
+
+# The AWS Batch (Fargate) job sizes the tier runs on, as (vCPU, memory MiB): the Fargate pairs the
+# deployment offers. The launcher's selector (lambda/computeTier.py) and the CDK construct keep the same
+# ladder; tests/test_3dbasic_batch_tier_contract.py compares them.
+BATCH_TASK_SIZES = ((4, 30 * 1024), (8, 60 * 1024), (16, 120 * 1024))
+
+
+def task_memory_bytes(environ=None):
+    """The AWS Batch task's memory in bytes from ``VAMS_TASK_MEMORY_MIB``, or None when it is not set
+    or not a positive number (on Lambda)."""
+    environ = os.environ if environ is None else environ
+    try:
+        mebibytes = int(environ.get(TASK_MEMORY_VARIABLE, ""))
+    except (TypeError, ValueError):
+        return None
+    return mebibytes * MB if mebibytes > 0 else None
+
+
+def compute_tier(environ=None):
+    """``batch`` on an AWS Batch task, else ``lambda``."""
+    return TIER_BATCH if task_memory_bytes(environ) else TIER_LAMBDA
 
 
 def memory_limit_bytes(environ=None):
-    """The function's memory in bytes from ``AWS_LAMBDA_FUNCTION_MEMORY_SIZE`` (MB), or None when it
-    is not set or not a positive number (outside Lambda)."""
+    """The memory this run may use in bytes: the Batch task's (``VAMS_TASK_MEMORY_MIB``), else the
+    function's (``AWS_LAMBDA_FUNCTION_MEMORY_SIZE``, MB); None when neither is set or a positive
+    number (a developer's machine)."""
     environ = os.environ if environ is None else environ
+    task = task_memory_bytes(environ)
+    if task:
+        return task
     try:
         megabytes = int(environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", ""))
     except ValueError:
@@ -212,8 +253,23 @@ def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=N
                 and expansion_factor(extension, output_extension) > expansion_factor(extension) else "")
         raise InputTooLargeError(
             f"{name} is {_mb(total)}, over the {_mb(limit)} limit for {target}. The limit is set by "
-            f"the {resource}. Reduce the model's size and run the conversion again.{hint}")
+            f"the {resource}. Reduce the model's size and run the conversion again.{hint}",
+            total_bytes=total, limit_bytes=limit, resource=resource)
     return limit
+
+
+def required_memory_bytes(extension, total_bytes, output_extension=None):
+    """The least memory (bytes) whose limit admits ``total_bytes`` of input and referenced files for
+    this pair: the inverse of the memory limit in ``limits``, rounded up."""
+    usable = total_bytes * expansion_factor(extension, output_extension) + BASE_MEMORY_BYTES
+    return int(-(-usable // MEMORY_USABLE_FRACTION))
+
+
+def limits_by_task_memory(extension, output_extension=None, sizes=BATCH_TASK_SIZES):
+    """``{task memory MiB: memory limit in bytes}`` for each AWS Batch job size, so the router can
+    pick the smallest size that admits an input (and name the largest size's limit) without holding
+    the factors."""
+    return {mib: limits(extension, mib * MB, None, output_extension)[0] for _, mib in sizes}
 
 
 def head_size(client, bucket, key, version_id=""):
@@ -251,3 +307,27 @@ def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None, output_ex
     usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
     usable -= expansion_factor(extension, output_extension) * geometry_bytes
     return max(int(usable / TEXTURE_MEMORY_FACTOR), 0)
+
+
+# Peak resident memory per triangle of a USD scene read and written as GLB, measured on the 120 GiB
+# Fargate task on 24 to 358 million triangles (266 to 279 bytes, flat), rounded up. USD to STL needs
+# about 1.45 times that, which the worker's address-space limit still bounds.
+BYTES_PER_SCENE_TRIANGLE = 270
+
+
+def scene_triangle_budget(memory_bytes, floor):
+    """The triangle budget of a scene walk (a USD, STEP or FBX scene) on a task with ``memory_bytes``:
+    the memory a conversion may use, less the base, divided by ``BYTES_PER_SCENE_TRIANGLE``, never below
+    ``floor`` (the budget the Lambda tier has always had). None when the memory is not known."""
+    if not memory_bytes:
+        return None
+    usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
+    return max(int(usable / BYTES_PER_SCENE_TRIANGLE), int(floor))
+
+
+def triangle_budget(environ=None, floor=30_000_000):
+    """The triangle budget this run's scene walks use, or None to keep the constant one. The constant
+    (30 million) is what the Lambda tier has always used, and at 10,240 MB the memory-derived budget
+    would be 34.6 million, so the Lambda tier keeps the constant; a Batch task derives the budget from
+    its own memory."""
+    return scene_triangle_budget(task_memory_bytes(environ), floor)

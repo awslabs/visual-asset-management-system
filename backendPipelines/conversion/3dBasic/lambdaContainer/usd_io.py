@@ -622,6 +622,90 @@ def placed_reference(from_name, to_name, extension):
     return relative if relative.startswith(".") else "./" + relative
 
 
+# usd-core's text writer drops, without an error, any one array whose text is 2 GiB or more: Layer.Save()
+# returns True and the file holds the prim's other attributes but not the array. Measured on usd-core
+# 26.11 with an int array of 8-digit values (10 bytes an entry): 214,687,500 entries (2,146,875,055 bytes of
+# text) were written whole and 217,500,000 (2,175,000,055) were dropped, so the limit is the signed 32-bit
+# length of the text, 2,147,483,648. The bound is that less 7 percent. It is a text size, not an entry
+# count: the same 330 million entries are written whole as short numbers and dropped as long ones.
+USDA_MAX_ARRAY_TEXT_BYTES = 2_000_000_000
+# What an entry takes as text: an int is its digits and ", "; a point or a normal (vec3f) measured 37.2 bytes
+# on random float32 (the longest text a float32 has), so 40 is used; a texture coordinate (vec2f) is taken as
+# 27. A mesh with arrays this size is refused even when its numbers are short, and the message says what to
+# do.
+USDA_BYTES_PER_VEC3F = 40
+USDA_BYTES_PER_VEC2F = 27
+USDA_SEPARATOR_BYTES = 2
+# A crate (.usdc, and the layer inside a .usdz) compresses each array as one LZ4 block, and LZ4 takes
+# at most 0x7E000000 bytes (2,113,929,216) of input: a larger array writes, then fails at read with a
+# decompression error (measured on single-mesh crates of 3 and 6 GiB; a 4 GiB crate of 16 meshes read).
+USDC_MAX_ARRAY_BYTES = 0x7E000000
+
+# (array, entries per vertex or face, bytes per entry in a crate) of the arrays write_usd authors for a mesh.
+_MESH_ARRAYS = (("face vertex indices", "faces3", 4), ("face vertex counts", "faces", 4),
+                ("points", "vertices", 12), ("normals", "vertices", 12), ("texture coordinates", "vertices", 8))
+
+
+def _index_text_bytes(faces, vertices):
+    """The text size of a face-vertex-index array: its entries' digits plus a separator each. Counted
+    exactly (one pass per digit count over the array, no copy) once a cheap upper bound reaches the
+    limit, since an index is usually shorter than the longest one."""
+    entries = int(faces.size) if hasattr(faces, "size") else len(faces) * 3
+    upper = entries * (len(str(max(vertices, 1))) + USDA_SEPARATOR_BYTES)
+    if upper < USDA_MAX_ARRAY_TEXT_BYTES or not hasattr(faces, "size"):
+        return upper
+    flat = np.asarray(faces).reshape(-1)
+    digits = int(np.count_nonzero(flat >= 0))
+    for width in range(1, len(str(max(vertices, 1)))):
+        digits += int(np.count_nonzero(flat >= 10 ** width))
+    return digits + entries * USDA_SEPARATOR_BYTES
+
+
+def _text_array_sizes(geometry, vertices, faces):
+    """``(array name, text bytes)`` of each array a mesh's .usda text holds that can be large."""
+    faces_array = getattr(geometry, "faces", None)
+    sizes = []
+    if faces:
+        sizes.append(("face vertex indices", _index_text_bytes(faces_array, vertices)))
+        sizes.append(("face vertex counts", faces * (1 + USDA_SEPARATOR_BYTES)))
+    sizes.append(("points", vertices * USDA_BYTES_PER_VEC3F))
+    if faces:
+        sizes.append(("normals", vertices * USDA_BYTES_PER_VEC3F))
+        sizes.append(("texture coordinates", vertices * USDA_BYTES_PER_VEC2F))
+    return sizes
+
+
+def check_array_bounds(scene, output_extension, input_name="model"):
+    """Refuse, before anything is written, a mesh with an array the output format cannot hold: one whose
+    text would reach ``USDA_MAX_ARRAY_TEXT_BYTES`` for ``.usda`` (the text writer drops it silently), or
+    past ``USDC_MAX_ARRAY_BYTES`` bytes for ``.usdc`` and ``.usdz`` (the crate cannot be read back). The
+    message names the array and suggests another output. Applies on both compute tiers."""
+    geometries = scene.geometry.values() if hasattr(scene, "geometry") else [scene]
+    text = output_extension == ".usda"
+    for geometry in geometries:
+        points = getattr(geometry, "vertices", None)
+        faces_array = getattr(geometry, "faces", None)
+        vertices = len(points) if points is not None else 0
+        faces = len(faces_array) if faces_array is not None else 0
+        if text:
+            for name, size in _text_array_sizes(geometry, vertices, faces):
+                if size >= USDA_MAX_ARRAY_TEXT_BYTES:
+                    raise ValueError(
+                        f"{input_name} has a mesh whose {name} array would be about {size / 1e9:,.1f} GB of text, "
+                        f"more than the {USDA_MAX_ARRAY_TEXT_BYTES / 1e9:,.1f} GB a .usda array can hold (a larger "
+                        f"array is dropped without an error when the text is written). Convert it to .usdc "
+                        f"instead.")
+            continue
+        counts = {"vertices": vertices, "faces": faces, "faces3": 3 * faces}
+        for name, key, size in _MESH_ARRAYS:
+            if counts[key] * size > USDC_MAX_ARRAY_BYTES:
+                raise ValueError(
+                    f"{input_name} has a mesh whose {name} array is {counts[key] * size / 1024 ** 3:,.1f} GiB, "
+                    f"more than the {USDC_MAX_ARRAY_BYTES / 1024 ** 3:,.1f} GiB one array of a {output_extension} "
+                    f"file can hold (it would write but could not be read back). Convert it to another "
+                    f"format such as .glb or .stl, or split the model into several meshes.")
+
+
 def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, input_name="model",
               output_path_extension=None):
     """Write ``scene`` (a ``trimesh.Scene``, ``Trimesh`` or ``PointCloud``) as USD to ``output_file``
@@ -633,6 +717,7 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdUtils, Vt
     if not isinstance(scene, trimesh.Scene):
         scene = trimesh.Scene(scene)
+    check_array_bounds(scene, output_extension, input_name)
     work_dir = os.path.dirname(os.path.abspath(output_file))
     if output_extension == ".usdz":
         # The layer and its textures are staged beside the export directory, not in it: everything in
