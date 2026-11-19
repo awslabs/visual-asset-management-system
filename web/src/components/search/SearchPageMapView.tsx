@@ -19,6 +19,7 @@ import { SearchPageViewProps } from "./SearchPageTypes";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Link from "@cloudscape-design/components/link";
+import Toggle from "@cloudscape-design/components/toggle";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Popover from "@cloudscape-design/components/popover";
@@ -290,7 +291,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const isFileSearchMode = state.filters?._rectype?.value === "file";
 
     // Extract location data from search results
-    const locationData: LocationDataWithDetails[] = React.useMemo(() => {
+    const allLocationData: LocationDataWithDetails[] = React.useMemo(() => {
         if (!state.result?.hits?.hits) return [];
 
         const validData: LocationDataWithDetails[] = [];
@@ -345,6 +346,22 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         );
         return validData;
     }, [state.result, isFileSearchMode]);
+
+    // The "Show raster files" view filter: ON each visit, never stored. Off takes the hits that can be
+    // shown as a raster (their footprints, pins and popups) and every drawn raster off the map; the
+    // API still decides each download.
+    const [showRasterFiles, setShowRasterFiles] = useState(true);
+    const rasterHitCount = React.useMemo(
+        () => allLocationData.filter((item) => canShowRaster(item)).length,
+        [allLocationData]
+    );
+    const locationData: LocationDataWithDetails[] = React.useMemo(
+        () =>
+            showRasterFiles
+                ? allLocationData
+                : allLocationData.filter((item) => !canShowRaster(item)),
+        [allLocationData, showRasterFiles]
+    );
 
     // Reset selected items when location data changes (page change or new search)
     useEffect(() => {
@@ -527,13 +544,27 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                             ? "s"
                             : ""}{" "}
                         with location data
+                        {!showRasterFiles && rasterHitCount > 0 && (
+                            <>
+                                {" "}
+                                <Box
+                                    variant="span"
+                                    color="text-body-secondary"
+                                    fontWeight="normal"
+                                    data-testid="map-raster-hidden-count"
+                                >
+                                    ({rasterHitCount} raster file{rasterHitCount !== 1 ? "s" : ""}{" "}
+                                    hidden)
+                                </Box>
+                            </>
+                        )}
                     </Box>
                 ) : (
                     <Box variant="h2">No search results with location data</Box>
                 )}
-                {locationData.length > 0 && (
+                {allLocationData.length > 0 && (
                     <div
-                        data-testid="map-raster-info-wrap"
+                        data-testid="map-raster-filter"
                         style={{ display: "flex", alignItems: "center", gap: "8px" }}
                     >
                         <Popover
@@ -559,12 +590,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                 data-testid="map-raster-info-button"
                             />
                         </Popover>
+                        <Toggle
+                            checked={showRasterFiles}
+                            onChange={({ detail }) => setShowRasterFiles(detail.checked)}
+                            data-testid="map-raster-toggle"
+                        >
+                            Show raster files
+                        </Toggle>
                     </div>
                 )}
             </div>
 
             {/* Warning when no location data */}
-            {locationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
+            {allLocationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
                 <Box variant="p" color="text-status-warning">
                     No results have valid location data. The map view recognizes the following
                     metadata field types:
@@ -993,6 +1031,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         map={mapLoaded ? (mapRef.current?.getMap() as any) ?? null : null}
                         requests={rasterRequests}
                         onShownChange={setShownRasters}
+                        hidden={!showRasterFiles}
                     />
                 </React.Suspense>
             )}

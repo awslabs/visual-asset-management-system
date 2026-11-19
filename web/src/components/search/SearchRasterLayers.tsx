@@ -30,6 +30,12 @@ interface Props {
     requests: SearchRasterRequest[];
     /** Called with the files whose raster is on the map (a converted COG counts for its source). */
     onShownChange?: (shown: Set<string>) => void;
+    /**
+     * The Search map's "Show raster files" filter is off: every drawn raster is taken off the map, and
+     * the ones this filter hid come back with their opacity and order when it turns on again. A raster
+     * the filter hid is hidden, not removed.
+     */
+    hidden?: boolean;
 }
 
 /**
@@ -37,12 +43,12 @@ interface Props {
  * as the GeoTIFF Map Viewer draws them (common/cogRaster); this component is loaded only when the
  * first raster is requested, so the COG reader is not part of the Search page bundle.
  */
-const SearchRasterLayers: React.FC<Props> = ({ map, requests, onShownChange }) => {
+const SearchRasterLayers: React.FC<Props> = ({ map, requests, onShownChange, hidden = false }) => {
     const layers = useRasterLayers(map, {
         beforeLayerId: () =>
             map ? firstLayerIdWithPrefix(map, FOOTPRINT_LAYER_PREFIXES) : undefined,
     });
-    const { addFile, remove, entries } = layers;
+    const { addFile, remove, setVisible, entries } = layers;
     const entriesRef = useRef(entries);
     entriesRef.current = entries;
     const handled = useRef(0);
@@ -67,6 +73,23 @@ const SearchRasterLayers: React.FC<Props> = ({ map, requests, onShownChange }) =
         }
     }, [map, requests, addFile, remove]);
 
+    // Hide the drawn rasters while the filter is off, and bring back exactly those on turning it on.
+    const hiddenByFilter = useRef<string[]>([]);
+    useEffect(() => {
+        if (hidden) {
+            for (const entry of entriesRef.current) {
+                if (entry.visible && !entry.failed && !hiddenByFilter.current.includes(entry.id)) {
+                    hiddenByFilter.current.push(entry.id);
+                    void setVisible(entry.id, false);
+                }
+            }
+        } else if (hiddenByFilter.current.length > 0) {
+            const ids = hiddenByFilter.current;
+            hiddenByFilter.current = [];
+            for (const id of ids) void setVisible(id, true);
+        }
+    }, [hidden, entries, setVisible]);
+
     // Report which hits are shown, so the popup's button reads Show or Hide to match (a layer removed
     // from the list below the map turns its button back to Show).
     useEffect(() => {
@@ -83,9 +106,15 @@ const SearchRasterLayers: React.FC<Props> = ({ map, requests, onShownChange }) =
         return null;
     }
     return (
-        <Container header={<Header variant="h3">Raster layers</Header>}>
-            <RasterLayerPanel layers={layers} />
-        </Container>
+        <div
+            hidden={hidden}
+            data-testid="search-raster-layers"
+            data-filter-hidden={hidden || undefined}
+        >
+            <Container header={<Header variant="h3">Raster layers</Header>}>
+                <RasterLayerPanel layers={layers} />
+            </Container>
+        </div>
     );
 };
 
