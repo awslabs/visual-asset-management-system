@@ -37,6 +37,7 @@
  */
 
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
@@ -352,17 +353,10 @@ const NON_ROOT_IMAGES: {
  *
  * The rule covers every registry and image, not only the docker-library python bases it started with:
  * a version-looking tag such as `condaforge/...:24.9.2-0` or `nvidia/cuda:12.8.1-...` is still a tag its
- * publisher can re-point, and the Image to 3D CUDA bases are where that bit (R3-9). A named build stage
- * (`FROM <stage>`) and an `ARG`-supplied base are not image references and are not matched.
+ * publisher can re-point, and the Image to 3D CUDA bases are where that bit (R3-9). An earlier build
+ * stage, `scratch` and a stage index are not image references; an `ARG`-supplied base is checked through
+ * its default.
  */
-// `@` is excluded from BOTH groups deliberately. With a plain `(\S+)` the image group matched greedily
-// through `…python:3.12-slim@sha256`, leaving the 64 hex characters to satisfy the tag group — so a
-// digest-pinned line was reported as floating, and the rule would have failed the very lines it exists
-// to require. The positive control below is what caught that. The optional trailing `AS <name>` is what
-// lets a builder stage's line be checked at all: without it the `$` anchor made every named stage pass.
-const FLOATING_TAG =
-    /^FROM\s+(?:--\S+\s+)*([^\s:@$]+(?:\/[^\s:@]+)*):([A-Za-z0-9._-]+)(?:\s+(?:AS|as)\s+\S+)?\s*$/;
-
 /** Every Dockerfile under backendPipelines (`Dockerfile`, `Dockerfile.<name>`, `Dockerfile_<name>`). */
 function pipelineDockerfiles(dir: string = PIPELINES_DIR): string[] {
     const out: string[] = [];
@@ -404,32 +398,79 @@ const DIGEST_RULE_EXEMPTIONS: { file: string; reason: string }[] = [
     },
 ];
 
-/** An image an instruction copies from (`COPY --from=<image>`), as opposed to a named build stage. */
-const COPY_FROM_IMAGE = /^COPY\s+(?:--\S+\s+)*--from=(\S*[/:]\S*)\s/;
+/** A Dockerfile's instructions: backslash continuations joined, comment lines dropped. */
+function dockerInstructions(text: string): string[] {
+    const out: string[] = [];
+    let current: string | null = null;
+    for (const raw of text.split(/\r?\n/)) {
+        if (current === null && /^\s*#/.test(raw)) continue;
+        const continues = /\\\s*$/.test(raw);
+        const body = raw.replace(/\\\s*$/, "").trim();
+        current = current === null ? body : `${current} ${body}`;
+        if (continues) continue;
+        if (current !== "") out.push(current);
+        current = null;
+    }
+    if (current !== null && current !== "") out.push(current);
+    return out;
+}
 
 /** The default of `ARG <name>=<value>` in a Dockerfile, or undefined. */
 function argDefault(text: string, name: string): string | undefined {
-    const m = new RegExp(`^ARG\\s+${name}=("?)(\\S+?)\\1\\s*$`, "m").exec(text);
+    const m = new RegExp(`^ARG\\s+${name}=("?)(\\S+?)\\1\\s*$`, "im").exec(text);
     return m ? m[2] : undefined;
 }
 
-/** The image references in one Dockerfile that are not pinned by digest. */
+const DIGEST_SUFFIX = /@sha256:[0-9a-f]{64}$/;
+
+/**
+ * Why `ref` is not pinned by digest, or null when it is pinned or is not an image: an earlier build
+ * stage, `scratch`, or a stage index. An `ARG`-supplied reference is checked through its default, whose
+ * digest may itself come from another `ARG` (`...@${DIGEST}`).
+ */
+function unpinned(ref: string, stages: Set<string>, text: string): string | null {
+    if (stages.has(ref.toLowerCase()) || ref.toLowerCase() === "scratch" || /^\d+$/.test(ref))
+        return null;
+    const arg = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(ref);
+    if (arg) {
+        const value = argDefault(text, arg[1]) ?? "";
+        const viaArg = /@\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(value);
+        const digest = viaArg ? argDefault(text, viaArg[1]) ?? "" : value.split("@")[1] ?? "";
+        return /^sha256:[0-9a-f]{64}$/.test(digest)
+            ? null
+            : `\${${arg[1]}} = ${value || "(no default)"}`;
+    }
+    return DIGEST_SUFFIX.test(ref) ? null : ref;
+}
+
+/**
+ * The image references in one Dockerfile that are not pinned by digest: every `FROM` operand (an untagged
+ * one means `latest`), every `COPY --from=` and every `RUN --mount=...,from=` that names an image rather
+ * than a stage. Instructions match in any case, and a registry may carry a port (`host:5000/img:1.0`).
+ */
 function unpinnedReferences(text: string): string[] {
     const offenders: string[] = [];
-    for (const raw of text.split(/\r?\n/)) {
-        const line = raw.trim();
-        const floating = FLOATING_TAG.exec(line);
-        if (floating) offenders.push(`${floating[1]}:${floating[2]}`);
-        const copied = COPY_FROM_IMAGE.exec(line);
-        if (copied && !/@sha256:[0-9a-f]{64}$/.test(copied[1])) offenders.push(copied[1]);
-        // An ARG-supplied base: its default must carry a digest, given inline or by another ARG.
-        const fromArg = /^FROM\s+(?:--\S+\s+)*\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/.exec(line);
-        if (fromArg) {
-            const value = argDefault(text, fromArg[1]) ?? "";
-            const viaArg = /@\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(value);
-            const digest = viaArg ? argDefault(text, viaArg[1]) ?? "" : value.split("@")[1] ?? "";
-            if (!/^sha256:[0-9a-f]{64}$/.test(digest))
-                offenders.push(`\${${fromArg[1]}} = ${value || "(no default)"}`);
+    const stages = new Set<string>();
+    for (const step of dockerInstructions(text)) {
+        const from = /^FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$/i.exec(step);
+        if (from) {
+            const why = unpinned(from[1], stages, text);
+            if (why) offenders.push(why);
+            if (from[2]) stages.add(from[2].toLowerCase());
+            continue;
+        }
+        const copy = /^COPY\s+(?:--\S+\s+)*?--from=(\S+)/i.exec(step);
+        if (copy) {
+            const why = unpinned(copy[1], stages, text);
+            if (why) offenders.push(why);
+            continue;
+        }
+        if (/^RUN\s/i.test(step)) {
+            for (const mount of step.matchAll(/--mount=(\S+)/gi)) {
+                const source = /(?:^|,)from=([^,\s]+)/i.exec(mount[1]);
+                const why = source ? unpinned(source[1], stages, text) : null;
+                if (why) offenders.push(why);
+            }
         }
     }
     return offenders;
@@ -457,46 +498,82 @@ describe("base images are not pulled from a floating tag", () => {
         expect(unpinnedReferences(fs.readFileSync(file, "utf-8"))).toEqual([]);
     });
 
-    it("the detector recognises an unpinned copy source and an ARG-supplied base", () => {
-        expect(
-            unpinnedReferences("COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /usr/local/bin/\n")
-        ).toEqual(["ghcr.io/astral-sh/uv:0.8.12"]);
-        expect(
-            unpinnedReferences(
-                `COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:${"c".repeat(64)} /uv /bin/\n`
-            )
-        ).toEqual([]);
-        expect(unpinnedReferences("COPY --from=builder /opt/venv /opt/venv\n")).toEqual([]);
-        const viaArg = `ARG D=sha256:${"d".repeat(
-            64
-        )}\nARG BASE_IMAGE=nvcr.io/x/y:1@\${D}\nFROM \${BASE_IMAGE}\n`;
-        expect(unpinnedReferences(viaArg)).toEqual([]);
-        expect(unpinnedReferences("ARG BASE_IMAGE=nvcr.io/x/y:1\nFROM ${BASE_IMAGE}\n")).toEqual([
-            "${BASE_IMAGE} = nvcr.io/x/y:1",
-        ]);
+    it("the detector passes digest-pinned references and what is not an image", () => {
+        const d = "a".repeat(64);
+        const pinned = [
+            `FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim@sha256:${d} AS build`,
+            `from registry.example.com:5000/team/img:1.0@sha256:${d} as second`,
+            "FROM build",
+            "FROM scratch",
+            `COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:${d} /uv /bin/`,
+            "COPY --from=build /opt/venv /opt/venv",
+            "copy --chown=10000:10000 --from=second /a /b",
+            "COPY --from=0 /a /b",
+            "RUN --mount=type=cache,target=/root/.cache pip install x",
+            "RUN --mount=type=bind,from=build,source=/a,target=/b true",
+            `RUN --mount=type=bind,from=alpine:3.20@sha256:${d},target=/b true`,
+            `ARG D=sha256:${"d".repeat(64)}`,
+            "ARG BASE_IMAGE=nvcr.io/x/y:1@${D}",
+            "FROM ${BASE_IMAGE}",
+            // A python `from x import y` inside a RUN is part of that instruction, not a FROM.
+            "RUN python -c \\",
+            "from os import path",
+        ].join("\n");
+        expect(unpinnedReferences(pinned)).toEqual([]);
     });
 
-    it("the detector recognises a floating reference", () => {
-        // Positive control. Without it a regex that matched nothing would pass every case above.
-        const sample = "FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim";
-        const m = FLOATING_TAG.exec(sample.trim());
-        expect(m).not.toBeNull();
-        expect(m![2]).toBe("3.12-slim");
-        // And that a digest-pinned line is NOT reported, which is what makes the rule discriminating.
-        expect(FLOATING_TAG.exec(`${sample}@sha256:${"a".repeat(64)}`.trim())).toBeNull();
-        // A named stage is checked too, and any registry's tag counts, not only python's.
-        expect(
-            FLOATING_TAG.exec("FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0 as build")
-        ).not.toBeNull();
-        expect(FLOATING_TAG.exec("FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04")).not.toBeNull();
-        expect(
-            FLOATING_TAG.exec(
-                `FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:${"b".repeat(64)}`
-            )
-        ).toBeNull();
-        // A build stage reference and an ARG-supplied base are not image tags.
-        expect(FLOATING_TAG.exec("FROM builder")).toBeNull();
-        expect(FLOATING_TAG.exec("FROM ${BASE_IMAGE}")).toBeNull();
+    // Each form, added to a scratch copy of a tracked, pinned Dockerfile, makes that copy fail.
+    const SCRATCH_SOURCE = path.join(
+        PIPELINES_DIR,
+        "genAi",
+        "nvidia",
+        "cosmos",
+        "reason",
+        "container",
+        "Dockerfile"
+    );
+    it.each([
+        ["an untagged FROM", "FROM ubuntu", "ubuntu"],
+        ["an untagged FROM ... AS", "FROM ubuntu AS tools", "ubuntu"],
+        ["a lowercase from", "from ubuntu:22.04", "ubuntu:22.04"],
+        [
+            "a registry with a port",
+            "FROM registry.example.com:5000/team/img:1.0",
+            "registry.example.com:5000/team/img:1.0",
+        ],
+        [
+            "a RUN --mount from an image",
+            "RUN --mount=type=bind,from=alpine:3.20,source=/etc,target=/x true",
+            "alpine:3.20",
+        ],
+        [
+            "a bare COPY --from that names no stage",
+            "COPY --from=alpine /etc/os-release /tmp/",
+            "alpine",
+        ],
+        ["a tagged FROM", "FROM python:3.12-slim", "python:3.12-slim"],
+        [
+            "an unpinned COPY --from image",
+            "COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /bin/",
+            "ghcr.io/astral-sh/uv:0.8.12",
+        ],
+        [
+            "an ARG base without a digest",
+            "ARG PROBE_BASE=nvcr.io/x/y:1\nFROM ${PROBE_BASE}",
+            "${PROBE_BASE} = nvcr.io/x/y:1",
+        ],
+    ])("a scratch copy with %s fails", (_label, added, offender) => {
+        const original = fs.readFileSync(SCRATCH_SOURCE, "utf-8");
+        // [control] the tracked file itself passes.
+        expect(unpinnedReferences(original)).toEqual([]);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "digest-rule-"));
+        const copy = path.join(dir, "Dockerfile");
+        try {
+            fs.writeFileSync(copy, `${original}\n${added}\n`);
+            expect(unpinnedReferences(fs.readFileSync(copy, "utf-8"))).toEqual([offender]);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 
