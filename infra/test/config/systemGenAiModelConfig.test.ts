@@ -86,6 +86,8 @@ function govCloud(c: any) {
 function euSovereign(c: any) {
     govCloud(c);
     c.env.region = "eusc-de-east-1";
+    // Audit log search is refused in aws-eusc unless off (Logs Insights is not available there).
+    c.app.auditLogging.search.enabled = false;
     c.app.useAlb.certificateArn =
         "arn:aws-eusc:acm:eusc-de-east-1:123456789012:certificate/11111111-2222-3333-4444-555555555555";
 }

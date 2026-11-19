@@ -383,6 +383,9 @@ FEATURE_AUTHPROVIDER_EXTERNALOAUTHIDP = "AUTHPROVIDER_EXTERNALOAUTHIDP"
 FEATURE_DEADLINECLOUD_PIPELINES = "DEADLINECLOUD_PIPELINES"
 FEATURE_VECTORSEARCH = "VECTORSEARCH"
 FEATURE_ZIPDOWNLOADS = "ZIPDOWNLOADS"
+# Audit Log Search (the /audit API); present in the deployment's feature list unless
+# app.auditLogging.search.enabled is false (off in the EU Sovereign template).
+FEATURE_AUDITLOGSEARCH = "AUDITLOGSEARCH"
 
 # Download as Zip. The archive formats and compressions the create route accepts
 # (CreateZipDownloadRequestModel in backend/backend/models/assetsV3.py), the job statuses, and

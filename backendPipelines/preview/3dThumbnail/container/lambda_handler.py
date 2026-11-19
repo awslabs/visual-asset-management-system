@@ -378,7 +378,7 @@ def lambda_handler(event, context):
         manifest = merge_manifest(s3.get_json(manifest_bucket, manifest_key), result, request, render_keys,
                                   list(option_warnings) + (report.warnings() if report else []),
                                   dependency_report=report.to_dict() if report else None)
-        s3.put_json(manifest_bucket, manifest_key, manifest)
+        s3.put_json_payload(manifest_bucket, manifest_key, manifest)
         logger.info(f"render3d: wrote {len(render_keys)} frames, attributes {sorted(result.attributes)}, "
                     f"renderSkipped={manifest['renderSkipped']}, warnings={len(manifest['warnings'])}")
         if manifest["renderSkipped"] == analysis.RENDER_SKIPPED_ERROR:

@@ -269,6 +269,7 @@ describe("core stack nested-stack dependencies", () => {
         "authBuilderNestedStack",
         "apiBuilderNestedStack",
         "apiBuilder2NestedStack",
+        "apiBuilder3NestedStack",
         "searchBuilderNestedStack",
         "addonBuilderNestedStack",
         "customBuilderNestedStack",
