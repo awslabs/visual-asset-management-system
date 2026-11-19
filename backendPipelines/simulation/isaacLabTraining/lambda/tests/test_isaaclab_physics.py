@@ -159,7 +159,8 @@ class TestTaskIdMapping:
 
 @pytest.mark.unit
 class TestAutoMateRefusal:
-    """AutoMate lists no physics preset and offers rl_games only (list_envs of Isaac Lab 3.0.0)."""
+    """AutoMate offers rl_games only (``list_envs`` of Isaac Lab 3.0.0). It lists no physics preset,
+    so the engine is not refused: the run leaves the selector out (defect D2 of PR #1736)."""
 
     task = "IsaacContrib-AutoMate-Assembly-Direct"
 
@@ -168,21 +169,20 @@ class TestAutoMateRefusal:
         with patch.object(mod, "s3_client", _s3()), patch.object(mod, "sfn_client"):
             return mod.lambda_handler(_train(task=self.task, **training), MagicMock())
 
-    def test_the_default_engine_is_refused_with_the_remedy(self):
-        with pytest.raises(ValueError, match="no Newton configuration.*isaacsim_physx"):
-            self._refused(rlLibrary="rl_games")
-
     @pytest.mark.parametrize("library", ["rsl_rl", "skrl"])
     @pytest.mark.parametrize("physics", ["newton_mjwarp", "isaacsim_physx"])
     def test_any_other_library_is_refused_naming_rl_games(self, library, physics):
         with pytest.raises(ValueError, match="offers the RL library rl_games"):
             self._refused(rlLibrary=library, physics=physics)
 
-    def test_rl_games_on_physx_is_accepted(self):
-        config = _run(_train(task=self.task, rlLibrary="rl_games",
-                             physics="isaacsim_physx"))["trainingConfig"]
+    @pytest.mark.parametrize("physics", [None, "newton_mjwarp", "isaacsim_physx"])
+    def test_rl_games_runs_on_the_task_default_whatever_engine_was_set(self, physics):
+        training = {"rlLibrary": "rl_games"}
+        if physics:
+            training["physics"] = physics
+        config = _run(_train(task=self.task, **training))["trainingConfig"]
         assert (config["task"], config["rlLibrary"], config["physics"]) == (
-            self.task, "rl_games", "isaacsim_physx")
+            self.task, "rl_games", "task-default")
 
     def test_the_disassembly_task_follows_the_same_rule(self):
         with pytest.raises(ValueError, match="offers the RL library rl_games"):
@@ -193,15 +193,47 @@ class TestAutoMateRefusal:
             assert _run(_train(task=task))["trainingConfig"]["task"] == task
 
 
-_CHECKPOINT = "s3://asset-bucket/xid130a6/checkpoints/model_9.pt"
-_TRAIN_CONFIG_KEY = "xid130a6/train-config.json"
+@pytest.mark.unit
+class TestTasksWithoutPresets:
+    @pytest.mark.parametrize("task", ["IsaacContrib-Velocity-Flat-AnymalC-Direct",
+                                      "IsaacContrib-Reach-OpenArm", "IsaacContrib-Lift-Cube-Franka"])
+    @pytest.mark.parametrize("physics", ["newton_mjwarp", "isaacsim_physx"])
+    def test_a_task_with_no_presets_records_the_task_default(self, task, physics):
+        for event in (_train(task=task, physics=physics), _evaluate(task=task, physics=physics)):
+            assert _run(event, {})["trainingConfig"]["physics"] == "task-default"
+
+    def test_a_task_with_presets_keeps_the_engine(self):
+        assert _run(_train(physics="isaacsim_physx"))["trainingConfig"]["physics"] == "isaacsim_physx"
+        assert _run(_train())["trainingConfig"]["physics"] == "newton_mjwarp"
+
+    def test_the_value_is_not_something_an_operator_can_choose(self):
+        with pytest.raises(ValueError, match="Unsupported physics 'task-default'"):
+            _run(_train(physics="task-default"))
+
+    def test_the_list_holds_only_tasks_the_spike_found_without_presets(self):
+        listed = _load().TASKS_WITHOUT_PHYSICS_PRESETS
+        assert len(listed) == 48 and all(t.startswith("IsaacContrib-") for t in listed)
+        assert not listed & {"Isaac-Cartpole", "IsaacContrib-Keyboard-SO101",
+                             "IsaacContrib-Factory-Franka", "IsaacContrib-DrLegs-Walk"}
+
+    def test_the_value_matches_the_container(self):
+        declared = _literal_assignments(
+            os.path.join(_CONTAINER_DIR, "utils", "training", "config.py"), "TASK_DEFAULT_PHYSICS")
+        assert declared == [_load().TASK_DEFAULT_PHYSICS] == ["task-default"]
+
+
+# The layout of a real run: checkpoints under <asset>/checkpoints/<executionId>/, the run record at
+# <asset>/<executionId>/train-config.json (read from a deployed run, defect D3 of PR #1736).
+_CHECKPOINT = "s3://asset-bucket/asset1/checkpoints/xid130a6/model_9.pt"
+_TRAIN_CONFIG_KEY = "asset1/xid130a6/train-config.json"
 
 
 def _note(recorded, physics="newton_mjwarp", objects=None):
     """The ``physicsNote`` of an evaluation whose sibling train-config.json holds ``recorded``."""
     objects = {_TRAIN_CONFIG_KEY: json.dumps(recorded)} if objects is None else objects
-    config = _run(_evaluate(physics=physics), objects)["trainingConfig"]
-    return config.get("physicsNote")
+    event = _evaluate(physics=physics, checkpointPath="checkpoints/xid130a6/model_9.pt")
+    event["inputAssetLocationKey"] = "asset1/"
+    return _run(event, objects)["trainingConfig"].get("physicsNote")
 
 
 @pytest.mark.unit
@@ -249,6 +281,33 @@ class TestCrossEngineAdvisory:
         call = s3.get_object.call_args.kwargs
         assert call["Bucket"] == "asset-bucket" and call["Key"] == _TRAIN_CONFIG_KEY
         assert call["Range"].startswith("bytes=0-")
+
+    def test_a_checkpoint_copied_into_a_checkpoints_folder_uses_the_record_beside_it(self):
+        mod = _load()
+        s3 = _s3({"asset1/train-config.json": json.dumps(
+            {"trainingConfig": {"physics": "isaacsim_physx"}, "isaacLabVersion": "3.0.0"})})
+        with patch.object(mod, "s3_client", s3):
+            note = mod.physics_note("s3://asset-bucket/asset1/checkpoints/model_9.pt", "newton_mjwarp")
+        assert "trained with physics=isaacsim_physx" in note
+
+    @pytest.mark.parametrize("key,expected", [
+        ("asset1/checkpoints/xid130a6/model_9.pt", ["asset1/xid130a6/train-config.json"]),
+        ("a/b/checkpoints/xid130a6/model_9.pt", ["a/b/xid130a6/train-config.json"]),
+        ("asset1/checkpoints/model_9.pt", ["asset1/train-config.json"]),
+        ("checkpoints/xid130a6/model_9.pt", ["xid130a6/train-config.json"]),
+        ("asset1/model_9.pt", []), ("model_9.pt", []),
+        ("asset1/checkpoints/../x/model.pt", []),
+    ])
+    def test_the_record_keys_follow_the_real_layout(self, key, expected):
+        assert _load().train_config_keys(key) == expected
+
+    def test_a_task_without_presets_adds_no_note(self):
+        mod = _load()
+        s3 = _s3({_TRAIN_CONFIG_KEY: json.dumps(
+            {"trainingConfig": {"physics": "isaacsim_physx"}, "isaacLabVersion": "3.0.0"})})
+        with patch.object(mod, "s3_client", s3):
+            assert mod.physics_note(_CHECKPOINT, "task-default") == ""
+        s3.get_object.assert_not_called()
 
     def test_a_training_run_never_gets_a_note(self):
         assert "physicsNote" not in _run(_train())["trainingConfig"]

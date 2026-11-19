@@ -58,3 +58,28 @@ def find_checkpoints(roots, rl_library: str) -> list:
                     found[os.path.realpath(path)] = path
 
     return sorted(found.values(), key=lambda p: (os.path.getmtime(p), p))
+
+
+def old_rsl_rl_checkpoint_message(path: str, loader=None):
+    """A readable failure for an rsl_rl checkpoint written by Isaac Lab 2.x, or ``None``.
+
+    rsl_rl 5.x (Isaac Lab 3.0) keeps the actor and critic in separate ``actor_state_dict`` and
+    ``critic_state_dict`` entries. The 2.x format has one ``model_state_dict`` and none of those, so
+    ``play`` fails after Isaac Sim has started with ``KeyError: 'actor_state_dict'`` and the run ends
+    with a bare exit code (issue #1669). The file is read with ``weights_only=True``, which loads
+    tensors and plain containers only and refuses to run code from the file. Any problem reading it
+    gives ``None``, so ``play`` reports what it finds.
+    """
+    try:
+        if loader is None:
+            import torch
+            loader = lambda p: torch.load(p, map_location="cpu", weights_only=True)  # noqa: E731
+        content = loader(path)
+    except Exception:
+        return None
+    if (isinstance(content, dict) and "model_state_dict" in content
+            and "actor_state_dict" not in content):
+        return ("This rsl_rl checkpoint was written by Isaac Lab 2.x and cannot be loaded by Isaac "
+                "Lab 3.0, which stores the actor and the critic in a new format. Retrain the policy "
+                "on Isaac Lab 3.0. Checkpoints of rl_games and skrl from 2.x do load.")
+    return None

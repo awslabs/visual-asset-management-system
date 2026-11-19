@@ -22,6 +22,9 @@ RL_LIBRARIES = ("rsl_rl", "rl_games", "skrl")
 # and in the two vamsSchema templates; lambda/tests/test_config_precedence.py asserts they agree.
 PHYSICS_ENGINES = ("newton_mjwarp", "isaacsim_physx")
 DEFAULT_PHYSICS = "newton_mjwarp"
+# Set by the open-pipeline Lambda for a task that lists no physics presets: the run leaves the
+# override out. Not an engine an operator can choose, so it is not in PHYSICS_ENGINES.
+TASK_DEFAULT_PHYSICS = "task-default"
 DEFAULT_TASK = "Isaac-Cartpole"
 
 # Ceilings for the operator-supplied counts, each far above any shipped default. They catch a value
@@ -141,6 +144,8 @@ def _physics_field(section: dict) -> str:
     value = section.get("physics")
     if value is None or (isinstance(value, str) and not value.strip()):
         return DEFAULT_PHYSICS
+    if isinstance(value, str) and value.strip() == TASK_DEFAULT_PHYSICS:
+        return TASK_DEFAULT_PHYSICS
     return _choice_field(section, "physics", DEFAULT_PHYSICS, PHYSICS_ENGINES)
 
 

@@ -19,10 +19,12 @@ import traceback
 import boto3
 from utils.aws.s3 import S3Client
 from utils.aws.staging import STAGED_ASSET_FILES_ENV, stage_asset_files
-from utils.training.config import PipelineConfig, PHYSICS_ENGINES, RL_LIBRARIES
-from utils.training.checkpoints import find_checkpoints
+from utils.training.config import (
+    PipelineConfig, PHYSICS_ENGINES, RL_LIBRARIES, TASK_DEFAULT_PHYSICS)
+from utils.training.checkpoints import find_checkpoints, old_rsl_rl_checkpoint_message
 from utils.training.task_physics import (
-    isaac_lab_version, run_isaac_lab, unknown_preset_message)
+    NO_PRESETS_NOTE, is_typed_preset_rejection, isaac_lab_version, preset_error_message,
+    run_isaac_lab, unknown_preset_message)
 from botocore.config import Config
 
 # Adaptive retry with client-side rate limiting, per backendPipelines/CLAUDE.md. A pipeline lambda
@@ -237,6 +239,8 @@ def run_pipeline():
     print(f"Num Envs: {config.num_envs}")
     print(f"RL Library: {config.rl_library}")
     print(f"Physics: {config.physics}")
+    if config.physics == TASK_DEFAULT_PHYSICS:
+        print(NO_PRESETS_NOTE.format(task=config.task))
     print(f"Isaac Lab: {isaac_lab_version()}")
     if config.task_id_requested:
         print(f"Task id {config.task_id_requested} was mapped to {config.task} "
@@ -291,15 +295,13 @@ def run_training(config: PipelineConfig, s3: S3Client, job_config: dict):
     """Execute training workflow."""
     checkpoint_dir = setup_checkpoint_dir(config)
 
-    cmd = build_training_command(config, checkpoint_dir)
-    print(f"Executing: {' '.join(cmd)}")
-
-    result = run_isaac_lab(cmd, cwd="/workspace/isaaclab")
+    result = run_with_preset_fallback(
+        config, lambda: build_training_command(config, checkpoint_dir), cwd="/workspace/isaaclab")
 
     if result.returncode != 0:
         print(f"ERROR: Training failed with exit code {result.returncode}")
         upload_logs(s3, config)
-        refusal = unknown_preset_message(config.task, config.physics, result.tail, PHYSICS_ENGINES)
+        refusal = preset_failure_message(config, result.tail)
         if refusal:
             raise RuntimeError(refusal)
         # Raise rather than exit: main() owns the Step Functions failure callbacks, and
@@ -315,12 +317,18 @@ def run_evaluation(config: PipelineConfig, s3: S3Client, job_config: dict):
     """Execute evaluation workflow."""
     # Find policy file - either from explicit URI or from input directory
     policy_path = download_policy(s3, config)
-    
-    cmd = build_evaluation_command(config, policy_path)
-    print(f"Executing: {' '.join(cmd)}")
+
+    if config.rl_library == "rsl_rl":
+        problem = old_rsl_rl_checkpoint_message(policy_path)
+        if problem:
+            print(f"ERROR: {problem}")
+            upload_logs(s3, config)
+            raise RuntimeError(problem)
 
     limit = evaluation_time_limit(config)
-    result = run_isaac_lab(cmd, cwd="/workspace/isaaclab", timeout_seconds=limit)
+    result = run_with_preset_fallback(
+        config, lambda: build_evaluation_command(config, policy_path), cwd="/workspace/isaaclab",
+        timeout_seconds=limit)
 
     if result.timed_out:
         print(f"ERROR: Evaluation did not finish within {limit} seconds")
@@ -333,13 +341,41 @@ def run_evaluation(config: PipelineConfig, s3: S3Client, job_config: dict):
     if result.returncode != 0:
         print(f"ERROR: Evaluation failed with exit code {result.returncode}")
         upload_logs(s3, config)
-        refusal = unknown_preset_message(config.task, config.physics, result.tail, PHYSICS_ENGINES)
+        refusal = preset_failure_message(config, result.tail)
         if refusal:
             raise RuntimeError(refusal)
         raise RuntimeError(f"Evaluation failed with exit code {result.returncode}")
 
     upload_evaluation_results(s3, config, job_config)
     print("Evaluation complete")
+
+
+def run_with_preset_fallback(config: PipelineConfig, build_command, cwd: str, **kwargs):
+    """Run the Isaac Lab command; when the task has no physics presets, run it again without one.
+
+    A task that lists no preset of the physics type rejects ``physics=<engine>`` during
+    configuration validation, before Isaac Sim starts. The Lambda leaves the override out for the
+    tasks it knows; for any other (a custom or ported environment) this reads the rejection and
+    runs once more with no selector, so the task runs on the physics it registers. The run is
+    recorded as ``task-default``. Any other failure is returned as it is.
+    """
+    cmd = build_command()
+    print(f"Executing: {' '.join(cmd)}")
+    result = run_isaac_lab(cmd, cwd=cwd, **kwargs)
+    if (result.returncode != 0 and not getattr(result, "timed_out", False)
+            and config.physics != TASK_DEFAULT_PHYSICS and is_typed_preset_rejection(result.tail)):
+        print(NO_PRESETS_NOTE.format(task=config.task))
+        config.physics = TASK_DEFAULT_PHYSICS
+        cmd = build_command()
+        print(f"Executing: {' '.join(cmd)}")
+        result = run_isaac_lab(cmd, cwd=cwd, **kwargs)
+    return result
+
+
+def preset_failure_message(config: PipelineConfig, output: str):
+    """The readable message for a failed run whose output shows a preset error, or ``None``."""
+    return (unknown_preset_message(config.task, config.physics, output, PHYSICS_ENGINES)
+            or preset_error_message(config.task, output))
 
 
 def evaluation_time_limit(config: PipelineConfig) -> int:
@@ -528,7 +564,8 @@ def build_training_command(config: PipelineConfig, checkpoint_dir: str) -> list:
     if config.seed is not None:
         cmd.extend(["--seed", str(config.seed)])
 
-    cmd.append(f"physics={resolve_physics(config.physics)}")
+    if config.physics != TASK_DEFAULT_PHYSICS:
+        cmd.append(f"physics={resolve_physics(config.physics)}")
     return cmd
 
 
@@ -561,6 +598,9 @@ def build_evaluation_command(config: PipelineConfig, policy_path: str) -> list:
         "--video_length",
         str(total_steps),
     ]
+
+    if config.physics == TASK_DEFAULT_PHYSICS:
+        return cmd  # the task lists no physics presets: no selector and no Newton viewer
 
     physics = resolve_physics(config.physics)
     if physics == "newton_mjwarp":

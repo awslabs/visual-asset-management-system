@@ -25,14 +25,27 @@ waits for the workflow's own timeout.
 
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
 from collections import deque
 from typing import List, Optional
 
+# The value a run records when its task lists no physics presets and so runs without the selector.
+# Kept equal to TASK_DEFAULT_PHYSICS in utils/training/config.py and lambda/openPipeline.py.
+TASK_DEFAULT_PHYSICS = "task-default"
+
+NO_PRESETS_NOTE = ("Task {task} declares no physics presets; it runs on its registered physics. "
+                   "The physics setting is ignored.")
+
 # The lines of output kept to read an error from.
 TAIL_LINES = 400
+
+# Isaac Lab's rejection of a ``physics=<preset>`` selector for a task that lists no preset of that
+# type. It happens during configuration validation, before Kit starts (the reviewer's run: 15 s).
+_TYPED_PRESET_REJECTION = re.compile(r"Typed preset selector\(s\)")
+_PRESET_ERROR_LINE = re.compile(r"^\w*(?:Error|Exception):[^\n]*\bpreset[^\n]*$", re.IGNORECASE | re.MULTILINE)
 
 _UNKNOWN_PRESET = re.compile(r"Unknown preset\(s\):\s*([^\n]+)")
 _AVAILABLE_HEADER = re.compile(r"Available presets[^\n]*\n")
@@ -63,6 +76,23 @@ def parse_unknown_preset_error(output: str) -> Optional[dict]:
                 available = [name.strip() for name in option_line.group(1).split(",")]
                 break
     return {"rejected": rejected, "available": available}
+
+
+def is_typed_preset_rejection(output: str) -> bool:
+    """Whether the run failed because the task has no preset of the type ``physics=`` selects."""
+    return bool(_TYPED_PRESET_REJECTION.search(output or ""))
+
+
+def preset_error_message(task: str, output: str) -> Optional[str]:
+    """A readable message for a preset error of any other form, or ``None``.
+
+    The first error line that mentions a preset is quoted (cut to 300 characters) so the run does
+    not end in a bare exit code.
+    """
+    match = _PRESET_ERROR_LINE.search(output or "")
+    if not match:
+        return None
+    return f"Task {task} failed while Isaac Lab resolved its presets: {match.group(0).strip()[:300]}"
 
 
 def unknown_preset_message(task: str, physics: str, output: str, offered: tuple) -> Optional[str]:
@@ -99,15 +129,30 @@ class IsaacLabRun:
         self.timed_out = timed_out
 
 
+def kill_process_group(process) -> None:
+    """Kill ``process`` and everything it started.
+
+    ``isaaclab.sh`` starts Isaac Lab's Python process as a child, so killing only the shell leaves
+    Kit and the GPU work running. The run starts in its own session (``start_new_session``), so its
+    process group id equals its pid and the group holds the whole tree. Falls back to the single
+    process when the group cannot be signalled.
+    """
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, AttributeError, TypeError, OSError):
+        process.kill()
+
+
 def run_isaac_lab(cmd: list, cwd: str, timeout_seconds: Optional[float] = None,
                   popen=subprocess.Popen, clock=time.monotonic) -> IsaacLabRun:
     """Run ``cmd``, echoing its output as it comes and keeping the last lines.
 
-    With ``timeout_seconds`` the process is killed when the limit passes. The command is a list and
+    With ``timeout_seconds`` the process and its children (one process group) are killed when the limit passes. The command is a list and
     no shell is involved.
     """
     process = popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # nosemgrep: dangerous-subprocess-use-audit
-                    text=True, errors="replace", bufsize=1)
+                    text=True, errors="replace", bufsize=1,
+                    start_new_session=True)
     tail = deque(maxlen=TAIL_LINES)
     timed_out = threading.Event()
 
@@ -123,7 +168,7 @@ def run_isaac_lab(cmd: list, cwd: str, timeout_seconds: Optional[float] = None,
     while process.poll() is None:
         if timeout_seconds is not None and clock() - started > timeout_seconds:
             timed_out.set()
-            process.kill()
+            kill_process_group(process)
             break
         time.sleep(0.5)
     process.wait()

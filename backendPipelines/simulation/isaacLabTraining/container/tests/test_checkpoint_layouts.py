@@ -183,3 +183,50 @@ class TestEvaluationPolicyPath:
         policy = main_module.EVALUATION_POLICY_PATH
         run_folder = os.path.dirname(os.path.dirname(policy))
         assert os.path.dirname(run_folder) == main_module.LOCAL_LOG_PATH
+
+
+class TestOldRslRlCheckpoint:
+    """An rsl_rl checkpoint of Isaac Lab 2.x fails play with ``KeyError: 'actor_state_dict'``
+    (defect D4 of PR #1736); it is named before Isaac Sim starts."""
+
+    def test_the_2x_format_is_named(self):
+        from utils.training.checkpoints import old_rsl_rl_checkpoint_message
+        message = old_rsl_rl_checkpoint_message(
+            "/p.pt", loader=lambda p: {"model_state_dict": {}, "optimizer_state_dict": {}, "iter": 3})
+        assert "Isaac Lab 2.x" in message and "Retrain" in message and "rl_games and skrl" in message
+
+    @pytest.mark.parametrize("content", [
+        {"actor_state_dict": {}, "critic_state_dict": {}, "iter": 3},
+        {"model_state_dict": {}, "actor_state_dict": {}},
+        {"something": 1}, [], None])
+    def test_a_3_0_checkpoint_or_anything_else_passes(self, content):
+        from utils.training.checkpoints import old_rsl_rl_checkpoint_message
+        assert old_rsl_rl_checkpoint_message("/p.pt", loader=lambda p: content) is None
+
+    def test_an_unreadable_file_is_left_to_play(self):
+        from utils.training.checkpoints import old_rsl_rl_checkpoint_message
+
+        def broken(path):
+            raise RuntimeError("not a zip file")
+
+        assert old_rsl_rl_checkpoint_message("/p.pt", loader=broken) is None
+        assert old_rsl_rl_checkpoint_message("/does/not/exist.pt") is None
+
+    def test_evaluation_stops_before_play_with_the_message(self, monkeypatch):
+        import importlib.util
+        import os
+        spec = importlib.util.spec_from_file_location(
+            "isaaclab_main_oldck", os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "__main__.py"))
+        main = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(main)
+        monkeypatch.setattr(main, "download_policy", lambda s3, config: "/p.pt")
+        monkeypatch.setattr(main, "old_rsl_rl_checkpoint_message", lambda path: "Isaac Lab 2.x checkpoint")
+        monkeypatch.setattr(main, "upload_logs", lambda s3, config: None)
+        monkeypatch.setattr(main, "run_isaac_lab",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("play started")))
+        from utils.training.config import PipelineConfig
+        config = PipelineConfig(job_name="j", mode="evaluate", task="Isaac-Cartpole",
+                                rl_library="rsl_rl", input_s3_path="", output_s3_path="s3://b/o/")
+        with pytest.raises(RuntimeError, match="Isaac Lab 2.x checkpoint"):
+            main.run_evaluation(config, None, {})

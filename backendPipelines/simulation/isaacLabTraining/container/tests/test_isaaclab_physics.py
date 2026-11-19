@@ -344,3 +344,158 @@ class TestCustomEnvironmentInstall:
         monkeypatch.setattr(main_module.subprocess, "run",
                             lambda cmd, **kw: SimpleNamespace(returncode=0, stderr=""))
         main_module.download_and_install_custom_environment(self._S3(), f"s3://b/envs/{name}")
+
+
+@pytest.fixture(scope="module")
+def typed_error_text():
+    with open(os.path.join(_TESTS_DIR, "fixtures", "typed_preset_error.txt"), encoding="utf-8") as f:
+        return f.read()
+
+
+@pytest.mark.unit
+class TestTasksWithoutPhysicsPresets:
+    """A task that lists no physics preset rejects both engines (defect D2 of PR #1736); the run
+    leaves the selector out and the task runs on the physics it registers."""
+
+    def test_a_task_default_run_has_no_selector_and_no_newton_viewer(self, main_module):
+        train = main_module.build_training_command(_config(physics="task-default"), "/tmp/ck")
+        assert not any(arg.startswith("physics=") for arg in train)
+        play = main_module.build_evaluation_command(
+            _config(mode="evaluate", physics="task-default"), "/p/policy.pt")
+        assert not any(arg.startswith("physics=") for arg in play) and "--viz" not in play
+
+    def test_the_value_is_accepted_from_the_lambda_only_in_the_config(self):
+        config = PipelineConfig.from_dict({"trainingConfig": {"physics": "task-default"}})
+        assert config.physics == "task-default"
+        assert "task-default" not in PHYSICS_ENGINES
+
+    def test_the_typed_rejection_runs_the_task_again_without_the_selector(
+            self, main_module, monkeypatch, typed_error_text, capsys):
+        seen = []
+
+        def fake(cmd, cwd, timeout_seconds=None):
+            seen.append(cmd)
+            return _run_result(1, typed_error_text) if len(seen) == 1 else _run_result(0)
+
+        monkeypatch.setattr(main_module, "run_isaac_lab", fake)
+        monkeypatch.setattr(main_module, "setup_checkpoint_dir", lambda config: "/unused")
+        monkeypatch.setattr(main_module, "upload_training_results", lambda *a: None)
+        config = _config(physics="isaacsim_physx", task="My-Ported-Task")
+        main_module.run_training(config, None, {})
+        assert seen[0][-1] == "physics=isaacsim_physx"
+        assert not any(arg.startswith("physics=") for arg in seen[1])
+        assert config.physics == "task-default"
+        assert ("Task My-Ported-Task declares no physics presets; it runs on its registered "
+                "physics. The physics setting is ignored.") in capsys.readouterr().out
+
+    def test_the_second_failure_is_reported_and_there_is_no_third_run(
+            self, main_module, monkeypatch, typed_error_text):
+        calls = []
+
+        def fake(cmd, cwd, timeout_seconds=None):
+            calls.append(cmd)
+            return _run_result(1, typed_error_text)
+
+        monkeypatch.setattr(main_module, "run_isaac_lab", fake)
+        monkeypatch.setattr(main_module, "setup_checkpoint_dir", lambda config: "/unused")
+        monkeypatch.setattr(main_module, "upload_logs", lambda s3, config: None)
+        with pytest.raises(RuntimeError):
+            main_module.run_training(_config(physics="newton_mjwarp"), None, {})
+        assert len(calls) == 2
+
+    def test_a_different_failure_is_not_run_again(self, main_module, monkeypatch):
+        calls = []
+        monkeypatch.setattr(main_module, "run_isaac_lab",
+                            lambda cmd, cwd, timeout_seconds=None: calls.append(cmd) or _run_result(1, "boom"))
+        monkeypatch.setattr(main_module, "setup_checkpoint_dir", lambda config: "/unused")
+        monkeypatch.setattr(main_module, "upload_logs", lambda s3, config: None)
+        with pytest.raises(RuntimeError, match="exit code 1"):
+            main_module.run_training(_config(), None, {})
+        assert len(calls) == 1
+
+    def test_evaluation_reruns_without_the_selector_too(
+            self, main_module, monkeypatch, typed_error_text):
+        seen = []
+
+        def fake(cmd, cwd, timeout_seconds=None):
+            seen.append(cmd)
+            return _run_result(1, typed_error_text) if len(seen) == 1 else _run_result(0)
+
+        monkeypatch.setattr(main_module, "run_isaac_lab", fake)
+        monkeypatch.setattr(main_module, "download_policy", lambda s3, config: "/unused/p.pt")
+        monkeypatch.setattr(main_module, "upload_evaluation_results", lambda *a: None)
+        config = _config(mode="evaluate", physics="newton_mjwarp", rl_library="rl_games")
+        main_module.run_evaluation(config, None, {})
+        assert "--viz" in seen[0] and "--viz" not in seen[1]
+        assert config.physics == "task-default"
+
+    def test_any_other_preset_error_gets_a_readable_message(self, main_module, monkeypatch):
+        text = "Traceback...\nValueError: Preset 'x' conflicts with preset 'y' for env.sim\n"
+        monkeypatch.setattr(main_module, "run_isaac_lab",
+                            lambda cmd, cwd, timeout_seconds=None: _run_result(1, text))
+        monkeypatch.setattr(main_module, "setup_checkpoint_dir", lambda config: "/unused")
+        monkeypatch.setattr(main_module, "upload_logs", lambda s3, config: None)
+        with pytest.raises(RuntimeError, match="failed while Isaac Lab resolved its presets.*conflicts"):
+            main_module.run_training(_config(physics="task-default"), None, {})
+
+    def test_the_banner_names_a_task_default_run(self, main_module, monkeypatch, capsys):
+        monkeypatch.setattr(main_module, "S3Client", lambda: type("S", (), {
+            "register_bucket_regions": lambda self, r: None})())
+        monkeypatch.setattr(main_module, "run_training", lambda *a: None)
+        monkeypatch.setattr(main_module.sys, "argv", ["x", json.dumps({
+            "jobName": "j", "trainingConfig": {"mode": "train", "task": "T-1",
+                                               "physics": "task-default"}})])
+        main_module.run_pipeline()
+        assert "Task T-1 declares no physics presets" in capsys.readouterr().out
+
+
+@pytest.mark.unit
+class TestPlayProcessGroup:
+    """Killing the shell of ``isaaclab.sh`` left Kit running (defect D6 of PR #1736)."""
+
+    def test_the_run_starts_in_its_own_session(self):
+        seen = {}
+
+        class Done:
+            returncode = 0
+            stdout = iter([])
+
+            def poll(self):
+                return 0
+
+            def wait(self):
+                return 0
+
+        def popen(*args, **kwargs):
+            seen.update(kwargs)
+            return Done()
+
+        run_isaac_lab(["x"], "/tmp", popen=popen)
+        assert seen.get("start_new_session") is True
+
+    def test_the_timeout_kills_the_group_and_not_only_the_shell(self, monkeypatch):
+        import signal
+        killed = []
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+
+        class Hung:
+            pid = 4242
+            returncode = -9
+            stdout = iter([])
+            single_kills = 0
+
+            def poll(self):
+                return None if not killed else -9
+
+            def kill(self):
+                self.single_kills += 1
+
+            def wait(self):
+                return -9
+
+        hung = Hung()
+        ticks = iter(range(0, 10000, 2000))
+        result = run_isaac_lab(["play"], "/tmp", timeout_seconds=1000,
+                               popen=lambda *a, **k: hung, clock=lambda: next(ticks))
+        assert result.timed_out
+        assert killed == [(4242, signal.SIGKILL)] and hung.single_kills == 0

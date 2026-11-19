@@ -75,13 +75,52 @@ TASK_ID_MAP_2X_TO_3X = {
     "Isaac-Velocity-Rough-Anymal-D-v0": "Isaac-Velocity-Rough-AnymalD",
 }
 
-# Task families the spike showed to be limited, as (id prefix, libraries the task offers, engines the
-# task offers among the two above). A deny list: a task no prefix names passes, so a valid
-# combination is never blocked by a stale table. The AutoMate tasks list no physics preset and
-# register an agent configuration for rl_games only (``list_envs`` of Isaac Lab 3.0.0).
+# Task families the spike showed to be limited, as (id prefix, libraries the task offers). A deny
+# list: a task no prefix names passes, so a valid combination is never blocked by a stale table. The
+# AutoMate tasks register an agent configuration for rl_games only (``list_envs`` of Isaac Lab 3.0.0).
 TASK_FAMILY_LIMITS = (
-    ("IsaacContrib-AutoMate-", ("rl_games",), ("isaacsim_physx",)),
+    ("IsaacContrib-AutoMate-", ("rl_games",)),
 )
+
+# The value the run records in place of an engine when the task has no physics presets to choose
+# from. It is never accepted as input (``resolve_physics`` allows the two engines only).
+TASK_DEFAULT_PHYSICS = "task-default"
+
+# Tasks of Isaac Lab 3.0.0 that list no physics preset (``list_envs`` of the image, the spike's task
+# table). Isaac Lab rejects any ``physics=<engine>`` override for them, with a "Typed preset
+# selector(s)" error, so the run leaves the override out and the task runs on the physics it
+# registers. A task this list does not name (a custom or ported environment) is handled in the
+# container, which reads that same error and runs once more without the override.
+TASKS_WITHOUT_PHYSICS_PRESETS = frozenset((
+    "IsaacContrib-Velocity-Flat-AnymalC-Direct", "IsaacContrib-Velocity-Rough-AnymalC-Direct",
+    "IsaacContrib-Assemble-Trocar-G129-Dex3", "IsaacContrib-Assemble-Trocar-G129-Dex3-Eval",
+    "IsaacContrib-AutoMate-Assembly-Direct", "IsaacContrib-AutoMate-Disassembly-Direct",
+    "IsaacContrib-Open-Drawer-OpenArm", "IsaacContrib-Cartpole-Camera-Showcase-Direct",
+    "IsaacContrib-Deploy-GearAssembly-Rizon4s-Grav",
+    "IsaacContrib-Deploy-GearAssembly-Rizon4s-Grav-ROS-Inference",
+    "IsaacContrib-Deploy-GearAssembly-UR10e-2F140", "IsaacContrib-Deploy-GearAssembly-UR10e-2F85",
+    "IsaacContrib-Deploy-GearAssembly-UR10e-2F140-ROS-Inference",
+    "IsaacContrib-Deploy-GearAssembly-UR10e-2F85-ROS-Inference",
+    "IsaacContrib-Deploy-Reach-Rizon4s", "IsaacContrib-Deploy-Reach-Rizon4s-ROS-Inference",
+    "IsaacContrib-Deploy-Reach-UR10e", "IsaacContrib-Deploy-Reach-UR10e-ROS-Inference",
+    "IsaacContrib-Navigation-3DObstacles-ARL-Robot-1",
+    "IsaacContrib-TrackPositionNoObstacles-ARL-Robot-1", "IsaacContrib-Factory-PegInsert-Direct",
+    "IsaacContrib-Factory-GearMesh-Direct", "IsaacContrib-Factory-NutThread-Direct",
+    "IsaacContrib-Forge-PegInsert-Direct", "IsaacContrib-Forge-GearMesh-Direct",
+    "IsaacContrib-Forge-NutThread-Direct", "IsaacContrib-Franka-Pour",
+    "IsaacContrib-Humanoid-AMP-Dance-Direct", "IsaacContrib-Humanoid-AMP-Run-Direct",
+    "IsaacContrib-Humanoid-AMP-Walk-Direct", "IsaacContrib-Lift-Cube-Franka",
+    "IsaacContrib-Lift-Cube-Franka-IK-Abs", "IsaacContrib-Lift-Cube-Franka-IK-Rel",
+    "IsaacContrib-Lift-Cube-OpenArm", "IsaacContrib-PickPlace-Locomanipulation-G1-Abs",
+    "IsaacContrib-PickPlace-FixedBaseUpperBodyIK-G1-Abs", "IsaacContrib-Multitask-Manipulation",
+    "IsaacContrib-Navigation-Flat-AnymalC", "IsaacContrib-PickPlace-GR1T2-Abs",
+    "IsaacContrib-NutPour-GR1T2-Pink-IK-Abs", "IsaacContrib-ExhaustPipe-GR1T2-Pink-IK-Abs",
+    "IsaacContrib-PickPlace-GR1T2-WaistEnabled-Abs", "IsaacContrib-PickPlace-G1-InspireFTP-Abs",
+    "IsaacContrib-Reach-OpenArmBi", "IsaacContrib-Reach-OpenArm",
+    "IsaacContrib-Stack-Cube-Instance-Randomize-Franka",
+    "IsaacContrib-Stack-Cube-Instance-Randomize-Franka-IK-Rel", "IsaacContrib-UR10-Particle-Push",
+))
+
 
 # Ceilings for the operator-supplied counts, each far above any shipped default. They catch a value
 # that cannot be what was meant — a mistyped extra digit — rather than describing capacity, which
@@ -181,7 +220,9 @@ def build_job_config_payload(event):
     task = map_task_id(requested_task)
     rl_library = resolve_rl_library(training_config.get("rlLibrary") or DEFAULT_RL_LIBRARY)
     physics = resolve_physics(training_config.get("physics") or DEFAULT_PHYSICS)
-    require_supported_task(task, rl_library, physics)
+    require_supported_task(task, rl_library)
+    if task in TASKS_WITHOUT_PHYSICS_PRESETS:
+        physics = TASK_DEFAULT_PHYSICS
 
     if mode == "train":
         job_config = build_training_config(event, training_config, task, rl_library, physics)
@@ -257,41 +298,62 @@ def map_task_id(task: str) -> str:
     return mapped
 
 
-def require_supported_task(task: str, rl_library: str, physics: str) -> None:
-    """Refuse a task, library and engine the spike showed cannot run, before any GPU starts."""
-    for prefix, libraries, engines in TASK_FAMILY_LIMITS:
-        if not task.startswith(prefix):
-            continue
-        if rl_library not in libraries:
+def require_supported_task(task: str, rl_library: str) -> None:
+    """Refuse a task and library the spike showed cannot run, before any GPU starts."""
+    for prefix, libraries in TASK_FAMILY_LIMITS:
+        if task.startswith(prefix) and rl_library not in libraries:
             raise ValueError(
                 f"Task {task} offers the RL library {', '.join(libraries)} in Isaac Lab 3.0. "
                 f"Set rlLibrary to {libraries[0]}."
             )
-        if physics not in engines:
-            raise ValueError(
-                f"Task {task} has no Newton configuration in Isaac Lab 3.0. "
-                f"Set Physics engine to {engines[0]}."
-            )
+
+
+_EXECUTION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def train_config_keys(key: str) -> list:
+    """The keys a checkpoint's ``train-config.json`` may sit at, in the order to try them.
+
+    A training run writes its checkpoints to ``<asset>/checkpoints/<executionId>/<file>`` and its
+    run record to ``<asset>/<executionId>/train-config.json``. A checkpoint copied straight into a
+    ``checkpoints`` folder has the record beside that folder.
+    """
+    parts = key.split("/")
+    folders = parts[:-1]
+    keys = []
+    if len(folders) >= 2 and folders[-2] == "checkpoints" and _EXECUTION_ID.match(folders[-1]):
+        keys.append("/".join(folders[:-2] + [folders[-1], "train-config.json"]))
+    if folders and folders[-1] == "checkpoints":
+        keys.append("/".join(folders[:-1] + ["train-config.json"]))
+    return keys
 
 
 def physics_note(policy_s3_uri: str, physics: str) -> str:
     """One line saying the checkpoint was trained on another engine, or ``""``.
 
     Advisory (it never fails a run: evaluating on the other engine is a legitimate transfer test).
-    Reads the ``train-config.json`` the training run wrote beside its ``checkpoints/`` folder, in the
+    Reads the ``train-config.json`` the training run wrote (see ``train_config_keys`` for where), in the
     same bucket as the checkpoint, whose bucket scope has already been checked. Every error gives
     ``""``. A run configuration with no ``physics`` and no ``isaacLabVersion`` was written before the
     upgrade, which ran PhysX. Only a value of the allow list is repeated, never operator text.
     """
+    if physics == TASK_DEFAULT_PHYSICS:
+        return ""  # the task has no engine to choose, so there is nothing to compare
     try:
         parsed = urlparse(policy_s3_uri)
-        key = parsed.path.lstrip("/")
-        folder = key.rsplit("/", 1)[0] if "/" in key else ""
-        if not parsed.netloc or not folder.endswith("checkpoints"):
+        keys = train_config_keys(parsed.path.lstrip("/"))
+        if not parsed.netloc or not keys:
             return ""
-        parent = folder[: -len("checkpoints")]
-        response = _s3_client_for_bucket(parsed.netloc).get_object(
-            Bucket=parsed.netloc, Key=f"{parent}train-config.json", Range="bytes=0-1048575")
+        response = None
+        for candidate in keys:
+            try:
+                response = _s3_client_for_bucket(parsed.netloc).get_object(
+                    Bucket=parsed.netloc, Key=candidate, Range="bytes=0-1048575")
+                break
+            except Exception as error:
+                logger.info(f"No run record at the candidate key: {type(error).__name__}")
+        if response is None:
+            return ""
         recorded = json.loads(response["Body"].read())
         training = recorded.get("trainingConfig") or {}
         trained = training.get("physics")
