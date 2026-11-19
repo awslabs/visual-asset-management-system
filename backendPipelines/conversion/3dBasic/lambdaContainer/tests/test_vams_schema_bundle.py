@@ -70,7 +70,17 @@ def _units_axes_values():
         "SOURCE_UNITS": ("auto", *units), "TARGET_UNITS": ("keep", *units),
         "SOURCE_UP_AXIS": ast.literal_eval(constants["SOURCE_UP_AXIS_VALUES"]),
         "TARGET_UP_AXIS": ast.literal_eval(constants["TARGET_UP_AXIS_VALUES"]),
+        "MISSING_REFERENCES": ast.literal_eval(constants["MISSING_REFERENCES_VALUES"]),
     }
+
+
+def _reference_handling_values():
+    with open(os.path.join(_LAMBDA_DIR, "units_axes.py"), encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "REFERENCE_HANDLING_VALUES":
+            return ast.literal_eval(node.value)
+    raise AssertionError("units_axes.py declares no REFERENCE_HANDLING_VALUES")
 
 
 def _load(*relative_parts):
@@ -180,6 +190,8 @@ class Test3dBasicBundle:
                 assert rendered.get(key, "auto") == "auto", (name, key)
             for key in ("targetUnits", "targetUpAxis"):
                 assert rendered.get(key, "keep") == "keep", (name, key)
+            assert rendered["referenceHandling"] in ("flatten", "auto"), name
+            assert rendered["missingReferences"] == "skip", name
 
     def test_the_option_values_are_the_ones_the_container_reads(self):
         values = _units_axes_values()
@@ -189,11 +201,24 @@ class Test3dBasicBundle:
                     assert entry["enumValues"] == list(values[entry["tagKey"]]), (name, entry["tagKey"])
                     assert entry["default"] == values[entry["tagKey"]][0], (name, entry["tagKey"])
 
+    def test_every_template_offers_the_reference_options(self):
+        allowed = _reference_handling_values()
+        for name in _template_files():
+            tags = {entry["tagKey"]: entry for entry in _load("templates", name)["tagSchema"]}
+            handling = tags["REFERENCE_HANDLING"]["enumValues"]
+            assert set(handling) <= set(allowed), (name, handling)
+            if name == "convert-to-usd.json":
+                # Only USD output can keep layers: package and convert-linked are offered there alone.
+                assert handling == list(allowed) and tags["REFERENCE_HANDLING"]["default"] == "auto"
+            else:
+                assert handling == ["flatten", "selected-only"], (name, handling)
+            assert tags["MISSING_REFERENCES"]["enumValues"] == ["skip", "fail"], name
+
     def test_gltf_outputs_offer_no_target_options(self):
         # The glTF convention (metres, Y up) is fixed, so the form cannot ask for another.
         for name in ("convert-to-glb.json", "convert-to-gltf.json"):
             tags = {entry["tagKey"] for entry in _load("templates", name)["tagSchema"]}
-            assert tags == {"SOURCE_UNITS", "SOURCE_UP_AXIS"}, (name, tags)
+            assert tags == {"SOURCE_UNITS", "SOURCE_UP_AXIS", "REFERENCE_HANDLING", "MISSING_REFERENCES"}, (name, tags)
 
     def test_no_template_carries_input_filter_overrides(self):
         # An override replaces the pipeline's whole filter list, so it would have to restate it.

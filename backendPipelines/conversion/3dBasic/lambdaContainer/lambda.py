@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import incomplete_result
 import referenced_files
 import size_check
 import units_axes
@@ -480,7 +481,17 @@ def resolve_inputs_from_manifest(data):
         output_path = f"s3://{outputs['bucket']}/{outputs['files']}"
         _record_bucket_region(outputs["bucket"], outputs.get("bucketRegion", ""))
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
+    # Where a run that left referenced files out writes conversion-incomplete.json: the execution's
+    # results folder (the outputs bucket + its bucket-relative results prefix).
+    global _results_location
+    _results_location = None
+    if outputs.get("bucket") and outputs.get("results"):
+        _results_location = (outputs["bucket"], outputs["results"].strip("/") + "/")
     return input_path, output_path, relative_subdir, version_id
+
+
+# (bucket, prefix) of the run's results folder, set by resolve_inputs_from_manifest; None without one.
+_results_location = None
 
 
 def exported_files(export_dir):
@@ -667,7 +678,8 @@ def worker_timeout_seconds(now=None):
 
 def run_worker(job, work_dir, timeout_seconds=None):
     """Run the load and the export in a child process (conversion_worker.py) and return when it has
-    written ``job["output_file"]``.
+    written ``job["output_file"]``; the return value is the child's result (``report`` for a
+    conversion, ``references`` for a ``mode: scan`` job).
 
     The child gets a scrubbed environment, an address-space limit (``job["address_space_bytes"]``)
     and a wall-clock limit; on a timeout its whole process group is killed. A failure it reports is
@@ -677,6 +689,9 @@ def run_worker(job, work_dir, timeout_seconds=None):
     job_path = os.path.join(work_dir, "job.json")
     result_path = os.path.join(work_dir, "result.json")
     stderr_path = os.path.join(work_dir, "worker.stderr")
+    # A result left by an earlier job of this run (the reference scan) is never read as this one's.
+    if os.path.lexists(result_path):
+        os.remove(result_path)
     with open(job_path, "w", encoding="utf-8") as handle:
         json.dump(job, handle)
     with open(stderr_path, "wb") as stderr:
@@ -703,7 +718,7 @@ def run_worker(job, work_dir, timeout_seconds=None):
     except (OSError, ValueError):
         pass
     if result is not None and result.get("ok"):
-        return
+        return result
     if result is None:
         _log_worker_stderr(stderr_path)
         code = process.returncode
@@ -824,6 +839,16 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         # An input whose text is not UTF-8 fails here, before its references are read or fetched.
         check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
         memory_bytes = size_check.memory_limit_bytes()
+        handling = options.resolved_reference_handling(output_filetype)
+        scene_input = input_s3_asset_extension in referenced_files.USD_EXTENSIONS or input_s3_asset_extension == ".dae"
+
+        def scan(batch):
+            # The scanned formats' references are read in a worker child, like the conversion itself.
+            result = run_worker({"mode": "scan", "files": [list(item) for item in batch],
+                                 "input_name": os.path.basename(input_key),
+                                 "address_space_bytes": size_check.address_space_limit_bytes()}, work_dir)
+            return result.get("references") or {}
+
         fetched = referenced_files.fetch_referenced_files(
             _s3_client_for_bucket(input_bucket), input_bucket, root_key, input_relative_path,
             temp_file, input_dir, limits=referenced_files.FetchLimits(
@@ -832,8 +857,18 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
                 # geometry leaves, not by their file size.
                 max_geometry_bytes=(size_limit - input_size) if size_limit is not None else None,
                 image_budget=(lambda geometry_bytes: size_check.texture_budget_bytes(
-                    input_s3_asset_extension, geometry_bytes, memory_bytes, output_filetype)) if memory_bytes else None),
-            logger=logger)
+                    input_s3_asset_extension, geometry_bytes, memory_bytes, output_filetype)) if memory_bytes else None,
+                # selected-only follows no reference: each is reported, and a glTF buffer the model
+                # cannot load without still fails the run.
+                max_depth=0 if handling == "selected-only" else (
+                    referenced_files.SCENE_MAX_DEPTH if scene_input else referenced_files.DEFAULT_MAX_DEPTH),
+                not_followed_reason=("not followed: REFERENCE_HANDLING is selected-only"
+                                     if handling == "selected-only" else None)),
+            logger=logger, scan=scan)
+        skipped_entries = list(getattr(fetched, "skipped_entries", None) or [])
+        # MISSING_REFERENCES fail stops here, before the conversion, naming the files.
+        if options.missing_references == "fail" and skipped_entries:
+            raise ValueError(incomplete_result.refusal(os.path.basename(input_key), skipped_entries))
 
         # Export mesh to output format, under the name it will carry in the asset: the input file's
         # own name with the output extension. The load and the export run in a child process (see
@@ -841,7 +876,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         outputFileName, _ = os.path.splitext(os.path.basename(input_key)) #get the original file name without extension
         outputFileName = f"{outputFileName}{output_filetype}" #add final output extension
         output_file = os.path.join(export_dir, outputFileName)
-        run_worker({
+        worker_result = run_worker({
             "input_file": temp_file,
             "input_dir": input_dir,
             "input_relative_path": input_relative_path,
@@ -852,7 +887,11 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
             "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
-        }, work_dir)
+        }, work_dir) or {}
+        removed = ((worker_result.get("report") or {}).get("removed")) or []
+        if removed:
+            logger.info(f"{len(removed)} name(s) a USD layer holds were removed before it was opened: "
+                        + "; ".join(f"{str(name)[:100]!r} ({reason})" for name, reason, *_ in removed[:10]))
 
         # Upload output file to S3. The converted file keeps the input file's subdirectory within the
         # asset so the write-back step places it beside the input rather than at the asset root. A
@@ -889,7 +928,32 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         remove_work_dir(work_dir)
 
     logger.info("Conversion complete")
+    if skipped_entries and any(not entry.get("forSize") for entry in skipped_entries):
+        name = os.path.basename(input_key)
+        incomplete_result.log(logger, skipped_entries)
+        write_incomplete_result(name, input_relative_path, skipped_entries)
+        return incomplete_result.message(name, skipped_entries)
+    if skipped_entries:
+        write_incomplete_result(os.path.basename(input_key), input_relative_path, skipped_entries)
     return incomplete_message(os.path.basename(input_key), fetched)
+
+
+def write_incomplete_result(input_name, input_relative_path, entries):
+    """Write conversion-incomplete.json under the run's results folder. Best effort: without a results
+    location, or when the write fails, the run keeps its output and its message; the log has the list."""
+    if not _results_location:
+        logger.info("No results location for this run; the incomplete-conversion list is in the log only")
+        return
+    bucket, prefix = _results_location
+    try:
+        _s3_client_for_bucket(bucket).put_object(
+            Bucket=bucket, Key=prefix + incomplete_result.INCOMPLETE_RESULT_FILENAME,
+            Body=incomplete_result.document(input_name, input_relative_path, entries),
+            ContentType="application/json")
+        logger.info(f"Incomplete-conversion result written: {incomplete_result.INCOMPLETE_RESULT_FILENAME}")
+    except Exception as e:  # noqa: BLE001 - the conversion's outcome stands
+        logger.warning(f"Could not write the incomplete-conversion result ({type(e).__name__}); the list is "
+                       f"in the run log")
 
 
 # Files named in the completion message; the rest are counted.

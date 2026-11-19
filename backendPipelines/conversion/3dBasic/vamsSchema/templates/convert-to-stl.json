@@ -3,9 +3,9 @@
     "templateName": "Convert to STL",
     "description": "Convert a 3D model to STL format using the Trimesh library. STL is unitless: scale and axis changes are applied to the vertices.",
     "configFormat": "json",
-    "configBody": "{\"outputType\":\".stl\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"targetUnits\":\"{{TARGET_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"targetUpAxis\":\"{{TARGET_UP_AXIS}}\"}",
+    "configBody": "{\"outputType\":\".stl\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"targetUnits\":\"{{TARGET_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"targetUpAxis\":\"{{TARGET_UP_AXIS}}\",\"referenceHandling\":\"{{REFERENCE_HANDLING}}\",\"missingReferences\":\"{{MISSING_REFERENCES}}\"}",
     "allowCustomEdit": false,
-    "inputInstructions": "Converts a 3D model to STL (.stl). Select the source model as the input file; the converted file is written back to the asset.\n\nA point cloud has no triangles and is refused; convert it to PLY, OBJ, GLB, GLTF or USD instead.\n\nSTL stores no unit or axis. With the defaults (auto and keep) the geometry is written as read. To change the unit or axis, set the target. The source unit or axis must then be known: declared by the file (USD, DAE, 3MF, glTF) or set in Source units and Source up axis. A run that needs an unknown source fails with a message naming the option.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
+    "inputInstructions": "Converts a 3D model to STL (.stl). Select the source model as the input file; the converted file is written back to the asset.\n\nA point cloud has no triangles and is refused; convert it to PLY, OBJ, GLB, GLTF or USD instead.\n\nSTL stores no unit or axis. With the defaults (auto and keep) the geometry is written as read. To change the unit or axis, set the target. The source unit or axis must then be known: declared by the file (USD, DAE, 3MF, glTF) or set in Source units and Source up axis. A run that needs an unknown source fails with a message naming the option.\n\nA model can name other files: USD sublayers, references, payloads and textures, glTF buffers and images, an OBJ material library and its textures, COLLADA images and FBX textures. Each must be a relative path to a file in the same asset. Reference handling sets what is done with them, and Missing references sets what a file that cannot be included does: skip converts without it and says the result is incomplete (conversion-incomplete.json in the run's results), fail stops the run before converting, naming the files.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
     "tagSchema": [
         {
             "tagKey": "SOURCE_UNITS",
@@ -42,6 +42,24 @@
             "enumValues": ["keep", "y", "z"],
             "label": "Target up axis",
             "description": "Which axis points up in the result. keep leaves the orientation unchanged. y or z rotates the geometry and needs a known source up axis."
+        },
+        {
+            "tagKey": "REFERENCE_HANDLING",
+            "type": "enum",
+            "required": false,
+            "default": "flatten",
+            "enumValues": ["flatten", "selected-only"],
+            "label": "Reference handling",
+            "description": "flatten includes every file the model names that is inside the asset in the one converted file. selected-only converts the selected file alone and reports what it names as not included."
+        },
+        {
+            "tagKey": "MISSING_REFERENCES",
+            "type": "enum",
+            "required": false,
+            "default": "skip",
+            "enumValues": ["skip", "fail"],
+            "label": "Missing references",
+            "description": "What a referenced file that is missing, outside the asset or over a limit does. skip converts without it and reports the result as incomplete; fail stops the run before converting and names the files. A glTF buffer the model cannot load without always fails the run."
         }
     ]
 }

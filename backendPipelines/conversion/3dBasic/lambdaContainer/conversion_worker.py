@@ -108,15 +108,59 @@ def convert_model(job, trimesh=None):
     import model_formats
     import units_axes
 
+    options = units_axes.Options.from_config(job.get("options"))
+    extension = os.path.splitext(job["input_name"])[1].lower()
+    handling = options.resolved_reference_handling(job["output_filetype"])
+    if extension in units_axes.USD_LAYER_INPUTS and handling in ("convert-linked", "package"):
+        # The layers are kept as authored: nothing is composed, so there is no model to load. They are
+        # confined first, so a reference that is not a fetched file is removed rather than followed.
+        import usd_io
+        skipped = []
+        usd_io.confine_dependencies(job["input_file"], job["input_dir"], skipped)
+        if handling == "convert-linked":
+            written = usd_io.convert_linked(job["input_file"], job["input_dir"], job["output_file"],
+                                            job["output_filetype"])
+        else:
+            usd_io.package_usdz(job["input_file"], job["input_dir"], job["output_file"])
+            written = [job["output_file"]]
+        return {"written": len(written), "removed": [list(entry) for entry in skipped[:100]]}
+
     # The loader is given a resolver that serves only the fetched files, so no reference reaches
     # anything else on the local disk.
     loaded, declared_meters, declared_up = model_formats.load_model(job, trimesh)
     check_exportable(loaded, job["output_filetype"], job["input_name"])
-    options = units_axes.Options.from_config(job.get("options"))
     plan = units_axes.plan(options, job["output_filetype"], declared_meters, declared_up)
     if job["output_filetype"] in MATERIAL_NAMED_FILE_FORMATS:
         rename_materials(loaded)
     model_formats.export_model(loaded, plan, job)
+
+
+# The scanned collectors by extension (reference_collectors.py); imported when a scan job runs.
+_SCAN_COLLECTORS = {".usd": "_usd_references", ".usda": "_usd_references", ".usdc": "_usd_references",
+                    ".usdz": "_usdz_references", ".dae": "_dae_references", ".fbx": "_fbx_references"}
+# References kept per scanned file, as in the thumbnail container (MAX_REFERENCES_PER_FILE).
+MAX_REFERENCES_PER_FILE = 100_000
+
+
+def scan_references(job):
+    """The references of each file in ``job["files"]`` (``[local path, extension]`` pairs), read with
+    the vendored collectors: ``{local path: [[value, percent_encoded, required, kind], ...]}``, or an
+    error text for a file whose references cannot be read. Run by the parent's fetch
+    (``referenced_files.fetch_referenced_files`` ``scan``) so USD and XML parsing never happens in the
+    process that holds the function's credentials."""
+    import reference_collectors
+    found = {}
+    for path, extension in job["files"]:
+        name = _SCAN_COLLECTORS.get(extension)
+        if name is None:
+            found[path] = f"no collector for {extension}"
+            continue
+        try:
+            entries = getattr(reference_collectors, name)(path)
+            found[path] = [list(entry) for entry in entries[:MAX_REFERENCES_PER_FILE]]
+        except Exception as e:  # noqa: BLE001 - reported to the parent per file
+            found[path] = f"{type(e).__name__}: {str(e)[:300]}"
+    return found
 
 
 class LimitError(RuntimeError):
@@ -157,6 +201,14 @@ def apply_limits(job):
     _set_limit(resource, resource.RLIMIT_CORE, 0)
 
 
+def run_job(job):
+    """What one job does: a reference scan returns its findings; a conversion returns its report."""
+    if job.get("mode") == "scan":
+        return {"references": scan_references(job)}
+    report = convert_model(job)
+    return {"report": report or {}}
+
+
 def _write_result(path, result):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(result, handle)
@@ -169,7 +221,7 @@ def main(argv):
     try:
         # Before anything heavy is imported, so the limits cover the parsers' own allocations.
         apply_limits(job)
-        convert_model(job)
+        output = run_job(job)
     except MemoryError:
         _write_result(result_path, {"ok": False, "type": "MemoryError",
                                     "message": "The model needs more memory than this function has."})
@@ -180,7 +232,7 @@ def main(argv):
             traceback.print_exc(file=sys.stderr)
         _write_result(result_path, {"ok": False, "type": kind, "message": str(e)})
         return 1
-    _write_result(result_path, {"ok": True})
+    _write_result(result_path, {"ok": True, **output})
     return 0
 
 

@@ -36,6 +36,12 @@ SOURCE_UNIT_VALUES = ('auto',) + tuple(UNITS)
 TARGET_UNIT_VALUES = ('keep',) + tuple(UNITS)
 SOURCE_UP_AXIS_VALUES = ('auto', 'y', 'z')
 TARGET_UP_AXIS_VALUES = ('keep', 'y', 'z')
+# How the files a model names are handled (REFERENCE_HANDLING) and what a missing one does
+# (MISSING_REFERENCES). auto is package for a .usdz output and flatten for every other.
+REFERENCE_HANDLING_VALUES = ('auto', 'flatten', 'package', 'convert-linked', 'selected-only')
+MISSING_REFERENCES_VALUES = ('skip', 'fail')
+USD_INPUTS = ('.usd', '.usda', '.usdc', '.usdz')
+USD_LAYER_INPUTS = ('.usd', '.usda', '.usdc')
 
 # The configuration keys (camelCase, as the templates' configBody writes them), their allowed values
 # and their defaults. The vamsSchema bundle test reads the value tuples by syntax tree and compares
@@ -45,12 +51,16 @@ OPTION_KEYS = {
     'targetUnits': ('target_units', TARGET_UNIT_VALUES),
     'sourceUpAxis': ('source_up_axis', SOURCE_UP_AXIS_VALUES),
     'targetUpAxis': ('target_up_axis', TARGET_UP_AXIS_VALUES),
+    'referenceHandling': ('reference_handling', REFERENCE_HANDLING_VALUES),
+    'missingReferences': ('missing_references', MISSING_REFERENCES_VALUES),
 }
 TEMPLATE_TAGS = {
     'sourceUnits': 'SOURCE_UNITS',
     'targetUnits': 'TARGET_UNITS',
     'sourceUpAxis': 'SOURCE_UP_AXIS',
     'targetUpAxis': 'TARGET_UP_AXIS',
+    'referenceHandling': 'REFERENCE_HANDLING',
+    'missingReferences': 'MISSING_REFERENCES',
 }
 
 FIXED_CONVENTION_OUTPUTS = ('.glb', '.gltf')
@@ -71,6 +81,8 @@ class Options:
     target_units: str = 'keep'
     source_up_axis: str = 'auto'
     target_up_axis: str = 'keep'
+    reference_handling: str = 'auto'
+    missing_references: str = 'skip'
 
     @staticmethod
     def from_config(config):
@@ -93,6 +105,20 @@ class Options:
     def is_default(self):
         return self == Options()
 
+    @property
+    def changes_units_or_axis(self):
+        return (self.source_units, self.target_units, self.source_up_axis, self.target_up_axis) != \
+            ('auto', 'keep', 'auto', 'keep')
+
+    def resolved_reference_handling(self, output_extension):
+        """REFERENCE_HANDLING with auto resolved: package for a .usdz output (flatten when a unit or
+        axis option is set, since package keeps the layers as authored), flatten otherwise."""
+        if self.reference_handling != 'auto':
+            return self.reference_handling
+        if output_extension == '.usdz' and not self.changes_units_or_axis:
+            return 'package'
+        return 'flatten'
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -114,6 +140,27 @@ def has_declared_convention(input_extension):
 def validate_request(input_extension, output_extension, options):
     """Refuse an illegal combination before anything is downloaded. Raises ``ValueError`` naming the
     option and what to set."""
+    handling = options.resolved_reference_handling(output_extension)
+    if handling == 'package':
+        if output_extension != '.usdz':
+            raise ValueError(f"REFERENCE_HANDLING package writes a .usdz package, so it cannot produce "
+                             f"{output_extension}. Choose flatten, or the .usdz output format.")
+        if input_extension in USD_INPUTS and options.changes_units_or_axis:
+            raise ValueError("REFERENCE_HANDLING package keeps the USD layers as authored, so it cannot "
+                             "change the unit or up axis. Choose flatten, or leave the unit and axis "
+                             "options on auto and keep.")
+    if handling == 'convert-linked':
+        if output_extension not in ('.usdc', '.usda'):
+            raise ValueError(f"REFERENCE_HANDLING convert-linked writes USD layers (.usdc or .usda), so "
+                             f"it cannot produce {output_extension}. Choose flatten.")
+        if input_extension not in USD_LAYER_INPUTS:
+            raise ValueError(f"REFERENCE_HANDLING convert-linked converts the USD layers a .usd, .usda or "
+                             f".usdc file names, so it cannot be used for a {input_extension} input. "
+                             f"Choose flatten.")
+        if options.changes_units_or_axis:
+            raise ValueError("REFERENCE_HANDLING convert-linked keeps each layer's own unit and up axis, "
+                             "so it cannot change them. Choose flatten, or leave the unit and axis "
+                             "options on auto and keep.")
     if output_extension in FIXED_CONVENTION_OUTPUTS:
         if options.target_units not in ('keep', 'm'):
             raise ValueError(

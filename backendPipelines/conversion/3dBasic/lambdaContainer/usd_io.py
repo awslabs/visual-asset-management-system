@@ -60,54 +60,209 @@ def _import_pxr():
 
 
 def confine_dependencies(path, input_dir, skipped=None):
-    """Refuse a USD input that names something outside the fetched files; return the sorted local
-    files the dependency walk found. Raises ``UsdReferenceError`` naming the reference."""
-    from pxr import UsdUtils
+    """Make the USD input safe to open and return the local files its layers name.
+
+    A loose layer (``.usd``, ``.usda``, ``.usdc``) is a local copy of the asset's file, so every asset
+    path it holds that is not a usable local file -- absolute, a URI scheme, ``..`` out of the input's
+    directory, not among the fetched files, or past ``MAX_DEPTH`` / ``MAX_LAYERS`` -- is removed from
+    it with ``UsdUtils.ModifyAssetPaths`` before the stage is opened, so the USD resolver never opens
+    it. Each removal is appended to ``skipped`` as ``(name, reason, is_layer)``. A ``.usdz`` package
+    cannot be edited: a layer it names outside the package that is not a relative path inside the asset
+    fails the run (``UsdReferenceError``); a missing one cannot be opened, and a texture is read only
+    from inside the input's directory (``_open_texture``)."""
+    from pxr import Sdf, UsdUtils
     skipped = [] if skipped is None else skipped
     root = os.path.realpath(input_dir)
-    is_usdz = path.lower().endswith(".usdz")
-    found = []
+    if path.lower().endswith(".usdz"):
+        _check_package(path, root)
+        return []
+    found = set()
     seen = set()
-    queue = [(path, 0)]
+    queue = [(os.path.realpath(path), 0)]
     while queue:
-        identifier, depth = queue.pop(0)
-        if identifier in seen:
+        local_layer, depth = queue.pop(0)
+        if local_layer in seen:
             continue
-        seen.add(identifier)
-        if len(seen) > MAX_LAYERS:
-            raise UsdReferenceError(f"The USD file pulls in more than {MAX_LAYERS} layers.")
-        if depth > MAX_DEPTH:
-            raise UsdReferenceError(f"The USD file nests layers deeper than {MAX_DEPTH} levels.")
+        seen.add(local_layer)
         try:
-            sublayers, references, payloads = UsdUtils.ExtractExternalReferences(identifier)
+            layer = Sdf.Layer.FindOrOpen(local_layer)
         except Exception as e:  # noqa: BLE001 - an unreadable layer is the input's problem
-            raise UsdReferenceError(f"The USD layer {os.path.basename(str(identifier))} could not be read: {e}")
+            raise UsdReferenceError(f"The USD layer {os.path.basename(local_layer)} could not be read: {e}")
+        if layer is None:
+            raise UsdReferenceError(f"The USD layer {os.path.basename(local_layer)} could not be read.")
+        children = []
+
+        def keep(asset_path, layer_dir=os.path.dirname(local_layer), depth=depth):
+            text = str(asset_path)
+            if not text:
+                return text
+            is_layer = _is_layer_name(text.split("[", 1)[0])
+            problem = reference_problem(text)
+            # A '..' that stays inside the input's asset is a legitimate relative path here; where it
+            # lands is checked against the asset's local root below.
+            if problem == "leaves the asset through '..'":
+                problem = None
+            local = None
+            if problem is None:
+                local = os.path.realpath(os.path.join(layer_dir, text.split("[", 1)[0]))
+                if local != root and not local.startswith(root + os.sep):
+                    problem = "leaves the asset"
+                elif not os.path.isfile(local):
+                    problem = "is not among the files fetched with the input"
+                elif is_layer and depth + 1 > MAX_DEPTH:
+                    problem = f"is nested deeper than {MAX_DEPTH} levels"
+                elif is_layer and local not in seen and len(seen) + len(children) >= MAX_LAYERS:
+                    problem = f"is past the {MAX_LAYERS} layers one input may compose"
+            if problem is not None:
+                skipped.append((text[:200], problem, is_layer))
+                return ""
+            found.add(local)
+            if is_layer:
+                children.append(local)
+            return text
+
+        before = layer.ExportToString()
+        UsdUtils.ModifyAssetPaths(layer, keep)
+        if layer.ExportToString() != before:
+            layer.Save()
+        for child in children:
+            queue.append((child, depth + 1))
+    return sorted(found)
+
+
+def _check_package(path, root):
+    """Refuse a ``.usdz`` whose root layer names a layer outside the package by an absolute path, a
+    URI scheme or ``..``: the package cannot be edited, and the resolver would open that path."""
+    from pxr import UsdUtils
+    sublayers, references, payloads = UsdUtils.ExtractExternalReferences(path)
+    for reference in list(sublayers) + list(references) + list(payloads):
+        problem = reference_problem(reference)
+        if problem and _is_layer_name(str(reference).split("[", 1)[0]):
+            raise UsdReferenceError(f"The USD package names {str(reference)[:200]!r}, which {problem}.")
+
+
+def dependency_graph(path, input_dir):
+    """``{local layer: [local files it names]}`` of a confined loose USD input (call
+    ``confine_dependencies`` first), every name resolved against its layer's directory."""
+    from pxr import UsdUtils
+    graph = {}
+    queue = [os.path.realpath(path)]
+    while queue:
+        local_layer = queue.pop(0)
+        if local_layer in graph:
+            continue
+        sublayers, references, payloads = UsdUtils.ExtractExternalReferences(local_layer)
+        targets = []
         for reference in list(sublayers) + list(references) + list(payloads):
-            problem = reference_problem(reference)
-            if problem:
-                if _is_layer_name(reference):
-                    raise UsdReferenceError(f"The USD file names {str(reference)[:200]!r}, which {problem}.")
-                # A texture or other data file that cannot be followed is left out and reported.
-                skipped.append((str(reference), problem))
+            text = str(reference).split("[", 1)[0]
+            if not text:
                 continue
-            if is_usdz:
-                member = os.path.normpath(os.path.join(os.path.dirname(_package_member(identifier)), reference))
-                child = f"{path}[{member.replace(os.sep, '/')}]"
-                if _is_layer_name(member):
-                    queue.append((child, depth + 1))
-                continue
-            local = os.path.realpath(os.path.join(os.path.dirname(identifier), reference))
-            outside = local != root and not local.startswith(root + os.sep)
-            if outside or not os.path.isfile(local):
-                reason = "leaves the asset" if outside else "is not among the files fetched with the input"
-                if _is_layer_name(reference):
-                    raise UsdReferenceError(f"The USD file names {str(reference)[:200]!r}, which {reason}.")
-                skipped.append((str(reference), reason))
-                continue
-            found.append(local)
-            if _is_layer_name(local):
-                queue.append((local, depth + 1))
-    return sorted(set(found))
+            local = os.path.realpath(os.path.join(os.path.dirname(local_layer), text))
+            if os.path.isfile(local):
+                targets.append(local)
+        graph[local_layer] = sorted(set(targets))
+        queue.extend(t for t in targets if _is_layer_name(t) and t not in graph)
+    return graph
+
+
+def _leaves_first(graph, start):
+    """The layers of ``graph`` reachable from ``start``, each after the layers it names. A cycle is
+    refused, naming the layers on it."""
+    order, state = [], {}
+
+    def visit(node, trail):
+        if state.get(node) == "done":
+            return
+        if state.get(node) == "open":
+            cycle = trail[trail.index(node):] + [node]
+            raise ValueError("REFERENCE_HANDLING convert-linked cannot convert a reference cycle: "
+                             + " -> ".join(os.path.basename(n) for n in cycle))
+        state[node] = "open"
+        for child in graph.get(node, []):
+            if _is_layer_name(child):
+                visit(child, trail + [node])
+        state[node] = "done"
+        order.append(node)
+
+    visit(start, [])
+    return order
+
+
+# The folder a converted layer that sits outside the selected file's folder is written to, at its path
+# from the asset root, so every converted file stays under the run's output.
+LINKED_OUTSIDE_FOLDER = "_linked"
+
+
+def convert_linked(path, input_dir, output_file, output_extension):
+    """REFERENCE_HANDLING convert-linked: convert the selected USD file AND every USD layer it names,
+    leaves first, each to ``output_extension`` (``.usdc`` or ``.usda``), keeping the sub-folders,
+    rewriting each layer's references to the converted files' names relative to it, and copying the
+    other files (textures, ``.usdz`` packages) beside them. Nothing is composed or flattened; each
+    layer keeps its own metersPerUnit and upAxis. Returns the output paths written."""
+    from pxr import Sdf, UsdUtils
+    root = os.path.realpath(input_dir)
+    source = os.path.realpath(path)
+    source_dir = os.path.dirname(source)
+    out_dir = os.path.dirname(os.path.abspath(output_file))
+    graph = dependency_graph(source, root)
+    layers = _leaves_first(graph, source)
+    files = sorted({t for targets in graph.values() for t in targets if not _is_layer_name(t)})
+
+    def destination(local):
+        if local == source:
+            return os.path.abspath(output_file)
+        relative = os.path.relpath(local, source_dir)
+        if relative.startswith(".."):
+            relative = os.path.join(LINKED_OUTSIDE_FOLDER, os.path.relpath(local, root))
+        if _is_layer_name(local):
+            relative = os.path.splitext(relative)[0] + output_extension
+        return os.path.join(out_dir, relative)
+
+    mapping = {local: destination(local) for local in layers + files}
+    clashes = {}
+    for local, target in mapping.items():
+        clashes.setdefault(target, []).append(local)
+    for target, sources in clashes.items():
+        if len(sources) > 1:
+            raise ValueError("REFERENCE_HANDLING convert-linked would write "
+                             + " and ".join(os.path.relpath(s, root) for s in sources)
+                             + f" to the same file, {os.path.relpath(target, out_dir)}. Rename one of them.")
+    for local in files:
+        os.makedirs(os.path.dirname(mapping[local]), exist_ok=True)
+        shutil.copyfile(local, mapping[local])
+    for local in layers:
+        target = mapping[local]
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if not Sdf.Layer.FindOrOpen(local).Export(target):
+            raise RuntimeError(f"{os.path.basename(local)} could not be written as {output_extension}.")
+        written = Sdf.Layer.FindOrOpen(target)
+        written.Reload(force=True)
+
+        def relink(asset_path, layer_dir=os.path.dirname(local), target_dir=os.path.dirname(target)):
+            text = str(asset_path)
+            base, _, member = text.partition("[")
+            if not base:
+                return text
+            resolved = os.path.realpath(os.path.join(layer_dir, base))
+            if resolved not in mapping:
+                return text
+            relinked = os.path.relpath(mapping[resolved], target_dir).replace(os.sep, "/")
+            if not relinked.startswith("."):
+                relinked = "./" + relinked
+            return relinked + ("[" + member if member else "")
+
+        UsdUtils.ModifyAssetPaths(written, relink)
+        written.Save()
+    return [mapping[local] for local in layers] + [mapping[f] for f in files]
+
+
+def package_usdz(path, input_dir, output_file):
+    """REFERENCE_HANDLING package: keep the USD input's layers and composition as authored and pack
+    the layer and everything it names (the confined dependency closure, textures included) into one
+    ``.usdz`` with ``UsdUtils.CreateNewUsdzPackage``."""
+    from pxr import Sdf, UsdUtils
+    if not UsdUtils.CreateNewUsdzPackage(Sdf.AssetPath(os.path.realpath(path)), output_file):
+        raise RuntimeError("The USDZ package could not be written.")
 
 
 def _package_member(identifier):
@@ -130,7 +285,7 @@ def read_usd(path, input_dir, limit=None):
     confine_dependencies(path, input_dir, skipped)
     if skipped:
         logger.warning(f"{len(skipped)} file(s) named by the USD file were left out: "
-                       + "; ".join(f"{name[:100]} ({reason})" for name, reason in skipped[:5]))
+                       + "; ".join(f"{name[:100]} ({reason})" for name, reason, _ in skipped[:5]))
     allowed_root = os.path.realpath(input_dir)
     try:
         stage = Usd.Stage.Open(path)
@@ -175,7 +330,10 @@ def read_usd(path, input_dir, limit=None):
         scene.add_geometry(geometry, node_name=str(prim.GetPath()).strip("/").replace("/", "_") or "geometry",
                            geom_name=str(prim.GetPath()).strip("/").replace("/", "_") or "geometry")
     if count == 0:
-        raise ValueError(f"{os.path.basename(path)} contains no geometry, so there is nothing to convert")
+        layers = [name for name, _, is_layer in skipped if is_layer]
+        missing = (f" The geometry layers it names could not be used: {', '.join(layers[:20])}."
+                   if layers else "")
+        raise ValueError(f"{os.path.basename(path)} contains no geometry, so there is nothing to convert.{missing}")
     return scene, float(meters), up
 
 

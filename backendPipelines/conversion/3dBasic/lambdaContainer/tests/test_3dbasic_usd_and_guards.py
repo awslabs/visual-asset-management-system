@@ -37,6 +37,10 @@ def _validation_errors(path):
     return [f"{e.GetName()}: {e.GetMessage()}" for e in errors]
 
 
+def _validator_names(path):
+    return {entry.split(":", 1)[0] for entry in _validation_errors(path)}
+
+
 def _scene_with_everything():
     cube = helpers.textured_cube()
     plain = trimesh.creation.icosphere(subdivisions=1)
@@ -145,21 +149,44 @@ class TestUsdReferences:
 
     @pytest.mark.parametrize("reference,why", [
         ("/etc/passwd.usda", "absolute path"),
-        ("../outside.usda", "'..'"),
+        ("../outside.usda", "leaves the asset"),
         ("http://example.com/a.usda", "URI scheme"),
         ("s3://bucket/a.usda", "URI scheme"),
+        ("./gone.usda", "not among the files fetched"),
     ])
-    def test_a_layer_reference_that_is_not_relative_to_the_asset_fails_naming_it(self, tmp_path, reference, why):
+    def test_a_layer_that_cannot_be_used_is_removed_before_the_stage_opens(self, tmp_path, reference, why):
         directory = self._stage_dir(tmp_path)
         _write_layer(directory / "root.usda", f'#usda 1.0\n(\n    subLayers = [@{reference}@]\n)\n' + _MESH)
-        with pytest.raises(usd_io.UsdReferenceError, match=why):
+        skipped = []
+        usd_io.confine_dependencies(str(directory / "root.usda"), str(directory), skipped)
+        assert [(name, is_layer) for name, _, is_layer in skipped] == [(reference, True)]
+        assert why in skipped[0][1]
+        # The local copy no longer names it, so the resolver cannot open it.
+        assert reference not in (directory / "root.usda").read_text()
+        scene, _, _ = usd_io.read_usd(str(directory / "root.usda"), str(directory))
+        assert len(scene.geometry) == 1
+
+    def test_a_scene_whose_only_geometry_layer_is_missing_fails_naming_it(self, tmp_path):
+        directory = self._stage_dir(tmp_path)
+        _write_layer(directory / "root.usda", '#usda 1.0\n(\n    subLayers = [@./gone.usda@]\n)\n')
+        with pytest.raises(ValueError, match=r"no geometry.*gone\.usda"):
             usd_io.read_usd(str(directory / "root.usda"), str(directory))
 
-    def test_a_missing_layer_fails_naming_it(self, tmp_path):
+    def test_a_package_naming_an_absolute_layer_fails(self, tmp_path):
         directory = self._stage_dir(tmp_path)
-        _write_layer(directory / "root.usda", '#usda 1.0\n(\n    subLayers = [@./gone.usda@]\n)\n' + _MESH)
-        with pytest.raises(usd_io.UsdReferenceError, match="gone.usda"):
-            usd_io.read_usd(str(directory / "root.usda"), str(directory))
+        _write_layer(directory / "root.usda", '#usda 1.0\n(\n    subLayers = [@/etc/x.usda@]\n)\n' + _MESH)
+        # UsdUtils' packager localises every dependency, so the package is written by hand: one stored
+        # member, padded so its data starts on a 64-byte boundary as USDZ requires.
+        package = directory / "p.usdz"
+        data = (directory / "root.usda").read_bytes()
+        with zipfile.ZipFile(package, "w", zipfile.ZIP_STORED) as archive:
+            info = zipfile.ZipInfo("root.usda")
+            header = 30 + len("root.usda")
+            info.extra = b"\x00" * ((64 - header % 64) % 64 + 4)
+            info.extra = b"\xff\xff" + (len(info.extra) - 4).to_bytes(2, "little") + b"\x00" * (len(info.extra) - 4)
+            archive.writestr(info, data)
+        with pytest.raises(usd_io.UsdReferenceError, match="absolute path"):
+            usd_io.confine_dependencies(str(package), str(directory))
 
     def test_a_missing_or_unsafe_texture_is_left_out_and_the_geometry_converts(self, tmp_path):
         directory = self._stage_dir(tmp_path)
@@ -195,8 +222,9 @@ def Scope "S" {
             _write_layer(directory / f"l{index}.usda",
                          f'#usda 1.0\n(\n    subLayers = [@./l{index + 1}.usda@]\n)\n' + _MESH)
         _write_layer(directory / "l5.usda", "#usda 1.0\n" + _MESH)
-        with pytest.raises(usd_io.UsdReferenceError, match="deeper than"):
-            usd_io.read_usd(str(directory / "l0.usda"), str(directory))
+        skipped = []
+        usd_io.confine_dependencies(str(directory / "l0.usda"), str(directory), skipped)
+        assert skipped and "deeper than 2" in skipped[0][1], skipped
 
     def test_a_scene_that_expands_past_the_limit_fails(self, tmp_path):
         import scene_limits
@@ -353,3 +381,89 @@ class TestUsdzPackaging:
         with zipfile.ZipFile(out) as archive:
             assert any(name.endswith(".png") for name in archive.namelist())
             assert archive.testzip() is None
+
+
+
+def _two_level_scene(directory):
+    """root.usda sublayers parts/wheel.usda and references shared/body.usda; wheel.usda names a texture."""
+    (directory / "parts").mkdir()
+    (directory / "shared").mkdir()
+    (directory / "parts" / "tex").mkdir()
+    from PIL import Image
+    Image.new("RGB", (4, 4), (200, 10, 10)).save(directory / "parts" / "tex" / "red.png")
+    _write_layer(directory / "parts" / "wheel.usda", '#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n' + _MESH +
+                 'def Scope "S" {\n    asset t = @./tex/red.png@\n}\n')
+    _write_layer(directory / "shared" / "body.usda", "#usda 1.0\n" + _MESH.replace('"M"', '"B"'))
+    _write_layer(directory / "root.usda", '#usda 1.0\n(\n    subLayers = [@./parts/wheel.usda@]\n)\n'
+                 'def Xform "Body" (references = @./shared/body.usda@) {}\n')
+
+
+@pytest.mark.unit
+class TestReferenceHandling:
+    def test_convert_linked_writes_each_layer_leaves_first_and_relinks(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _two_level_scene(directory)
+        out = tmp_path / "export"
+        out.mkdir()
+        written = usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usdc"), ".usdc")
+        relative = sorted(os.path.relpath(p, out) for p in written)
+        assert relative == ["parts/tex/red.png", "parts/wheel.usdc", "root.usdc", "shared/body.usdc"]
+        root_text = Sdf.Layer.FindOrOpen(str(out / "root.usdc")).ExportToString()
+        assert "@./parts/wheel.usdc@" in root_text and "@./shared/body.usdc@" in root_text
+        assert ".usda@" not in root_text
+        wheel = Sdf.Layer.FindOrOpen(str(out / "parts" / "wheel.usdc"))
+        assert wheel.GetFileFormat().formatId == "usdc"
+        assert "@./tex/red.png@" in wheel.ExportToString()
+        stage = Usd.Stage.Open(str(out / "root.usdc"))
+        assert stage.GetPrimAtPath("/M") and stage.GetPrimAtPath("/Body/B") is not None
+        # Layers are kept as authored, so the output reports no validator error the source does not.
+        assert _validator_names(str(out / "root.usdc")) <= _validator_names(str(directory / "root.usda"))
+
+    def test_convert_linked_puts_a_layer_outside_the_selected_folder_under_linked(self, tmp_path):
+        directory = tmp_path / "input"
+        (directory / "scenes").mkdir(parents=True)
+        _write_layer(directory / "lib.usda", "#usda 1.0\n" + _MESH)
+        _write_layer(directory / "scenes" / "s.usda", '#usda 1.0\n(\n    subLayers = [@../lib.usda@]\n)\n')
+        out = tmp_path / "export"
+        out.mkdir()
+        usd_io.convert_linked(str(directory / "scenes" / "s.usda"), str(directory), str(out / "s.usda"), ".usda")
+        assert (out / "_linked" / "lib.usda").is_file()
+        assert "@./_linked/lib.usda@" in (out / "s.usda").read_text()
+        assert Usd.Stage.Open(str(out / "s.usda")).GetPrimAtPath("/M")
+
+    def test_convert_linked_refuses_a_reference_cycle(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "a.usda", '#usda 1.0\ndef "A" (references = @./b.usda@) {}\n' + _MESH)
+        _write_layer(directory / "b.usda", '#usda 1.0\ndef "B" (references = @./a.usda@) {}\n')
+        out = tmp_path / "export"
+        out.mkdir()
+        with pytest.raises(ValueError, match="cycle: a.usda -> b.usda -> a.usda"):
+            usd_io.convert_linked(str(directory / "a.usda"), str(directory), str(out / "a.usdc"), ".usdc")
+
+    def test_convert_linked_refuses_two_sources_with_one_converted_name(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "p.usda", "#usda 1.0\n" + _MESH)
+        Sdf.Layer.FindOrOpen(str(directory / "p.usda")).Export(str(directory / "p.usd"))
+        _write_layer(directory / "r.usda", '#usda 1.0\n(\n    subLayers = [@./p.usda@, @./p.usd@]\n)\n')
+        out = tmp_path / "export"
+        out.mkdir()
+        with pytest.raises(ValueError, match="to the same file"):
+            usd_io.convert_linked(str(directory / "r.usda"), str(directory), str(out / "r.usdc"), ".usdc")
+
+    def test_package_keeps_the_layers_and_holds_the_closure(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _two_level_scene(directory)
+        out = tmp_path / "export"
+        out.mkdir()
+        usd_io.confine_dependencies(str(directory / "root.usda"), str(directory))
+        usd_io.package_usdz(str(directory / "root.usda"), str(directory), str(out / "root.usdz"))
+        with zipfile.ZipFile(out / "root.usdz") as archive:
+            names = archive.namelist()
+        assert any(n.endswith("wheel.usda") for n in names) and any(n.endswith("body.usda") for n in names)
+        assert any(n.endswith("red.png") for n in names)
+        source = _validator_names(str(directory / "root.usda"))
+        assert _validator_names(str(out / "root.usdz")) <= source | {"PackageEncapsulationValidator"}

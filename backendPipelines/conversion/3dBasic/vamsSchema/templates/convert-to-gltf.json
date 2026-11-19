@@ -3,9 +3,9 @@
     "templateName": "Convert to GLTF",
     "description": "Convert a 3D model to glTF (JSON with companion files) using the Trimesh library. The result is always in metres, Y-up. Set the source unit or up axis when the input does not declare them.",
     "configFormat": "json",
-    "configBody": "{\"outputType\":\".gltf\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\"}",
+    "configBody": "{\"outputType\":\".gltf\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"referenceHandling\":\"{{REFERENCE_HANDLING}}\",\"missingReferences\":\"{{MISSING_REFERENCES}}\"}",
     "allowCustomEdit": false,
-    "inputInstructions": "Converts a 3D model to glTF (.gltf); the converted file and its companion files are written back to the asset. Select the source model as the input file; the converted file is written back to the asset.\n\nThe result is always in metres with Y up, the glTF convention, so there are no target options. Source units and Source up axis default to auto: the unit and axis the file declares are used (USD, DAE, 3MF), and a file that declares none (STL, OBJ, PLY, OFF, XYZ) is not scaled or rotated. Set them for a file whose numbers use another unit or axis, for example mm and z for a CAD export.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
+    "inputInstructions": "Converts a 3D model to glTF (.gltf); the converted file and its companion files are written back to the asset. Select the source model as the input file; the converted file is written back to the asset.\n\nThe result is always in metres with Y up, the glTF convention, so there are no target options. Source units and Source up axis default to auto: the unit and axis the file declares are used (USD, DAE, 3MF), and a file that declares none (STL, OBJ, PLY, OFF, XYZ) is not scaled or rotated. Set them for a file whose numbers use another unit or axis, for example mm and z for a CAD export.\n\nA model can name other files: USD sublayers, references, payloads and textures, glTF buffers and images, an OBJ material library and its textures, COLLADA images and FBX textures. Each must be a relative path to a file in the same asset. Reference handling sets what is done with them, and Missing references sets what a file that cannot be included does: skip converts without it and says the result is incomplete (conversion-incomplete.json in the run's results), fail stops the run before converting, naming the files.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
     "tagSchema": [
         {
             "tagKey": "SOURCE_UNITS",
@@ -24,6 +24,24 @@
             "enumValues": ["auto", "y", "z"],
             "label": "Source up axis",
             "description": "Which axis points up in the source file. auto uses the axis the file declares and does not rotate a file that declares none. Set z for a CAD or 3D-printing export. The result is Y-up."
+        },
+        {
+            "tagKey": "REFERENCE_HANDLING",
+            "type": "enum",
+            "required": false,
+            "default": "flatten",
+            "enumValues": ["flatten", "selected-only"],
+            "label": "Reference handling",
+            "description": "flatten includes every file the model names that is inside the asset in the one converted file. selected-only converts the selected file alone and reports what it names as not included."
+        },
+        {
+            "tagKey": "MISSING_REFERENCES",
+            "type": "enum",
+            "required": false,
+            "default": "skip",
+            "enumValues": ["skip", "fail"],
+            "label": "Missing references",
+            "description": "What a referenced file that is missing, outside the asset or over a limit does. skip converts without it and reports the result as incomplete; fail stops the run before converting and names the files. A glTF buffer the model cannot load without always fails the run."
         }
     ]
 }

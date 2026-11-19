@@ -3,9 +3,9 @@
     "templateName": "Convert to USD",
     "description": "Convert a 3D model to OpenUSD: binary (.usdc), text (.usda) or a single-file package with textures (.usdz). The file always declares its unit (metersPerUnit) and up axis.",
     "configFormat": "json",
-    "configBody": "{\"outputType\":\"{{OUTPUT_FORMAT}}\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"targetUnits\":\"{{TARGET_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"targetUpAxis\":\"{{TARGET_UP_AXIS}}\"}",
+    "configBody": "{\"outputType\":\"{{OUTPUT_FORMAT}}\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"targetUnits\":\"{{TARGET_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"targetUpAxis\":\"{{TARGET_UP_AXIS}}\",\"referenceHandling\":\"{{REFERENCE_HANDLING}}\",\"missingReferences\":\"{{MISSING_REFERENCES}}\"}",
     "allowCustomEdit": false,
-    "inputInstructions": "Converts a 3D model to OpenUSD. Select the source model as the input file; the converted file is written back to the asset.\n\nOutput format: .usdc is binary and compact, .usda is readable text, .usdz is one file that carries its textures. A .usdc or .usda result with textures is written with its textures in a textures folder beside it.\n\nThe result always declares metersPerUnit and upAxis. With the defaults (auto and keep) the file's own declaration is kept. A source that declares none (STL, OBJ, PLY, OFF, XYZ) is written as metres and Y up without changing any number, so set Source units and Source up axis for such a file, for example mm and z for a CAD export.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
+    "inputInstructions": "Converts a 3D model to OpenUSD. Select the source model as the input file; the converted file is written back to the asset.\n\nOutput format: .usdc is binary and compact, .usda is readable text, .usdz is one file that carries its textures. A .usdc or .usda result with textures is written with its textures in a textures folder beside it.\n\nThe result always declares metersPerUnit and upAxis. With the defaults (auto and keep) the file's own declaration is kept. A source that declares none (STL, OBJ, PLY, OFF, XYZ) is written as metres and Y up without changing any number, so set Source units and Source up axis for such a file, for example mm and z for a CAD export.\n\nA model can name other files: USD sublayers, references, payloads and textures, glTF buffers and images, an OBJ material library and its textures, COLLADA images and FBX textures. Each must be a relative path to a file in the same asset. Reference handling sets what is done with them, and Missing references sets what a file that cannot be included does: skip converts without it and says the result is incomplete (conversion-incomplete.json in the run's results), fail stops the run before converting, naming the files.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
     "tagSchema": [
         {
             "tagKey": "OUTPUT_FORMAT",
@@ -51,6 +51,24 @@
             "enumValues": ["keep", "y", "z"],
             "label": "Target up axis",
             "description": "Which axis points up in the result (the upAxis written to the stage). keep writes the source axis. y or z rotates the geometry and needs a known source up axis."
+        },
+        {
+            "tagKey": "REFERENCE_HANDLING",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "flatten", "package", "convert-linked", "selected-only"],
+            "label": "Reference handling",
+            "description": "auto is package for .usdz and flatten otherwise. flatten composes the scene, every file it names inside the asset included, into one file. package keeps the USD layers as authored and packs them and their textures into one .usdz. convert-linked (a .usd, .usda or .usdc input to .usdc or .usda) converts the selected file and every USD layer it names, keeping the sub-folders and rewriting the references to the converted names. selected-only converts the selected file alone."
+        },
+        {
+            "tagKey": "MISSING_REFERENCES",
+            "type": "enum",
+            "required": false,
+            "default": "skip",
+            "enumValues": ["skip", "fail"],
+            "label": "Missing references",
+            "description": "What a referenced file that is missing, outside the asset or over a limit does. skip converts without it and reports the result as incomplete; fail stops the run before converting and names the files. A glTF buffer the model cannot load without always fails the run."
         }
     ]
 }
