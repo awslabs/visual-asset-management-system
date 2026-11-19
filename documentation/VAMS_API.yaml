@@ -9063,7 +9063,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
-                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
+                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, a deployment in which re-run is not available, or an input file's asset that is quarantined without an exception when the deployment sets app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files cannot be used as workflow input", as on the execute route).
                     content:
                         application/json:
                             schema:
