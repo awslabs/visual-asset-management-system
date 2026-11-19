@@ -39,7 +39,10 @@ describe("resolveAuditLoggingConfig", () => {
         ["the key is null", appWith({ recordReads: null })],
     ])("records reads when %s", (_label, config) => {
         Config.resolveAuditLoggingConfig(config);
-        expect(config.app.auditLogging).toEqual({ recordReads: true });
+        expect(config.app.auditLogging).toEqual({
+            recordReads: true,
+            search: { enabled: true, ...Config.AUDIT_SEARCH_DEFAULTS },
+        });
     });
 
     test.each([true, false])("keeps an explicit %s", (value) => {
@@ -67,8 +70,11 @@ describe("the shipped config files and the ConfigBuilder", () => {
         ["config.template.commercial.json", commercialTemplate],
         ["config.template.govcloud.json", govcloudTemplate],
         ["config.template.eusovereign.json", eusovereignTemplate],
-    ])("%s records reads", (_name, file: any) => {
-        expect(file.app.auditLogging).toEqual({ recordReads: true });
+    ])("%s records reads", (name, file: any) => {
+        expect(file.app.auditLogging).toEqual({
+            recordReads: true,
+            search: { enabled: !name.includes("eusovereign"), ...Config.AUDIT_SEARCH_DEFAULTS },
+        });
     });
 
     test.each(["commercial", "govcloud", "eusovereign"] as const)(
@@ -76,6 +82,7 @@ describe("the shipped config files and the ConfigBuilder", () => {
         (profile) => {
             expect((makeDefaultConfig(profile) as any).app.auditLogging).toEqual({
                 recordReads: true,
+                search: { enabled: profile !== "eusovereign", ...Config.AUDIT_SEARCH_DEFAULTS },
             });
         }
     );

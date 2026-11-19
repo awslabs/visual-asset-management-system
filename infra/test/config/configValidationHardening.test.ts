@@ -489,6 +489,8 @@ describe("Physna outbound endpoint validation (S1-INFRA-069)", () => {
 function euSovereignPartition(c: any) {
     restrictedPartition(c);
     c.env.region = "eusc-de-east-1";
+    // Audit log search is refused in aws-eusc unless off (Logs Insights is not available there).
+    c.app.auditLogging.search.enabled = false;
 }
 
 /** The IL6 control set an ISO partition requires before any feature rule is reached. */
@@ -1209,6 +1211,8 @@ describe("Video SOP/BOM Extraction pipeline validation (useGenAiVideoSopBom)", (
     const euSovereignPartition = (c: any) => {
         videoSopBomRestrictedPartition(c);
         c.env.region = "eusc-de-east-1";
+        // Audit log search is refused in aws-eusc unless off (Logs Insights is not available there).
+        c.app.auditLogging.search.enabled = false;
     };
     const US_GOV_ID = "us-gov.anthropic.claude-sonnet-4-20250514-v1:0";
     /** The message getConfig() throws for `mutate`, or "" when it accepts the configuration. */

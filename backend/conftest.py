@@ -74,6 +74,7 @@ os.environ['COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME'] = 'complianceAssetStateS
 os.environ['COMPLIANCE_EVALUATION_STORAGE_TABLE_NAME'] = 'complianceEvaluationStorageTable'
 os.environ['COMPLIANCE_CASCADE_STORAGE_TABLE_NAME'] = 'complianceCascadeStorageTable'
 os.environ['COMPLIANCE_AUDIT_STORAGE_TABLE_NAME'] = 'complianceAuditStorageTable'
+os.environ['AUDIT_LOG_QUERIES_STORAGE_TABLE_NAME'] = 'auditLogQueriesStorageTable'
 
 # AWS credentials for testing
 os.environ['AWS_ACCESS_KEY_ID'] = 'test-access-key'
