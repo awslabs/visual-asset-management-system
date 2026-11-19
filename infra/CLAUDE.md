@@ -177,6 +177,10 @@ Configuration values resolve in order: CDK context (`-c key=value`) → `config/
 | `CUSTOM_AUTHORIZER_IGNORED_PATHS` | `["/api/amplify-config", "/api/version"]`                                                                                         |
 | `API_GATEWAY_STAGE_NAME`          | `"api"` (fixed; baked into VamsCLI endpoint constants and web `/api/*` fronting)                                                  |
 
+### A Batch GPU Compute Environment's Instance Types Must Be Able to Run Its Job
+
+AWS Batch accepts a compute environment whose instance types cannot hold the job and then leaves the job `RUNNABLE` with no error, so the check is made at synthesis. Two precedents in `config/config.ts`: the Cosmos 3 tiers (`validateInstanceTypeGpuCount()`, against `GPU_COUNT_BY_INSTANCE_TYPE`) and Isaac Lab (`validateIsaacLabInstanceTypes()`, against `ISAAC_LAB_CAPABLE_INSTANCE_SPECS` and the `ISAAC_LAB_JOB_*` constants that the job definition also reads). Each type must offer the job's vCPUs, GPUs and **registered** memory (`estimatedRegisteredMemoryMiB()`: the ECS agent registers about 97% of installed memory less 32 MiB, so a 32 GiB type never holds a 32,768 MiB job). A type the tables do not know is a warning, a known-too-small type is an error. Set `useOptimalInstanceClasses: false` on a GPU-only environment, or the CDK adds the CPU-only `optimal` class. Size a warm floor (`minvCpus`) from the job, not from one instance type's name. A new accelerated size goes into both tables and into `ConfigBuilder/validation.ts`, which mirrors them by hand. Tests: `test/pipelines/isaacLabInstancePool.test.ts`, `test/pipelines/cosmos3InstanceTypeGpuCount.test.ts`.
+
 ### ConfigPublic Interface
 
 `ConfigPublic` (~200 lines in `config/config.ts`) defines all deployment parameters. Key sections:

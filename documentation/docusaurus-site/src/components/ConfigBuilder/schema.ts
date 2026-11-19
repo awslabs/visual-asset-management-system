@@ -1100,6 +1100,15 @@ export const FIELDS: FieldMeta[] = [
         help: "Warning: incurs continuous compute cost even when idle.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useIsaacLabTraining.enabled"),
     },
+    {
+        path: "app.pipelines.useIsaacLabTraining.instanceTypes",
+        label: "Isaac Lab — GPU instance types",
+        input: "string-array",
+        section: "pipelines-gpu",
+        advanced: true,
+        help: "EC2 instance types the Isaac Lab compute environment may launch. Each needs one NVIDIA GPU with RT cores and 16 GB or more of video memory (G5, G6, GR6 or G6e), at least 8 vCPUs and more than 32 GiB of registered memory. g5.2xlarge and g6.2xlarge are too small.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useIsaacLabTraining.enabled"),
+    },
     // RapidPipeline ECS
     {
         path: "app.pipelines.useRapidPipeline.useEcs.enabled",
