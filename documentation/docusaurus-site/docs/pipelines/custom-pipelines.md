@@ -487,13 +487,17 @@ Four behaviors are worth knowing:
     rather than indexing the envelope directly.
 -   **Each `inputFiles` entry is self-locating.** It carries the file's asset-relative `relativePath`;
     its S3 location by bucket name (`bucket`, `key`, and `versionId` -- empty on an unversioned
-    bucket); its asset identity (`databaseId`, `assetId`, `assetRootS3Key`); its auxiliary-bucket
+    bucket); its asset identity (`databaseId`, `assetId`, and the asset's root folder,
+    `assetRootS3Key` in the bucket `assetRootBucket`); its auxiliary-bucket
     preview prefix (`auxPreviewPrefix`); `bucketId`, the asset bucket's registration id; and the
     bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
     Region), and `bucketAccountId`, its owning account when that is not the deployment account
     (`""` otherwise). Read S3 with `bucket`, through a client for `bucketRegion`
     (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
-    `inputBucketRegion` and the output bucket's as `outputBucketRegion`. `bucketId` is for a consumer
+    `inputBucketRegion` and the output bucket's as `outputBucketRegion`. From the second step of a
+    workflow on, an input that an earlier step rewrote is read from the run's output bucket, so its
+    `bucket` is that bucket while `assetRootBucket` stays the asset's; join the asset root with
+    `assetRootBucket`, never with `bucket`. `bucketId` is for a consumer
     downstream of the pipeline that must resolve the registered bucket row itself -- the vector
     indexer does, from the embedding event a pipeline publishes -- and is `""` only on an entry no
     asset row produced.
