@@ -120,6 +120,8 @@ def convert_model(job, trimesh=None):
         if handling == "convert-linked":
             written = usd_io.convert_linked(job["input_file"], job["input_dir"], job["output_file"],
                                             job["output_filetype"])
+            usd_io.relink_for_output_extension(os.path.dirname(job["output_file"]),
+                                               job.get("output_path_extension"))
         else:
             usd_io.package_usdz(job["input_file"], job["input_dir"], job["output_file"])
             written = [job["output_file"]]
@@ -133,6 +135,9 @@ def convert_model(job, trimesh=None):
     if job["output_filetype"] in MATERIAL_NAMED_FILE_FORMATS:
         rename_materials(loaded)
     model_formats.export_model(loaded, plan, job)
+    if job["output_filetype"] in (".usda", ".usdc") and job.get("output_path_extension"):
+        import usd_io
+        usd_io.relink_for_output_extension(os.path.dirname(job["output_file"]), job["output_path_extension"])
 
 
 # The scanned collectors by extension (reference_collectors.py); imported when a scan job runs.

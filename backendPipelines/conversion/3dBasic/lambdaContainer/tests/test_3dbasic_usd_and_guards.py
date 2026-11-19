@@ -86,7 +86,10 @@ class TestUsdOutputIsValid:
         export = tmp_path / "export"
         export.mkdir()
         usd_io.write_usd(_scene_with_everything(), str(export / "scene.usdc"), 1.0, "y", ".usdc")
-        assert sorted(os.listdir(export)) == ["scene.usdc", "textures"]
+        # Beside the layer, not in a sub-folder: the workflow's output path extension is inserted before
+        # each file's own name, which would separate a sub-folder from its layer (D3).
+        assert sorted(os.listdir(export)) == ["material_0.png", "scene.usdc"]
+        assert "@./material_0.png@" in Sdf.Layer.FindOrOpen(str(export / "scene.usdc")).ExportToString()
 
     def test_transforms_become_xforms_and_points_stay_points(self, tmp_path):
         export = tmp_path / "export"
@@ -416,7 +419,9 @@ class TestReferenceHandling:
         assert wheel.GetFileFormat().formatId == "usdc"
         assert "@./tex/red.png@" in wheel.ExportToString()
         stage = Usd.Stage.Open(str(out / "root.usdc"))
-        assert stage.GetPrimAtPath("/M") and stage.GetPrimAtPath("/Body/B") is not None
+        assert stage.GetPrimAtPath("/M").IsA(UsdGeom.Mesh)
+        # body.usda has no default prim, so the reference composes nothing; the arc still resolves.
+        assert stage.GetPrimAtPath("/Body")
         # Layers are kept as authored, so the output reports no validator error the source does not.
         assert _validator_names(str(out / "root.usdc")) <= _validator_names(str(directory / "root.usda"))
 
@@ -532,3 +537,138 @@ class TestGeometryAnOutputCannotHold:
         import units_axes
         model_formats.export_model(self._scene(), units_axes.plan(units_axes.Options(), output, 1.0, "z"), job)
         assert os.path.getsize(export / f"o{output}") > 0
+
+
+def _component_set(directory):
+    """An OpenChessSet-style set: set.usda references two component assets. Each component layer
+    names itself in its ``assetInfo`` identifier (the ASWF/Pixar component-model layout), carries
+    ``kind = component`` and loads its geometry layer, which names a texture, through a payload."""
+    from PIL import Image
+    for piece in ("Bishop", "Rook"):
+        folder = directory / "assets" / piece
+        folder.mkdir(parents=True)
+        Image.new("RGB", (4, 4), (50, 60, 70)).save(folder / f"{piece}_BaseColor.png")
+        _write_layer(folder / f"{piece}_geom.usda", "#usda 1.0\n(\n    defaultPrim = \"Geom\"\n)\n"
+                     + _MESH.replace('"M"', '"Geom"').replace("}\n", f'    asset tex = @./{piece}_BaseColor.png@\n}}\n', 1))
+        _write_layer(folder / f"{piece}.usd",
+                     f'#usda 1.0\n(\n    defaultPrim = "{piece}"\n)\n'
+                     f'def "{piece}" (\n    assetInfo = {{\n        asset identifier = @./{piece}.usd@\n'
+                     f'        string name = "{piece}"\n    }}\n    kind = "component"\n'
+                     f'    payload = @./{piece}_geom.usda@\n) {{\n}}\n')
+    _write_layer(directory / "set.usda", '#usda 1.0\n(\n    defaultPrim = "Set"\n)\ndef Xform "Set" {\n'
+                 '    def "Bishop" (references = @./assets/Bishop/Bishop.usd@) {}\n'
+                 '    def "Rook" (references = @./assets/Rook/Rook.usd@) {}\n}\n')
+
+
+@pytest.mark.unit
+class TestComponentAssets:
+    """The assetInfo identifier is metadata, not a composition arc (in-development defect D4): it
+    must not make a component layer its own dependency."""
+
+    def test_the_dependency_graph_has_no_self_edge(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _component_set(directory)
+        graph = usd_io.dependency_graph(str(directory / "set.usda"), str(directory))
+        for layer, targets in graph.items():
+            assert layer not in targets, layer
+        bishop = os.path.realpath(directory / "assets" / "Bishop" / "Bishop.usd")
+        assert graph[bishop] == [os.path.realpath(directory / "assets" / "Bishop" / "Bishop_geom.usda")]
+
+    @pytest.mark.parametrize("output", [".usdc", ".usda"])
+    def test_convert_linked_converts_a_component_set(self, tmp_path, output):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _component_set(directory)
+        out = tmp_path / "export"
+        out.mkdir()
+        written = usd_io.convert_linked(str(directory / "set.usda"), str(directory), str(out / f"set{output}"), output)
+        relative = sorted(os.path.relpath(p, out) for p in written)
+        assert f"assets/Bishop/Bishop{output}" in relative and f"assets/Rook/Rook_geom{output}" in relative
+        assert "assets/Bishop/Bishop_BaseColor.png" in relative
+        bishop = Sdf.Layer.FindOrOpen(str(out / "assets" / "Bishop" / f"Bishop{output}")).ExportToString()
+        # The identifier names the converted layer itself.
+        assert f"asset identifier = @./Bishop{output}@" in bishop
+        stage = Usd.Stage.Open(str(out / f"set{output}"))
+        assert stage.GetPrimAtPath("/Set/Bishop").IsA(UsdGeom.Mesh)
+        assert stage.GetPrimAtPath("/Set/Rook").IsA(UsdGeom.Mesh)
+
+    def test_a_layer_that_sublayers_itself_is_not_a_cycle_of_its_own(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "a.usda", '#usda 1.0\n(\n    subLayers = [@./a.usda@]\n)\n' + _MESH)
+        out = tmp_path / "export"
+        out.mkdir()
+        usd_io.convert_linked(str(directory / "a.usda"), str(directory), str(out / "a.usdc"), ".usdc")
+        assert (out / "a.usdc").is_file()
+
+
+@pytest.mark.unit
+class TestUnreadableCollada:
+    """A COLLADA document pycollada cannot read is reported as unreadable, with the parser's reason,
+    not as empty (in-development defect D5; seen on 3ds Max exports with a malformed effect colour)."""
+
+    def _broken(self, tmp_path):
+        text = trimesh.creation.box().export(file_type="dae").decode()
+        text = text.replace("<color>0.0 0.0 0.0 1.0</color>", "<color>0.0 not-a-number</color>", 1)
+        (tmp_path / "broken.dae").write_text(text)
+        return {"input_file": str(tmp_path / "broken.dae"), "input_dir": str(tmp_path),
+                "input_relative_path": "broken.dae", "by_reference": {}, "input_name": "broken.dae"}
+
+    def test_the_message_says_it_could_not_be_read_and_why(self, tmp_path):
+        with pytest.raises(ValueError, match=r"broken\.dae could not be read as COLLADA: Dae\w+Error"):
+            model_formats.load_model(self._broken(tmp_path), trimesh)
+
+    def test_an_empty_but_valid_document_is_still_reported_as_empty(self, tmp_path):
+        import conversion_worker
+        text = ('<?xml version="1.0"?><COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" '
+                'version="1.4.1"><asset><up_axis>Y_UP</up_axis></asset><library_visual_scenes>'
+                '<visual_scene id="s"/></library_visual_scenes><scene><instance_visual_scene url="#s"/></scene>'
+                '</COLLADA>')
+        (tmp_path / "empty.dae").write_text(text)
+        job = {"input_file": str(tmp_path / "empty.dae"), "input_dir": str(tmp_path),
+               "input_relative_path": "empty.dae", "by_reference": {}, "input_name": "empty.dae"}
+        loaded, _, _ = model_formats.load_model(job, trimesh)
+        with pytest.raises(ValueError, match="contains no geometry"):
+            conversion_worker.check_exportable(loaded, ".glb", "empty.dae")
+
+
+@pytest.mark.unit
+class TestImplicitPrims:
+    """UsdGeom Cube, Sphere, Cylinder, Cone, Capsule and Plane are tessellated (in-development defect
+    D6: they were dropped, so a scene made of them reported no geometry)."""
+
+    @pytest.mark.parametrize("prim,extents", [
+        ('def Cube "C" { double size = 3 }', (3, 3, 3)),
+        ('def Cube "C" {}', (2, 2, 2)),
+        ('def Sphere "S" { double radius = 2 }', (4, 4, 4)),
+        ('def Cylinder "Y" { double radius = 1\n double height = 5\n uniform token axis = "Y" }', (2, 5, 2)),
+        ('def Cone "K" { double radius = 1\n double height = 4\n uniform token axis = "X" }', (4, 2, 2)),
+        ('def Capsule "P" { double radius = 0.5\n double height = 2 }', (1, 1, 3)),
+        ('def Plane "L" { double width = 4\n double length = 6\n uniform token axis = "Y" }', (4, 0, 6)),
+    ])
+    def test_each_is_tessellated_at_its_authored_size(self, tmp_path, prim, extents):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "s.usda", "#usda 1.0\n" + prim.replace(" }", "\n}").replace("{ ", "{\n") + "\n")
+        scene, _, _ = usd_io.read_usd(str(directory / "s.usda"), str(directory))
+        assert len(scene.geometry) == 1
+        np.testing.assert_allclose(scene.extents, extents, atol=0.05)
+
+    def test_the_transform_and_display_colour_apply(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "s.usda", '#usda 1.0\ndef Xform "X" (\n) {\n    double3 xformOp:translate = (10, 0, 0)\n'
+                     '    uniform token[] xformOpOrder = ["xformOp:translate"]\n'
+                     '    def Cube "C" {\n        color3f[] primvars:displayColor = [(1, 0, 0)]\n    }\n}\n')
+        scene, _, _ = usd_io.read_usd(str(directory / "s.usda"), str(directory))
+        np.testing.assert_allclose(scene.bounds, [[9, -1, -1], [11, 1, 1]], atol=1e-6)
+        mesh = next(iter(scene.geometry.values()))
+        assert list(mesh.visual.material.baseColorFactor[:3]) == [255, 0, 0]
+
+    def test_a_scene_of_implicit_prims_converts(self, tmp_path):
+        directory = tmp_path / "src"
+        directory.mkdir()
+        _write_layer(directory / "prims.usda", '#usda 1.0\ndef Cube "C" {\n}\ndef Sphere "S" {\n    double radius = 0.5\n}\n')
+        out = helpers.convert(tmp_path, str(directory / "prims.usda"), ".glb")
+        assert len(trimesh.load(out).geometry) == 2

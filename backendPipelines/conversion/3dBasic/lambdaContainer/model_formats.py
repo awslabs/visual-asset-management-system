@@ -26,6 +26,7 @@ import numpy as np
 import archive_guard
 import units_axes
 import usd_io
+import vertex_normals
 import xml_guard
 
 USD_EXTENSIONS = ('.usd', '.usda', '.usdc', '.usdz')
@@ -102,6 +103,21 @@ def _check_dae(path):
     if declared_up == 'x':
         raise ValueError(f"{os.path.basename(path)} declares X as its up axis, which this pipeline does not convert.")
     return (meters if meters is not None else 1.0), declared_up
+
+
+def _explain_empty_collada(loaded, path):
+    """trimesh reads COLLADA with pycollada told to ignore malformed parts, so a file pycollada cannot
+    read (a corrupt effect, say) loads with no geometry and would be reported as empty. When nothing
+    loaded, the document is read again strictly to say why it could not be read."""
+    geometry = getattr(loaded, "geometry", None)
+    if geometry is None or len(geometry):
+        return
+    try:
+        import collada
+        collada.Collada(path)
+    except Exception as e:  # noqa: BLE001 - the parser's own message names the problem
+        raise ValueError(f"{os.path.basename(path)} could not be read as COLLADA: "
+                         f"{type(e).__name__}: {str(e)[:300]}")
 
 
 def _check_3mf(path, work_dir):
@@ -282,6 +298,8 @@ def load_model(job, trimesh):
         loaded, meters, up = _load_fbx(job, trimesh, resolver)
         return _faceless_mesh_as_points(loaded, trimesh), meters, up
     loaded = trimesh.load(path, resolver=resolver)
+    if extension == '.dae':
+        _explain_empty_collada(loaded, path)
     if extension == '.3mf':
         declared_meters = units_axes.meters_per_unit_from_name(
             (getattr(loaded, "metadata", None) or {}).get("units")) or units_axes.UNITS['mm']
@@ -324,7 +342,11 @@ def _concatenated(loaded):
 
 def _write_dae(loaded, plan, output_file):
     import trimesh.exchange.dae as dae
-    data = dae.export_collada(_meshes(loaded))
+    meshes = _meshes(loaded)
+    # The COLLADA exporter writes every mesh's vertex_normals; fill them without SciPy first.
+    for mesh in meshes:
+        vertex_normals.fill_vertex_normals(mesh)
+    data = dae.export_collada(meshes)
     if isinstance(data, str):
         data = data.encode("utf-8")
     unit = f'<unit name="unit" meter="{plan.meters_per_unit!r}"/>'.encode()

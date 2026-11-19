@@ -488,8 +488,14 @@ def resolve_inputs_from_manifest(data):
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
     # Where a run that left referenced files out writes conversion-incomplete.json: the execution's
     # results folder (the outputs bucket + its bucket-relative results prefix).
-    global _results_location
+    global _results_location, _output_path_extension
     _results_location = None
+    # The prefix the write-back inserts before each output file's own name (the launch's or the
+    # workflow's defaultOutputFileBaseExecutionPathExtension), resolved by the execute handler. A loose
+    # USD output's references are rewritten for it (usd_io.relink_for_output_extension).
+    target = (manifest or {}).get("outputTarget") or {}
+    extension = target.get("fileBaseExecutionPathExtension") if isinstance(target, dict) else None
+    _output_path_extension = extension if isinstance(extension, str) else None
     if outputs.get("bucket") and outputs.get("results"):
         _results_location = (outputs["bucket"], outputs["results"].strip("/") + "/")
     return input_path, output_path, relative_subdir, version_id
@@ -497,6 +503,8 @@ def resolve_inputs_from_manifest(data):
 
 # (bucket, prefix) of the run's results folder, set by resolve_inputs_from_manifest; None without one.
 _results_location = None
+# The run's output path extension from the manifest's outputTarget; None without one.
+_output_path_extension = None
 
 
 def exported_files(export_dir):
@@ -895,6 +903,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "output_file": output_file,
             "output_filetype": output_filetype,
             "options": {key: getattr(options, field) for key, (field, _) in units_axes.OPTION_KEYS.items()},
+            "output_path_extension": _output_path_extension,
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
             "tool_timeout_seconds": int(worker_timeout_seconds()),

@@ -16,6 +16,7 @@ never reads anything else. For a USDZ the check runs over the files inside the p
 """
 
 import os
+import posixpath
 import re
 import shutil
 import tempfile
@@ -23,6 +24,7 @@ import tempfile
 import numpy as np
 
 import scene_limits
+import vertex_normals
 from common.logger import safeLogger
 
 logger = safeLogger(service="conversionTrimeshPipeline")
@@ -143,22 +145,31 @@ def _check_package(path, root):
 
 def dependency_graph(path, input_dir):
     """``{local layer: [local files it names]}`` of a confined loose USD input (call
-    ``confine_dependencies`` first), every name resolved against its layer's directory."""
-    from pxr import UsdUtils
+    ``confine_dependencies`` first), every name resolved against its layer's directory.
+
+    Only what loads something is an edge: composition arcs (sublayers, references, payloads, variants
+    included), value clips, and the values of ``asset``-typed attributes (textures). Layer and prim
+    metadata are not -- above all a component asset's ``assetInfo`` identifier, which names the layer
+    itself -- the same rule ``reference_collectors._usd_reference_kinds`` applies when the files are
+    fetched. A layer naming itself through a composition arc is not an edge either; USD does not
+    compose a layer into itself."""
+    import reference_collectors
     graph = {}
     queue = [os.path.realpath(path)]
     while queue:
         local_layer = queue.pop(0)
         if local_layer in graph:
             continue
-        sublayers, references, payloads = UsdUtils.ExtractExternalReferences(local_layer)
+        kinds = reference_collectors._usd_reference_kinds(local_layer)
+        if kinds is None:
+            raise ValueError(f"The USD layer {os.path.basename(local_layer)} could not be read for its references.")
         targets = []
-        for reference in list(sublayers) + list(references) + list(payloads):
+        for reference in kinds["composition"] | kinds["clips"] | kinds["attributes"]:
             text = str(reference).split("[", 1)[0]
             if not text:
                 continue
             local = os.path.realpath(os.path.join(os.path.dirname(local_layer), text))
-            if os.path.isfile(local):
+            if local != local_layer and os.path.isfile(local):
                 targets.append(local)
         graph[local_layer] = sorted(set(targets))
         queue.extend(t for t in targets if _is_layer_name(t) and t not in graph)
@@ -256,6 +267,102 @@ def convert_linked(path, input_dir, output_file, output_extension):
     return [mapping[local] for local in layers] + [mapping[f] for f in files]
 
 
+# Vendored from backend/backend/common/workflows/outputPathExtension.py (tests/test_3dbasic_output_prefix.py
+# keeps both functions identical): how the workflow's write-back places an execution's output path
+# extension in each output file's asset-relative path.
+NO_EXTENSION = "/"
+
+
+def normalize_output_path_extension(raw):
+    """Canonicalize an authored extension to a single leading `/` plus its authored trailing `/`.
+
+    Returns `NO_EXTENSION` for None/empty/`"/"`. Any `{{tag}}` placeholders pass through untouched —
+    they are substituted once the launch has a manifest, and the result is normalized again. Traversal
+    and backslashes are rejected by the request model, not here.
+    """
+    if raw is None:
+        return NO_EXTENSION
+    text = str(raw).strip()
+    if text in ("", "/"):
+        return NO_EXTENSION
+    is_folder = text.endswith("/")
+    segments = [segment for segment in text.split("/") if segment]
+    if not segments:
+        return NO_EXTENSION
+    body = "/".join(segments)
+    return f"/{body}/" if is_folder else f"/{body}"
+
+
+def apply_output_path_extension(relative_path, extension):
+    """Insert `extension` into `relative_path` immediately before the final filename.
+
+    `relative_path` is asset-relative (a leading `/` is tolerated and dropped, matching the
+    bucket-relative keys the output lambdas build). Returns the path unchanged when there is no
+    extension, and returns an empty/only-slash path unchanged (there is no filename to place before).
+    """
+    relative = (relative_path or "").lstrip("/")
+    normalized = normalize_output_path_extension(extension)
+    if not relative or normalized == NO_EXTENSION:
+        return relative
+    insert = normalized.lstrip("/")
+    head, separator, filename = relative.rpartition("/")
+    return f"{head}{separator}{insert}{filename}"
+
+
+def relink_for_output_extension(export_dir, extension):
+    """Rewrite the asset paths of every loose USD layer in ``export_dir`` to where the workflow's
+    write-back will put the files they name.
+
+    The write-back inserts the execution's output path extension (a workflow's
+    ``defaultOutputFileBaseExecutionPathExtension``, or the one a launch names) immediately before each
+    output file's own name. For files in one folder that changes nothing between them, but a layer
+    whose texture sits in a sub-folder (``textures/a.png``), or a convert-linked layer that names a
+    layer in another folder, would point where no file lands: ``m/x/E/m.usdc`` and ``m/x/textures/E/
+    a.png``. Every asset path that names a file of this export is rewritten to the relative path
+    between the two placed files. The placement depends only on the paths inside the export folder,
+    since the extension goes before the last component of the whole asset-relative path. Returns the
+    number of layers rewritten."""
+    from pxr import Sdf, UsdUtils
+    if normalize_output_path_extension(extension) == NO_EXTENSION:
+        return 0
+    root = os.path.realpath(export_dir)
+
+    def placed(local):
+        relative = os.path.relpath(local, root).replace(os.sep, "/")
+        return apply_output_path_extension(relative, extension)
+
+    rewritten = 0
+    for folder, _, names in os.walk(root):
+        for name in names:
+            if not _is_layer_name(name):
+                continue
+            layer_path = os.path.join(folder, name)
+            layer = Sdf.Layer.FindOrOpen(layer_path)
+            if layer is None:
+                continue
+            layer_placed_dir = posixpath.dirname(placed(layer_path))
+
+            def relink(asset_path, layer_dir=folder, layer_placed_dir=layer_placed_dir):
+                text = str(asset_path)
+                base, bracket, member = text.partition("[")
+                if not base or reference_problem(base):
+                    return text
+                target = os.path.realpath(os.path.join(layer_dir, base))
+                if not (target.startswith(root + os.sep) and os.path.isfile(target)):
+                    return text
+                moved = posixpath.relpath(placed(target), layer_placed_dir or ".")
+                if not moved.startswith("."):
+                    moved = "./" + moved
+                return moved + (bracket + member if bracket else "")
+
+            before = layer.ExportToString()
+            UsdUtils.ModifyAssetPaths(layer, relink)
+            if layer.ExportToString() != before:
+                layer.Save()
+                rewritten += 1
+    return rewritten
+
+
 def package_usdz(path, input_dir, output_file):
     """REFERENCE_HANDLING package: keep the USD input's layers and composition as authored and pack
     the layer and everything it names (the confined dependency closure, textures included) into one
@@ -316,6 +423,8 @@ def read_usd(path, input_dir, limit=None):
             geometry = _read_mesh(UsdGeom.Mesh(prim), world, textures, trimesh, allowed_root)
         elif prim.IsA(UsdGeom.Points):
             geometry = _read_points(UsdGeom.Points(prim), world, trimesh)
+        elif _implicit_type(prim, UsdGeom) is not None:
+            geometry = _read_implicit(prim, world, textures, trimesh, allowed_root, UsdGeom)
         else:
             continue
         if geometry is None:
@@ -335,6 +444,78 @@ def read_usd(path, input_dir, limit=None):
                    if layers else "")
         raise ValueError(f"{os.path.basename(path)} contains no geometry, so there is nothing to convert.{missing}")
     return scene, float(meters), up
+
+
+# Segments around the axis of a tessellated Cylinder, Cone or Capsule and the subdivision of a
+# tessellated Sphere: smooth enough to look round, small next to real meshes.
+IMPLICIT_SECTIONS = 48
+IMPLICIT_SPHERE_SUBDIVISIONS = 3
+
+
+def _implicit_type(prim, UsdGeom):
+    for name in ("Cube", "Sphere", "Cylinder", "Cone", "Capsule", "Plane"):
+        schema = getattr(UsdGeom, name, None)
+        if schema is not None and prim.IsA(schema):
+            return name
+    return None
+
+
+def _axis_rotation(axis):
+    """The 4x4 rotation taking trimesh's Z-aligned primitive to the USD ``axis`` token."""
+    axis = str(axis).upper()
+    if axis == "X":
+        return np.array([[0, 0, 1, 0], [0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 0, 1]], dtype=np.float64)
+    if axis == "Y":
+        return np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=np.float64)
+    return np.eye(4)
+
+
+def _read_implicit(prim, world, textures, trimesh, allowed_root, UsdGeom):
+    """A UsdGeom Cube, Sphere, Cylinder, Cone, Capsule or Plane tessellated to a mesh with its
+    authored size (or the schema's fallback), placed by its world transform."""
+    kind = _implicit_type(prim, UsdGeom)
+    schema = getattr(UsdGeom, kind)(prim)
+
+    def value(name, default):
+        attribute = getattr(schema, f"Get{name}Attr", None)
+        got = attribute().Get() if attribute is not None else None
+        return default if got is None else got
+
+    if kind == "Cube":
+        mesh = trimesh.creation.box(extents=[float(value("Size", 2.0))] * 3)
+    elif kind == "Sphere":
+        mesh = trimesh.creation.icosphere(subdivisions=IMPLICIT_SPHERE_SUBDIVISIONS,
+                                          radius=float(value("Radius", 1.0)))
+    else:
+        axis = value("Axis", "Z")
+        if kind == "Plane":
+            width, length = float(value("Width", 2.0)), float(value("Length", 2.0))
+            # UsdGeomPlane's axis is its normal. For Z it lies in XY, width along X and length along Y;
+            # the rotation below gives X (width along Z, length along Y) and Y (width along X, length
+            # along Z), as the schema defines them.
+            vertices = np.array([[-width / 2, -length / 2, 0], [width / 2, -length / 2, 0],
+                                 [width / 2, length / 2, 0], [-width / 2, length / 2, 0]])
+            mesh = trimesh.Trimesh(vertices=vertices, faces=[[0, 1, 2], [0, 2, 3]], process=False)
+        else:
+            height, radius = float(value("Height", 2.0)), float(value("Radius", 1.0))
+            if kind == "Cylinder":
+                mesh = trimesh.creation.cylinder(radius=radius, height=height, sections=IMPLICIT_SECTIONS)
+            elif kind == "Cone":
+                mesh = trimesh.creation.cone(radius=radius, height=height, sections=IMPLICIT_SECTIONS)
+                mesh.apply_translation([0, 0, -height / 2])
+            else:
+                mesh = trimesh.creation.capsule(height=height, radius=radius, count=[IMPLICIT_SECTIONS, IMPLICIT_SECTIONS // 2])
+        mesh.apply_transform(_axis_rotation(axis))
+    mesh.apply_transform(world)
+    color, _ = _read_material(prim, textures, allowed_root)
+    if color is None:
+        display = UsdGeom.Gprim(prim).GetDisplayColorAttr().Get()
+        if display is not None and len(display):
+            color = [int(round(max(0.0, min(1.0, float(c))) * 255)) for c in display[0]] + [255]
+    if color is not None:
+        mesh.visual = trimesh.visual.TextureVisuals(
+            material=trimesh.visual.material.PBRMaterial(baseColorFactor=color))
+    return mesh
 
 
 def _read_points(points_prim, world, trimesh):
@@ -505,7 +686,9 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
     root = UsdGeom.Xform.Define(stage, "/Model")
     stage.SetDefaultPrim(root.GetPrim())
     materials = UsdGeom.Scope.Define(stage, "/Model/Materials")
-    texture_dir = os.path.join(os.path.dirname(layer_path), "textures")
+    # Textures are written beside the layer, as a glTF's buffers and an OBJ's material files are, so the
+    # workflow's output path extension (inserted before each file's own name) keeps them together.
+    texture_dir = os.path.dirname(layer_path)
     used_nodes, used_materials, material_paths = set(), set(), {}
     count = 0
     for node_name in scene.graph.nodes_geometry:
@@ -528,7 +711,10 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
             usd_mesh.CreateExtentAttr(extent)
             usd_mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
             usd_mesh.CreateOrientationAttr(UsdGeom.Tokens.rightHanded)
-            normals = np.asarray(geometry.vertex_normals, dtype=np.float32)
+            # Not geometry.vertex_normals: without SciPy (as in this image) trimesh computes those
+            # in O(vertices x faces); see vertex_normals.py.
+            normals = vertex_normals.angle_weighted_vertex_normals(
+                vertices, geometry.faces, geometry.face_normals).astype(np.float32)
             usd_mesh.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(normals))
             usd_mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
             _write_visual(stage, usd_mesh, geometry, materials, texture_dir, used_materials, material_paths,
@@ -591,7 +777,7 @@ def _write_visual(stage, usd_mesh, geometry, materials, texture_dir, used_materi
             reader_out = reader.CreateOutput("result", Sdf.ValueTypeNames.Float2)
             texture = UsdShade.Shader.Define(stage, usd_material.GetPath().AppendChild("diffuseTexture"))
             texture.CreateIdAttr("UsdUVTexture")
-            texture.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(f"textures/{file_name}"))
+            texture.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(f"./{file_name}"))
             texture.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(reader_out)
             texture.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB")
             texture_out = texture.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)

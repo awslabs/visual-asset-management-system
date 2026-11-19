@@ -76,10 +76,10 @@ def sources(tmp_path_factory):
     generic = root / "generic"
     generic.mkdir()
     (generic / "part.usd").write_bytes(open(usda, "rb").read())
-    textures = os.path.join(os.path.dirname(usda), "textures")
-    os.makedirs(generic / "textures")
-    for name in os.listdir(textures):
-        (generic / "textures" / name).write_bytes(open(os.path.join(textures, name), "rb").read())
+    # The writer puts textures beside the layer.
+    for name in os.listdir(os.path.dirname(usda)):
+        if name.endswith(".png"):
+            (generic / name).write_bytes(open(os.path.join(os.path.dirname(usda), name), "rb").read())
     made[".usd"] = (str(generic / "part.usd"), cube)
     return made
 
