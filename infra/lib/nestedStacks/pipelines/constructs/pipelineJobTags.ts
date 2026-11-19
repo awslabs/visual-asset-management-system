@@ -65,7 +65,7 @@ export const VAMS_PIPELINE_TAG_VALUES = {
     imageTo3d: "imageTo3d",
     videoSopBom: "videoSopBom",
     splatToolbox: "splatToolbox",
-    metadata3dLabeling: "metadata3dLabeling",
+    systemGenAiMetadata: "systemGenAiMetadata",
     nvidiaCosmos3: "nvidiaCosmos3",
     nvidiaCosmosPredict: "nvidiaCosmosPredict",
     nvidiaCosmosReason: "nvidiaCosmosReason",
