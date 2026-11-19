@@ -51,7 +51,8 @@ class ApiRoute(NamedTuple):
     ``addon_feature`` names the add-on feature switch (``common/addonFeatures.py``)
     a route of ``common/addonApiRoutes.py`` is deployed under, so the route
     listings leave it out on a deployment without that add-on; ``None`` for a
-    route every deployment serves.
+    route every deployment serves. A core feature that can be switched off (audit log search) uses
+    the same field with its own switch name (``CORE_FEATURE_AUDIT_LOG_SEARCH``).
     """
 
     path: str
