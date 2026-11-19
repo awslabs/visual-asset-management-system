@@ -42,9 +42,64 @@ MEMORY_EXPANSION_FACTORS = {
     '.glb': 27,
     '.gltf': 27,
     '.xyz': 13,
+    # The USD family: a text layer expands little; a binary (crate) layer and a package of one are
+    # compressed on disk, and the generic `.usd` extension may be either, so it takes the larger.
+    '.usd': 46,
+    '.usda': 15,
+    '.usdc': 46,
+    '.usdz': 46,
+    '.dae': 18,
+    # A 3MF is a zip of XML, so its bytes on disk are a fraction of what is parsed.
+    '.3mf': 106,
+    '.off': 20,
+    # An FBX is converted to GLB by Assimp first and the GLB loaded; Assimp's own peak is in its
+    # process, under the same address-space limit.
+    '.fbx': 27,
+    # A STEP file is text describing exact geometry; its tessellation is far larger than the text.
+    # Measured 55 to 67 on the NIST and Adafruit test files of 0.4 to 0.5 MB (smaller files are
+    # dominated by the fixed cost of loading Open CASCADE, which BASE_MEMORY_BYTES covers).
+    '.step': 70,
+    '.stp': 70,
 }
 # Used for an extension without a measured factor: the largest measured one.
 DEFAULT_MEMORY_EXPANSION_FACTOR = max(MEMORY_EXPANSION_FACTORS.values())
+
+# Factors by output format, where a conversion to that format needs clearly more memory per input byte
+# than the input's factor above: the COLLADA exporter holds the model as Python objects as well, and
+# the USD writer holds the scene as USD data beside the trimesh model. Each is the measured peak per
+# input byte for that pair times 1.26, the margin the input factors keep over their own measurement
+# (STL: 14 over 11.1), and applies when it exceeds the input's factor by more than 10 percent. FBX and
+# STEP are read as a GLB, so they scale with the GLB row. Without this table a 330 MB STL admitted for
+# USDA output peaked at 5,307 of 5,308 MB, so the admitted maximum of every output keeps the headroom
+# of the others (a peak of about 70 to 85 percent of the function memory at the limit). The PR 1 pairs
+# (STL, OBJ, PLY, GLB, GLTF, XYZ to STL, OBJ, PLY, GLB, GLTF) keep their factors.
+OUTPUT_EXPANSION_FACTORS = {
+    '.obj': {'.usda': 17},
+    '.stl': {'.usda': 17, '.usdc': 52},
+    '.off': {'.obj': 10, '.usda': 17},
+    '.dae': {
+        '.3mf': 149, '.dae': 18, '.fbx': 52, '.glb': 52, '.gltf': 52, '.obj': 13, '.off': 29,
+        '.ply': 43, '.step': 135, '.stl': 26, '.stp': 135, '.usda': 27, '.usdc': 90, '.usdz': 88,
+    },
+    '.3mf': {'.obj': 10, '.usda': 17},
+    '.usdc': {
+        '.fbx': 42, '.glb': 42, '.gltf': 42, '.obj': 13, '.off': 24, '.ply': 41, '.step': 109,
+        '.stl': 22, '.stp': 109, '.usdc': 54, '.usdz': 54,
+    },
+    '.usda': {
+        '.fbx': 41, '.glb': 41, '.gltf': 41, '.obj': 13, '.off': 24, '.ply': 41, '.step': 107,
+        '.stl': 21, '.stp': 107, '.usda': 17, '.usdc': 54, '.usdz': 54,
+    },
+    '.usdz': {
+        '.fbx': 42, '.glb': 42, '.gltf': 42, '.obj': 13, '.off': 24, '.ply': 41, '.step': 109,
+        '.stl': 21, '.stp': 109, '.usdz': 54,
+    },
+}
+# The input factors are the largest peak resident memory above the interpreter and trimesh baseline,
+# per byte of input, over the outputs that need no factor of their own, measured on a 0.33 to 1.3
+# million triangle sphere through the worker child (`conversion_worker.convert_model`) and rounded up
+# by at least 15 percent. The first six are the factors of the formats this pipeline has always read.
+# The output table was measured in the built image (no SciPy) on a 163,842-vertex sphere.
 
 # Memory the interpreter, trimesh and the S3 clients hold before any model is loaded (measured at
 # about 50 MB for trimesh alone; the rest is the Lambda runtime, boto3 and headroom).
@@ -113,18 +168,23 @@ def free_disk_bytes(path="/tmp"):
     return shutil.disk_usage(path).free
 
 
-def expansion_factor(extension):
-    return MEMORY_EXPANSION_FACTORS.get((extension or "").lower(), DEFAULT_MEMORY_EXPANSION_FACTOR)
+def expansion_factor(extension, output_extension=None):
+    """Peak memory per input byte for converting ``extension`` to ``output_extension``: the input's
+    factor, or the output table's entry for the pair when it has one (it is never lower)."""
+    extension = (extension or "").lower()
+    factor = MEMORY_EXPANSION_FACTORS.get(extension, DEFAULT_MEMORY_EXPANSION_FACTOR)
+    by_output = OUTPUT_EXPANSION_FACTORS.get((output_extension or "").lower(), {})
+    return max(factor, by_output.get(extension, factor))
 
 
-def limits(extension, memory_bytes=None, disk_free_bytes=None):
+def limits(extension, memory_bytes=None, disk_free_bytes=None, output_extension=None):
     """``(max_total_bytes, binding_resource)``: the most the input and its referenced files may total
     in bytes, and which resource sets that. A resource that is unknown (None) sets no limit; with
     neither known the limit is None."""
     candidates = []
     if memory_bytes:
         usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
-        candidates.append((max(int(usable / expansion_factor(extension)), 0), MEMORY_RESOURCE))
+        candidates.append((max(int(usable / expansion_factor(extension, output_extension)), 0), MEMORY_RESOURCE))
     if disk_free_bytes is not None:
         usable = disk_free_bytes - DISK_HEADROOM_BYTES
         candidates.append((max(int(usable / (1 + OUTPUT_DISK_FACTOR)), 0), DISK_RESOURCE))
@@ -135,19 +195,24 @@ def _mb(value):
     return f"{value / MB:,.1f} MB"
 
 
-def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=None, extra_bytes=0):
+def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=None, extra_bytes=0,
+               output_extension=None):
     """Raise ``InputTooLargeError`` when ``size_bytes`` (plus ``extra_bytes`` already declared for
     referenced files) is over what the function can convert. Returns the limit in bytes (None when no
     limit is known) so the caller can bound the files the input references."""
-    limit, resource = limits(extension, memory_bytes, disk_free_bytes)
+    limit, resource = limits(extension, memory_bytes, disk_free_bytes, output_extension)
     if limit is None:
         return None
     total = size_bytes + extra_bytes
     if total > limit:
+        target = (f"converting {extension.lower()} to {output_extension.lower()}" if output_extension
+                  else f"{extension.lower()} inputs")
+        hint = (" A conversion to another format may accept it."
+                if output_extension and resource == MEMORY_RESOURCE
+                and expansion_factor(extension, output_extension) > expansion_factor(extension) else "")
         raise InputTooLargeError(
-            f"{name} is {_mb(total)}, over the {_mb(limit)} limit for {extension.lower()} inputs. "
-            f"The limit is set by the {resource}. Reduce the model's size and run the conversion "
-            f"again.")
+            f"{name} is {_mb(total)}, over the {_mb(limit)} limit for {target}. The limit is set by "
+            f"the {resource}. Reduce the model's size and run the conversion again.{hint}")
     return limit
 
 
@@ -177,12 +242,12 @@ def head_object_info(client, bucket, key, version_id=""):
 TEXTURE_MEMORY_FACTOR = 5
 
 
-def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None):
+def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None, output_extension=None):
     """Decoded RGBA bytes of texture images the function can hold beside a model whose input and
     non-image files total ``geometry_bytes``: the memory a conversion may use, less the base and the
     geometry's share, divided by ``TEXTURE_MEMORY_FACTOR``. None when the memory is not known."""
     if not memory_bytes:
         return None
     usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
-    usable -= expansion_factor(extension) * geometry_bytes
+    usable -= expansion_factor(extension, output_extension) * geometry_bytes
     return max(int(usable / TEXTURE_MEMORY_FACTOR), 0)

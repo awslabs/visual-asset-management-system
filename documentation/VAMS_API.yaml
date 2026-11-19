@@ -1467,7 +1467,7 @@ paths:
               - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}:
+    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionIdAndCommentId}:
         get:
             summary: "Get specified comment."
             responses:
@@ -1494,9 +1494,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId"
+              - name: "assetVersionIdAndCommentId"
                 in: "path"
-                description: "Unique identifier for comment. Validation will be performed on asset version ID and comment ID."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path. Validation will be performed on asset version ID and comment ID."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1525,9 +1525,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1561,9 +1561,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1597,9 +1597,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -11690,7 +11690,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, the name exists, the request moves it to a database scope and it is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`), or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `ruleName`. A caller who may not run that rule's workflow gets the 403 instead."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, the name exists, the request moves it to a database scope and it is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`), or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A caller who may not run that rule's workflow gets the 403 instead."
                     content:
                         application/json:
                             schema:
@@ -11777,7 +11777,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, the new `databaseId` is a database and the schema is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`) (a move to GLOBAL is always allowed), or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `ruleName`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
+                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, the new `databaseId` is a database and the schema is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`) (a move to GLOBAL is always allowed), or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
                     content:
                         application/json:
                             schema:

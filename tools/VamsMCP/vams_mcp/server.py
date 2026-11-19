@@ -577,8 +577,8 @@ def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
                             abandon_on_cancel=True, limiter=_tool_limiter(),
                         )
             finally:
-                # Also on a cancellation from outside (the client went away): a call whose body never
-                # started gives its slot back here, and its worker, if one picks it up later, runs nothing.
+                # When the time budget runs out before a worker picks the call up, its body never
+                # started: it gives its slot back here, and its worker, if one picks it up later, runs nothing.
                 never_started = _abandon_if_not_started(identity.user_id, call)
             if scope.cancelled_caught:
                 result = _remote_busy(fn.__name__) if never_started else _remote_timeout(fn.__name__)

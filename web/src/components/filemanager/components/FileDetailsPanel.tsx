@@ -72,6 +72,8 @@ import {
 // Import the context from FileTreeView
 import { FileManagerContext } from "./FileTreeView";
 
+const FILE_PERMANENT_DELETE_ROUTE = "/database/{databaseId}/assets/{assetId}/deleteFile";
+
 // File Info Panel Component
 export function FileDetailsPanel({}: FileInfoPanelProps) {
     const { state, dispatch, onViewExecution } = useContext(FileManagerContext)!;
@@ -111,6 +113,15 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
         permissionsFailed,
         canCallRoute("POST", "/uploads"),
         `Your role does not allow uploading files to this ${Synonyms.asset}.`
+    );
+    // Permanent file delete is its own route: a role may archive files without it, so the delete
+    // dialog offers only archiving and the archived files' delete buttons are greyed.
+    const canPermanentlyDeleteFiles = canCallRoute("DELETE", FILE_PERMANENT_DELETE_ROUTE);
+    const permanentDeleteDisabledReason = routeDisabledReason(
+        permissionsLoading,
+        !!permissionsFailed,
+        canPermanentlyDeleteFiles,
+        `Your role does not allow permanently deleting files of this ${Synonyms.asset}.`
     );
 
     // Download as Zip: offered in every Export menu when the deployment has the feature and the
@@ -590,6 +601,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                         databaseId={databaseId}
                         assetId={assetId}
                         forceDeleteMode={selectedItems.every((item) => item.isArchived)}
+                        canPermanentlyDelete={canPermanentlyDeleteFiles}
                         onSuccess={(operation) => {
                             setShowDeleteModal(false);
                             // Clear selection first, then refresh file list
@@ -691,6 +703,10 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                                     <Button
                                                         iconName="remove"
                                                         onClick={() => setShowDeleteModal(true)}
+                                                        disabled={!!permanentDeleteDisabledReason}
+                                                        disabledReason={
+                                                            permanentDeleteDisabledReason
+                                                        }
                                                     >
                                                         Permanently Delete Files
                                                     </Button>
@@ -1042,6 +1058,7 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                     databaseId={databaseId}
                     assetId={assetId}
                     forceDeleteMode={selectedItem?.isArchived}
+                    canPermanentlyDelete={canPermanentlyDeleteFiles}
                     onSuccess={(operation) => {
                         setShowDeleteModal(false);
                         // Clear selection first, then refresh file list
@@ -1369,6 +1386,8 @@ export function FileDetailsPanel({}: FileInfoPanelProps) {
                                             <Button
                                                 iconName="remove"
                                                 onClick={() => setShowDeleteModal(true)}
+                                                disabled={!!permanentDeleteDisabledReason}
+                                                disabledReason={permanentDeleteDisabledReason}
                                             >
                                                 Permanently Delete File
                                             </Button>
