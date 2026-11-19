@@ -77,7 +77,7 @@ naming any other bucket is rejected before the job starts:
 
 **Option 3: Auto-discovery (legacy)**
 
-Place a `.pt` file in the same directory as the evaluation config. The pipeline will automatically discover and use it.
+Place a `.pt` or `.pth` file in the asset. The pipeline will automatically discover and use the latest checkpoint of the run folder written most recently, preferring files named the way the chosen `rlLibrary` names its checkpoints.
 
 **Key Differences:**
 
@@ -375,12 +375,12 @@ renders a field for each and substitutes the value into the configuration body a
 
 After training completes, the following files are added to the asset the run executed against. Both Isaac Lab workflows set `defaultOutputFileBaseExecutionPathExtension` to `/{{executionId}}/`, which inserts a folder named for the workflow execution immediately before each file name:
 
-| Path                                   | Description                                    |
-| -------------------------------------- | ---------------------------------------------- |
-| `checkpoints/<executionId>/model_*.pt` | Training checkpoints written by the RL library |
-| `<executionId>/metrics.csv`            | Training metrics exported from TensorBoard     |
-| `<executionId>/train-config.json`      | Copy of input configuration                    |
-| `<executionId>/*.txt`                  | Converted log files (e.g., git diff files)     |
+| Path                              | Description                                                                                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `checkpoints/<executionId>/*`     | Training checkpoints written by the RL library: `model_<n>.pt` for `rsl_rl`, `<name>.pth` for `rl_games`, `agent_<n>.pt` and `best_agent.pt` for `skrl` |
+| `<executionId>/metrics.csv`       | Training metrics exported from TensorBoard                                                                                                              |
+| `<executionId>/train-config.json` | Copy of input configuration                                                                                                                             |
+| `<executionId>/*.txt`             | Converted log files (e.g., git diff files)                                                                                                              |
 
 For evaluation jobs:
 
