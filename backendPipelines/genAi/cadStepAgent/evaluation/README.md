@@ -18,7 +18,7 @@ Each case is scored on three independent axes, plus a golden diff where the case
 -   **Intent.** The judge reads a bounded view of one run — the instruction, the agent's status and report without the per-attempt script output, the measured geometry, the geometry and honesty verdicts — and scores each of the case's two to four `intent_rubric` criteria from 1 to 5, then an overall 1–5, whether the report is consistent with the measured geometry, and a rationale of at most 600 characters. A run passes at overall 4 or more. The judge grades intent only: its prompt tells it the measured figures are facts it must not re-grade. One Converse call per run, with no temperature (some models refuse the parameter); the model is `--model-id`, else `BEDROCK_MODEL_ID` (the setting the deployed agent uses). An answer that is not the requested JSON is a scoring ERROR, never a PASS. Each call records its tokens and an estimated cost.
 -   **Golden diff.** `golden_diff.py` compares an output with the case's golden geometrically — solid, face and edge counts, sorted extents, volume, the hole set (count, radii, axes, through or blind), fillet radii, and for single solids the symmetric-difference volume of an Open CASCADE boolean cut after aligning the bounding boxes — each within a tolerance (`DEFAULT_TOL`, overridden per case by `golden_tol`). Every failed check names its field. A golden is a reviewed known-good output, not a byte target: two correct exports of the same part differ in every byte, and a correct part built another way can differ from the golden within the tolerances.
 
-**The judge is calibrated** (see [Calibrating the judge](#calibrating-the-judge) for the run): over seven recorded runs it scored the honest refusal 1/5, the vague instruction completed as `partial` 4/5 and the clean generate and modify passes 5/5, and it called no geometry-scorer PASS inconsistent. Read its scores beside the other two axes: it grades intent, which they cannot measure, and they grade geometry and honesty, which it does not re-measure.
+**The judge is calibrated** (see [Calibrating the judge](#calibrating-the-judge) for the run, recorded at temperature 0): over seven recorded runs it scored the honest refusal 1/5, the vague instruction completed as `partial` 4/5 and the clean generate and modify passes 5/5, and it called no geometry-scorer PASS inconsistent. Read its scores beside the other two axes: it grades intent, which they cannot measure, and they grade geometry and honesty, which it does not re-measure.
 
 ## Layout
 
@@ -94,7 +94,7 @@ python llm_judge.py --corpus corpus.yaml --out /tmp/cad-eval/calibration.json \
 
 Accept the judge when it ranks the refusal and the partial run below the clean passes and calls no geometry-scorer PASS inconsistent. A judge that does not discriminate is marked experimental here until a re-run does.
 
-Recorded calibration, 2026-10-19, model `global.anthropic.claude-sonnet-4-5-20250929-v1:0` (temperature 0), seven recorded runs, estimated cost USD 0.09:
+Recorded calibration, 2026-10-19, model `global.anthropic.claude-sonnet-4-5-20250929-v1:0`, seven recorded runs, estimated cost USD 0.09, recorded at temperature 0 (the judge sends no temperature, so a re-run samples at the model's default):
 
 | Case                        | Run                                      | Geometry | Honesty | Judge overall | Consistent | Rationale (head)                                                                     |
 | --------------------------- | ---------------------------------------- | -------- | ------- | ------------- | ---------- | ------------------------------------------------------------------------------------ |
@@ -106,7 +106,7 @@ Recorded calibration, 2026-10-19, model `global.anthropic.claude-sonnet-4-5-2025
 | FM4 inch sheet, centre hole | `succeeded`                              | PASS     | PASS    | 5             | yes        | 6.756 mm hole at the face centre, through Y; the 30 existing holes unchanged         |
 | FG9 teapot, modelled        | `succeeded`, dimensions declared         | PASS     | PASS    | 4             | yes        | Body, spout, handle and lid opening present; the lid is simplified                   |
 
-The judge grades the design and not the measurement: on the vague bracket it scored the extrusion interface 3/5 for a reason an engineer would give, and on the modelled teapot it marked the simplified lid down, while every geometry PASS kept its consistency flag. Re-run this table when the judge prompt, the rubrics or the deployment model change.
+The judge grades the design and not the measurement: on the vague bracket it scored the extrusion interface 3/5 for a reason an engineer would give, and on the modelled teapot it marked the simplified lid down, while every geometry PASS kept its consistency flag. Re-run this table when the judge prompt, the rubrics, the deployment model or its inference settings change.
 
 ## Adding a case, a fixture or a golden
 
