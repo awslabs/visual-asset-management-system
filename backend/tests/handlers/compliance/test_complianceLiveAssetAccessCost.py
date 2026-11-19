@@ -319,8 +319,11 @@ def test_a_single_record(world, caller):
 @pytest.mark.unit
 @pytest.mark.parametrize("caller", [ADMIN, TAG_DENY])
 def test_evaluate_all_reads_the_live_partition_once(world, caller):
-    body, cost = _measure(world, caller, "POST", f"/compliance/evaluate/{DB}",
-                          {"databaseId": DB}, request_body={})
+    # The counts, not the clock: on a slow runner moto's read of the 5000-asset partition alone can
+    # take the call's whole time budget, and the call then stops before it decides any asset.
+    with patch.object(evaluate_svc, "SWEEP_TIME_BUDGET_SECONDS", 3600):
+        body, cost = _measure(world, caller, "POST", f"/compliance/evaluate/{DB}",
+                              {"databaseId": DB}, request_body={})
     print(f"COST evaluate all | {caller}: {cost} | skippedNotAuthorized "
           f"{body.get('skippedNotAuthorized')}")
     assert cost["asset BatchGetItem"] == 0
