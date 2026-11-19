@@ -903,3 +903,49 @@ class UserRoleDeletionError(UserRoleError):
 class InvalidUserRoleDataError(UserRoleError):
     """Raised when user role data is invalid."""
     pass
+
+
+# Audit log search business logic exceptions
+class AuditSearchError(BusinessLogicError):
+    """Base class for audit log search errors."""
+    pass
+
+
+class AuditSearchNotSupportedError(AuditSearchError):
+    """Raised when the deployment does not have the audit search routes."""
+    pass
+
+
+class InvalidAuditRequestError(AuditSearchError):
+    """Raised when a search, page or export request is refused as invalid (400), or a value is
+    refused before any request is sent."""
+    pass
+
+
+class AuditQueryNotFoundError(AuditSearchError):
+    """Raised when a search handle is unknown, expired, not the caller's, or no longer allowed.
+
+    The API answers all of these with one 404, so this error never says which."""
+    pass
+
+
+class AuditSearchFailedError(AuditSearchError):
+    """Raised when a waited-on search ends Failed, Cancelled or Timeout.
+
+    `json_fields` carries the handle and the final status."""
+
+    def __init__(self, message: str, query_id: str = None, status: str = None):
+        super().__init__(message)
+        self.json_fields = {
+            key: value for key, value in (("queryId", query_id), ("status", status)) if value
+        }
+
+
+class AuditSearchTimeoutError(AuditSearchError):
+    """Raised when --wait gives up before the search finishes. The search keeps running on the
+    server; `json_fields` carries the handle so a script can read it later."""
+
+    def __init__(self, message: str, query_id: str = None):
+        super().__init__(message)
+        self.json_fields = {"queryId": query_id} if query_id else {}
+

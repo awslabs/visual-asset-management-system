@@ -24,6 +24,13 @@
 
 import * as fs from "fs";
 import { SynthResult, TemplateName, synthTemplate } from "../support/templateSynth";
+
+/** Whether the synth emitted a nested template for the construct. */
+const hasNestedTemplate = (s: SynthResult, construct: string): boolean =>
+    Object.keys(s.templates).some(
+        (key) =>
+            key.endsWith(".nested") && key.replace(/[0-9A-F]{8}\.nested$/, "").endsWith(construct)
+    );
 import {
     IAM_INLINE_POLICY_LIMIT,
     IAM_MANAGED_POLICY_LIMIT,
@@ -127,7 +134,7 @@ const TERMINAL_WRITER_ROLES = [
 ];
 
 /** The nested stacks whose roles this budget covers: every API Lambda. */
-const API_STACKS = ["ApiBuilder", "ApiBuilder2"];
+const API_STACKS = ["ApiBuilder", "ApiBuilder2", "ApiBuilder3"];
 
 /**
  * Roles above the budget in at least one cell, keyed by the role's logical id prefix (the Lambda's
@@ -172,9 +179,16 @@ describe.each(CELLS)("API Lambda role inline policy budget ($name)", (cell) => {
 
     beforeAll(() => {
         const synth = synthCell(cell);
-        sizes = API_STACKS.flatMap((construct) =>
-            roleInlineSizesInStack(synth, nestedTemplateKeyFor(synth, construct))
-        ).sort((a, b) => b.total - a.total);
+        // ApiBuilder3 (audit log search) is built only when app.auditLogging.search.enabled, so the
+        // EU Sovereign cells, where the template turns it off, have two API stacks.
+        const present = API_STACKS.filter(
+            (construct) => construct !== "ApiBuilder3" || hasNestedTemplate(synth, construct)
+        );
+        sizes = present
+            .flatMap((construct) =>
+                roleInlineSizesInStack(synth, nestedTemplateKeyFor(synth, construct))
+            )
+            .sort((a, b) => b.total - a.total);
         report[cell.name] = Object.fromEntries(sizes.map((s) => [s.roleId, s.total]));
         for (const s of sizes) {
             for (const [policyId, size] of s.managed) {

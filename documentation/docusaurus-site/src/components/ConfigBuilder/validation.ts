@@ -412,6 +412,8 @@ const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "g6.12xlarge": 4,
     "g6.24xlarge": 4,
     "g6.48xlarge": 8,
+    "gr6.4xlarge": 1,
+    "gr6.8xlarge": 1,
     "g6e.xlarge": 1,
     "g6e.2xlarge": 1,
     "g6e.4xlarge": 1,
@@ -446,6 +448,80 @@ function unverifiedGpuInstanceTypes(cfg: ConfigShape, path: string): string[] {
     const types = g(cfg, path);
     if (!Array.isArray(types)) return [];
     return types.filter((t) => GPU_COUNT_BY_INSTANCE_TYPE[String(t)] === undefined);
+}
+
+// What one Isaac Lab Batch job reserves, mirroring ISAAC_LAB_JOB_VCPUS / ISAAC_LAB_JOB_MEMORY_MIB /
+// ISAAC_LAB_JOB_GPUS in infra/config/config.ts. AWS Batch accepts a compute environment whose instance
+// types cannot hold the job and then leaves the job RUNNABLE with no error.
+const ISAAC_LAB_JOB_VCPUS = 8;
+const ISAAC_LAB_JOB_MEMORY_MIB = 32768;
+const ISAAC_LAB_JOB_GPUS = 1;
+
+// vCPUs and installed memory (MiB) of the g5, g6, gr6 and g6e types, mirroring
+// ISAAC_LAB_CAPABLE_INSTANCE_SPECS in infra/config/config.ts. Keep the two tables in step; the drift
+// check does not cover this file.
+const ISAAC_LAB_CAPABLE_INSTANCE_SPECS: Record<string, { vcpus: number; memoryMiB: number }> = {
+    "g5.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g5.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g5.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g5.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g5.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g5.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g5.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g5.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "g6.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g6.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g6.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g6.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g6.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g6.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g6.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g6.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "gr6.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "gr6.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.xlarge": { vcpus: 4, memoryMiB: 32768 },
+    "g6e.2xlarge": { vcpus: 8, memoryMiB: 65536 },
+    "g6e.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "g6e.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.16xlarge": { vcpus: 64, memoryMiB: 524288 },
+    "g6e.12xlarge": { vcpus: 48, memoryMiB: 393216 },
+    "g6e.24xlarge": { vcpus: 96, memoryMiB: 786432 },
+    "g6e.48xlarge": { vcpus: 192, memoryMiB: 1572864 },
+};
+
+// Families whose GPU has no RT cores, or under 16 GB of video memory, mirroring
+// ISAAC_LAB_UNSUPPORTED_FAMILIES in infra/config/config.ts.
+const ISAAC_LAB_UNSUPPORTED_FAMILIES = ["g4dn", "p3", "p3dn", "p4d", "p4de", "p5", "p5e", "p5en"];
+
+/** Memory ECS registers for an instance, mirroring estimatedRegisteredMemoryMiB in config.ts. */
+function estimatedRegisteredMemoryMiB(installedMiB: number): number {
+    return Math.floor(installedMiB * 0.97) - 32;
+}
+
+/** Why an Isaac Lab instance type can never run the job, or undefined when it can (or is unknown). */
+function isaacLabInstanceTypeProblem(instanceType: string): string | undefined {
+    if (ISAAC_LAB_UNSUPPORTED_FAMILIES.includes(instanceType.split(".")[0])) {
+        return `${instanceType} has a GPU without RT cores or with under 16 GB of video memory`;
+    }
+    const spec = ISAAC_LAB_CAPABLE_INSTANCE_SPECS[instanceType];
+    if (spec === undefined) return undefined;
+    const gpus = GPU_COUNT_BY_INSTANCE_TYPE[instanceType];
+    if (gpus !== ISAAC_LAB_JOB_GPUS) {
+        return `${instanceType} has ${gpus} GPUs and the job uses ${ISAAC_LAB_JOB_GPUS}`;
+    }
+    if (spec.vcpus < ISAAC_LAB_JOB_VCPUS) {
+        return `${instanceType} has ${spec.vcpus} vCPUs and the job needs ${ISAAC_LAB_JOB_VCPUS}`;
+    }
+    if (estimatedRegisteredMemoryMiB(spec.memoryMiB) < ISAAC_LAB_JOB_MEMORY_MIB) {
+        return `${instanceType} registers under ${ISAAC_LAB_JOB_MEMORY_MIB} MiB of memory with Amazon ECS`;
+    }
+    return undefined;
+}
+
+/** The Isaac Lab instanceTypes entries, or undefined when the field is absent (getConfig() defaults it). */
+function isaacLabInstanceTypes(cfg: ConfigShape): unknown[] | undefined {
+    const types = g(cfg, "app.pipelines.useIsaacLabTraining.instanceTypes");
+    return types === undefined ? undefined : Array.isArray(types) ? types : [];
 }
 
 /** The three NVIDIA Cosmos 3 Super variants that share one AWS Batch compute environment. */
@@ -923,6 +999,72 @@ function bedrockProfilePrefixRules(
     ];
 }
 
+// ----- Audit log search limits (config.ts resolveAuditSearchConfig: an absent key takes its default, a
+// present one must be an integer in range) -----
+const AUDIT_SEARCH_LIMITS: ReadonlyArray<readonly [string, number, number]> = [
+    ["maxQueryWindowDays", 1, 366],
+    ["maxRows", 1, 10000],
+    ["maxConcurrentQueries", 1, 20],
+    ["queryDeadlineSeconds", 10, 900],
+    ["maxContainsTermLength", 3, 128],
+    ["maxContainsTerms", 1, 5],
+    ["handleRetentionMinutes", 5, 1440],
+];
+
+function auditSearchValue(c: ConfigShape, key: string): unknown {
+    return g(c, `app.auditLogging.search.${key}`);
+}
+
+function outOfRange(value: unknown, min: number, max: number): boolean {
+    if (value === undefined || value === null) return false;
+    return typeof value !== "number" || !Number.isInteger(value) || value < min || value > max;
+}
+
+function auditSearchLongPollMax(c: ConfigShape): number {
+    const apiTimeout = g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime");
+    return Math.min(25, (typeof apiTimeout === "number" ? apiTimeout : 29) - 4);
+}
+
+const AUDIT_SEARCH_RULES: Rule[] = [
+    ...AUDIT_SEARCH_LIMITS.map(
+        ([key, min, max]): Rule => ({
+            id: `audit-search-${key}-in-range`,
+            severity: "error",
+            fieldPaths: [`app.auditLogging.search.${key}`],
+            appliesWhen: (c) => outOfRange(auditSearchValue(c, key), min, max),
+            message: `app.auditLogging.search.${key} must be an integer from ${min} to ${max}. Leave it out for the default.`,
+        })
+    ),
+    {
+        id: "audit-search-per-user-cap-within-vams-wide",
+        severity: "error",
+        fieldPaths: [
+            "app.auditLogging.search.maxConcurrentQueriesPerUser",
+            "app.auditLogging.search.maxConcurrentQueries",
+        ],
+        appliesWhen: (c) => {
+            const wide = auditSearchValue(c, "maxConcurrentQueries");
+            const perUser = auditSearchValue(c, "maxConcurrentQueriesPerUser");
+            const wideValue = typeof wide === "number" ? wide : 5;
+            return outOfRange(perUser, 1, wideValue);
+        },
+        message:
+            "app.auditLogging.search.maxConcurrentQueriesPerUser must be an integer from 1 to the VAMS-wide maxConcurrentQueries. Leave it out for the default.",
+    },
+    {
+        id: "audit-search-long-poll-within-api-timeout",
+        severity: "error",
+        fieldPaths: [
+            "app.auditLogging.search.longPollWaitSeconds",
+            "app.api.apiGatewayRest.apiGatewayTimeoutTime",
+        ],
+        appliesWhen: (c) =>
+            outOfRange(auditSearchValue(c, "longPollWaitSeconds"), 0, auditSearchLongPollMax(c)),
+        message:
+            "app.auditLogging.search.longPollWaitSeconds must be an integer from 0 to 25 and at most the API Gateway timeout minus 4 seconds. Leave it out for the default.",
+    },
+];
+
 const CORE_RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
@@ -978,6 +1120,28 @@ const CORE_RULES: Rule[] = [
         },
         message:
             "app.auditLogging.recordReads must be true or false (a JSON boolean). Leave it out to record reads.",
+    },
+    ...AUDIT_SEARCH_RULES,
+    {
+        id: "audit-search-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.auditLogging.search.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.auditLogging.search.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.auditLogging.search.enabled must be true or false (a JSON boolean). Leave it out to deploy Audit Log Search.",
+    },
+    {
+        id: "audit-search-not-in-eusc",
+        severity: "error",
+        fieldPaths: ["env.region", "app.auditLogging.search.enabled"],
+        appliesWhen: (c) =>
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc" &&
+            g(c, "app.auditLogging.search.enabled") === true,
+        message:
+            "Audit Log Search needs Amazon CloudWatch Logs Insights, which is not available in the AWS European Sovereign Cloud (aws-eusc). Set app.auditLogging.search.enabled to false there; the recording of audit events is not affected.",
     },
     {
         id: "govcloud-no-deadline-cloud",
@@ -1067,6 +1231,52 @@ const CORE_RULES: Rule[] = [
             !g(c, "app.pipelines.useIsaacLabTraining.acceptNvidiaEula"),
         message:
             "Isaac Lab Training requires accepting the NVIDIA EULA — set useIsaacLabTraining.acceptNvidiaEula to true.",
+    },
+
+    // ----- Isaac Lab instance types
+    // (config.ts: "Every instance type must be able to run the job" in the useIsaacLabTraining block,
+    // and validateIsaacLabInstanceTypes) -----
+    {
+        id: "isaac-instance-types",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useIsaacLabTraining.instanceTypes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useIsaacLabTraining.enabled")) return false;
+            const types = isaacLabInstanceTypes(c);
+            if (types === undefined) return false;
+            return (
+                types.length === 0 ||
+                types.some((t) => typeof t !== "string" || t.trim() === "") ||
+                types.some((t) => isaacLabInstanceTypeProblem(String(t)) !== undefined)
+            );
+        },
+        message:
+            "useIsaacLabTraining.instanceTypes must be a non-empty list of instance types that can each run " +
+            "the Isaac Lab job: one GPU with RT cores and 16 GB or more of video memory (G5, G6, GR6 or G6e), " +
+            `at least ${ISAAC_LAB_JOB_VCPUS} vCPUs and more than ${ISAAC_LAB_JOB_MEMORY_MIB} MiB of registered ` +
+            "memory. g5.2xlarge and g6.2xlarge are too small, multi-GPU sizes such as g6e.12xlarge leave GPUs " +
+            "idle, and g4dn and P-series GPUs lack RT cores or video memory. AWS Batch otherwise leaves the job " +
+            "RUNNABLE without an error.",
+    },
+    {
+        id: "isaac-instance-types-unverified",
+        severity: "warning",
+        fieldPaths: ["app.pipelines.useIsaacLabTraining.instanceTypes"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useIsaacLabTraining.enabled") &&
+            (isaacLabInstanceTypes(c) || []).some(
+                (t) =>
+                    typeof t === "string" &&
+                    t.trim() !== "" &&
+                    !ISAAC_LAB_UNSUPPORTED_FAMILIES.includes(t.split(".")[0]) &&
+                    ISAAC_LAB_CAPABLE_INSTANCE_SPECS[t] === undefined
+            ),
+        message:
+            "useIsaacLabTraining.instanceTypes includes an instance type whose size and GPU cannot be " +
+            `verified here. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS} vCPUs, ${ISAAC_LAB_JOB_MEMORY_MIB} ` +
+            `MiB of registered memory, ${ISAAC_LAB_JOB_GPUS} GPU and an NVIDIA GPU with RT cores and 16 GB of ` +
+            "video memory. Confirm the type offers them, because AWS Batch leaves the job RUNNABLE on one that " +
+            "does not.",
     },
 
     // ----- Pipeline upload trigger without registration

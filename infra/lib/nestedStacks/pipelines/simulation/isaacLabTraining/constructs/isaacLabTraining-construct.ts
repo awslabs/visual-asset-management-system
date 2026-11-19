@@ -187,6 +187,8 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
             userData: ec2.UserData.custom(userData),
         });
 
+        const isaacLabConfig = props.config.app.pipelines.useIsaacLabTraining;
+
         // Batch compute environment for GPU instances
         // Uses private subnets with NAT Gateway for internet access to download Omniverse assets
         const computeEnvironment = new batch.ManagedEc2EcsComputeEnvironment(
@@ -199,21 +201,18 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
                         ? { subnets: props.pipelineSubnets }
                         : undefined,
                 securityGroups: props.pipelineSecurityGroups,
-                instanceTypes: [
-                    // Priority 1: G6 instances (L4 GPU - best price/performance for Isaac Lab)
-                    ec2.InstanceType.of(ec2.InstanceClass.G6, ec2.InstanceSize.XLARGE2),
-                    ec2.InstanceType.of(ec2.InstanceClass.G6, ec2.InstanceSize.XLARGE4),
-                    ec2.InstanceType.of(ec2.InstanceClass.G6, ec2.InstanceSize.XLARGE12),
-                    // Priority 2: G6E instances (L40S GPU - higher performance)
-                    ec2.InstanceType.of(ec2.InstanceClass.G6E, ec2.InstanceSize.XLARGE2),
-                    ec2.InstanceType.of(ec2.InstanceClass.G6E, ec2.InstanceSize.XLARGE12),
-                    // Fallback: G5 instances (A10G GPU)
-                    ec2.InstanceType.of(ec2.InstanceClass.G5, ec2.InstanceSize.XLARGE2),
-                    ec2.InstanceType.of(ec2.InstanceClass.G5, ec2.InstanceSize.XLARGE4),
-                ],
+                // Only the configured GPU instance types, so no CPU-only class is added and every type
+                // can run the job (validated in getConfig()). The list is wide because AWS Batch can
+                // only find EC2 capacity among the types it is given.
+                useOptimalInstanceClasses: false,
+                instanceTypes: isaacLabConfig.instanceTypes.map(
+                    (instanceType) => new ec2.InstanceType(instanceType)
+                ),
                 maxvCpus: 256,
-                // Keep 1 warm instance (8 vCPUs for g6.2xlarge) when enabled to avoid cold start delays
-                minvCpus: props.config.app.pipelines.useIsaacLabTraining.keepWarmInstance ? 8 : 0,
+                // Keep one warm instance when enabled to avoid cold start delays. The floor is one job's
+                // vCPUs: every configured type has at least that many and can run the job, so the one
+                // instance Batch starts for it is able to take the job.
+                minvCpus: isaacLabConfig.keepWarmInstance ? Config.ISAAC_LAB_JOB_VCPUS : 0,
                 allocationStrategy: batch.AllocationStrategy.BEST_FIT_PROGRESSIVE,
                 launchTemplate: launchTemplate,
                 // NVIDIA-accelerated AMI for the GPU instance families above
@@ -378,8 +377,10 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
         const jobDefinition = new batch.EcsJobDefinition(this, "IsaacLabJobDef", {
             container: new batch.EcsEc2ContainerDefinition(this, "Container", {
                 image: containerImageRef,
-                cpu: 8,
-                memory: cdk.Size.gibibytes(32),
+                cpu: Config.ISAAC_LAB_JOB_VCPUS,
+                memory: cdk.Size.mebibytes(Config.ISAAC_LAB_JOB_MEMORY_MIB),
+                // Keep equal to Config.ISAAC_LAB_JOB_GPUS, which the instance types are checked
+                // against; test/pipelines/isaacLabInstancePool.test.ts pins both.
                 gpu: 1,
                 jobRole: jobRole,
                 environment: {
