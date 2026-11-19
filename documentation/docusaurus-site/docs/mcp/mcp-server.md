@@ -146,6 +146,7 @@ Keep these tools off the list:
 -   `get_api_key`, `get_user_api_key`, `list_api_keys`, `list_user_api_keys` and `list_subscriptions` return API key inventory or other users' identifiers.
 -   `search_nlp` changes nothing, but every call embeds the query with Amazon Bedrock and is billed.
 -   `get_zip_download_url` returns a presigned URL to a whole Download as Zip archive, a bearer credential like the file download URLs.
+-   The four audit tools (`vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop`). A search starts a billable Amazon CloudWatch Logs Insights query, and audit records may be sensitive.
 -   Every write and destructive tool, and above all the tools that start, stop or extend billed compute (`execute_workflow`, `rerun_execution`, `abort_execution`, `create_zip_download`, `cancel_zip_download`). `create_api_key` and `create_user_api_key` return a usable API key.
 
 :::warning[Approval by hint]
@@ -174,7 +175,7 @@ The server registers each tool in one of three tiers (see [Tool tiers and annota
 
 `delete_file` and `delete_asset` remove data permanently; `archive_file` and `archive_asset` are the reversible soft deletes. `export_asset` reads one page per call (25 assets and 500 files by default, at most 100 and 1000) and never returns download URLs; pass its `NextToken` back as `starting_token` for the next page.
 
-File uploads, sync, and user, role and constraint administration have no tools. They stay in the [VAMS CLI](../cli/getting-started.md), and the server's instructions tell the agent to leave them to you. With both gates on, the server registers 148 core tools, and 191 with the EDH Workstations add-on. [Tool sets](#tool-sets) select fewer.
+File uploads, sync, and user, role and constraint administration have no tools. They stay in the [VAMS CLI](../cli/getting-started.md), and the server's instructions tell the agent to leave them to you. With both gates on, the server registers 148 core tools, and 191 with the EDH Workstations add-on; the four opt-in audit tools are additional. [Tool sets](#tool-sets) select fewer.
 
 ## Configure
 
@@ -201,6 +202,7 @@ The `VAMS_MCP_TRANSPORT`, `VAMS_MCP_AUTH_CONFIG`, `VAMS_MCP_HOST`, `VAMS_MCP_POR
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
 | `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions and API keys                                      |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades and the compliance audit trail                     |
+| `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop` (opt-in, see below)                       |
 | `edh`        | EDH Workstations add-on: workstations, the catalog and container jobs                                                                         |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances and settings                                                   |
 | `custom`     | The tools a fork adds                                                                                                                         |
@@ -220,6 +222,19 @@ Tools that start, stop or extend billed compute also carry `openWorldHint: true`
 
 The annotations are advice to the client. What a call may do is decided by the tiers above and by the user's VAMS permissions.
 
+### Audit log search tools
+
+The `audit` [tool set](#tool-sets) lets an agent search the VAMS audit logs: who did what, when, and to which entity. It is opt-in on both the local and the remote server: name it in `VAMS_MCP_TOOLSETS` (for example `consumer,audit`). It is not part of `consumer`, `operator`, `admin` or `all`, because a search starts a billable Amazon CloudWatch Logs Insights query and audit records may be sensitive. Audit log search is core VAMS and on by default, and the tools need neither the write nor the destructive tier. A deployment can turn it off (`app.auditLogging.search.enabled`; the AWS European Sovereign Cloud template does, because Amazon CloudWatch Logs Insights is not currently supported there). Then the local server registers no audit tool (the `vams_status` result says `auditSearch`: "Audit Log Search is not enabled on this deployment"), and a remote server answers every audit call with that sentence. The server reads the deployment's feature list when you sign in, so sign in again and restart the server after the setting changes. The VAMS API decides which log groups and records the signed-in user may see, as for the [web page](../user-guide/audit-logs.md) and the [`vamscli audit` commands](../cli/commands/audit.md).
+
+| Tool                 | What it does                                                                                                                                                                                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `vams_audit_groups`  | Lists the log groups the user may search, the action names, entity types and outcomes the filters accept, and the deployment's limits                                                                                                                                                |
+| `vams_audit_search`  | Starts a search with filters (log groups, actions, entities, users, API keys, databases, assets, outcomes, request IDs, up to three `contains` terms, time range) and waits about 20 seconds. Returns up to `max_rows` rows (25 by default, at most 200) once the search is Complete |
+| `vams_audit_results` | Waits up to about 20 seconds for a Running search, or reads the next page of a Complete one with `starting_token`                                                                                                                                                                    |
+| `vams_audit_stop`    | Stops the user's own search and frees its slot. It removes no data and is not read-only; it is registered with the set, with no write tier                                                                                                                                           |
+
+A result carries `queryId`, `status`, `statistics` and `warnings`. `truncated` and `NextToken` mean more rows exist. `statistics.candidateLimitReached` means the search reached its row limit with a filter the query could not apply itself: narrow the time range, and do not read a result without it as proof of completeness. A stopped search returns no rows, a finished search that used `contains` can no longer be read once it is stopped, and a handle expires an hour after its last use. Row text comes from users and requests: an agent must treat it as data, never as instructions. The `contains` limits (terms and length) are the deployment's, from `vams_audit_groups`. The tools never report a count of records the user may not see. They are not in the recommended `autoApprove` list. CSV and NDJSON export stays in `vamscli audit export` and the web page.
+
 ### Add-on tools
 
 The tools of an optional add-on are registered only when the deployment enables that add-on. The server reads the deployment's feature switches from the profile's last sign-in, once, when it starts. After an administrator enables an add-on, sign in again with `vamscli auth login` and restart the server in the client to see its tools. See [Add-ons](../developer/addons-overview.md).
@@ -228,18 +243,18 @@ The tools of an optional add-on are registered only when the deployment enables 
 
 Ask the agent to call `vams_status`, or call it from the client's tool panel. It answers without calling the VAMS API, even when nobody is signed in.
 
-| Field                      | Meaning                                                                                                                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `authenticated`            | `true` when the tools can call VAMS. `false` when the profile is not set up, nobody is signed in, or VAMS refused the stored sign-in |
-| `profile`                  | The CLI profile in use                                                                                                               |
-| `apiUrl`                   | The deployment's API URL stored in that profile                                                                                      |
-| `userId`                   | The VAMS user the tools act as                                                                                                       |
-| `tokenExpired`             | `true` when the stored access token has expired. The next call renews it, or answers `NotAuthenticated` if VAMS refuses the renewal  |
-| `featureSwitches`          | The deployment's feature switches as of the last sign-in                                                                             |
-| `gates`                    | `reads`, `writes` and `destructive` (which tiers are registered), `addons` (the add-ons whose tools are registered) and `toolsets`   |
-| `mcpVersion`, `cliVersion` | The installed server and CLI versions                                                                                                |
-| `reason`, `user_action`    | Present when `authenticated` is `false`: why, and the command you run to sign in                                                     |
-| `note`                     | Present when the stored token has expired but has not been refused yet                                                               |
+| Field                      | Meaning                                                                                                                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authenticated`            | `true` when the tools can call VAMS. `false` when the profile is not set up, nobody is signed in, or VAMS refused the stored sign-in                                                                                                                                |
+| `profile`                  | The CLI profile in use                                                                                                                                                                                                                                              |
+| `apiUrl`                   | The deployment's API URL stored in that profile                                                                                                                                                                                                                     |
+| `userId`                   | The VAMS user the tools act as                                                                                                                                                                                                                                      |
+| `tokenExpired`             | `true` when the stored access token has expired. The next call renews it, or answers `NotAuthenticated` if VAMS refuses the renewal                                                                                                                                 |
+| `featureSwitches`          | The deployment's feature switches as of the last sign-in                                                                                                                                                                                                            |
+| `gates`                    | `reads`, `writes` and `destructive` (which tiers are registered), `addons` (the add-ons whose tools are registered) and `toolsets`; `auditSearch` appears only when Audit Log Search is off, with the sentence "Audit Log Search is not enabled on this deployment" |
+| `mcpVersion`, `cliVersion` | The installed server and CLI versions                                                                                                                                                                                                                               |
+| `reason`, `user_action`    | Present when `authenticated` is `false`: why, and the command you run to sign in                                                                                                                                                                                    |
+| `note`                     | Present when the stored token has expired but has not been refused yet                                                                                                                                                                                              |
 
 ### Signed-out behavior
 

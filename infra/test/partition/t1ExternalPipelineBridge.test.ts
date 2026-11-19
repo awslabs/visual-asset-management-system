@@ -386,19 +386,27 @@ describe("SSM integration surface", () => {
         );
         // The two reindexer names are published only when their function is built (OpenSearch or
         // vector search enabled), so they are the canonical keys allowed to be absent.
+        // The audit log queries table (dynamoTables/auditLogQueriesStorage) is built, and published,
+        // only when audit log search is enabled; the EU Sovereign template turns it off.
+        const searchOff = name === "eusovereign";
         const optional = new Set<string>([
             RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer,
             RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer,
         ]);
-        const required = canonical.filter((key) => !optional.has(key));
+        const required = canonical.filter(
+            (key) =>
+                !optional.has(key) &&
+                !(searchOff && key === RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage)
+        );
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
-        // 75 registry parameters (ResourceNamesBuilder) + the three late-bound ones here (the
-        // workflow role ARN, the import function and the copy engine function), plus one
-        // reindexer name per enabled search engine.
-        expect(names.length).toBeGreaterThanOrEqual(78);
-        expect(names.length).toBeLessThanOrEqual(80);
+        // 76 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the
+        // three late-bound ones here (the workflow role ARN, the import function and the copy engine
+        // function), plus one reindexer name per enabled search engine.
+        const searchOffCount = searchOff ? 1 : 0;
+        expect(names.length).toBeGreaterThanOrEqual(79 - searchOffCount);
+        expect(names.length).toBeLessThanOrEqual(81 - searchOffCount);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {

@@ -29,7 +29,7 @@ import {
     openFileManager,
     selectTreePath,
 } from "./support/fixtures";
-import { stripePixels } from "./support/mapFixtures";
+import { stripePixels } from "./support/rasterViewerFixtures";
 
 /** Below this viewer width the layer list wraps under the map (CogMapViewerComponent.STACKED_BELOW_PX). */
 const STACKED_BELOW_PX = 792;

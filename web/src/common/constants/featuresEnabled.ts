@@ -10,6 +10,9 @@ export const featuresEnabled = {
     VECTORSEARCH: "VECTORSEARCH",
     // Download as Zip (prepared archive downloads); present only when app.pipelines.useZipDownloads.enabled
     ZIPDOWNLOADS: "ZIPDOWNLOADS",
+    // Audit Log Search (the /audit API, page, CLI commands and MCP tools); present unless
+    // app.auditLogging.search.enabled is false (off in the EU Sovereign template)
+    AUDITLOGSEARCH: "AUDITLOGSEARCH",
 };
 
 /**

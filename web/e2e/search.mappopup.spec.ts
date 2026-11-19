@@ -20,7 +20,7 @@
 
 import { test, expect, Page } from "@playwright/test";
 import { gotoSearch, searchQueryBox } from "./support/fixtures";
-import { mapCamera, mapJumpTo, pixelOf, popupAnchorPx } from "./support/mapFixtures";
+import { mapCamera, mapJumpTo, pixelOf, popupAnchorPx } from "./support/mapPopupFixtures";
 
 const ring = (w: number, e: number, s: number, n: number) => [
     [

@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { geometryParts } from "./mapBounds";
-
 /** Prefix of the id of the fill layer the Search map draws for each GeoJSON result. */
 export const FOOTPRINT_FILL_PREFIX = "geojson-fill-";
 
@@ -12,6 +10,40 @@ interface GeoItem {
     id: string;
     type: string;
     geoJson?: any;
+}
+
+/** The longitudes and latitudes of each part of a GeoJSON geometry, one entry per part. */
+function geometryParts(geom: any, parts: Array<{ lons: number[]; lats: number[] }>): void {
+    if (!geom) return;
+    const vertices = (coords: any, into: { lons: number[]; lats: number[] }) => {
+        if (!Array.isArray(coords)) return;
+        if (typeof coords[0] === "number" && typeof coords[1] === "number") {
+            into.lons.push(coords[0]);
+            into.lats.push(coords[1]);
+            return;
+        }
+        for (const c of coords) vertices(c, into);
+    };
+    const part = (coords: any) => {
+        const into = { lons: [] as number[], lats: [] as number[] };
+        vertices(coords, into);
+        if (into.lons.length) parts.push(into);
+    };
+    switch (geom.type) {
+        case "MultiPolygon":
+        case "MultiLineString":
+            for (const member of geom.coordinates ?? []) part(member);
+            break;
+        case "MultiPoint":
+            for (const member of geom.coordinates ?? []) part(member);
+            break;
+        case "GeometryCollection":
+            for (const sub of geom.geometries ?? []) geometryParts(sub, parts);
+            break;
+        default:
+            // Point, LineString, Polygon: one part. Unknown types with coordinates count as one part.
+            if (geom.coordinates) part(geom.coordinates);
+    }
 }
 
 /** The box of one part of a shape: [west, south, east, north]. */
@@ -33,48 +65,12 @@ function partBoxes(geoJson: any): Box[] {
     );
 }
 
-/** Web Mercator y (in radians of x) for a latitude, clamped to the map's limit. */
-const mercatorY = (lat: number) =>
-    Math.log(
-        Math.tan(Math.PI / 4 + (Math.max(-85.051129, Math.min(85.051129, lat)) * Math.PI) / 360)
-    );
-
-/** Shoelace area of a ring in Web Mercator, so it matches what the user sees on the flat map. */
-function ringArea(ring: any): number {
-    if (!Array.isArray(ring) || ring.length < 3) return 0;
-    let twice = 0;
-    for (let i = 0; i < ring.length; i++) {
-        const [lon1, lat1] = ring[i];
-        const [lon2, lat2] = ring[(i + 1) % ring.length];
-        const x1 = (lon1 * Math.PI) / 180;
-        const x2 = (lon2 * Math.PI) / 180;
-        twice += x1 * mercatorY(lat2) - x2 * mercatorY(lat1);
-    }
-    return Math.abs(twice) / 2;
-}
-
-/** The polygon outer rings of a geometry: one per Polygon, one per member of a MultiPolygon. */
-function outerRings(geom: any, rings: any[]): void {
-    if (!geom) return;
-    if (geom.type === "Polygon") rings.push(geom.coordinates?.[0]);
-    else if (geom.type === "MultiPolygon")
-        for (const p of geom.coordinates ?? []) rings.push(p?.[0]);
-    else if (geom.type === "GeometryCollection")
-        for (const g of geom.geometries ?? []) outerRings(g, rings);
-}
-
 /**
- * The area of a footprint as drawn on the flat map: the sum of its polygons' outer-ring areas in Web
- * Mercator (shoelace). A rotated or skewed footprint counts its real area, not its box's, and a footprint
- * split at longitude 180 is two small parts, not one shape across the world. A shape with an unreadable
- * coordinate counts as infinitely large, so it never wins a pick over a readable one.
+ * The area, in square degrees, of a shape's parts' boxes. Each part counts on its own, so a footprint
+ * split at longitude 180 is two small parts, not one box across the world.
  */
 export function footprintArea(geoJson: any): number {
-    const geom = geoJson?.type === "Feature" ? geoJson.geometry : geoJson;
-    const rings: any[] = [];
-    outerRings(geom, rings);
-    const area = rings.reduce((sum, ring) => sum + ringArea(ring), 0);
-    return Number.isFinite(area) ? area : Infinity;
+    return partBoxes(geoJson).reduce((sum, [w, s, e, n]) => sum + (e - w) * (n - s), 0);
 }
 
 /**

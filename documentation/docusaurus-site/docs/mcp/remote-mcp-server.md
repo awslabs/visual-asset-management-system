@@ -199,11 +199,12 @@ Never publish the port on all interfaces (`-p 8000:8000`): clients reach the ser
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
 | `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions and API keys                                      |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades and the compliance audit trail                     |
+| `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop` (opt-in, see below)                       |
 | `edh`        | EDH Workstations add-on: workstations, the catalog and container jobs                                                                         |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances and settings                                                   |
 | `all`        | Every tool the gates allow. More than 100 tools; the server warns at start                                                                    |
 
-Sets combine (`VAMS_MCP_TOOLSETS=consumer,edh`), and the write and destructive gates still apply inside a set. Each named set holds at most 100 tools; a combination can hold more, and the server logs a warning at start when it does, because some clients drop the tools past 100 without saying so. Every user still needs the VAMS permissions for what a tool does: a tool set decides which tools a client sees, never what a user may do.
+The `audit` set (audit log search) is opt-in: it is not in `consumer`, `operator`, `admin` or `all`, and each of its four tools needs the signed-in user's own audit permission in VAMS. See [Audit log search tools](mcp-server.md#audit-log-search-tools). Sets combine (`VAMS_MCP_TOOLSETS=consumer,edh`), and the write and destructive gates still apply inside a set. Each named set holds at most 100 tools; a combination can hold more, and the server logs a warning at start when it does, because some clients drop the tools past 100 without saying so. Every user still needs the VAMS permissions for what a tool does: a tool set decides which tools a client sees, never what a user may do.
 
 ## Step 4: Put an HTTPS front end in front of it
 

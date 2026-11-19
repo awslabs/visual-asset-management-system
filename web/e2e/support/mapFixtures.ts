@@ -4,9 +4,9 @@
  */
 
 /**
- * Helpers for specs that look at a MapLibre map in the live app: its camera, whether a coordinate is in
- * view, and whether a frame shows the viewer backdrop's stripes. The live bundle exposes no map
- * global, so the map is found through the React fiber tree behind its `.maplibregl-map` element.
+ * Helpers for specs that look at a MapLibre map in the live app: its camera and whether a coordinate is
+ * in view. The live bundle exposes no map global, so the map is found through the React fiber tree
+ * behind its `.maplibregl-map` element.
  */
 
 import { Page } from "@playwright/test";
@@ -39,31 +39,6 @@ export async function mapCamera(page: Page): Promise<MapCamera | null> {
       return { center: { lng: c.lng, lat: c.lat }, zoom: m.getZoom(), canvas: { width: cv.clientWidth, height: cv.clientHeight } }; })()`);
 }
 
-/** Moves the page's (first) map to a centre and zoom without animation. False when no map is mounted. */
-export async function mapJumpTo(
-    page: Page,
-    lon: number,
-    lat: number,
-    zoom: number
-): Promise<boolean> {
-    return page.evaluate(`(() => { const m = ${FIND_MAP}; if (!m) return false;
-      m.jumpTo({ center: [${lon}, ${lat}], zoom: ${zoom} }); return true; })()`);
-}
-
-/**
- * Where the open popup is anchored, in CSS pixels from the top-left corner of the map's canvas, or null
- * when none is open. MapLibre places a popup with `translate(x px, y px)`, the pixel of its coordinate
- * plus the offset; the Search map gives a footprint's popup no offset, so this is the coordinate itself.
- */
-export async function popupAnchorPx(page: Page): Promise<{ x: number; y: number } | null> {
-    return page.evaluate(() => {
-        const popup = document.querySelector(".maplibregl-popup") as HTMLElement | null;
-        const match =
-            popup && /translate\(([-\d.]+)px,\s*([-\d.]+)px\)\s*$/.exec(popup.style.transform);
-        return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
-    });
-}
-
 /**
  * Where a coordinate falls in the map's canvas, in CSS pixels from its top-left corner. Computed from
  * the camera for flat Web Mercator, so the answer does not depend on the projection the basemap style
@@ -91,29 +66,4 @@ export function isInView(camera: MapCamera, lon: number, lat: number, margin = 0
         x <= camera.canvas.width - margin &&
         y <= camera.canvas.height - margin
     );
-}
-
-/**
- * How many pixels of a PNG screenshot are one of the two stripe colours of the visualizer frame's
- * backdrop (`.visualizer-container`: #606dbc and #465298). A viewer that fills its frame and paints
- * its own background shows none.
- */
-export async function stripePixels(page: Page, png: Buffer): Promise<number> {
-    return page.evaluate(async (b64: string) => {
-        const bin = atob(b64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const bmp = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-        const canvas = new OffscreenCanvas(bmp.width, bmp.height);
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(bmp, 0, 0);
-        const d = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
-        const near = (i: number, r: number, g: number, b: number) =>
-            Math.abs(d[i] - r) < 4 && Math.abs(d[i + 1] - g) < 4 && Math.abs(d[i + 2] - b) < 4;
-        let n = 0;
-        for (let i = 0; i < d.length; i += 4) {
-            if (near(i, 0x60, 0x6d, 0xbc) || near(i, 0x46, 0x52, 0x98)) n++;
-        }
-        return n;
-    }, png.toString("base64"));
 }

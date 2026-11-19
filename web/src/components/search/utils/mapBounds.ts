@@ -51,7 +51,7 @@ function coveringArc(intervals: Array<[number, number]>): [number, number] {
 }
 
 /** The longitude interval and the latitudes of each part of a GeoJSON geometry, one entry per part. */
-export function geometryParts(geom: any, parts: Array<{ lons: number[]; lats: number[] }>): void {
+function geometryParts(geom: any, parts: Array<{ lons: number[]; lats: number[] }>): void {
     if (!geom) return;
     const vertices = (coords: any, into: { lons: number[]; lats: number[] }) => {
         if (!Array.isArray(coords)) return;

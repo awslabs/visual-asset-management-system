@@ -14,7 +14,7 @@
             "name": "ALLOWED_GROUPS",
             "required": true,
             "default": ".*",
-            "description": "A regular expression matched against the whole audit log group key (for example authorization, or (authorization|api)). The default .* allows every group, including groups added later."
+            "description": "A regular expression matched against the whole audit log group key, as listed by GET /audit/log-groups (for example auditActions, or (auditActions|auditErrors); the keys are auditAuthentication, auditAuthorization, auditFileUpload, auditFileDownload, auditFileDownloadStreamed, auditAuthOther, auditAuthChanges, auditActions and auditErrors). The default .* allows every group, including groups added later."
         }
     ],
     "constraints": [
@@ -71,7 +71,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-signin-api-routes-get",
-            "description": "Allow the sign-in probes the web app and CLI call (login profile, secure config) for {{ROLE_NAME}}",
+            "description": "Allow the sign-in probes the web app and CLI call (login profile, secure config, the allowed-routes listing) for {{ROLE_NAME}}",
             "objectType": "api",
             "criteriaAnd": [],
             "criteriaOr": [
@@ -84,6 +84,11 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/secure-config"
+                },
+                {
+                    "field": "route__path",
+                    "operator": "starts_with",
+                    "value": "/auth/routes"
                 }
             ],
             "groupPermissions": [
