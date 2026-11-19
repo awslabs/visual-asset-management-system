@@ -3,7 +3,8 @@
 Every tool passes exactly one of these to ``@mcp.tool(title=..., annotations=...)``, chosen by the
 gate block it is registered in — never by what the tool seems to do:
 
-* read block (always registered)               -> ``READ``
+* read block (always registered)               -> ``READ`` (and ``STOP_OWN_SEARCH``, for
+  ``vams_audit_stop`` only)
 * ``if CONFIG.enable_writes:`` block            -> ``WRITE``, or ``COMPUTE`` for a tool that starts,
   resumes, extends or stops billed compute
 * ``if CONFIG.enable_destructive:`` block       -> ``DESTRUCTIVE``, or ``DESTRUCTIVE_COMPUTE`` for one
@@ -24,6 +25,9 @@ READ = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 COMPUTE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
 DESTRUCTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False)
+# Stops the caller's own audit search: not read-only, removes no data, and repeating it changes nothing
+# further. Registered in the read block (the audit set is the only gate); only `vams_audit_stop` uses it.
+STOP_OWN_SEARCH = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 DESTRUCTIVE_COMPUTE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
 
 # The constant names allowed in each gate tier, for the layout tests.
