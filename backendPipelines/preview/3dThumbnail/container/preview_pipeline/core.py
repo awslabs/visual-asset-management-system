@@ -6,6 +6,7 @@ Core pipeline orchestrator for Preview 3D Thumbnail generation.
 Follows the pcPotreeViewer pipeline pattern: parse input, dispatch to handler, upload output.
 """
 
+import json
 import os
 import numpy as np
 from pathlib import Path
@@ -35,6 +36,7 @@ from . import renderer
 from . import resources
 from . import scene_parts
 from .utils.timing import PhaseTimer
+from .analysis import workdirs
 
 logger = get_logger()
 
@@ -347,9 +349,11 @@ def _run_preview_stage(
     # OBJ materials and textures, FBX textures, LCC data files and LCC2 chunks) from the input's own asset. A rejected or missing
     # reference is skipped; the input still renders, and the run reports the preview as incomplete.
     incomplete = None
+    fetch_report = None
+    fetch_error = None
+    usd_report = {}
     if not localTest and not streamed and dependencies.has_references(ext):
         fetch_report = dependencies.FetchReport()
-        fetch_error = None
         try:
             with timer.phase("fetch"):
                 dependencies.fetch_referenced_files(
@@ -365,9 +369,23 @@ def _run_preview_stage(
         except Exception as e:
             logger.warning(f"Failed to fetch some referenced files: {e}")
             fetch_error = e
-        incomplete = dependencies.incomplete_preview(fetch_report, fetch_error)
-        if incomplete is not None:
-            incomplete.log()
+
+    def summarize_incomplete():
+        """The incomplete-preview summary, logged. It is built after the load, so a skipped file that
+        only a root prim the USD handler left out reaches is not reported."""
+        if fetch_report is None:
+            return None
+        left_out = usd_report.get("leftOut") if usd_report else None
+        if left_out and (fetch_report.skipped or fetch_report.not_followed):
+            unused = usd_handler.left_out_roots_unused(local_filepath, left_out)
+            if unused:
+                dependencies.drop_left_out_references(
+                    fetch_report, dependencies.relative_to_root(stage_input.objectKey, reference_root_key),
+                    local_filepath, unused)
+        summary = dependencies.incomplete_preview(fetch_report, fetch_error)
+        if summary is not None:
+            summary.log()
+        return summary
 
     # Load with appropriate handler, then bring the geometry within the render budgets
     try:
@@ -380,10 +398,12 @@ def _run_preview_stage(
             else:
                 pv_data = _load_file(local_filepath, ext,
                                      asset_root=None if localTest else reference_local_root,
-                                     budgets=budgets)
+                                     budgets=budgets,
+                                     **({"usd_report": usd_report} if usd_handler.can_handle(ext) else {}))
             pv_data = geometry_budget.apply_budgets(pv_data, budgets)
     except MemoryError:
         logger.exception("Out of memory while loading the input")
+        summarize_incomplete()
         return _error_response(
             stage,
             f"Out of memory loading the 3D file ({ext}) within the task's "
@@ -391,7 +411,9 @@ def _run_preview_stage(
             f"{resources.memory_advice(resources.compute_tier())}")
     except Exception as e:
         logger.exception(f"Failed to load file: {e}")
+        summarize_incomplete()
         return _error_response(stage, f"Failed to load 3D file ({ext}): {str(e)}")
+    incomplete = summarize_incomplete()
 
     # Detect and normalize up-axis to Y-up for consistent rendering (splat scenes are oriented by
     # their handler)
@@ -463,11 +485,12 @@ def _run_preview_stage(
     if failure is not None:
         return failure
 
-    if incomplete is not None:
+    skipped_prims = usd_report.get("skippedPrims") if usd_report else None
+    if incomplete is not None or skipped_prims:
         _write_incomplete_result(
             results_location, incomplete,
-            dependencies.relative_to_root(stage_input.objectKey, reference_root_key))
-        return _success_response(stage, incomplete.message())
+            dependencies.relative_to_root(stage_input.objectKey, reference_root_key), skipped_prims)
+        return _success_response(stage, _incomplete_message(incomplete, skipped_prims))
     return _success_response(stage)
 
 
@@ -575,7 +598,25 @@ def _complete_without_preview(stage: PipelineStage, results_location: dict, name
     return _success_response(stage, message)
 
 
-def _write_incomplete_result(results_location: dict, incomplete, input_path: str):
+def _skipped_prims_sentence(skipped_prims: dict) -> str:
+    """'3 Points prims and 2 BasisCurves prims are not drawn by the 3D Preview Thumbnail.'"""
+    listed = usd_handler.describe_skipped(skipped_prims)
+    total = sum(entry["count"] for entry in skipped_prims.values())
+    return f"{listed} {'is' if total == 1 else 'are'} not drawn by the 3D Preview Thumbnail."
+
+
+def _incomplete_message(incomplete, skipped_prims) -> str:
+    """The completion message of a run that is incomplete: the fetched-files message, the skipped prim
+    types, or both. Unchanged from the fetched-files message when no prim was skipped."""
+    if not skipped_prims:
+        return incomplete.message()
+    sentence = _skipped_prims_sentence(skipped_prims)
+    if incomplete is None:
+        return f"Preview generated, but incomplete: {sentence} See the job log for the list."
+    return f"{incomplete.message()} {sentence}"
+
+
+def _write_incomplete_result(results_location: dict, incomplete, input_path: str, skipped_prims: dict = None):
     """Write the incomplete preview's result document under the execution's results folder, where the
     workflow's output step records it on the execution (Output Results). Best effort: a run with no
     results location, or a write that fails, keeps its preview and its outcome; the job log still
@@ -586,7 +627,23 @@ def _write_incomplete_result(results_location: dict, incomplete, input_path: str
         return
     key = results_location["objectDir"] + dependencies.INCOMPLETE_RESULT_FILENAME
     try:
-        body = dependencies.incomplete_result_document(incomplete, input_path)
+        body = dependencies.incomplete_result_document(
+            incomplete if incomplete is not None else
+            dependencies.IncompletePreview(geometry_layers=[], other_files=[], not_followed=[]),
+            input_path)
+        if skipped_prims:
+            document = json.loads(body)
+            document["message"] = _incomplete_message(incomplete, skipped_prims)
+            document["counts"]["skippedPrimTypes"] = {name: entry["count"] for name, entry in skipped_prims.items()}
+            document["skippedPrims"] = [{"type": name, "count": entry["count"], "paths": list(entry["paths"])}
+                                        for name, entry in skipped_prims.items()]
+            body = json.dumps(document, indent=2).encode("utf-8")
+            # The cap holds for the final document: the file list shrinks until it fits. A run without
+            # skipped prims never reaches this, so its document is unchanged.
+            while len(body) > dependencies.MAX_RESULT_DOCUMENT_BYTES and document["skippedFiles"]:
+                document["skippedFiles"] = document["skippedFiles"][:len(document["skippedFiles"]) // 2]
+                document["truncated"] = True
+                body = json.dumps(document, indent=2).encode("utf-8")
         if s3.put_json(results_location["bucketName"], key, body) is None:
             logger.warning("Could not write the incomplete-preview result; the summary is in the job "
                            "log")
@@ -655,7 +712,7 @@ def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId
     return "/".join(input_parts[asset_id_idx + 1:-1])
 
 
-def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
+def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None, usd_report: dict = None):
     """
     Load a 3D file with the appropriate format handler.
     Returns a PyVista PolyData object. ``asset_root`` is the local directory the input's referenced
@@ -697,7 +754,7 @@ def _load_file(file_path: str, ext: str, asset_root: str = None, budgets=None):
     elif cad_handler.can_handle(ext):
         return cad_handler.load(file_path, max_triangles=max_triangles)
     elif usd_handler.can_handle(ext):
-        return usd_handler.load(file_path, asset_root=asset_root)
+        return usd_handler.load(file_path, asset_root=asset_root, report=usd_report)
     else:
         raise ValueError(
             f"Unsupported file format: {ext}. "
@@ -778,6 +835,10 @@ def _normalize_up_axis(pv_data, ext: str):
     return pv_data
 
 
+# Public name for callers outside the Fargate runner.
+normalize_up_axis = _normalize_up_axis
+
+
 def _rotate_z_up_to_y_up(pv_data):
     """
     Rotate data from Z-up to Y-up by applying a -90 degree rotation around the X-axis.
@@ -833,8 +894,9 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
 
 
 def _create_dir(parts: list) -> str:
-    """Create a directory from path parts if it doesn't exist."""
-    dir_path = os.path.join(*parts)
+    """Create a directory from path parts if it doesn't exist. Relative parts resolve against the
+    runtime's work root: ``/tmp`` in Lambda, the cwd in the Fargate container."""
+    dir_path = os.path.join(workdirs.work_root(), *parts)
     if not os.path.exists(dir_path):
         Path(dir_path).mkdir(parents=True)
     return dir_path

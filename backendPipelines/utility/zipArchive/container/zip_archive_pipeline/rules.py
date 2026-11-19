@@ -6,10 +6,12 @@
 A zip download carries the deployment's merged blocklists in its request manifest (the API reads them
 from backend ``common/constants.py``, add-on and custom entries included), so they are always current.
 A zipArchive run started as an ordinary workflow has no such manifest and uses the core lists below;
-``tests/test_rules.py`` fails when they drift from backend ``CORE_UNALLOWED_*``.
+``tests/test_runner.py`` fails when they drift from backend ``CORE_UNALLOWED_*``.
 
 The matching mirrors backend ``common/s3.validateUnallowedFileExtensionAndContentType`` and
-``common/downloadEligibility.is_file_archived``.
+``common/downloadEligibility.is_file_archived``. Preview companions (``{file}.previewFile.{ext}``) are
+left out of every archive unless the run configuration or the request manifest sets
+``includePreviewFiles`` to true.
 """
 
 import os
@@ -32,6 +34,13 @@ CORE_BLOCKED_CONTENT_TYPES = (
 VAMS_STATUS_METADATA_KEY = "vams-status"
 ARCHIVED_STATUSES = ("archived", "deleted")
 ARCHIVED_STORAGE_CLASSES = ("GLACIER", "DEEP_ARCHIVE")
+
+# The marker of a file-level preview companion, ``{file}.previewFile.{ext}``: a key that contains it is
+# a preview of its base file. Mirrors backend ``common/s3PathPatterns.PREVIEW_FILE_PATTERN`` (the file
+# list hides these keys and the export folds them into their base file's entry); tests/test_runner.py
+# fails when the two drift. An archive leaves companions out unless ``includePreviewFiles`` is true.
+PREVIEW_FILE_PATTERN = ".previewFile."
+INCLUDE_PREVIEW_FILES_KEY = "includePreviewFiles"
 
 
 class Refusal(Exception):
@@ -63,3 +72,17 @@ def is_blocked(key, content_type, blocked_extensions, blocked_content_types):
 def is_archived(head):
     status = (head.get("Metadata") or {}).get(VAMS_STATUS_METADATA_KEY, "")
     return status in ARCHIVED_STATUSES or head.get("StorageClass", "STANDARD") in ARCHIVED_STORAGE_CLASSES
+
+
+def is_preview_companion(key):
+    """True when the key is a file-level preview companion (it contains ``.previewFile.``)."""
+    return PREVIEW_FILE_PATTERN in (key or "")
+
+
+def include_preview_files(source):
+    """The ``includePreviewFiles`` value of a run configuration or a request manifest: false when the key
+    is missing; a value that is not a boolean refuses the archive."""
+    value = (source or {}).get(INCLUDE_PREVIEW_FILES_KEY, False)
+    if not isinstance(value, bool):
+        raise Refusal(f"{INCLUDE_PREVIEW_FILES_KEY} must be true or false")
+    return value

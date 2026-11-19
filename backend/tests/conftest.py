@@ -344,8 +344,9 @@ sys.modules['common.apiRoutes'] = _apir_module
 # The audit action registry is pure constants over the route list, so load the REAL modules by path
 # for the same reason: the route type module first, then the add-on lane and the merged registry
 # (which imports the fork-owned custom/customAuditActions.py by name).
-# common.auditSearchText (the redacted searchText key of a search record) is pure Python and joins them.
-for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditActions', 'auditSearchText'):
+# common.auditSearchText (the redacted searchText key of a search record) is pure Python and joins them,
+# as does the audit log group registry that the merged registry and the writer derive their groups from.
+for _audit_reg in ('auditActionTypes', 'addonAuditActions', 'auditLogGroups', 'auditActions', 'auditSearchText'):
     _audit_reg_spec = _s3mk_importlib_util.spec_from_file_location(
         f'common.{_audit_reg}',
         os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', f'{_audit_reg}.py')
@@ -634,7 +635,8 @@ os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"] = "assetFileMetadataTable"
 os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"] = "fileAttributeTable"
 os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "metadataSchemaTableV2"
 
-# Workflow coordination tables
+# Vector search + workflow coordination tables
+os.environ["VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME"] = "vectorEmbeddingsStorageTable"
 os.environ["WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"] = "workflowExecutionLocksStorageTable"
 
 

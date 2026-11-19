@@ -1,6 +1,7 @@
 {
     "pipelineName": "3D Preview Thumbnail",
-    "category": "Preview",
+    "category": "SYSTEM - Preview",
+    "isSystem": true,
     "description": "Generate preview thumbnails (GIF/JPG/PNG) for 3D files - .ply, .stl, .obj, .glb, .gltf, .fbx, .las, .laz, .e57, .ptx, .pts, .pcd, .drc, .off, .3mf, .dae, .stp, .step, .usd, .usda, .usdc, .usdz, .spz, .sog, .splat, .ksplat, .lcc, .lcc2",
     "executionConfig": {
         "executionType": "Lambda",

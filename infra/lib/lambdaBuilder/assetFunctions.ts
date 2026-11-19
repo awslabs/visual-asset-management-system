@@ -21,6 +21,7 @@ import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as apigateway from "aws-cdk-lib/aws-apigatewayv2";
 import { NagSuppressions } from "cdk-nag";
 import {
+    addIamNagSuppressions,
     generateUniqueNameHash,
     suppressCdkNagErrorsByGrantReadWrite,
     grantReadWritePermissionsToAllAssetBuckets,
@@ -1483,16 +1484,12 @@ function buildCopyPartsStateMachine(
         },
         tracingEnabled: true,
     });
-    NagSuppressions.addResourceSuppressions(
-        machine,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: "Invokes the copy-engine function and its versions; writes its own log group.",
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(machine, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "Invokes the copy-engine function and its versions; writes its own log group.",
+        },
+    ]);
     return machine;
 }
 
@@ -1703,19 +1700,15 @@ function buildCopyStateMachine(
         },
         tracingEnabled: true,
     });
-    NagSuppressions.addResourceSuppressions(
-        stateMachine,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Invokes the copy-engine function and its versions; writes its own log group; " +
-                    "describes and stops the executions of its child state machine; manages the " +
-                    "Step Functions-owned rule startExecution.sync uses to wait on them.",
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(stateMachine, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Invokes the copy-engine function and its versions; writes its own log group; " +
+                "describes and stops the executions of its child state machine; manages the " +
+                "Step Functions-owned rule startExecution.sync uses to wait on them.",
+        },
+    ]);
 
     // A failed copy execution is a copy that broke (its job row and the upload or execution record
     // name the file), an outcome that could not be reported, or an execution that ended outside its
@@ -2110,16 +2103,12 @@ export function buildZipDownloadSweep(
         },
         tracingEnabled: true,
     });
-    NagSuppressions.addResourceSuppressions(
-        stateMachine,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: "Invokes the zip download service function (its sweep action) and its versions; writes its own log group.",
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(stateMachine, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "Invokes the zip download service function (its sweep action) and its versions; writes its own log group.",
+        },
+    ]);
 
     const arn = zipDownloadSweepStateMachineArn(config);
     zipDownloadService.addEnvironment("ZIP_DOWNLOAD_SWEEP_STATE_MACHINE_ARN", arn);

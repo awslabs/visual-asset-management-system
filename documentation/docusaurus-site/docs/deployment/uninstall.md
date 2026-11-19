@@ -100,8 +100,8 @@ for STACK in $(aws cloudformation list-stack-resources \
         --output text >> vams-nested-stack-resources.txt
 done
 
-# GenAI CAD STEP agent on its agentcore runtime: record the runtime name and id, which the
-# service-created runtime log groups are named for (Step 4)
+# GenAI CAD STEP agent on its agentcore runtime: record the runtime names and ids, which
+# identify a runtime that a failed teardown leaves behind, as Step 1 describes
 aws bedrock-agentcore-control list-agent-runtimes \
     --query "agentRuntimes[?starts_with(agentRuntimeName, 'vams_cad_step_agent_')].[agentRuntimeName,agentRuntimeId]" \
     --output text > vams-cad-agent-runtimes.txt
@@ -177,12 +177,25 @@ aws cloudformation delete-stack \
 
 Then manually delete the retained resources using the steps in Step 2 through Step 11.
 
+:::note[The SYSTEM GenAI guardrail is deleted with the stack, and an orphan blocks a redeploy]
+When `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled` is `true`, the pipeline's nested stack owns an Amazon Bedrock guardrail named `VAMS-SystemGenAiMetadata-<deployment hash>` and its published version, both deleted with the stack. Amazon Bedrock rejects a second guardrail with the same name in an account and Region, so a guardrail left behind by a failed teardown fails the next deployment of the same configuration name and `app.baseStackName` at the guardrail resource. List and delete it before redeploying:
+
+```bash
+aws bedrock list-guardrails --query "guardrails[?starts_with(name, 'VAMS-SystemGenAiMetadata-')].[id,name,status]" --output table
+aws bedrock delete-guardrail --guardrail-identifier <GUARDRAIL_ID>
+```
+
+Deleting the guardrail deletes every version of it. An operator-owned guardrail referenced through `guardrailIdentifier` is not a stack resource and is never touched by a teardown.
+:::
+
 :::note[Amazon SQS queues are deleted with the stack]
-Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the compliance job queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — and the dead-letter queue each one redrives to. The dead-letter queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
+Every VAMS Amazon SQS queue uses a `DESTROY` removal policy, so none of the steps below covers one. That includes every source queue — the file and asset indexer queues, the vector indexer queue when vector search is enabled, the system-workflow launch queue whenever the SYSTEM GenAI metadata pipeline is enabled, both bucket-sync queues per registered bucket, the large file processing queue, the workflow trigger dispatch queue, the compliance trigger queue, the compliance job queue, the Garnet queues, and the two Physna sync queues when Physna sync is enabled — the dead-letter queue each one redrives to, and the dead-letter queue of the `vector.embedding.ready` rule target. The dead-letter queues, the workflow trigger dispatch queue, both vector search queues and both compliance queues are auto-named by AWS CloudFormation and never conflict with a redeploy; the bucket sync, indexer, Physna sync, and Garnet queues carry explicit names of the form `<configuration name>-<app.baseStackName>-<region>-<purpose>`, and the large file processing queue one of the form `<configuration name>-<env.coreStackName>-sqsUploadLargeFile-queue`. If a teardown fails partway, delete any queue left behind before redeploying with the same configuration name and the same `app.baseStackName` into the same account and Region.
 
 Check the indexer dead-letter queues before deleting them. They hold the asset and file records the indexer could not add to the search index, and a redeploy does not replay them — run a reindex to rebuild the index for the affected assets and files.
 
 Check the Physna sync dead-letter queues the same way when Physna sync is enabled. They hold the file and asset sync events that never reached Physna, and a redeploy does not replay them — anything left in them is a file or asset the Physna tenant does not have.
+
+Check the vector indexer dead-letter queue and the `vector.embedding.ready` rule dead-letter queue before deleting them when vector search is enabled. They hold embedding documents and file lifecycle records the vector indexer could not apply, and a redeploy does not replay them — invoke the vector reindexer (see [Reindex Utility](../developer/utilities/reindex.md)) to rebuild the vector index for the affected files.
 :::
 
 :::note[GenAI CAD STEP agent runtime and guardrail]
@@ -268,7 +281,7 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern. The listing also includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one. The large object copy jobs table (`LargeObjectCopyJobsStorageTable`) is the same: it holds the progress of copies into assets, which expire 30 days after they finish, and needs no backup. The zip download requests table (`ZipDownloadRequestsStorageTable`) holds only Download as Zip jobs, which expire after 7 days, and needs no backup either.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern. The listing includes the vector embeddings table, which is created in every deployment and holds items only after vector search has been enabled (it is kept while the feature is off so that the embeddings survive an off-on cycle); its vector index is part of the table and is deleted with it. The listing also includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one. The large object copy jobs table (`LargeObjectCopyJobsStorageTable`) is the same: it holds the progress of copies into assets, which expire 30 days after they finish, and needs no backup. The zip download requests table (`ZipDownloadRequestsStorageTable`) holds only Download as Zip jobs, which expire after 7 days, and needs no backup either.
 
 ```bash
 # List remaining VAMS tables
@@ -300,10 +313,14 @@ The key named log groups are:
 -   `/aws/vendedlogs/VAMSCloudWatchVPCLogs-{hash}` — VPC flow logs (conditional on `useGlobalVpc`)
 -   `/aws/vendedlogs/VAMSCloudTrailLogs-{hash}` — AWS CloudTrail logs (conditional on `addStackCloudTrailLogs`)
 -   `aws-waf-logs-vams-{hash}` — AWS WAF request logs, one per web ACL (conditional on `useWaf`). Outside the `/aws/vendedlogs/` namespace because AWS WAF requires the `aws-waf-logs-` prefix, and the CloudFront ACL's group is in us-east-1 rather than the deployment Region
--   `/aws/vendedlogs/VAMSstateMachine-*{hash}` and `/aws/vendedlogs/VAMSStateMachine-*{hash}` — Per-pipeline state machine logs. Both spellings are in use: the CoordTransform, Metadata3dLabelingPipeline, ModelOps, RapidPipeline, CadStepAgent and VideoSopBom pipelines use the upper-case `VAMSStateMachine-`, and the remaining pipelines use `VAMSstateMachine-`. The delete commands below match on the `/aws/vendedlogs/VAMS` prefix, so they already cover both
--   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `Metadata3dLabelingBlenderRenderer{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}`, `VideoSopBom{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
+-   `/aws/vendedlogs/VAMSstateMachine-*{hash}` and `/aws/vendedlogs/VAMSStateMachine-*{hash}` — Per-pipeline state machine logs. Both spellings are in use: the CoordTransform, SystemGenAiMetadata, ModelOps, RapidPipeline, CadStepAgent and VideoSopBom pipelines (and, with the SYSTEM GenAI metadata pipeline's `useGenAiAnalysis` on, the asset summary's `SystemGenAiAssetSummary`) use the upper-case `VAMSStateMachine-`, and the remaining pipelines use `VAMSstateMachine-`. The commands below read each group's name from the stack, so they cover both
+-   `/aws/vendedlogs/Pipelines/*` — Per-pipeline container logs. The AWS Fargate job groups are `CoordTransform{hash}`, `SystemGenAiMetadataRender{hash}`, `Preview3dThumbnail{hash}`, `PcPotreeViewerPDAL{hash}`, `PcPotreeViewerPotree{hash}`, `VideoSopBom{hash}` and `CadStepAgent{hash}` (conditional on the matching pipeline flag; `CadStepAgent{hash}` on the GenAI CAD STEP agent's `fargate` runtime only); the RapidPipeline and ModelOps groups are named for their container
 
-The `/aws/codebuild/` build log groups of pipelines configured with `useCodeBuild: true` are not named by VAMS; the last command block below finds and deletes them.
+A pipeline configured with `useCodeBuild: true` also leaves one build log group per AWS CodeBuild project, `/aws/codebuild/<project name>`. AWS CodeBuild creates these groups on a project's first build, so AWS CloudFormation does not delete them with the stack, and they keep the CloudWatch Logs default retention of never expire. AWS CloudFormation generates the project names, so a leftover group does not block a redeploy, and the names do not carry the stack name.
+
+The REST API stage's execution logging writes to `API-Gateway-Execution-Logs_<REST_API_ID>/api`, a log group that Amazon API Gateway creates and no stack owns, so it also stays after the stack is deleted. A redeploy creates a new REST API ID, so a leftover group does not block it.
+
+The GenAI CAD STEP agent on its `agentcore` runtime leaves log groups that the stack never owned as well: Amazon Bedrock AgentCore creates `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` for each runtime the deployment had, so stack deletion does not remove them. The runtime ID begins with the runtime name, `vams_cad_step_agent_<hash>`, which a redeploy with the same configuration reuses under a new runtime ID.
 
 The orchestration bus audit log group's resource policy belongs to the log group and is deleted with it, so deleting one deployment does not affect another deployment's audit logging. A deployment with a provisioned Amazon OpenSearch Service domain also has one account-level CloudWatch Logs resource policy for the domain's logs (its name contains `ESLogGroupPolicy`), which stack deletion removes. To confirm that none is left behind, list the account-level policies in the Region:
 
@@ -311,110 +328,136 @@ The orchestration bus audit log group's resource policy belongs to the log group
 aws logs describe-resource-policies --query 'resourcePolicies[].policyName' --output text
 ```
 
+The prefixes of the named log groups, such as `/aws/vendedlogs/VAMS`, `/aws/vendedlogs/vamsPipelineWorkflows` and `/aws/vendedlogs/Pipelines/`, are the same for every VAMS deployment; only the hash at the end tells one deployment's groups from another's. A deletion by prefix therefore also removes the log groups of every other VAMS deployment in the same account and Region, and of any other application that names its groups under `/aws/vendedlogs/Pipelines/`. Select the groups from the AWS CloudFormation record of the deleted stack instead. AWS CloudFormation keeps that record for 90 days and addresses a deleted stack by its stack ID, so list the stacks of the deployment's stack name first, as in [Identify the key](#identify-the-key):
+
 ```bash
-# List VAMS-related log groups
-aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
-    --query 'logGroups[].logGroupName' --output text
-
-# List all VAMS named log groups (audit, workflow, orchestration,
-# VPC, CloudTrail, and per-pipeline state machine groups)
-aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/VAMS" \
-    --query 'logGroups[].logGroupName' --output text
-
-aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/vamsPipelineWorkflows" \
-    --query 'logGroups[].logGroupName' --output text
-
-# Delete Lambda log groups
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete all VAMS named vendedlogs groups (audit, orchestration bus,
-# VPC flow logs, per-pipeline state machine logs). Includes the conditional
-# CloudTrail (VAMSCloudTrailLogs) and VPC (VAMSCloudWatchVPCLogs) groups.
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/VAMS" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete the workflow execution log group
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/vamsPipelineWorkflows" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete container pipeline log groups (Fargate jobs, RapidPipeline, ModelOps), if present
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/vendedlogs/Pipelines/" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
-
-# Delete API Gateway access log groups (if present)
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/apigateway/<STACK_NAME>" \
-    --query 'logGroups[].logGroupName' --output text); do
-    echo "Deleting log group ${LG}..."
-    aws logs delete-log-group --log-group-name "${LG}"
-done
+# List the stacks of that name, including those deleted within the last 90 days
+aws cloudformation list-stacks \
+    --query "StackSummaries[?StackName=='<VAMS_STACK_NAME>'].[StackId,StackStatus,CreationTime]" \
+    --output text
 ```
 
-A pipeline configured with `useCodeBuild: true` also leaves one build log group per AWS CodeBuild project, `/aws/codebuild/<project name>`. AWS CodeBuild creates these groups on a project's first build, so AWS CloudFormation does not delete them with the stack, and they keep the CloudWatch Logs default retention of never expire. AWS CloudFormation generates the project names, so a leftover group does not block a redeploy, and the names do not carry the stack name. Read them from the AWS CloudFormation record of the deleted stack and its nested stacks, using the stack ID resolved as in [Identify the key](#identify-the-key):
+Use the stack ID of the `DELETE_COMPLETE` row whose creation time is that of the deployment you are removing. A row with any other status is a stack of the same name that exists now, such as a redeploy with the same configuration. The hash in a named log group's name comes from the stack name and the account ID, so that stack's named log groups have the same names as the deleted deployment's.
+
+The commands below read the resources of the deleted stack and of every nested stack, derive the log group name of each log group, Lambda function, AWS CodeBuild project, REST API, Amazon ECS cluster, Amazon EKS cluster and Amazon Bedrock AgentCore runtime among them, and leave out every name that a current stack of the same name derives the same way. They write the names that still exist in the account and Region to `vams-log-groups-to-delete.txt`, and they delete nothing. Any AWS CLI error stops them with an empty file, so a throttled or failed call never leaves a partial list:
 
 ```bash
-# Collect the CodeBuild project names from the stack and every nested stack
-# (list-stack-resources reads a deleted stack by its stack ID for 90 days)
-STACKS="<VAMS_STACK_ID>"
-PROJECTS=""
-while [ -n "${STACKS}" ]; do
-    NESTED=""
-    for STACK in ${STACKS}; do
-        PROJECTS="${PROJECTS} $(aws cloudformation list-stack-resources \
-            --stack-name "${STACK}" \
-            --query "StackResourceSummaries[?ResourceType=='AWS::CodeBuild::Project'].PhysicalResourceId" \
-            --output text)"
-        NESTED="${NESTED} $(aws cloudformation list-stack-resources \
-            --stack-name "${STACK}" \
-            --query "StackResourceSummaries[?ResourceType=='AWS::CloudFormation::Stack'].PhysicalResourceId" \
-            --output text)"
+# Retry throttled AWS CLI calls, so that only an error that remains stops the commands below
+export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=10
+
+# Print the log group names that a stack and its nested stacks derive from their resources
+vams_stack_log_groups() {
+    echo "$1" > vams-stacks.txt
+    : > vams-stack-resources.txt
+    while [ -s vams-stacks.txt ]; do
+        : > vams-stack-level.txt
+        for STACK in $(cat vams-stacks.txt); do
+            aws cloudformation list-stack-resources \
+                --stack-name "${STACK}" \
+                --query 'StackResourceSummaries[].[ResourceType,PhysicalResourceId]' \
+                --output text >> vams-stack-level.txt || return 1
+        done
+        cat vams-stack-level.txt >> vams-stack-resources.txt
+        awk -F '\t' '$1 == "AWS::CloudFormation::Stack" && $2 != "None" { print $2 }' \
+            vams-stack-level.txt > vams-stacks.txt
     done
-    STACKS="${NESTED}"
-done
+    awk -F '\t' '
+        $1 == "AWS::Logs::LogGroup"         { print $2 }
+        $1 == "AWS::Lambda::Function"       { print "/aws/lambda/" $2 }
+        $1 == "AWS::CodeBuild::Project"     { print "/aws/codebuild/" $2 }
+        $1 == "AWS::ApiGateway::RestApi"    { print "API-Gateway-Execution-Logs_" $2 "/api" }
+        $1 == "AWS::ECS::Cluster"           { print "/aws/ecs/containerinsights/" $2 "/performance" }
+        $1 == "Custom::AWSCDK-EKS-Cluster"  { print "/aws/eks/" $2 "/cluster"
+                                              print "/aws/containerinsights/" $2 "/performance" }
+        $1 == "AWS::BedrockAgentCore::Runtime" { print "/aws/bedrock-agentcore/runtimes/" $2 "-DEFAULT" }
+    ' vams-stack-resources.txt
+}
 
-# Delete the build log group of each project (a project that never ran a build has none)
-for PROJECT in ${PROJECTS}; do
-    echo "Deleting log group /aws/codebuild/${PROJECT}..."
-    aws logs delete-log-group --log-group-name "/aws/codebuild/${PROJECT}"
-done
+# Write the log groups of the deleted stack that exist and that no current stack of the
+# same name derives to vams-log-groups-to-delete.txt, given the stack name and stack ID
+vams_find_log_groups() {
+    : > vams-log-groups-to-delete.txt
+    STATUS=$(aws cloudformation list-stacks \
+        --query "StackSummaries[?StackId=='$2'].StackStatus" --output text) || return 1
+    if [ "${STATUS}" != "DELETE_COMPLETE" ]; then
+        echo "Stack $2 is ${STATUS:-not found}, not DELETE_COMPLETE." >&2
+        return 1
+    fi
+    vams_stack_log_groups "$2" > vams-log-group-candidates.txt || return 1
+    aws cloudformation list-stacks \
+        --query "StackSummaries[?StackName=='$1' && StackStatus!='DELETE_COMPLETE'].StackId" \
+        --output text > vams-current-stacks.txt || return 1
+    : > vams-log-groups-current.txt
+    for CURRENT in $(cat vams-current-stacks.txt); do
+        vams_stack_log_groups "${CURRENT}" >> vams-log-groups-current.txt || return 1
+    done
+    aws logs describe-log-groups \
+        --query 'logGroups[].logGroupName' \
+        --output text > vams-account-log-groups.txt || return 1
+    tr '\t' '\n' < vams-account-log-groups.txt > vams-account-log-group-names.txt
+    awk '
+        FILENAME == ARGV[1] { current[$0] = 1; next }
+        FILENAME == ARGV[2] { candidate[$0] = 1; next }
+        ($0 in candidate) && !($0 in current)
+    ' vams-log-groups-current.txt vams-log-group-candidates.txt vams-account-log-group-names.txt \
+        > vams-log-groups-to-delete.txt
+}
+
+vams_find_log_groups "<VAMS_STACK_NAME>" "<VAMS_STACK_ID>" \
+    && cat vams-log-groups-to-delete.txt \
+    || echo "The list is incomplete: fix the error above, then run these commands again."
 ```
 
-The GenAI CAD STEP agent on its `agentcore` runtime also leaves log groups the stack never owned: Amazon Bedrock AgentCore creates `/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT` for each runtime the deployment had, so stack deletion does not remove them. Their names begin with the runtime name, `vams_cad_step_agent_<hash>`, which other VAMS deployments in the same account share except for the hash. Delete only the groups whose hash matches the runtime recorded in `vams-cad-agent-runtimes.txt`:
+Read `vams-log-groups-to-delete.txt` before you delete anything. Each line names a log group of a resource in the deleted deployment's stacks that no current stack of the same name has. Remove the line of any group you want to keep, such as an audit log group that your records retention requires. An empty file with no error means that no log group of the deployment is left. Then delete the groups that the file lists, and no others:
 
 ```bash
-# List the AgentCore runtime log groups of every CAD STEP agent deployment in the account
-aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/vams_cad_step_agent_" \
-    --query 'logGroups[].logGroupName' --output text
-
-# Delete those of this deployment
-for LG in $(aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/<CAD_RUNTIME_NAME>" \
-    --query 'logGroups[].logGroupName' --output text); do
+# Delete the log groups listed in vams-log-groups-to-delete.txt
+for LG in $(cat vams-log-groups-to-delete.txt); do
     echo "Deleting log group ${LG}..."
     aws logs delete-log-group --log-group-name "${LG}"
 done
 ```
+
+The stack record holds the resources the stack had when it was deleted. A Lambda function that an earlier update replaced, or that an earlier deployment of the same stack name created, left its log group under a function name that the record does not hold. AWS CloudFormation generates these function names from the stack name, which it shortens to as few as its first 25 characters, so the commands below list the Lambda log groups whose names begin with those characters and whose function no longer exists. A group whose function still exists belongs to a current deployment, and the commands leave it out. The list can still include the groups of another removed deployment whose stack name begins with the same 25 characters, so delete a group from it only by its full name, once you know it is this deployment's:
+
+```bash
+# List the Lambda log groups whose name begins with the first 25 characters of the
+# stack name and whose function no longer exists
+PREFIX=$(printf '%s' "<VAMS_STACK_NAME>" | cut -c1-25)
+for LG in $(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/lambda/${PREFIX}" \
+    --query 'logGroups[].logGroupName' --output text); do
+    aws lambda get-function --function-name "${LG#/aws/lambda/}" \
+        --query Configuration.FunctionArn --output text 2>&1 \
+        | grep -q ResourceNotFoundException && echo "${LG}"
+done
+
+aws logs delete-log-group --log-group-name "<LOG_GROUP_NAME>"
+```
+
+A GenAI CAD STEP agent runtime that an earlier update replaced left its log group under a runtime ID that the record no longer holds. Every runtime ID of a deployment begins with the same runtime name, `vams_cad_step_agent_<hash>`: the text between `/aws/bedrock-agentcore/runtimes/` and the first `-` in `vams-log-group-candidates.txt`. The commands below list the log groups of that runtime name whose runtime no longer exists. A redeploy with the same configuration reuses the runtime name, and the commands leave out the group of its current runtime. Delete a group from the list by its full name:
+
+```bash
+# List the AgentCore runtime log groups of that runtime name whose runtime no longer exists
+for LG in $(aws logs describe-log-groups \
+    --log-group-name-prefix "/aws/bedrock-agentcore/runtimes/<CAD_RUNTIME_NAME>-" \
+    --query 'logGroups[].logGroupName' --output text); do
+    RUNTIME_ID=${LG#/aws/bedrock-agentcore/runtimes/}
+    aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id "${RUNTIME_ID%-DEFAULT}" \
+        --query agentRuntimeId --output text 2>&1 \
+        | grep -q ResourceNotFoundException && echo "${LG}"
+done
+```
+
+The other stacks that `cdk destroy --all` deletes in [Step 1](#step-1-destroy-the-cdk-stack), the AWS WAF stacks and the per-Region notification stacks among them, also leave the log groups of their Lambda functions behind, for example that of the `CustomCrossRegionExportWriter` function of the CloudFront web ACL's stack, `<name>-waf-<baseStackName>-<region>`, which is in us-east-1 whatever the deployment Region. To remove them, run the first command and `vams_find_log_groups` again with that stack's name and the stack ID of its `DELETE_COMPLETE` row, and then the delete commands, in the stack's Region: for a stack outside the deployment Region, run `export AWS_REGION=<region> AWS_DEFAULT_REGION=<region>` first, which AWS CLI version 2 and version 1 both read, and set both back to the deployment Region afterwards.
+
+:::note[Log groups the stack record does not name]
+
+-   The Isaac Lab pipeline's AWS Batch compute environment runs on an Amazon ECS cluster that AWS Batch creates, so the stack record does not hold that cluster's Container Insights group, `/aws/ecs/containerinsights/AWSBatch-<compute environment>-<id>/performance`. `<compute environment>` is the name at the end of the ARN of the pipeline's `AWS::Batch::ComputeEnvironment` resource in the deleted stack's record. Delete the group by its full name.
+-   `/aws/batch/job` is the default log group of every AWS Batch job in the account and Region that sets no log configuration, so it is shared with other workloads. Leave it in place.
+-   When the deleted stack's record is older than 90 days, `vams_find_log_groups` reports the stack as not found. The Lambda log group list is then the only way to find the deployment's groups by name; the AWS CodeBuild and API Gateway execution log groups carry no name of the deployment, so they cannot be told apart from another deployment's.
+
+:::
 
 :::warning[Redeploying with the same configuration]
 VAMS log group names are deterministic (a hash of the stack name plus account ID). If you intend to redeploy VAMS with the same configuration name into the same account, you **must** delete any orphaned `/aws/vendedlogs/...` groups first. A pre-existing log group with the same name causes the deployment's log group creation to fail. This most commonly affects the conditional `VAMSCloudTrailLogs` (when `addStackCloudTrailLogs` is enabled) and `VAMSCloudWatchVPCLogs` (when `useGlobalVpc` is enabled) groups.

@@ -44,9 +44,6 @@ from common.auditActions import (
     GROUP_AUTH_OTHER,
     GROUP_AUTHORIZATION,
     GROUP_ERRORS,
-    GROUP_FILE_DOWNLOAD,
-    GROUP_FILE_DOWNLOAD_STREAMED,
-    GROUP_FILE_UPLOAD,
     AUDIT_ACTION_NAME_PATTERN,
     KIND_DOWNLOAD,
     KIND_READ,
@@ -54,6 +51,11 @@ from common.auditActions import (
     audit_spec_for_action,
     audit_spec_for_route,
     resolve_route_template,
+)
+from common.auditLogGroups import (
+    action_target_group_labels as audit_log_group_labels,
+    groups_without_type_segment as audit_log_groups_without_type_segment,
+    resource_keys as audit_log_group_resource_keys,
 )
 
 # Initialize logger for audit logging module
@@ -121,17 +123,7 @@ _created_log_streams: Dict[str, str] = {}
 # unpublished parameter into a cold-start 500 on every request. `_audit_log_group()` retries a name
 # that did not resolve, so a transient SSM failure at import does not silence the container's audit
 # trail for its whole lifetime.
-_AUDIT_LOG_GROUP_KEYS = (
-    ResourceKeys.AUDIT_LOG_AUTHENTICATION,
-    ResourceKeys.AUDIT_LOG_AUTHORIZATION,
-    ResourceKeys.AUDIT_LOG_FILEUPLOAD,
-    ResourceKeys.AUDIT_LOG_FILEDOWNLOAD,
-    ResourceKeys.AUDIT_LOG_FILEDOWNLOAD_STREAMED,
-    ResourceKeys.AUDIT_LOG_AUTHOTHER,
-    ResourceKeys.AUDIT_LOG_AUTHCHANGES,
-    ResourceKeys.AUDIT_LOG_ACTIONS,
-    ResourceKeys.AUDIT_LOG_ERRORS,
-)
+_AUDIT_LOG_GROUP_KEYS = audit_log_group_resource_keys()
 
 _audit_log_group_names: Dict[str, Optional[str]] = {}
 
@@ -1597,20 +1589,11 @@ def audit_records_reads() -> bool:
 _VALUE_SECTIONS = ("changes", "previous", "requestParameters", "details")
 
 # The prefix label of each audit log group.
-_GROUP_LABELS = {
-    GROUP_ACTIONS: "ACTIONS",
-    "auditAuthChanges": "AUTHCHANGES",
-    "auditAuthOther": "AUTHOTHER",
-    GROUP_AUTHORIZATION: "AUTHORIZATION",
-    GROUP_ERRORS: "ERRORS",
-    GROUP_FILE_UPLOAD: "FILEUPLOAD",
-    GROUP_FILE_DOWNLOAD: "FILEDOWNLOAD",
-    GROUP_FILE_DOWNLOAD_STREAMED: "FILEDOWNLOAD-STREAMED",
-}
+_GROUP_LABELS = audit_log_group_labels()
 
 # The file groups' records carry no [type: ...] segment, as their legacy records do not, so the
 # documented prefix patterns keep matching; the action is in the payload.
-_GROUPS_WITHOUT_TYPE_SEGMENT = frozenset({GROUP_FILE_UPLOAD, GROUP_FILE_DOWNLOAD, GROUP_FILE_DOWNLOAD_STREAMED})
+_GROUPS_WITHOUT_TYPE_SEGMENT = audit_log_groups_without_type_segment()
 
 # The audit log group key of each audit log type.
 _AUDIT_LOG_KEYS_BY_TYPE = {_audit_log_type(_key): _key for _key in _AUDIT_LOG_GROUP_KEYS}
@@ -1942,6 +1925,23 @@ def audited_handler(handler: Callable) -> Callable:
             return response
 
     return wrapper
+
+
+def skip_route_outcome(event: Any) -> None:
+    """
+    Tell :func:`audited_handler` that the error response this request returns is not an outcome of
+    its route's action, so it records no failed action for it. Only for an answer that asks the
+    caller to try again and that the caller always retries: a reindex launch that finds every
+    reindex slot held answers 429 and the launcher sends it again later, so the attempt that starts
+    the run records the action, and one that is refused for good records its failure. Records
+    nothing itself; never raises.
+    """
+    try:
+        ctx = _context_for(event)
+        if ctx is not None and ctx.route_spec is not None:
+            _note_recorded(ctx, ctx.route_spec.action)
+    except Exception as e:
+        logger.exception(f"Failed to mark the request's outcome as not recorded: {e}")
 
 
 # The generic reason a failed record names for an error status; any other 4xx is clientError and

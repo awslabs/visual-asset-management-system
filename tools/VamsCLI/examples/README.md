@@ -47,6 +47,10 @@ Files the asset already holds are not uploaded again. The manifest schema (downl
 `prepend-utf8-bom` / `copy` / `utf16le-bom` / `utf16be-bom` / `utf16le` / `zip` / `splat-transform`
 / `ply-to-splat` / `ksplat` / `las-to-ply` derivations, `requiresFeature`) is described in
 `web/e2e/CLAUDE.md`, "Viewer render proof"; the script validates it before it downloads anything.
+Each download names the script and the project URL in its `User-Agent`, as the sample hosts ask, and
+a host that answers `429 Too Many Requests` is asked again after its `Retry-After` delay: at most four
+attempts in all, each wait at most 300 seconds. Past either bound the run stops with the reason, and
+`--cache` keeps what it already fetched for the next run.
 
 ```bash
 python3 tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>

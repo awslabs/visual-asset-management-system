@@ -170,7 +170,11 @@ def _launch(restriction="perAsset", metadata_rows=None, refused_trigger=False):
             stack.enter_context(context)
         sfn = stack.enter_context(patch(f"{MOD}.sfn_client"))
         sfn.start_execution.return_value = {"executionArn": "arn:exec"}
-        response = ewv2.lambda_handler(_event(body), MagicMock())
+        event = _event(body)
+        if refused_trigger:
+            # The dispatcher's envelope: a fileUpload trigger type is accepted only from a system launch.
+            event["lambdaCrossCall"] = {"userName": "SYSTEM_USER"}
+        response = ewv2.lambda_handler(event, MagicMock())
     return response, calls
 
 

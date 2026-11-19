@@ -832,9 +832,10 @@ class TestEveryExecutionTypeReadsTheManifest:
 
 def _bundle_dirs():
     root = os.path.join(REPO, "backendPipelines")
-    found = {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema", "**",
+    # vamsSchema* : a pipeline folder may ship a second bundle beside its own (3dThumbnail/vamsSchemaMedia).
+    found = {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema*", "**",
                                                                  "pipeline.json"), recursive=True)}
-    found |= {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema",
+    found |= {os.path.dirname(p) for p in glob.glob(os.path.join(root, "**", "vamsSchema*",
                                                                  "pipeline.json"), recursive=True)}
     return sorted(d for d in found if "node_modules" not in d)
 
@@ -859,6 +860,23 @@ def _metadata_inputs(record):
     return ((record or {}).get("systemConfig") or {}).get("metadataInputs") or {}
 
 
+# The registrations that ask for opt-in sections by design, with the keys each asks for at each level; every other
+# bundle asks for none. A listed bundle is held to exactly these keys, receives what it did for its four metadata
+# types once they are set aside, and receives the sections they name.
+_SGM_BUNDLE = os.path.join("backendPipelines", "system", "genAiMetadata", "vamsSchema")
+OPT_IN_BUNDLES = {
+    # Schema-aware key reuse reads the schema section.
+    _SGM_BUNDLE: {"pipeline": {"metadataSchema"}, "workflow": {"metadataSchema"}},
+    # The asset summary reads every file's record under the selection, and the asset schema for key reuse.
+    os.path.join(_SGM_BUNDLE, "assetSummary"): {"pipeline": {"assetFileMetadata", "metadataSchema"},
+                                                "workflow": {"assetFileMetadata", "metadataSchema"}},
+}
+
+
+def _without_opt_in_keys(metadata_inputs):
+    return {k: v for k, v in (metadata_inputs or {}).items() if k not in fx.OPT_IN_KEYS}
+
+
 @pytest.mark.unit
 class TestBuiltInPipelinesAreUnchanged:
     """Every pipeline the deployment registers (each vamsSchema bundle under backendPipelines/, all
@@ -869,8 +887,18 @@ class TestBuiltInPipelinesAreUnchanged:
     BUNDLES = _bundle_dirs()
 
     def test_the_discovery_finds_the_shipped_bundles(self):
-        # 29 registrations ship today; fewer means the glob broke, not that bundles were removed.
+        # 29 registrations ship today: the SYSTEM GenAI metadata and asset summary bundles replaced the
+        # retired GenAI 3D labeling and CAD/mesh metadata extraction bundles. Fewer means the glob broke,
+        # not that bundles were removed.
         assert len(self.BUNDLES) >= 29, len(self.BUNDLES)
+        # The two system bundles are under the guard as well: neither asks for an opt-in key.
+        found = {os.path.relpath(d, REPO) for d in self.BUNDLES}
+        for system_bundle in (os.path.join("backendPipelines", "system", "genAiMetadata", "vamsSchema"),
+                              os.path.join("backendPipelines", "preview", "3dThumbnail", "vamsSchema"),
+                              os.path.join("backendPipelines", "preview", "3dThumbnail", "vamsSchemaMedia")):
+            assert system_bundle in found, system_bundle
+        # Every named exception is a shipped bundle, so a moved bundle cannot leave a stale exception behind.
+        assert set(OPT_IN_BUNDLES) <= found, set(OPT_IN_BUNDLES) - found
 
     @pytest.mark.parametrize("directory", BUNDLES, ids=lambda d: os.path.relpath(d, REPO))
     def test_the_bundle_requests_no_opt_in_section_and_receives_what_it_did(self, directory):
@@ -878,9 +906,13 @@ class TestBuiltInPipelinesAreUnchanged:
         maps = {"pipeline": _metadata_inputs(pipeline), "workflow": _metadata_inputs(workflow)}
         for name, template in templates.items():
             maps[f"template {name}"] = ((template.get("overrides") or {}).get("metadataInputs") or {})
+        expected = OPT_IN_BUNDLES.get(os.path.relpath(directory, REPO), {})
         for where, metadata_inputs in maps.items():
-            for key in fx.OPT_IN_KEYS:
-                assert er.metadata_input_enabled(metadata_inputs, key) is False, (directory, where, key)
+            asked = {key for key in fx.OPT_IN_KEYS if er.metadata_input_enabled(metadata_inputs, key)}
+            assert asked == expected.get(where, set()), (directory, where, asked)
+        if expected:
+            self._assert_the_named_sections_arrive(maps, expected)
+            maps = {where: _without_opt_in_keys(m) for where, m in maps.items()}
 
         golden = _golden()
         # A registration with no workflow, or one whose workflow omits the map, runs under the
@@ -905,3 +937,13 @@ class TestBuiltInPipelinesAreUnchanged:
                     directory, selection, step_map)
                 cases += 1
         assert cases == 3 * len(step_maps)
+
+    @staticmethod
+    def _assert_the_named_sections_arrive(maps, expected):
+        """A bundle listed in OPT_IN_BUNDLES receives, for a whole-asset run, the sections its keys name."""
+        intake = ew._intake_metadata_inputs(maps["workflow"], [_step_record(maps["pipeline"])], {})
+        received = fx.delivered(fx.build_envelope(intake, "wholeAsset"), maps["pipeline"])
+        keys = expected["pipeline"] & expected["workflow"]
+        assert ("metadataSchemas" in received) == ("metadataSchema" in keys), keys
+        expanded = [r for g in received["assets"] for r in g["files"] if r.get("expanded")]
+        assert bool(expanded) == ("assetFileMetadata" in keys), keys

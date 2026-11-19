@@ -115,6 +115,7 @@ from common.apiRoutes import (
     API_ROLES,
     API_ROLE_BY_ID,
     API_SEARCH,
+    API_SEARCH_NLP,
     API_SEARCH_SIMPLE,
     API_SECURE_CONFIG,
     API_SET_PRIMARY_FILE,
@@ -170,6 +171,7 @@ from common.auditActionTypes import (
     route_entries,
     spec,
 )
+from common.auditLogGroups import action_target_group_keys
 from common.addonAuditActions import (
     ADDON_AUDIT_EXEMPT,
     ADDON_AUDIT_ROUTE_ACTIONS,
@@ -461,6 +463,7 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # Search: the request (index, filters, page) is recorded and the hit count, never the hits.
     **route_entries(API_SEARCH, {POST: spec("search", "search", KIND_SEARCH)}),
     **route_entries(API_SEARCH_SIMPLE, {POST: spec("search", "search", KIND_SEARCH)}),
+    **route_entries(API_SEARCH_NLP, {POST: spec("search", "search", KIND_SEARCH)}),
     # Compliance. The compliance services also write their own audit trail (the compliance audit
     # table, read by the two audit routes); these records are the VAMS action records of the calls.
     **route_entries(API_COMPLIANCE_SCHEMAS, {
@@ -554,6 +557,7 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.indexing.sqsBucketSync", spec("assetSync", "asset")),
     SystemAction("handlers.indexing.sqsBucketSync", spec("fileSync", "file")),
     SystemAction("handlers.indexing.crReindexer", spec("searchReindex", "system")),
+    SystemAction("handlers.osVectorSearch.vectorReindexer", spec("searchReindex", "system")),
     SystemAction("handlers.workflows.sfn.processWorkflowExecutionOutput", spec("workflowOutputIngest", "execution")),
     SystemAction("handlers.workflows.sfn.processWorkflowExecutionOutput", spec("workflowExecutionEnd", "execution")),
     SystemAction("handlers.workflows.sfn.handleExecutionError", spec("workflowExecutionEnd", "execution")),
@@ -587,8 +591,10 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
 
 # Handlers that serve no API route and record no action, with the reason.
 AUDIT_SYSTEM_EXEMPT: Dict[str, str] = {
-    "handlers.indexing.assetIndexer": "search index upkeep derived from a recorded change",
-    "handlers.indexing.fileIndexer": "search index upkeep derived from a recorded change",
+    "handlers.osSemanticSearch.osAssetIndexer": "search index upkeep derived from a recorded change",
+    "handlers.osSemanticSearch.osFileIndexer": "search index upkeep derived from a recorded change",
+    "handlers.osVectorSearch.vectorIndexer": "vector index upkeep derived from a recorded change or analysis run",
+    "handlers.osVectorSearch.systemWorkflowLauncher": "each launch is an executeWorkflow call, which records it",
     "handlers.indexing.snsQueuing": "fans a recorded change out to the indexers",
     "handlers.sendEmail.sendEmail": "delivers the notification of a recorded subscription",
 }
@@ -620,6 +626,9 @@ def _merge_exempt() -> Dict[RouteMethod, str]:
             merged.setdefault(key, value)
     return merged
 
+
+# The groups log_action may write to, derived from the merged group registry (common/auditLogGroups.py).
+AUDIT_GROUPS = action_target_group_keys()
 
 AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = _merge_route_actions()
 AUDIT_EXEMPT: Dict[RouteMethod, str] = _merge_exempt()

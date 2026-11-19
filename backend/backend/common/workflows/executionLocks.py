@@ -39,6 +39,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
+from common.workflows.systemPipelines import MAX_CONCURRENCY_SLOT_CANDIDATES, MAX_CONCURRENCY_SLOTS
 
 logger = safeLogger()
 
@@ -268,9 +269,12 @@ def _take_over_or_raise(table, item, error, now_epoch, stranded_after_seconds, h
 
 
 def _scope_of_key(lock_key: str) -> str:
-    """The scope segment of a key built by build_lock_key ("" for any other shape)."""
+    """The scope segment of a key built by build_lock_key or system_slot_key ("" for any other shape)."""
     parts = (lock_key or "").split("|")
-    return parts[1] if len(parts) == 3 and parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() else ""
+    if len(parts) != 3:
+        return ""
+    return parts[1] if parts[1] in LOCK_SCOPE_BY_RESTRICTION.values() or parts[1] == LOCK_SCOPE_SYSTEM_SLOT \
+        else ""
 
 
 def acquire_locks(table, lock_keys, execution_id, ttl_seconds, now=None, *,
@@ -427,3 +431,106 @@ def release_locks_for_execution(dynamo, *, locks_table_name, workflow_table_name
     except Exception as error:
         logger.exception(f"Lock release for execution {workflow_execution_id} failed: {error}")
         return 0
+
+
+# ---------------------------------------------------------------------------------------------------
+# Concurrency slots of a system-pipeline launch: at most N slot-holding runs of a workflow at once
+# ---------------------------------------------------------------------------------------------------
+#
+# A marked system-pipeline launch (common.workflows.systemPipelines) may ask for one of N concurrency slots
+# of its workflow (`systemExecution.concurrencySlots`: the slot count N, and the candidates it found free).
+# The run that claims one holds that slot row in this table for its whole life:
+#
+#     {workflowDatabaseId}:{workflowId}|systemSlot|{0..N-1}
+#
+# executeWorkflow claims a slot with the same conditional PutItem as a lock, immediately before the
+# run's first side effect, and every release site frees it through the holder index like any lock row,
+# so a run that ends in any way frees its slot. The release is by key, whatever the key's shape, so a row
+# an earlier release of VAMS wrote under another scope name is freed the same way when its run ends. A
+# row whose holder is lost expires at system_slot_ttl_seconds; one whose holder wrote no record, or
+# whose record is terminal, is taken over once it is older than the launch handler can run. At most N
+# rows exist, so at most N slot-holding runs hold one. A launch that asks for no slot (every manual,
+# upload-triggered or re-run launch, and a system launch without the field) never claims one, and core
+# keeps no list of the launches that do.
+
+LOCK_SCOPE_SYSTEM_SLOT = "systemSlot"
+# Bound on the slot count a launch may name, and the slots one launch tries before it is told to wait: the
+# bounds systemPipelines.resolve_concurrency_slots validates a request against.
+MAX_SYSTEM_SLOTS = MAX_CONCURRENCY_SLOTS
+MAX_SYSTEM_SLOT_CANDIDATES = MAX_CONCURRENCY_SLOT_CANDIDATES
+SYSTEM_SLOTS_BUSY_MESSAGE = "Every concurrency slot of this launch is in use; the launch waits for one."
+
+
+class SystemSlotsBusy(Exception):
+    """No candidate slot could be claimed: the launch is not started and is retried later."""
+
+
+def system_slot_key(workflow_database_id, workflow_id, index) -> str:
+    return f"{workflow_database_id}:{workflow_id}|{LOCK_SCOPE_SYSTEM_SLOT}|{int(index)}"
+
+
+def system_slot_keys(workflow_database_id, workflow_id, slot_count) -> List[str]:
+    count = max(0, min(int(slot_count), MAX_SYSTEM_SLOTS))
+    return [system_slot_key(workflow_database_id, workflow_id, index) for index in range(count)]
+
+
+def system_slot_ttl_seconds(pipeline_records, ingestion_wait_seconds=0) -> int:
+    """Lifetime of a slot row: the longest the run can last plus the margin. That is the sum of its
+    pipelines' bounds (as for a lock) and `ingestion_wait_seconds`, the longest the run then waits for
+    outputs handed to the large object copy engine (the workflow definition's output-ingestion wait), so
+    a run waiting on its outputs still holds its slot. Unlike a lock it is not lifted to a day, so a slot
+    whose holder was lost is usable again once no run could still hold it."""
+    total = sum(pipeline_timeout_seconds(record) for record in pipeline_records or [])
+    try:
+        wait = max(0, int(ingestion_wait_seconds or 0))
+    except (TypeError, ValueError):
+        wait = 0
+    return total + wait + LOCK_TTL_MARGIN_SECONDS
+
+
+def slot_is_free(item, now_epoch) -> bool:
+    """Whether a slot row (None when absent) can be claimed with a plain conditional put."""
+    if not item:
+        return True
+    try:
+        return int(item.get(EXPIRES_AT_ATTRIBUTE, 0)) < int(now_epoch)
+    except (TypeError, ValueError):
+        return False
+
+
+def slot_acquired_epoch(item) -> Optional[int]:
+    """When a slot row was taken (epoch seconds), or None when it carries no readable time."""
+    return _epoch_of_iso((item or {}).get(ACQUIRED_AT_ATTRIBUTE))
+
+
+def acquire_system_slot(table, candidate_keys, execution_id, ttl_seconds, now=None, *,
+                        stranded_after_seconds=None, holder_has_record=None) -> str:
+    """Claim the first of `candidate_keys` that is free (no row, or an expired one) or whose holder is
+    stranded (`holder_has_record` answers False for it once its row is older than
+    `stranded_after_seconds`), and return its key. Raises SystemSlotsBusy when every candidate is held;
+    any other DynamoDB error propagates. Each candidate costs one conditional PutItem, and a held one
+    whose row is old enough also one read of its holder's record."""
+    now_epoch = _now_epoch(now)
+    for slot_key in list(dict.fromkeys(candidate_keys or []))[:MAX_SYSTEM_SLOT_CANDIDATES]:
+        item = {
+            LOCK_KEY_ATTRIBUTE: slot_key,
+            HOLDER_ATTRIBUTE: execution_id,
+            LOCK_SCOPE_ATTRIBUTE: LOCK_SCOPE_SYSTEM_SLOT,
+            ACQUIRED_AT_ATTRIBUTE: _iso(now_epoch),
+            EXPIRES_AT_ATTRIBUTE: now_epoch + int(ttl_seconds),
+        }
+        try:
+            table.put_item(
+                Item=item,
+                ConditionExpression=_PUT_CONDITION,
+                ExpressionAttributeValues={":now": now_epoch},
+                ReturnValuesOnConditionCheckFailure="ALL_OLD",
+            )
+            return slot_key
+        except ClientError as error:
+            try:
+                _take_over_or_raise(table, item, error, now_epoch, stranded_after_seconds, holder_has_record)
+                return slot_key
+            except ExecutionLockConflict:
+                continue
+    raise SystemSlotsBusy(SYSTEM_SLOTS_BUSY_MESSAGE)

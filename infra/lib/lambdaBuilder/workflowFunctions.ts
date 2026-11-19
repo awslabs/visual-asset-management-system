@@ -10,7 +10,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { Duration, Names } from "aws-cdk-lib";
-import { suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
+import { addIamNagSuppressions, suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import {
     storageResources,
     METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
@@ -131,7 +131,7 @@ function executionLockReleaseStatements(storageResources: storageResources) {
  * them. Under VAMS stack role customization the statements are recorded on the pre-created role
  * instead. The function waits for the policy, since its code calls the lock table once deployed.
  */
-function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
+export function attachExecutionLockPolicy(fun: lambda.Function, statements: iam.PolicyStatement[]) {
     attachHandlerPolicy(fun, EXECUTION_LOCK_POLICY_ID, statements);
 }
 
@@ -548,17 +548,13 @@ function addSageMakerSubProcessGrant(fun: lambda.Function, config: Config.Config
             ],
         })
     );
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
-                appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(fun, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
+            appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
+        },
+    ]);
 }
 
 /**
@@ -578,23 +574,19 @@ function addDeadlineJobGrant(fun: lambda.Function, config: Config.Config, action
             ],
         })
     );
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
-                    "known at deploy time, so the Deadline Cloud job actions are scoped to this account and " +
-                    "Region's farm hierarchy. The handler only ever passes a farm/queue read from the pipeline " +
-                    "definition of the execution being aborted or read, and a job id it either read from that " +
-                    "execution's registration rows or matched by the execution's own id in a reserved job " +
-                    "parameter.",
-                appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(fun, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                "known at deploy time, so the Deadline Cloud job actions are scoped to this account and " +
+                "Region's farm hierarchy. The handler only ever passes a farm/queue read from the pipeline " +
+                "definition of the execution being aborted or read, and a job id it either read from that " +
+                "execution's registration rows or matched by the execution's own id in a reserved job " +
+                "parameter.",
+            appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+        },
+    ]);
 }
 
 /**
@@ -807,26 +799,22 @@ export function buildExecutionLogsFunction(
                 ],
             })
         );
-        NagSuppressions.addResourceSuppressions(
-            fun,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Deadline Cloud session logs land in the queue's own '/aws/deadline/<farmId>/<queueId>' " +
-                        "log group, and farm and queue ids are recorded on VAMS pipeline records rather than " +
-                        "known at deploy time, so the logs read is scoped to this account and Region's Deadline " +
-                        "log-group namespace. The handler only ever reads the streams named by the session ids " +
-                        "Deadline Cloud returned for a job registered on the execution being read.",
-                    appliesTo: [
-                        {
-                            regex: "/^Resource::arn:.*:logs:.*:log-group:/aws/deadline/\\*(:\\*)?$/g",
-                        },
-                    ],
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(fun, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Deadline Cloud session logs land in the queue's own '/aws/deadline/<farmId>/<queueId>' " +
+                    "log group, and farm and queue ids are recorded on VAMS pipeline records rather than " +
+                    "known at deploy time, so the logs read is scoped to this account and Region's Deadline " +
+                    "log-group namespace. The handler only ever reads the streams named by the session ids " +
+                    "Deadline Cloud returned for a job registered on the execution being read.",
+                appliesTo: [
+                    {
+                        regex: "/^Resource::arn:.*:logs:.*:log-group:/aws/deadline/\\*(:\\*)?$/g",
+                    },
+                ],
+            },
+        ]);
     }
     fun.addToRolePolicy(
         new iam.PolicyStatement({
@@ -1291,17 +1279,13 @@ export function buildHandleExecutionErrorFunction(
             ],
         })
     );
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
-                appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(fun, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: SAGEMAKER_SUB_PROCESS_NAG_REASON,
+            appliesTo: [{ regex: "/^Resource::arn:.*:sagemaker:.*$/g" }],
+        },
+    ]);
     // Gated the same way the abort path's grant is: with the execution type disabled no pipeline can
     // be registered as DeadlineCloud, so no failing execution can hold a job to cancel.
     if (config.app.pipelines.deadlineCloudExecutionTypeEnabled) {
@@ -1330,22 +1314,18 @@ export function buildHandleExecutionErrorFunction(
                 ],
             })
         );
-        NagSuppressions.addResourceSuppressions(
-            fun,
-            [
-                {
-                    id: "AwsSolutions-IAM5",
-                    reason:
-                        "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
-                        "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob are scoped to this account " +
-                        "and Region's farm hierarchy. The handler only ever passes a farm/queue read from the " +
-                        "failing execution's own pipeline definition, and a job id either read from a registration " +
-                        "row on that execution or matched to it by the reserved VamsPipelineExecutionId parameter.",
-                    appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
-                },
-            ],
-            true
-        );
+        addIamNagSuppressions(fun, [
+            {
+                id: "AwsSolutions-IAM5",
+                reason:
+                    "Deadline Cloud farm, queue and job ids are recorded on VAMS pipeline records rather than " +
+                    "known at deploy time, so deadline:UpdateJob/ListJobs/GetJob are scoped to this account " +
+                    "and Region's farm hierarchy. The handler only ever passes a farm/queue read from the " +
+                    "failing execution's own pipeline definition, and a job id either read from a registration " +
+                    "row on that execution or matched to it by the reserved VamsPipelineExecutionId parameter.",
+                appliesTo: [{ regex: "/^Resource::arn:.*:deadline:.*$/g" }],
+            },
+        ]);
     }
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
@@ -1671,29 +1651,25 @@ export function buildDeadlineCloudJobCallbackFunction(
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason:
-                    "Deadline Cloud job submission targets operator-owned farms/queues whose IDs are stored in " +
-                    "pipeline records rather than known at deploy time, so deadline:GetJob is scoped to this " +
-                    "account/region's farms, queues and jobs by wildcard. Step Functions task tokens are opaque " +
-                    "values that carry no resource ARN, so states:SendTaskSuccess/SendTaskFailure cannot be " +
-                    "scoped below the account/region — the same scope the pipeline callback lambdas use.",
-                appliesTo: [
-                    {
-                        regex: "/^Resource::arn:.*:deadline:.*$/g",
-                    },
-                    {
-                        regex: "/^Resource::arn:.*:states:.*$/g",
-                    },
-                ],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(fun, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason:
+                "Deadline Cloud job submission targets operator-owned farms/queues whose IDs are stored in " +
+                "pipeline records rather than known at deploy time, so deadline:GetJob is scoped to this " +
+                "account/region's farms, queues and jobs by wildcard. Step Functions task tokens are opaque " +
+                "values that carry no resource ARN, so states:SendTaskSuccess/SendTaskFailure cannot be " +
+                "scoped below the account/region — the same scope the pipeline callback lambdas use.",
+            appliesTo: [
+                {
+                    regex: "/^Resource::arn:.*:deadline:.*$/g",
+                },
+                {
+                    regex: "/^Resource::arn:.*:states:.*$/g",
+                },
+            ],
+        },
+    ]);
     suppressCdkNagErrorsByGrantReadWrite(fun);
     return fun;
 }
