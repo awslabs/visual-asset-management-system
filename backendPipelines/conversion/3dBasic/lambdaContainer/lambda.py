@@ -933,12 +933,13 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             logger=logger, scan=scan)
         skipped_entries = list(getattr(fetched, "skipped_entries", None) or [])
         if escalation_allowed and getattr(fetched, "skipped_for_size_count", 0):
-            # Files the model references were left out for size: a larger job can include them. The
-            # total they add is not known, so the router sizes from what was fetched so far.
+            # Files the model references were left out for size: a larger job can include them. The job is
+            # sized from the input and the declared sizes of every referenced file found (fetched or left
+            # out), so the larger run does not skip them again.
             raise conversion_service.EscalationRequired(_escalation(
                 conversion_service.REASON_SIZE,
                 f"{input_name} references files the function's size limits leave out.", input_name,
-                input_size + max(getattr(fetched, "total_bytes", 0) or 0, 0), input_s3_asset_extension,
+                input_size + max(getattr(fetched, "declared_bytes", 0) or 0, 0), input_s3_asset_extension,
                 output_filetype, size_check.MEMORY_RESOURCE))
         # MISSING_REFERENCES fail stops here, before the conversion, naming the files.
         if options.missing_references == "fail" and skipped_entries:
@@ -965,7 +966,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "tool_timeout_seconds": int(worker_timeout_seconds()),
             "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
             # The triangle budget of the scene walks: the constant one on Lambda, the task's own on Batch.
-            "max_triangles": size_check.triangle_budget(),
+            "max_triangles": size_check.triangle_budget(output_extension=output_filetype),
         }, work_dir) or {}
         _phase_timer.phase("upload")
         removed = ((worker_result.get("report") or {}).get("removed")) or []
@@ -1210,6 +1211,18 @@ def convert(data):
         result = escalation.result
         logger.info(f"The conversion continues on AWS Batch: {conversion_service.REASON_TEXT[result['reason']]}")
         return result
+    except Exception as e:  # noqa: BLE001 - recorded, then raised unchanged
+        if tier == size_check.TIER_BATCH:
+            # The end of the line: say which tier ran and how it failed, then fail as before. The error text
+            # is the one the job's log and the workflow carry.
+            reason = data.get("escalationReason")
+            reason = reason if reason in conversion_service.ESCALATION_REASONS else None
+            _phase_timer.stop()
+            write_run_document(conversion_service.run_document(
+                tier, task_memory_mib, _task_vcpu(), _phase_timer.seconds, reason=reason,
+                escalated_from=size_check.TIER_LAMBDA if reason else None,
+                message=f"{type(e).__name__}: {e}", failed=True))
+        raise
 
     if run_document_enabled:
         reason = data.get("escalationReason")

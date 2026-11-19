@@ -311,23 +311,31 @@ def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None, output_ex
 
 # Peak resident memory per triangle of a USD scene read and written as GLB, measured on the 120 GiB
 # Fargate task on 24 to 358 million triangles (266 to 279 bytes, flat), rounded up. USD to STL needs
-# about 1.45 times that, which the worker's address-space limit still bounds.
+# about 1.45 times that (SCENE_TRIANGLE_FACTOR_BY_OUTPUT), which the worker's address-space limit still
+# bounds.
 BYTES_PER_SCENE_TRIANGLE = 270
 
 
-def scene_triangle_budget(memory_bytes, floor):
+# How much more memory per triangle an output format needs than GLB (the figure above), where measured.
+# Other outputs use the GLB figure.
+SCENE_TRIANGLE_FACTOR_BY_OUTPUT = {".stl": 1.45}
+
+
+def scene_triangle_budget(memory_bytes, floor, output_extension=None):
     """The triangle budget of a scene walk (a USD, STEP or FBX scene) on a task with ``memory_bytes``:
-    the memory a conversion may use, less the base, divided by ``BYTES_PER_SCENE_TRIANGLE``, never below
-    ``floor`` (the budget the Lambda tier has always had). None when the memory is not known."""
+    the memory a conversion may use, less the base, divided by ``BYTES_PER_SCENE_TRIANGLE`` (times the
+    output format's factor), never below ``floor`` (the budget the Lambda tier has always had). None when
+    the memory is not known."""
     if not memory_bytes:
         return None
     usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
-    return max(int(usable / BYTES_PER_SCENE_TRIANGLE), int(floor))
+    factor = SCENE_TRIANGLE_FACTOR_BY_OUTPUT.get((output_extension or "").lower(), 1.0)
+    return max(int(usable / (BYTES_PER_SCENE_TRIANGLE * factor)), int(floor))
 
 
-def triangle_budget(environ=None, floor=30_000_000):
+def triangle_budget(environ=None, floor=30_000_000, output_extension=None):
     """The triangle budget this run's scene walks use, or None to keep the constant one. The constant
     (30 million) is what the Lambda tier has always used, and at 10,240 MB the memory-derived budget
     would be 34.6 million, so the Lambda tier keeps the constant; a Batch task derives the budget from
     its own memory."""
-    return scene_triangle_budget(task_memory_bytes(environ), floor)
+    return scene_triangle_budget(task_memory_bytes(environ), floor, output_extension)

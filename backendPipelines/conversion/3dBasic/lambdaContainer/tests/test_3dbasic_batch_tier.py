@@ -126,6 +126,14 @@ class TestTriangleBudget:
         budget = size_check.triangle_budget({"VAMS_TASK_MEMORY_MIB": str(mib)})
         assert lower <= budget <= upper
 
+    def test_an_stl_output_gets_a_smaller_budget_than_a_glb_output(self):
+        environ = {"VAMS_TASK_MEMORY_MIB": str(30 * 1024)}
+        glb = size_check.triangle_budget(environ, output_extension=".glb")
+        stl = size_check.triangle_budget(environ, output_extension=".STL")
+        assert glb == size_check.triangle_budget(environ)
+        assert 0.68 < stl / glb < 0.70  # 1 / 1.45
+        assert size_check.triangle_budget({"VAMS_TASK_MEMORY_MIB": "4096"}, output_extension=".stl") == 30_000_000
+
     def test_the_budget_never_falls_below_the_constant(self):
         assert size_check.triangle_budget({"VAMS_TASK_MEMORY_MIB": "4096"}) == 30_000_000
 
@@ -327,6 +335,45 @@ class TestEscalationOnTheLambdaTier:
                 mod.convert_input_output("s3://abkt/xid/m.gltf", "s3://obkt/out/", ".glb", "", "", None,
                                          allow_escalation=True)
         assert excinfo.value.result["inputBytes"] == 901 * MB
+
+    def _skipped_for_size_report(self):
+        import referenced_files
+        report = referenced_files.FetchReport()
+        report.skipped_for_size_count = 2
+        report.skipped_for_size = ["a.png: too big", "b.png: too big"]
+        # 1 MB fetched; 900 MB of declared sizes over everything the model references
+        report.total_bytes = 1 * MB
+        report.declared_bytes = 900 * MB
+        return report
+
+    def test_an_optional_file_skipped_for_size_escalates_sized_from_every_referenced_file(self):
+        mod = _load()
+        report = self._skipped_for_size_report()
+        with patch.object(mod.referenced_files, "fetch_referenced_files", MagicMock(return_value=report)), \
+                patch.object(mod, "head_input", MagicMock(return_value=(1 * MB, ""))), \
+                patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "wb").close() or p)), \
+                patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"}):
+            with pytest.raises(conversion_service.EscalationRequired) as excinfo:
+                mod.convert_input_output("s3://abkt/xid/m.gltf", "s3://obkt/out/", ".glb", "", "", None,
+                                         allow_escalation=True)
+        # the input plus the declared sizes of all referenced files, not only what was fetched (1 MB)
+        assert excinfo.value.result["inputBytes"] == 901 * MB
+        assert excinfo.value.result["reason"] == "size"
+
+    def test_without_the_flag_a_skipped_optional_file_completes_as_an_incomplete_conversion(self):
+        mod = _load()
+        report = self._skipped_for_size_report()
+        reached = RuntimeError("reached the conversion")
+        with patch.object(mod.referenced_files, "fetch_referenced_files", MagicMock(return_value=report)), \
+                patch.object(mod, "run_worker", MagicMock(side_effect=reached)), \
+                patch.object(mod, "head_input", MagicMock(return_value=(1 * MB, ""))), \
+                patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "wb").close() or p)), \
+                patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"}):
+            # no escalation: the run goes on to the conversion, as it did before the tier existed
+            with pytest.raises(RuntimeError, match="reached the conversion"):
+                mod.convert_input_output("s3://abkt/xid/m.gltf", "s3://obkt/out/", ".glb", "", "", None)
+        message = mod.incomplete_message("m.gltf", report)
+        assert "2 referenced files could not be included" in message and "incomplete" in message
 
     def test_a_referenced_file_that_is_missing_is_not_escalated(self):
         import referenced_files
@@ -704,3 +751,34 @@ class TestDockerfileTargets:
 
     def test_the_task_sizes_are_the_fargate_pairs(self):
         assert size_check.BATCH_TASK_SIZES == ((4, 30720), (8, 61440), (16, 122880))
+
+
+@pytest.mark.unit
+class TestRunDocumentOnAFailedBatchRun:
+    def _run(self, tier_env, error):
+        mod = _load()
+        patches = [patch.object(mod, "fetch_input_configuration", MagicMock(return_value={"outputType": ".glb"})),
+                   patch.object(mod, "resolve_inputs_from_manifest",
+                                MagicMock(return_value=("s3://abkt/xid/m.stl", "s3://obkt/out/", "", ""))),
+                   patch.object(mod, "convert_input_output", MagicMock(side_effect=error)),
+                   patch.object(mod, "write_run_document"), patch.object(mod, "write_incomplete_result"),
+                   patch.dict(os.environ, tier_env)]
+        started = [p.start() for p in patches]
+        try:
+            with pytest.raises(type(error)):
+                mod.convert({"escalationReason": "memory"})
+            return started[3]
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_a_failed_batch_run_writes_the_document_and_still_raises(self):
+        writer = self._run({"VAMS_TASK_MEMORY_MIB": "30720"}, ValueError("The model could not be read."))
+        document = writer.call_args[0][0]
+        assert document["tier"] == "batch" and document["failed"] is True
+        assert document["escalatedFrom"] == "lambda" and document["reason"] == "memory"
+        assert document["message"] == "ValueError: The model could not be read."
+
+    def test_a_failed_lambda_run_writes_no_document(self):
+        writer = self._run({"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"}, ValueError("The model could not be read."))
+        writer.assert_not_called()

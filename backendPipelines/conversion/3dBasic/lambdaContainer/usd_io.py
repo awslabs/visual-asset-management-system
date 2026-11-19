@@ -734,12 +734,39 @@ def _layer_entry_text_bytes(value):
     return None
 
 
+# The most time samples of one attribute that check_layer_array_text reads (each query loads the sample).
+# A layer with more is checked on its first samples and its default value only.
+LAYER_SAMPLES_CHECKED = 256
+
+
+def _layer_array_text_estimate(value):
+    """An estimate of the .usda text bytes of a ``Vt`` array value, or None when it is not a numeric
+    array. Integers are counted exactly (digits plus a separator) once the cheap upper bound reaches the
+    limit, since most are shorter than the widest; other types use the per-entry figures."""
+    per_entry = _layer_entry_text_bytes(value)
+    if per_entry is None:
+        return None
+    upper = len(value) * per_entry
+    kind = type(value).__name__
+    if upper >= USDA_MAX_ARRAY_TEXT_BYTES and kind.startswith(("Int", "Uint", "Short", "Ushort")):
+        flat = np.abs(np.asarray(value, dtype=np.int64)).reshape(-1)
+        digits = int(flat.size)
+        for width in range(1, 19):
+            digits += int(np.count_nonzero(flat >= 10 ** width))
+        return digits + int(np.count_nonzero(np.asarray(value).reshape(-1) < 0)) + flat.size * USDA_SEPARATOR_BYTES
+    return upper
+
+
 def check_layer_array_text(layer, name="layer"):
     """Refuse a layer holding an array whose .usda text would reach ``USDA_MAX_ARRAY_TEXT_BYTES``: the
     text writer drops such an array without an error. Used by convert-linked before it exports each layer
-    as ``.usda``; sizes are estimated per entry from the array type, as ``check_array_bounds`` does for a
-    mesh. Checks default values and time samples."""
+    as ``.usda``. Sizes are estimates: integers are counted by their digits, other numbers by a per-entry
+    figure for the array type, which can be higher than the text of short numbers. Checks default values
+    and the first ``LAYER_SAMPLES_CHECKED`` time samples of each attribute. A layer that cannot be
+    opened is refused with a message naming it."""
     from pxr import Sdf
+    if layer is None:
+        raise ValueError(f"{name} could not be read, so its arrays could not be checked for a .usda export.")
     found = []
 
     def visit(path):
@@ -749,19 +776,19 @@ def check_layer_array_text(layer, name="layer"):
         if spec is None:
             return
         values = [spec.default] if spec.default is not None else []
-        for time in layer.ListTimeSamplesForPath(path):
+        for time in layer.ListTimeSamplesForPath(path)[:LAYER_SAMPLES_CHECKED]:
             values.append(layer.QueryTimeSample(path, time))
         for value in values:
-            per_entry = _layer_entry_text_bytes(value)
-            if per_entry is not None and len(value) * per_entry >= USDA_MAX_ARRAY_TEXT_BYTES:
-                found.append((str(path), len(value) * per_entry))
+            size = _layer_array_text_estimate(value)
+            if size is not None and size >= USDA_MAX_ARRAY_TEXT_BYTES:
+                found.append((str(path), size))
 
     layer.Traverse(Sdf.Path.absoluteRootPath, visit)
     if found:
         where, size = max(found, key=lambda item: item[1])
         raise ValueError(
-            f"{name} has an array, {where}, that would be about {size / 1e9:,.1f} GB of text, more than the "
-            f"{USDA_MAX_ARRAY_TEXT_BYTES / 1e9:,.1f} GB a .usda array can hold (a larger array is dropped "
+            f"{name} has an array, {where}, that would be an estimated {size / 1e9:,.1f} GB of text, more than "
+            f"the {USDA_MAX_ARRAY_TEXT_BYTES / 1e9:,.1f} GB a .usda array can hold (a larger array is dropped "
             f"without an error when the text is written). Convert it to .usdc instead.")
 
 

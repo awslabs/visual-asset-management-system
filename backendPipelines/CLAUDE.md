@@ -554,13 +554,17 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     (`conversion_service.attempt_deadline_epoch`, four hours by default). The scene triangle budget
     (`size_check.triangle_budget`, passed to the worker as `job["max_triangles"]`) is the constant 30 million on Lambda
     and `(0.9 x task memory - 300 MiB) / 270 bytes` on a Batch task (measured 266 to 279 bytes per triangle, USD to GLB),
-    never below 30 million. The vendored `scene_limits.py` is unchanged: the callers pass the budget in.
+    divided by the output's factor in `size_check.SCENE_TRIANGLE_FACTOR_BY_OUTPUT` (STL 1.45), never below 30 million. The vendored `scene_limits.py` is unchanged: the callers pass the budget in.
 -   **Named results instead of errors.** The state machine sends `allowEscalation: true` on the Lambda attempt of a
     deployment with the tier. Then `convert()` returns `{"escalate": true, "reason": "size" | "memory" | "time", ...}`
     (`conversion_service.escalation_result`) for an input over the function's limits, a worker ended by SIGKILL
     (`WorkerKilledForMemory`), a worker out of time (`WorkerOutOfTime`) and a referenced file over the limits; the
     result carries the input's size, the size check's limit for each Batch job size and the memory a retry must
-    exceed, so the launcher's `computeTier.choose_job_size` picks a size without holding any factor. Without the flag
+    exceed, so the launcher's `computeTier.choose_job_size` picks a size without holding any factor. An OPTIONAL
+    referenced file the function's limits leave out (a large texture) also escalates when the flag is set, so the
+    Batch run can include it; the job is sized from the input plus the declared (`HeadObject`) sizes of every
+    referenced file found, fetched or not (`FetchReport.declared_bytes`), so the larger run does not skip it again.
+    Without the flag the run completes as an incomplete conversion, as before. Without the flag
     (a deployment without the tier, a direct invocation, the Batch task itself) the same conditions raise the errors
     they always raised, with the same text. A format limit no memory lifts (`conversion_service.check_format_limit`: a PLY over
     4 GiB, whose loader keeps a 32-bit size) is refused before any download on both tiers and never escalated.
@@ -570,8 +574,9 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     is the text size and not an entry count: ints are counted by their digits, a vec3f at 40 bytes, a vec2f at 27), and
     a `.usdc` or `.usdz` array over 0x7E000000 bytes (the
     LZ4 block limit) is refused because the crate would write and then fail at read. convert-linked to `.usda` applies
-    the same text bound to each layer it will export (`check_layer_array_text`, estimated per entry from the array type),
-    before any file is written. The worker turns a crate's
+    the same text bound to each layer it will export (`check_layer_array_text`: ints counted by digits, other types
+    estimated per entry, the message says "estimated"; the first `LAYER_SAMPLES_CHECKED` time samples of each
+    attribute are read; a layer that cannot be opened is refused by name), before any file is written. The worker turns a crate's
     decompression failure into a `ValueError` saying the file could not be read (`conversion_worker.translate_error`).
 -   **Worker environment.** `conversion_service.is_scrubbed` lists what the child never receives (`AWS_*`, `ECS_*`,
     `VAMS_*`, including `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` and `ECS_CONTAINER_METADATA_URI*`, which on Fargate
@@ -579,14 +584,17 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
 -   **Run document.** `conversion-run.json` (`vams.conversion3dBasic.run/v1`: tier, task memory and vCPU, seconds per
     phase, and for a continued run its reason) is written under the run's results folder only when the request carries
     `allowEscalation` (a deployment with the tier) or the run is on Batch, so a deployment without the tier writes
-    nothing new.
+    nothing new. A failed Batch run also writes it, with `failed: true` and the error line, then fails as before; a
+    failed Lambda run writes none (its error is in the workflow).
 -   **Launcher.** Not in this change. The Lambdas of the callback form (`conversion/3dBasic/lambda/`:
     `vamsExecuteConversion3dBasicPipeline`, `openPipeline`, `constructPipeline`, `selectJobSize`, `pipelineEnd`, the
     selector `computeTier`, the vendored `manifestHelper` and `customLogging`) arrive with the infrastructure that deploys
     them (config, VPC, Batch resources, state machine, registration override), because their `states:SendTaskFailure`
     grant comes from that builder. The container's contract with them is fixed here: the converter never receives the
     workflow's task token, the Batch task gets only locations in `VAMS_CONVERSION_EVENT`, and the job role has no
-    `states:` permission.
+    `states:` permission. The job definition must set `linuxParameters.initProcessEnabled` (the entry runs as PID 1
+    and does not reap orphaned grandchildren such as Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the
+    S3 clients read the Region at import).
 -   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
     (Lambda) and `GOLDEN_TARGET=batch tests/golden/run_golden.sh` (the same 176 cells, one container run each, plus
     `tests/test_3dbasic_hostile_inputs_golden.py` on both).

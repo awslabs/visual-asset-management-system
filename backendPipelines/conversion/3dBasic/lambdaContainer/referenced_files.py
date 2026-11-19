@@ -190,6 +190,9 @@ class FetchReport:
     # completion message.
     skipped_for_size: List[str] = field(default_factory=list)
     skipped_for_size_count: int = 0
+    # The declared sizes (HeadObject) of every referenced file found in the asset, fetched or left out
+    # for size. A larger job is sized from this and the input, not from what was fetched.
+    declared_bytes: int = 0
     # Bytes of the non-image files fetched, and decoded bytes of the images fetched.
     geometry_bytes: int = 0
     image_decoded_bytes: int = 0
@@ -604,6 +607,7 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                        f"again to include it)")
                 continue
             size, version_id = measured
+            report.declared_bytes += size
             image = is_image(relative)
             if report.total_bytes + size > limits.max_total_bytes:
                 failure = (f"The files the input references exceed {limits.max_total_bytes} bytes "
