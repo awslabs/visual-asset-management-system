@@ -725,7 +725,8 @@ def run() -> None:
 
     # Output keys are composed before any GPU work: a definition that cannot address its own output
     # must fail immediately rather than after a generation run.
-    relative_subdir = export.compute_relative_subdir(input_file.get("objectKey", ""), asset_id)
+    relative_subdir = export.compute_relative_subdir(input_file.get("objectKey", ""), asset_id,
+                                                     definition.get("inputRelativePath", ""))
     logger.info(f"Relative subdirectory within asset {asset_id}: '{relative_subdir}'")
 
     hf_home = resolve_hf_home(model)

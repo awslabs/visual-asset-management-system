@@ -55,6 +55,9 @@ MANIFEST_PATH_PIPELINES = {
         "openPipeline": "openPipeline.py", "builder": "constructPipeline.py",
         # The subfolder is resolved in the Lambda; the container receives it as relativeSubdir.
         "builderReads": ("inputRelativePath",)},
+    "genAi/imageTo3d": {
+        "vamsExecute": ["vamsExecuteImageTo3dPipeline.py"],
+        "openPipeline": "openPipeline.py", "builder": "constructPipeline.py"},
 }
 
 FIELDS = ("inputRelativePath", "inputAssetRootS3Key", "inputAssetRootBucket")

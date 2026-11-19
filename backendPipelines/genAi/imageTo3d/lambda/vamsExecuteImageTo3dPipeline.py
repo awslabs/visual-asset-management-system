@@ -208,6 +208,7 @@ def lambda_handler(event, context):
         if len(views) > 1:
             logger.info(f"Multi-view run: {len(views)} views for model '{model}'")
 
+        primary_input = (resolved['inputFiles'] or [{}])[0] or {}
         payload = {
             "inputS3AssetFilePath": resolved['inputS3AssetFilePath'],
             # Every view with the S3 version it is read at. Empty or single-entry for every other run,
@@ -238,6 +239,11 @@ def lambda_handler(event, context):
             "inputBucketRegion": resolved['inputBucketRegion'],
             # The S3 version of the primary input ("" reads the current object); each view carries its own.
             "inputVersionId": resolved['inputVersionId'],
+            # Where the primary input sits in its asset, from its manifest entry (empty without one):
+            # its asset-relative path, whose folder is the output subdirectory, and the asset root.
+            "inputRelativePath": primary_input.get('relativePath') or "",
+            "inputAssetRootS3Key": primary_input.get('assetRootS3Key') or "",
+            "inputAssetRootBucket": primary_input.get('assetRootBucket') or "",
             "outputBucketRegion": resolved['outputBucketRegion'],
             "model": model,
             "sfnExternalTaskToken": external_task_token,
