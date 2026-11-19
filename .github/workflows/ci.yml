@@ -665,6 +665,14 @@ jobs:
             - name: Build the image and run the golden round trip
               run: bash backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh
 
+            # The same cells on the image's AWS Batch target (non-root user, batch_entry.py entrypoint), so a
+            # change that breaks the Batch output or entrypoint cannot pass with the Lambda run alone.
+            - name: Build the Batch target and run the golden round trip
+              env:
+                  GOLDEN_TARGET: batch
+                  GOLDEN_IMAGE: vams-3dbasic-golden-batch
+              run: bash backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh
+
     # The VamsMCP suite. The server imports vamscli, which is not on PyPI, so VamsCLI is installed from
     # its directory first. The mcp SDK needs Pydantic v2, so this suite has a job of its own rather
     # than sharing the backend's Pydantic v1 environment.
