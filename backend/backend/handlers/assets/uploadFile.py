@@ -806,26 +806,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_file_key)
-        filename = os.path.basename(base_file_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        # List objects in the directory
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_file_key}{PREVIEW_FILE_PATTERN}"
+
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
+                preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
