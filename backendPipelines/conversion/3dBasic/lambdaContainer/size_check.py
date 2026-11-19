@@ -138,8 +138,8 @@ TIER_BATCH = "batch"
 TASK_MEMORY_VARIABLE = "VAMS_TASK_MEMORY_MIB"
 
 # The AWS Batch (Fargate) job sizes the tier runs on, as (vCPU, memory MiB): the Fargate pairs the
-# deployment offers. The launcher's selector (lambda/computeTier.py) and the CDK construct keep the same
-# ladder; tests/test_3dbasic_batch_tier_contract.py compares them.
+# deployment offers. The launcher's selector and the CDK construct (both added with the infrastructure
+# change) keep the same ladder.
 BATCH_TASK_SIZES = ((4, 30 * 1024), (8, 60 * 1024), (16, 120 * 1024))
 
 

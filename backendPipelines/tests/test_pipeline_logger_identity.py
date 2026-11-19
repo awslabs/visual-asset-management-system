@@ -37,7 +37,6 @@ LOGGER_COPIES = (
     "backendPipelines/genAi/cadStepAgent/lambda/customLogging/logger.py",
     "backendPipelines/genAi/imageTo3d/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/customLogging/logger.py",
-    "backendPipelines/conversion/3dBasic/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/transfer/lambda/customLogging/logger.py",

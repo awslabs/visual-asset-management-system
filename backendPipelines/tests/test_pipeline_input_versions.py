@@ -61,9 +61,6 @@ MANIFEST_NAMED_VERSION_CHECKS = {
 # location, since AWS Batch bounds the command's size) and reads each input file's own versionId there.
 # The check reads the named container module instead of constructPipeline.
 CONTAINER_MANIFEST_PIPELINES = {
-    # The 3D Basic Conversion container reads the run manifest itself (the Batch task's environment
-    # carries its location) and the input file's versionId there (`input_version_id`).
-    "backendPipelines/conversion/3dBasic/lambda": "backendPipelines/conversion/3dBasic/lambdaContainer/lambda.py",
     "backendPipelines/utility/zipArchive/lambda": "backendPipelines/utility/zipArchive/container/zip_archive_pipeline/runner.py",
 }
 
@@ -195,7 +192,7 @@ class TestEveryPipelineCarriesTheVersion:
                 return re.search(r"entry\.get\(['\"]versionId['\"]\)", source) is not None
             if relative.rsplit("/", 1)[0] in CONTAINER_MANIFEST_PIPELINES:
                 container = _read(CONTAINER_MANIFEST_PIPELINES[relative.rsplit("/", 1)[0]])
-                return re.search(r"(?:entry|\(entry or \{\}\))\.get\(['\"]versionId['\"]\)", container) is not None
+                return re.search(r"entry\.get\(['\"]versionId['\"]\)", container) is not None
             return _carries(relative, "constructPipeline", r"inputVersionId")
         builders = _lambda_files("constructPipeline") + sorted(CONSTRUCT_PIPELINE_BUILDERS)
         missing = [relative for relative in builders if not _whole_asset(relative) and not carries(relative)]

@@ -549,7 +549,7 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
 -   **Where the limits come from.** `size_check.memory_limit_bytes` reads `VAMS_TASK_MEMORY_MIB` on a Batch task and
     `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` on Lambda; `size_check.compute_tier` names the tier. The Batch job sizes are
     `size_check.BATCH_TASK_SIZES` ((4 vCPU, 30 GiB), (8, 60), (16, 120)); the launcher's `computeTier.JOB_SIZES` and the
-    CDK construct's ladder must equal it (`lambda/tests/test_batch_tier_launcher.py` compares the first). The attempt's
+    CDK construct's ladder, both added with the infrastructure change, must equal it. The attempt's
     time comes from `VAMS_ATTEMPT_DEADLINE` (epoch seconds) or `VAMS_ATTEMPT_SECONDS`
     (`conversion_service.attempt_deadline_epoch`, four hours by default). The scene triangle budget
     (`size_check.triangle_budget`, passed to the worker as `job["max_triangles"]`) is the constant 30 million on Lambda
@@ -580,12 +580,13 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     phase, and for a continued run its reason) is written under the run's results folder only when the request carries
     `allowEscalation` (a deployment with the tier) or the run is on Batch, so a deployment without the tier writes
     nothing new.
--   **Launcher.** `conversion/3dBasic/lambda/` holds the Lambdas of the callback form (`vamsExecuteConversion3dBasicPipeline`,
-    `openPipeline`, `constructPipeline`, `selectJobSize`, `pipelineEnd`, vendored `manifestHelper` and `customLogging`).
-    The converter never receives the workflow's task token: `openPipeline` keeps it as `externalSfnTaskToken` for
-    `pipelineEnd`, the Batch task gets only locations in `VAMS_CONVERSION_EVENT`, and the job role has no `states:`
-    permission. The infrastructure that deploys these (config, VPC, Batch resources, state machine, registration override)
-    is a separate change.
+-   **Launcher.** Not in this change. The Lambdas of the callback form (`conversion/3dBasic/lambda/`:
+    `vamsExecuteConversion3dBasicPipeline`, `openPipeline`, `constructPipeline`, `selectJobSize`, `pipelineEnd`, the
+    selector `computeTier`, the vendored `manifestHelper` and `customLogging`) arrive with the infrastructure that deploys
+    them (config, VPC, Batch resources, state machine, registration override), because their `states:SendTaskFailure`
+    grant comes from that builder. The container's contract with them is fixed here: the converter never receives the
+    workflow's task token, the Batch task gets only locations in `VAMS_CONVERSION_EVENT`, and the job role has no
+    `states:` permission.
 -   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
     (Lambda) and `GOLDEN_TARGET=batch tests/golden/run_golden.sh` (the same 176 cells, one container run each, plus
     `tests/test_3dbasic_hostile_inputs_golden.py` on both).
