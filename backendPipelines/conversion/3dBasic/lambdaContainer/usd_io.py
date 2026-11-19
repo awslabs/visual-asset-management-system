@@ -204,12 +204,14 @@ def _leaves_first(graph, start):
 LINKED_OUTSIDE_FOLDER = "_linked"
 
 
-def convert_linked(path, input_dir, output_file, output_extension):
+def convert_linked(path, input_dir, output_file, output_extension, output_path_extension=None):
     """REFERENCE_HANDLING convert-linked: convert the selected USD file AND every USD layer it names,
     leaves first, each to ``output_extension`` (``.usdc`` or ``.usda``), keeping the sub-folders,
     rewriting each layer's references to the converted files' names relative to it, and copying the
     other files (textures, ``.usdz`` packages) beside them. Nothing is composed or flattened; each
-    layer keeps its own metersPerUnit and upAxis. Returns the output paths written."""
+    layer keeps its own metersPerUnit and upAxis. ``output_path_extension`` is the run's output path
+    prefix: references are written to where the write-back puts each file, in the same pass, so no
+    layer is opened a second time. Returns the output paths written."""
     from pxr import Sdf, UsdUtils
     root = os.path.realpath(input_dir)
     source = os.path.realpath(path)
@@ -249,7 +251,7 @@ def convert_linked(path, input_dir, output_file, output_extension):
         written = Sdf.Layer.FindOrOpen(target)
         written.Reload(force=True)
 
-        def relink(asset_path, layer_dir=os.path.dirname(local), target_dir=os.path.dirname(target)):
+        def relink(asset_path, layer_dir=os.path.dirname(local), target=target):
             text = str(asset_path)
             base, _, member = text.partition("[")
             if not base:
@@ -257,9 +259,9 @@ def convert_linked(path, input_dir, output_file, output_extension):
             resolved = os.path.realpath(os.path.join(layer_dir, base))
             if resolved not in mapping:
                 return text
-            relinked = os.path.relpath(mapping[resolved], target_dir).replace(os.sep, "/")
-            if not relinked.startswith("."):
-                relinked = "./" + relinked
+            relinked = placed_reference(os.path.relpath(target, out_dir).replace(os.sep, "/"),
+                                        os.path.relpath(mapping[resolved], out_dir).replace(os.sep, "/"),
+                                        output_path_extension)
             return relinked + ("[" + member if member else "")
 
         UsdUtils.ModifyAssetPaths(written, relink)
@@ -307,60 +309,6 @@ def apply_output_path_extension(relative_path, extension):
     insert = normalized.lstrip("/")
     head, separator, filename = relative.rpartition("/")
     return f"{head}{separator}{insert}{filename}"
-
-
-def relink_for_output_extension(export_dir, extension):
-    """Rewrite the asset paths of every loose USD layer in ``export_dir`` to where the workflow's
-    write-back will put the files they name.
-
-    The write-back inserts the execution's output path extension (a workflow's
-    ``defaultOutputFileBaseExecutionPathExtension``, or the one a launch names) immediately before each
-    output file's own name. For files in one folder that changes nothing between them, but a layer
-    whose texture sits in a sub-folder (``textures/a.png``), or a convert-linked layer that names a
-    layer in another folder, would point where no file lands: ``m/x/E/m.usdc`` and ``m/x/textures/E/
-    a.png``. Every asset path that names a file of this export is rewritten to the relative path
-    between the two placed files. The placement depends only on the paths inside the export folder,
-    since the extension goes before the last component of the whole asset-relative path. Returns the
-    number of layers rewritten."""
-    from pxr import Sdf, UsdUtils
-    if normalize_output_path_extension(extension) == NO_EXTENSION:
-        return 0
-    root = os.path.realpath(export_dir)
-
-    def placed(local):
-        relative = os.path.relpath(local, root).replace(os.sep, "/")
-        return apply_output_path_extension(relative, extension)
-
-    rewritten = 0
-    for folder, _, names in os.walk(root):
-        for name in names:
-            if not _is_layer_name(name):
-                continue
-            layer_path = os.path.join(folder, name)
-            layer = Sdf.Layer.FindOrOpen(layer_path)
-            if layer is None:
-                continue
-            layer_placed_dir = posixpath.dirname(placed(layer_path))
-
-            def relink(asset_path, layer_dir=folder, layer_placed_dir=layer_placed_dir):
-                text = str(asset_path)
-                base, bracket, member = text.partition("[")
-                if not base or reference_problem(base):
-                    return text
-                target = os.path.realpath(os.path.join(layer_dir, base))
-                if not (target.startswith(root + os.sep) and os.path.isfile(target)):
-                    return text
-                moved = posixpath.relpath(placed(target), layer_placed_dir or ".")
-                if not moved.startswith("."):
-                    moved = "./" + moved
-                return moved + (bracket + member if bracket else "")
-
-            before = layer.ExportToString()
-            UsdUtils.ModifyAssetPaths(layer, relink)
-            if layer.ExportToString() != before:
-                layer.Save()
-                rewritten += 1
-    return rewritten
 
 
 def package_usdz(path, input_dir, output_file):
@@ -664,10 +612,23 @@ def _identifier(name, used):
     return candidate
 
 
-def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, input_name="model"):
+def placed_reference(from_name, to_name, extension):
+    """The relative asset path from the file ``from_name`` to the file ``to_name`` (both relative to one
+    export folder, forward slashes) once the workflow's write-back has inserted ``extension`` before
+    each file's own name; the plain relative path without an extension."""
+    placed_from = apply_output_path_extension(from_name, extension)
+    placed_to = apply_output_path_extension(to_name, extension)
+    relative = posixpath.relpath(placed_to, posixpath.dirname(placed_from) or ".")
+    return relative if relative.startswith(".") else "./" + relative
+
+
+def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, input_name="model",
+              output_path_extension=None):
     """Write ``scene`` (a ``trimesh.Scene``, ``Trimesh`` or ``PointCloud``) as USD to ``output_file``
-    (``.usdc``, ``.usda`` or ``.usdz``). Textures are written beside a loose file in ``textures/`` and
-    packed into a USDZ."""
+    (``.usdc``, ``.usda`` or ``.usdz``). Textures are written beside a loose file and packed into a
+    USDZ. ``output_path_extension`` is the run's output path prefix: a loose layer names its textures
+    by where the write-back will put them, decided here so the layer is never opened again (a large
+    layer reopened under the worker's memory limit does not fit)."""
     import trimesh
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdUtils, Vt
     if not isinstance(scene, trimesh.Scene):
@@ -689,6 +650,8 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
     # Textures are written beside the layer, as a glTF's buffers and an OBJ's material files are, so the
     # workflow's output path extension (inserted before each file's own name) keeps them together.
     texture_dir = os.path.dirname(layer_path)
+    layer_name = os.path.basename(layer_path)
+    reference_extension = None if output_extension == ".usdz" else output_path_extension
     used_nodes, used_materials, material_paths = set(), set(), {}
     count = 0
     for node_name in scene.graph.nodes_geometry:
@@ -718,6 +681,7 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
             usd_mesh.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(normals))
             usd_mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
             _write_visual(stage, usd_mesh, geometry, materials, texture_dir, used_materials, material_paths,
+                          layer_name, reference_extension,
                           Gf, Sdf, UsdGeom, UsdShade, Vt)
         else:
             points = UsdGeom.Points.Define(stage, path)
@@ -738,6 +702,7 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
 
 
 def _write_visual(stage, usd_mesh, geometry, materials, texture_dir, used_materials, material_paths,
+                  layer_name, reference_extension,
                   Gf, Sdf, UsdGeom, UsdShade, Vt):
     visual = getattr(geometry, "visual", None)
     if visual is None or not getattr(visual, "defined", False):
@@ -777,7 +742,8 @@ def _write_visual(stage, usd_mesh, geometry, materials, texture_dir, used_materi
             reader_out = reader.CreateOutput("result", Sdf.ValueTypeNames.Float2)
             texture = UsdShade.Shader.Define(stage, usd_material.GetPath().AppendChild("diffuseTexture"))
             texture.CreateIdAttr("UsdUVTexture")
-            texture.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(f"./{file_name}"))
+            texture.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(
+                Sdf.AssetPath(placed_reference(layer_name, file_name, reference_extension)))
             texture.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(reader_out)
             texture.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB")
             texture_out = texture.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)

@@ -492,7 +492,7 @@ def resolve_inputs_from_manifest(data):
     _results_location = None
     # The prefix the write-back inserts before each output file's own name (the launch's or the
     # workflow's defaultOutputFileBaseExecutionPathExtension), resolved by the execute handler. A loose
-    # USD output's references are rewritten for it (usd_io.relink_for_output_extension).
+    # USD output names its files by their placed paths (usd_io.placed_reference).
     target = (manifest or {}).get("outputTarget") or {}
     extension = target.get("fileBaseExecutionPathExtension") if isinstance(target, dict) else None
     _output_path_extension = extension if isinstance(extension, str) else None

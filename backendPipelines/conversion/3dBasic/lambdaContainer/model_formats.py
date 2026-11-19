@@ -411,7 +411,8 @@ def export_model(loaded, plan, job):
     prune_for_output(loaded, extension)
     apply_plan(loaded, plan)
     if extension in USD_EXTENSIONS:
-        usd_io.write_usd(loaded, output_file, plan.meters_per_unit, plan.up_axis, extension, job["input_name"])
+        usd_io.write_usd(loaded, output_file, plan.meters_per_unit, plan.up_axis, extension, job["input_name"],
+                         job.get("output_path_extension"))
     elif extension == '.dae':
         _write_dae(loaded, plan, output_file)
     elif extension == '.3mf':

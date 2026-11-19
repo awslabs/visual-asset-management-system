@@ -424,10 +424,13 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     exporters write normals only when cached. `tests/test_3dbasic_no_scipy.py` converts a 163,842-vertex mesh
     to every output in a child with SciPy blocked, under a time bound; this suite's CI environment is built
     from `requirements.txt` and has no SciPy either.
--   A loose USD output's companions are written beside the layer, and `usd_io.relink_for_output_extension`
-    rewrites every loose layer's references for the run's output path extension (the manifest's
-    `outputTarget.fileBaseExecutionPathExtension`), which the write-back inserts before each file's own
-    name (rule 7). `normalize_output_path_extension` and `apply_output_path_extension` there are vendored from
+-   A loose USD output's companions are written beside the layer, and every reference a loose layer holds is
+    written with the path the file will have once the write-back inserts the run's output path extension
+    (the manifest's `outputTarget.fileBaseExecutionPathExtension`) before each file's own name
+    (`usd_io.placed_reference`, used by `write_usd` and `convert_linked` as they write). Never reopen a
+    written layer to fix its paths afterwards: a large layer loaded a second time under the worker's
+    address-space limit crashes the run (rule 7). `normalize_output_path_extension` and
+    `apply_output_path_extension` in `usd_io.py` are vendored from
     `backend/backend/common/workflows/outputPathExtension.py` (drift test in
     `tests/test_3dbasic_output_prefix.py`). `usd_io.dependency_graph` (convert-linked) follows composition
     arcs, value clips and asset-typed attributes only, never layer or prim metadata such as a component's

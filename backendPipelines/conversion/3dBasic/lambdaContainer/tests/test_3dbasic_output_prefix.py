@@ -7,8 +7,9 @@
 The workflow inserts the execution's output path extension (a launch's, or the workflow's
 ``defaultOutputFileBaseExecutionPathExtension``) immediately before each output file's own name
 (``backend/backend/common/workflows/outputPathExtension.py``). A layer and a texture in a sub-folder
-end up apart: ``m/E/m.usdc`` and ``m/textures/E/a.png``. The pipeline now writes textures beside the
-layer and rewrites every loose layer's references to where the write-back puts the files they name.
+end up apart: ``m/E/m.usdc`` and ``m/textures/E/a.png``. The pipeline writes textures beside the layer
+and writes every reference with the path the file will have after the write-back
+(``usd_io.placed_reference``), as the layer is written, so no layer is opened again (D7).
 
 Each case converts through the real worker child, then places the uploaded files the way the
 write-back does and opens the result with USD."""
@@ -161,22 +162,88 @@ class TestLooseUsdUnderAPrefix:
         texture = os.path.join(root, usd_io.apply_output_path_extension("scene/root/parts/tex/green.png", extension))
         assert os.path.isfile(wheel) and os.path.isfile(texture)
 
-    def test_without_a_prefix_nothing_is_rewritten(self, tmp_path):
+    @pytest.mark.parametrize("extension,expected", [
+        (None, "./t.png"), ("/", "./t.png"), ("/E/", "./t.png"), ("/E_", "./E_t.png"),
+    ])
+    def test_a_file_beside_the_layer(self, extension, expected):
+        assert usd_io.placed_reference("m.usdc", "t.png", extension) == expected
+
+    @pytest.mark.parametrize("extension,expected", [
+        (None, "./parts/w.usdc"), ("/E/", "../parts/E/w.usdc"), ("/E_", "./parts/E_w.usdc"),
+    ])
+    def test_a_file_in_a_sub_folder(self, extension, expected):
+        assert usd_io.placed_reference("root.usdc", "parts/w.usdc", extension) == expected
+
+    def test_back_up_from_a_sub_folder(self):
+        assert usd_io.placed_reference("parts/w.usdc", "tex/g.png", "/E/") == "../../tex/E/g.png"
+
+
+@pytest.mark.unit
+class TestALargeLayerIsNotReopened:
+    """In-development defect D7: with an output path prefix the worker reopened every written layer
+    after the export to rewrite its references; for a 281 MB STL written as USD the second load did not
+    fit in the worker's address-space limit (signal 11 / std::bad_alloc). The references are now
+    written with their placed paths as the layer is written, so no written layer is opened again."""
+
+    @pytest.fixture()
+    def opens(self, monkeypatch):
+        from pxr import Sdf as _Sdf
+        original = _Sdf.Layer.FindOrOpen
+        calls = []
+
+        def spy(identifier, *args, **kwargs):
+            calls.append(str(identifier))
+            return original(identifier, *args, **kwargs)
+        monkeypatch.setattr(_Sdf.Layer, "FindOrOpen", staticmethod(spy))
+        original_open = Usd.Stage.Open
+
+        def stage_spy(*args, **kwargs):
+            calls.append(str(args[0]) if args else "")
+            return original_open(*args, **kwargs)
+        monkeypatch.setattr(Usd.Stage, "Open", staticmethod(stage_spy))
+        return calls
+
+    @pytest.mark.parametrize("output", [".usdc", ".usda"])
+    @pytest.mark.parametrize("extension", ["/o/x/", "/E_"])
+    def test_a_flattened_output_is_never_reopened(self, tmp_path, opens, output, extension):
+        import conversion_worker
+        import new_format_helpers as helpers
+        source = tmp_path / "src" / "big.stl"
+        source.parent.mkdir()
+        source.write_bytes(trimesh.creation.icosphere(subdivisions=6).export(file_type="stl"))
+        work = tmp_path / "run"
+        (work / "input").mkdir(parents=True)
+        (work / "export").mkdir()
+        (work / "input" / "big.stl").write_bytes(source.read_bytes())
+        output_file = work / "export" / f"big{output}"
+        conversion_worker.convert_model({
+            "input_file": str(work / "input" / "big.stl"), "input_dir": str(work / "input"),
+            "input_relative_path": "big.stl", "by_reference": {}, "output_file": str(output_file),
+            "output_filetype": output, "input_name": "big.stl", "options": {},
+            "output_path_extension": extension})
+        assert output_file.is_file()
+        reopened = [path for path in opens if os.path.realpath(path.split("[")[0]) == os.path.realpath(output_file)]
+        assert reopened == [], reopened
+
+    def test_a_textured_output_names_its_texture_by_the_placed_path(self, tmp_path, opens):
+        import new_format_helpers as helpers
         export = tmp_path / "export"
         export.mkdir()
-        usd_io.write_usd(__import__("new_format_helpers").textured_cube(), str(export / "m.usda"), 1.0, "y", ".usda")
-        before = (export / "m.usda").read_text()
-        for extension in (None, "", "/"):
-            assert usd_io.relink_for_output_extension(str(export), extension) == 0
-        assert (export / "m.usda").read_text() == before
+        usd_io.write_usd(helpers.textured_cube(), str(export / "m.usda"), 1.0, "y", ".usda",
+                         output_path_extension="/E_")
+        assert opens == []
+        text = (export / "m.usda").read_text()
+        assert "@./E_material_0.png@" in text and (export / "material_0.png").is_file()
 
-    def test_a_reference_outside_the_export_is_left_alone(self, tmp_path):
+    def test_a_usdz_package_keeps_its_internal_names(self, tmp_path):
+        import new_format_helpers as helpers
         export = tmp_path / "export"
-        (export / "sub").mkdir(parents=True)
-        (export / "sub" / "t.png").write_bytes(b"png")
-        layer = export / "a.usda"
-        layer.write_text('#usda 1.0\ndef "X" {\n    asset a = @./sub/t.png@\n    asset b = @./gone.png@\n'
-                         '    asset c = @/etc/hostname@\n}\n')
-        usd_io.relink_for_output_extension(str(export), "/E/")
-        text = layer.read_text()
-        assert "@../sub/E/t.png@" in text and "@./gone.png@" in text and "@/etc/hostname@" in text
+        export.mkdir()
+        usd_io.write_usd(helpers.textured_cube(), str(export / "m.usdz"), 1.0, "y", ".usdz",
+                         output_path_extension="/E_")
+        import zipfile
+        with zipfile.ZipFile(export / "m.usdz") as archive:
+            layer = next(n for n in archive.namelist() if n.endswith(".usdc"))
+            assert "material_0.png" in archive.namelist()
+        scene = usd_io.read_usd(str(export / "m.usdz"), str(export))[0]
+        assert any(getattr(g.visual.material, "baseColorTexture", None) is not None for g in scene.geometry.values())
