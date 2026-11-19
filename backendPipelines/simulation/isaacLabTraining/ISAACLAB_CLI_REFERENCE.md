@@ -1,339 +1,154 @@
 # Isaac Lab CLI Reference Guide
 
-This guide provides a complete reference for Isaac Lab command-line arguments used in training and evaluation pipelines.
+This guide describes the Isaac Lab 3.0 command line the VAMS pipeline runs for training and evaluation, the physics engine setting, and the task ids. The pipeline builds every command itself from the run configuration. The commands below are for reproducing a run by hand in the Isaac Lab container.
 
 ## Table of Contents
 
 -   [Quick Start](#quick-start)
+-   [Physics Engine](#physics-engine)
+-   [Task Ids](#task-ids)
+-   [Task Support by Engine](#task-support-by-engine)
 -   [Important: Evaluation Termination](#important-evaluation-termination)
--   [Play Script Arguments](#play-script-arguments-playpy)
--   [Train Script Arguments](#train-script-arguments-trainpy)
--   [RSL-RL Specific Arguments](#rsl-rl-specific-arguments)
--   [AppLauncher Arguments](#applauncher-arguments)
--   [Environment Configuration](#environment-configuration)
--   [Examples](#examples)
+-   [Visualizers](#visualizers)
+-   [Logs, Checkpoints and Video](#logs-checkpoints-and-video)
+-   [VAMS Pipeline Integration](#vams-pipeline-integration)
+-   [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Quick Start
 
+The image runs Isaac Lab from `/workspace/isaaclab` with Python 3.12 in `/opt/isaaclab-venv`. The `isaaclab.sh` launcher is deprecated upstream, and the pipeline still uses it because the pinned image ships it.
+
 ### Training
 
 ```bash
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Ant-Direct-v0 \
+./isaaclab.sh train --rl_library rsl_rl \
+    --task Isaac-Cartpole \
     --num_envs 4096 \
-    --max_iterations 1000 \
-    --headless
+    --max_iterations 1500 \
+    --viz none \
+    physics=newton_mjwarp
 ```
 
 ### Evaluation
 
 ```bash
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-    --task Isaac-Ant-Direct-v0 \
+./isaaclab.sh play --rl_library rsl_rl \
+    --task Isaac-Cartpole \
     --num_envs 100 \
-    --checkpoint /path/to/model.pt \
-    --headless \
-    --video \
-    --video_length 5000
+    --checkpoint /path/to/model_1499.pt \
+    --video --video_length 50000 \
+    --viz newton_gl \
+    physics=newton_mjwarp
 ```
+
+`--rl_library` takes `rsl_rl`, `rl_games` or `skrl`. `--headless` no longer exists: Isaac Lab rejects it as an unrecognized argument. `--viz none` keeps visualizers off for training. The `physics=<engine>` override goes last.
+
+---
+
+## Physics Engine
+
+Isaac Lab 3.0 selects the physics engine with a Hydra override, `physics=<preset>`, after the options and without leading dashes. The pipeline exposes one setting for both training and evaluation, `trainingConfig.physics`:
+
+| Value            | Engine                                                     | Notes                                                |
+| ---------------- | ---------------------------------------------------------- | ---------------------------------------------------- |
+| `newton_mjwarp`  | Newton with the MuJoCo-Warp solver. **Default.**           | Newton and its packages ship in the image.           |
+| `isaacsim_physx` | PhysX on Isaac Sim. The engine earlier VAMS releases used. | Set this to reproduce a run made before the upgrade. |
+
+Other presets exist (`newton_kamino`, `ovphysx`, `physx`) and depend on the task or cannot share a process with Isaac Sim, so the pipeline does not offer them.
+
+Things to know:
+
+-   **Results differ between engines.** A saved configuration, a built-in template or an Isaac Sim connector launch that does not name an engine now runs on Newton. A checkpoint trained before the upgrade was trained on PhysX.
+-   **Evaluate on the engine that trained the policy.** Evaluating on the other engine is a transfer test. A checkpoint carries observations and actions and not the engine, so it loads on either, and the behaviour is similar and not identical. When the evaluation can read the training run's `train-config.json` and the engines differ, the run prints a note and records it as `physicsNote` in `evaluate-config.json`. The note never fails the run. Robots with branched kinematics may also need joint and body ordering overrides that the pipeline does not expose.
+-   **A task offers the engines it lists.** `./isaaclab.sh list_envs --keyword <task> --show_presets` prints them. A task that does not list the chosen engine fails 11 to 17 seconds after the command starts, before Isaac Sim starts, and the pipeline reports `Task <id> does not offer physics=<value> ... Options for this task: ...`.
+-   **Environments ported from Isaac Lab 2.x** usually declare PhysX only. With the default engine they fail at the start; set `physics` to `isaacsim_physx`.
+-   **The first run on a new instance compiles kernels.** Warp and Newton compile on first use. A cold Newton training start measured 88 to 112 seconds against 25 seconds warm on PhysX. The cache lives in the container, so every job starts cold.
+
+---
+
+## Task Ids
+
+Isaac Lab 3.0 does not alias the 2.x ids ending in `-v0` (`Isaac-Cartpole-v0` raises a deprecation error), and some ids were renamed rather than only shortened. The pipeline maps these saved ids to their 3.0 ids, logs the mapping, and records the requested id as `taskIdRequested`:
+
+| Isaac Lab 2.x id                   | Isaac Lab 3.0 id               |
+| ---------------------------------- | ------------------------------ |
+| `Isaac-Cartpole-v0`                | `Isaac-Cartpole`               |
+| `Isaac-Cartpole-Direct-v0`         | `Isaac-Cartpole-Direct`        |
+| `Isaac-Lift-Cube-Franka-v0`        | `Isaac-Lift-Franka`            |
+| `Isaac-Velocity-Rough-Anymal-D-v0` | `Isaac-Velocity-Rough-AnymalD` |
+
+Any other id is passed to Isaac Lab as written. For another saved 2.x id, look the 3.0 id up with `./isaaclab.sh list_envs` and update the configuration. Tasks that moved to the contributed set carry an `IsaacContrib-` prefix.
+
+---
+
+## Task Support by Engine
+
+Three levels of evidence are used. **ran**: a training run finished. **config**: Isaac Lab accepted the engine for the task and Isaac Sim started, and no training ran. **docs**: Isaac Lab's documentation names the pair. A listed preset is not proof that training works: only Cartpole was run on both engines.
+
+| Task                                                                                     | Newton (`newton_mjwarp`)           | PhysX (`isaacsim_physx`)     |
+| ---------------------------------------------------------------------------------------- | ---------------------------------- | ---------------------------- |
+| `Isaac-Cartpole`, `Isaac-Cartpole-Direct`                                                | ran (rsl_rl, rl_games, skrl)       | ran (rsl_rl, rl_games, skrl) |
+| `Isaac-Ant`, `Isaac-Ant-Direct`, `Isaac-Humanoid`, `Isaac-Humanoid-Direct`               | config                             | config                       |
+| `Isaac-Velocity-Rough-AnymalD`, `Isaac-Velocity-Rough-G1`, `Isaac-Reorient-Cube-Allegro` | config                             | config                       |
+| `Isaac-Lift-Franka`                                                                      | docs                               | docs                         |
+| `IsaacContrib-AutoMate-*`                                                                | not offered (no physics preset)    | not measured                 |
+| Tasks that list only `isaacsim_physx`                                                    | not offered                        | listed                       |
+| Tasks that list no physics preset                                                        | not offered                        | not measured                 |
+| A custom environment                                                                     | only with a `newton_mjwarp` preset | as the port declares         |
+
+The AutoMate tasks offer `rl_games` only. The pipeline refuses them on Newton and with any other library before a GPU instance starts.
 
 ---
 
 ## Important: Evaluation Termination
 
-> **Critical**: The `play.py` script runs in an **infinite loop** by default. Without the `--video` flag, evaluation will never terminate on its own.
+> **Critical**: `play` runs until it is stopped unless a video length bounds it. Without `--video`, evaluation does not terminate on its own.
 
-### How Termination Works
-
-From the Isaac Lab source code (`play.py` lines 127-140):
-
-```python
-while simulation_app.is_running():
-    # ... inference loop ...
-
-    if args_cli.video:
-        timestep += 1
-        if timestep == args_cli.video_length:
-            break  # Only exits when --video is enabled
-```
-
-### Solution for Batch Jobs
-
-Always use `--video` with `--video_length` to ensure evaluation terminates:
-
-```bash
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-    --task Isaac-Ant-Direct-v0 \
-    --checkpoint /path/to/model.pt \
-    --headless \
-    --video \
-    --video_length 45000  # Controls when evaluation stops
-```
-
-### Calculating video_length
-
-The `video_length` parameter is in **simulation steps**, not episodes.
+Always pass `--video` with `--video_length`, and compute it from the run:
 
 ```
 video_length = num_episodes × steps_per_episode
-steps_per_episode = episode_length_s / (decimation × physics_dt)
 ```
 
-| Task                     | Typical Steps/Episode | 50 Episodes |
-| ------------------------ | --------------------- | ----------- |
-| Isaac-Ant-Direct-v0      | ~900                  | 45,000      |
-| Isaac-Cartpole-Direct-v0 | ~500                  | 25,000      |
-| Isaac-Humanoid-Direct-v0 | ~1000                 | 50,000      |
+`video_length` counts simulation steps, not episodes. The pipeline sets it from `numEpisodes` and `stepsPerEpisode` (defaults 50 and 1000). Evaluation records a video on every run, and `recordVideo` decides only whether it is uploaded.
 
-**Default**: 1000 steps/episode if not specified.
+As a second bound, the container stops a `play` process that has not finished within a wall-clock limit (1,800 seconds plus 0.1 seconds per step, never more than 6,600) and fails the run naming the engine and the limit. Some play runs did not terminate during testing: the default Kit visualizer under Newton, and a Newton checkpoint played on PhysX.
 
 ---
 
-## Play Script Arguments (`play.py`)
+## Visualizers
 
-Arguments specific to policy evaluation/inference.
+`--viz` selects the visualizer. The container has no display.
 
-| Argument                      | Type | Default                  | Description                                                                                |
-| ----------------------------- | ---- | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `--video`                     | flag | `False`                  | Record videos during evaluation. **Required for auto-termination in batch jobs.**          |
-| `--video_length`              | int  | `200`                    | Length of recorded video in simulation steps. Also controls when evaluation terminates.    |
-| `--disable_fabric`            | flag | `False`                  | Disable Fabric and use USD I/O operations. Slower but more compatible with some workflows. |
-| `--num_envs`                  | int  | `None`                   | Number of parallel environments to simulate. Overrides task default.                       |
-| `--task`                      | str  | `None`                   | Name of the task/environment (e.g., `Isaac-Ant-Direct-v0`). **Required.**                  |
-| `--agent`                     | str  | `rsl_rl_cfg_entry_point` | Name of the RL agent configuration entry point.                                            |
-| `--seed`                      | int  | `None`                   | Random seed for reproducibility.                                                           |
-| `--use_pretrained_checkpoint` | flag | `False`                  | Use pre-trained checkpoint from NVIDIA Nucleus instead of local file.                      |
-| `--real-time`                 | flag | `False`                  | Run simulation in real-time by adding sleep delays between steps.                          |
+| Run                     | Option                 | Why                                                                                             |
+| ----------------------- | ---------------------- | ----------------------------------------------------------------------------------------------- |
+| Training, either engine | `--viz none`           | No window or viewer code runs.                                                                  |
+| Evaluation on Newton    | `--viz newton_gl`      | Records through Newton's own viewer. Isaac Lab warns that Kit frames can be black under Newton. |
+| Evaluation on PhysX     | the default Kit viewer | Recording through Kit RTX needs a GPU with RT cores on both engines.                            |
+
+Video recording needs MoviePy 1.x and `imageio-ffmpeg`, which the image installs. MoviePy 2.x fails to import in Isaac Lab.
 
 ---
 
-## Train Script Arguments (`train.py`)
+## Logs, Checkpoints and Video
 
-Arguments specific to policy training.
+Paths are relative to `/workspace/isaaclab`.
 
-| Argument                  | Type | Default                  | Description                                                                               |
-| ------------------------- | ---- | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `--video`                 | flag | `False`                  | Record videos during training at specified intervals.                                     |
-| `--video_length`          | int  | `200`                    | Length of each recorded video in simulation steps.                                        |
-| `--video_interval`        | int  | `2000`                   | Number of steps between video recordings.                                                 |
-| `--num_envs`              | int  | `None`                   | Number of parallel environments. More environments = faster training but more GPU memory. |
-| `--task`                  | str  | `None`                   | Task/environment name. **Required.**                                                      |
-| `--agent`                 | str  | `rsl_rl_cfg_entry_point` | Agent configuration entry point.                                                          |
-| `--seed`                  | int  | `None`                   | Random seed. Use `-1` for random seed selection.                                          |
-| `--max_iterations`        | int  | `None`                   | Maximum training iterations. Overrides task default.                                      |
-| `--distributed`           | flag | `False`                  | Enable multi-GPU or multi-node distributed training.                                      |
-| `--export_io_descriptors` | flag | `False`                  | Export IO descriptors for deployment (manager-based envs only).                           |
-| `--ray-proc-id`           | int  | `None`                   | Ray integration process ID. Auto-configured by Ray, do not set manually.                  |
+| Library    | Run folder                                      | Checkpoint                                  | TensorBoard events                        |
+| ---------- | ----------------------------------------------- | ------------------------------------------- | ----------------------------------------- |
+| `rsl_rl`   | `logs/rsl_rl/<experiment>/<timestamp>/`         | `model_<n>.pt` in the run folder            | `events.out.tfevents.*` in the run folder |
+| `rl_games` | `logs/rl_games/<experiment>/<timestamp>/`       | `nn/last_<experiment>_ep_<n>_rew__<r>_.pth` | `summaries/`                              |
+| `skrl`     | `logs/skrl/<experiment>/<timestamp>_ppo_torch/` | `checkpoints/agent_<step>.pt`               | not recorded; read in the live smoke      |
 
----
-
-## RSL-RL Specific Arguments
-
-Arguments for the RSL-RL library, available in both `train.py` and `play.py`.
-
-| Argument             | Type | Default | Description                                                          |
-| -------------------- | ---- | ------- | -------------------------------------------------------------------- |
-| `--experiment_name`  | str  | `None`  | Name of the experiment folder where logs are stored.                 |
-| `--run_name`         | str  | `None`  | Suffix appended to the log directory name.                           |
-| `--resume`           | flag | `False` | Resume training from a previous checkpoint.                          |
-| `--load_run`         | str  | `None`  | Name of the run folder to resume from (e.g., `2024-01-15_10-30-00`). |
-| `--checkpoint`       | str  | `None`  | Path to specific checkpoint file (e.g., `/path/to/model_500.pt`).    |
-| `--logger`           | str  | `None`  | Logger backend: `wandb`, `tensorboard`, or `neptune`.                |
-| `--log_project_name` | str  | `None`  | Project name for Weights & Biases or Neptune logging.                |
-
-### Checkpoint Loading Priority
-
-1. `--use_pretrained_checkpoint` - Downloads from NVIDIA Nucleus
-2. `--checkpoint` - Uses specified file path
-3. `--load_run` - Finds latest checkpoint in specified run folder
-4. Default - Finds latest checkpoint in experiment directory
-
----
-
-## AppLauncher Arguments
-
-Common arguments available to all Isaac Lab scripts. These control the simulation application.
-
-### Display & Rendering
-
-| Argument           | Type | Default    | Description                                                                        |
-| ------------------ | ---- | ---------- | ---------------------------------------------------------------------------------- |
-| `--headless`       | flag | `False`    | Run without GUI. **Required for batch/cloud jobs.**                                |
-| `--livestream`     | int  | `-1`       | Enable livestreaming: `0`=disabled, `1`=WebRTC public, `2`=WebRTC private.         |
-| `--enable_cameras` | flag | `False`    | Enable camera sensors and rendering extensions. **Required when using `--video`.** |
-| `--rendering_mode` | str  | `balanced` | Rendering quality preset: `performance`, `balanced`, or `quality`.                 |
-
-### Device & Compute
-
-| Argument   | Type | Default  | Description                                                      |
-| ---------- | ---- | -------- | ---------------------------------------------------------------- |
-| `--device` | str  | `cuda:0` | Compute device: `cpu`, `cuda`, or `cuda:N` where N is GPU index. |
-
-### Logging & Debug
-
-| Argument    | Type | Default | Description                                         |
-| ----------- | ---- | ------- | --------------------------------------------------- |
-| `--verbose` | flag | `False` | Enable verbose-level log output from SimulationApp. |
-| `--info`    | flag | `False` | Enable info-level log output from SimulationApp.    |
-
-### Advanced
-
-| Argument       | Type | Default | Description                                                               |
-| -------------- | ---- | ------- | ------------------------------------------------------------------------- |
-| `--experience` | str  | `""`    | Custom experience file path. Auto-selected based on other flags if empty. |
-| `--xr`         | flag | `False` | Enable XR mode for VR/AR applications.                                    |
-| `--kit_args`   | str  | `""`    | Additional Omniverse Kit arguments as space-separated string.             |
-
-### Experience File Auto-Selection
-
-When `--experience` is empty, Isaac Lab selects the appropriate experience file:
-
-| Conditions                        | Experience File                          |
-| --------------------------------- | ---------------------------------------- |
-| `--headless` + `--enable_cameras` | `isaaclab.python.headless.rendering.kit` |
-| `--headless` only                 | `isaaclab.python.headless.kit`           |
-| `--enable_cameras` only           | `isaaclab.python.rendering.kit`          |
-| Neither                           | `isaaclab.python.kit`                    |
-
----
-
-## Environment Configuration
-
-Key environment configuration parameters that affect episode behavior.
-
-| Parameter           | Type  | Description                                                   |
-| ------------------- | ----- | ------------------------------------------------------------- |
-| `episode_length_s`  | float | Duration of an episode in seconds.                            |
-| `decimation`        | int   | Number of simulation steps per policy step.                   |
-| `seed`              | int   | Random seed for environment initialization.                   |
-| `is_finite_horizon` | bool  | Whether task is finite horizon (no bootstrapping at timeout). |
-
-### Episode Length Calculation
-
-```python
-episode_length_steps = ceil(episode_length_s / (decimation * physics_dt))
-```
-
-Example for `Isaac-Ant-Direct-v0`:
-
--   `episode_length_s` = 15.0
--   `decimation` = 2
--   `physics_dt` = 0.00833 (120 Hz)
--   `episode_length_steps` = ceil(15.0 / (2 × 0.00833)) ≈ 900 steps
-
----
-
-## Examples
-
-### Basic Training
-
-```bash
-# Train Ant locomotion for 500 iterations
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 4096 \
-    --max_iterations 500 \
-    --headless
-```
-
-### Training with Video Recording
-
-```bash
-# Train with periodic video recording
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Cartpole-Direct-v0 \
-    --num_envs 1024 \
-    --max_iterations 300 \
-    --headless \
-    --video \
-    --video_length 200 \
-    --video_interval 1000 \
-    --enable_cameras
-```
-
-### Training with Weights & Biases Logging
-
-```bash
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 4096 \
-    --max_iterations 1000 \
-    --headless \
-    --logger wandb \
-    --log_project_name my-isaaclab-project \
-    --experiment_name ant-training
-```
-
-### Resume Training
-
-```bash
-# Resume from specific checkpoint
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 4096 \
-    --headless \
-    --resume \
-    --checkpoint /path/to/logs/rsl_rl/ant_direct/2024-01-15_10-30-00/model_500.pt
-```
-
-### Evaluation with Termination (Batch Jobs)
-
-```bash
-# Evaluate for approximately 50 episodes
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 100 \
-    --checkpoint /path/to/model.pt \
-    --headless \
-    --video \
-    --video_length 45000 \
-    --enable_cameras
-```
-
-### Evaluation with Pre-trained Checkpoint
-
-```bash
-# Use NVIDIA's pre-trained model
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 32 \
-    --use_pretrained_checkpoint \
-    --headless \
-    --video \
-    --video_length 5000
-```
-
-### Multi-GPU Distributed Training
-
-```bash
-# Launch with torchrun for multi-GPU
-torchrun --nnodes=1 --nproc_per_node=4 \
-    scripts/reinforcement_learning/rsl_rl/train.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 4096 \
-    --max_iterations 1000 \
-    --headless \
-    --distributed
-```
-
-### Real-Time Visualization (Local Development)
-
-```bash
-# Run with GUI for debugging
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py \
-    --task Isaac-Ant-Direct-v0 \
-    --num_envs 16 \
-    --checkpoint /path/to/model.pt \
-    --real-time
-```
+-   `play` writes no TensorBoard events, so an evaluation run has no training-style metrics file of its own.
+-   Video goes to `<folder of --checkpoint>/videos/play/` for `rsl_rl`, and one folder higher for `rl_games` and `skrl`. A checkpoint at a flat path such as `/tmp/model.pt` makes those two try `/videos` and fail with a permission error, so the container downloads the policy into a nested folder under its writable log root.
+-   `rl_games` and `skrl` break with a very small `numEnvs` (64 failed the `rl_games` minibatch check). Leave the parallel environments at the default unless you know the library's minibatch size.
 
 ---
 
 ## VAMS Pipeline Integration
-
-When using Isaac Lab through the VAMS pipeline, the container automatically constructs commands based on your configuration.
 
 ### Training Mode Configuration
 
@@ -341,10 +156,11 @@ When using Isaac Lab through the VAMS pipeline, the container automatically cons
 {
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Ant-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "numEnvs": 4096,
-        "maxIterations": 1000,
-        "rlLibrary": "rsl_rl"
+        "maxIterations": 1500,
+        "rlLibrary": "rsl_rl",
+        "physics": "newton_mjwarp"
     }
 }
 ```
@@ -355,49 +171,61 @@ When using Isaac Lab through the VAMS pipeline, the container automatically cons
 {
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Ant-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "numEnvs": 100,
         "numEpisodes": 50,
-        "stepsPerEpisode": 900,
-        "rlLibrary": "rsl_rl"
+        "stepsPerEpisode": 1000,
+        "rlLibrary": "rsl_rl",
+        "physics": "newton_mjwarp"
     }
 }
 ```
 
-| Parameter         | Type | Default | Description                                   |
-| ----------------- | ---- | ------- | --------------------------------------------- |
-| `numEpisodes`     | int  | 50      | Number of episodes to evaluate                |
-| `stepsPerEpisode` | int  | 1000    | Simulation steps per episode (task-dependent) |
+| Parameter         | Type | Default         | Description                                                             |
+| ----------------- | ---- | --------------- | ----------------------------------------------------------------------- |
+| `physics`         | enum | `newton_mjwarp` | `newton_mjwarp` or `isaacsim_physx`. Blank or absent means the default. |
+| `numEpisodes`     | int  | 50              | Number of episodes to evaluate                                          |
+| `stepsPerEpisode` | int  | 1000            | Simulation steps per episode (task-dependent)                           |
 
-The pipeline converts these to `video_length = numEpisodes × stepsPerEpisode`.
+The uploaded `train-config.json` and `evaluate-config.json` carry the resolved `physics`, the `isaacLabVersion` of the image and the `gpuDriverVersion` the run saw.
+
+### GPU driver
+
+NVIDIA tests Isaac Sim 6.2 on driver 595.58.03 or newer on Linux. The pipeline runs on the driver of the ECS GPU AMI, which was 580.178.04 when it was validated, and prints the driver version at the start of every run. The image itself declares 570.169 as its minimum. A different AMI driver is the operator's risk, and no run fails on the driver version.
 
 ---
 
 ## Troubleshooting
 
-### Evaluation Job Runs Forever
+### Evaluation Job Runs Forever or Is Stopped at the Time Limit
 
-**Cause**: Missing `--video` flag.
+**Cause**: `play` did not end after `--video_length` steps, for example on the default Kit visualizer under Newton or with a checkpoint from the other engine.
 
-**Solution**: Always include `--video` and `--video_length` for batch evaluation jobs.
+**Solution**: Check the run log for where it stopped. Evaluate on the engine that trained the policy, and lower `numEpisodes` or `stepsPerEpisode` to shorten the playback.
+
+### `Task <id> does not offer physics=<value>`
+
+**Cause**: The task does not list that engine.
+
+**Solution**: Set "Physics engine" to one of the options in the message. For an environment ported from Isaac Lab 2.x, use `isaacsim_physx`.
 
 ### Out of GPU Memory
 
 **Cause**: Too many environments for available VRAM.
 
-**Solution**: Reduce `--num_envs`. Start with 1024 and increase gradually.
+**Solution**: Reduce `numEnvs`. Newton used less memory than PhysX for Ant at 4096 environments in testing (about 1.5 GB against 4 GB of GPU memory).
 
-### Video Not Recording
+### Video Is Black
 
-**Cause**: Missing `--enable_cameras` flag.
+**Cause**: Kit frames can be black under Newton.
 
-**Solution**: Add `--enable_cameras` when using `--video`.
+**Solution**: Evaluation on Newton records with `--viz newton_gl`. If frames are still empty, evaluate with `isaacsim_physx`.
 
-### Checkpoint Not Found
+### Checkpoint Does Not Load
 
-**Cause**: Incorrect path or missing `--load_run` specification.
+**Cause**: The checkpoint was written by another RL library, or by a much older Isaac Lab release.
 
-**Solution**: Use absolute paths with `--checkpoint` or specify `--load_run` with the run folder name.
+**Solution**: Select the library that trained it. A checkpoint from before the upgrade was trained on PhysX with Isaac Lab 2.3.0: evaluate it with `isaacsim_physx` and, if it does not load, retrain.
 
 ---
 

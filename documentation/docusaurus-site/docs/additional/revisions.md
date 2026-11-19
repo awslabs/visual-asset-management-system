@@ -44,6 +44,12 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
+-   **Isaac Lab 3.0 and the physics engine setting** — The Isaac Lab training and evaluation pipeline runs on Isaac Lab 3.0.0 and Isaac Sim 6.2 (Python 3.12) and takes a physics engine setting, `trainingConfig.physics`: `newton_mjwarp` (Newton, the default) or `isaacsim_physx` (PhysX on Isaac Sim). Both built-in templates show it as a "Physics engine" drop-down, and the uploaded run configuration records the engine, the Isaac Lab image version and the GPU driver version. A task that does not offer the chosen engine fails at the start with a message naming the options, and the AutoMate tasks, which offer `rl_games` and PhysX only, are refused before a GPU instance starts. Saved Isaac Lab 2.x task ids `Isaac-Cartpole-v0`, `Isaac-Cartpole-Direct-v0`, `Isaac-Lift-Cube-Franka-v0` and `Isaac-Velocity-Rough-Anymal-D-v0` are mapped to their 3.0 ids. An evaluation whose checkpoint was trained on the other engine prints a note and still runs, and a play process that does not finish within a time limit is stopped. See [NVIDIA Isaac Lab](../pipelines/nvidia-isaac-lab.md#physics-engine). (issue #1669)
+
+**Behaviour changes:**
+
+-   **Isaac Lab default engine** — Runs that do not name an engine now run on Newton: saved configurations, built-in templates, edited template bodies without the field, JSON input files and Isaac Sim connector launches. Results differ from earlier PhysX runs, and a checkpoint trained before the upgrade was trained on PhysX, so evaluating it on Newton is a transfer test. Set `physics` to `isaacsim_physx` to reproduce an earlier run. Custom environments ported from Isaac Lab 2.x usually declare PhysX only and fail at the start on Newton until `physics` is `isaacsim_physx`, and they must be built for Python 3.12. Isaac Lab 3.0 task ids carry no `-v0` suffix; only the four ids named above are mapped. NVIDIA tests Isaac Sim 6.2 on driver 595.58.03 or newer, and the pipeline runs on the ECS GPU AMI driver (580.178.04 when validated). (issue #1669)
+
 **Key fixes:**
 
 -   **Search map popup position** — A click on a file's footprint in the Search Map view opens its popup at the click, not at the centre of the footprint's box (away from the click for a large or L-shaped footprint, and at longitude 0 for a footprint split at longitude 180). Of overlapping footprints, the smallest under the click opens. (issue #1683)

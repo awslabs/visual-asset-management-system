@@ -61,10 +61,11 @@ Training configs are used to train new RL policies from scratch.
   "description": "string",    // Job description
   "trainingConfig": {
     "mode": "train",          // Must be "train" for training jobs
-    "task": "string",         // Isaac Lab task name (e.g., "Isaac-Ant-Direct-v0")
+    "task": "string",         // Isaac Lab task name (e.g., "Isaac-Ant-Direct")
     "numEnvs": number,        // Number of parallel environments (typically 1024-8192)
     "maxIterations": number,  // Training iterations (policy updates)
     "rlLibrary": "string",    // RL library: "rsl_rl", "rl_games", or "skrl"
+    "physics": "string",      // Optional: "newton_mjwarp" (default) or "isaacsim_physx"
     "customEnvironmentPath": "string", // Optional: relative path to custom env package
     "stageAssetPaths": ["string"]      // Optional: asset files/folders downloaded before the run
   }
@@ -78,10 +79,10 @@ Simple balancing task - good for testing the pipeline:
 ```json
 {
     "name": "Cartpole Training Job",
-    "description": "Train a PPO policy for the Isaac-Cartpole-Direct-v0 environment",
+    "description": "Train a PPO policy for the Isaac-Cartpole-Direct environment",
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Cartpole-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "numEnvs": 4096,
         "maxIterations": 500,
         "rlLibrary": "rsl_rl"
@@ -96,10 +97,10 @@ Quadruped locomotion - more complex task:
 ```json
 {
     "name": "Ant Training Job",
-    "description": "Train a PPO policy for the Isaac-Ant-Direct-v0 environment",
+    "description": "Train a PPO policy for the Isaac-Ant-Direct environment",
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Ant-Direct-v0",
+        "task": "Isaac-Ant-Direct",
         "numEnvs": 4096,
         "maxIterations": 1000,
         "rlLibrary": "rsl_rl"
@@ -116,16 +117,17 @@ tags. Wherever both name the same parameter the form's value wins. The numeric a
 carry a value, so they always decide; `SEED` is the one that can be left blank, which falls through to
 the config file.
 
-| Parameter                        | Type   | Required | Description                                                                                                                                                                                                                                                       |
-| -------------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                           | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                                                                                                                                |
-| `description`                    | string | Yes      | Human-readable description of the training job purpose                                                                                                                                                                                                            |
-| `trainingConfig.mode`            | string | Yes      | Must be `"train"` for training jobs                                                                                                                                                                                                                               |
-| `trainingConfig.task`            | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct-v0"`, `"Isaac-Cartpole-Direct-v0"`)                                                                                                                                                                     |
-| `trainingConfig.numEnvs`         | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                                                                                                                                           |
-| `trainingConfig.maxIterations`   | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity                                                                                                              |
-| `trainingConfig.rlLibrary`       | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set, before a GPU node is provisioned — it is not substituted            |
-| `trainingConfig.stageAssetPaths` | list   | No       | Files and folders of the executing asset that the container downloads into `/tmp/assets` (`VAMS_ASSET_FILES_DIR`) before the run, keeping their asset-relative paths; also accepted in evaluation configs. Limits and validation: the pipeline documentation page |
+| Parameter                        | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                           | string | Yes      | Display name for the job shown in VAMS UI and logs                                                                                                                                                                                                                                                                                                                                 |
+| `description`                    | string | Yes      | Human-readable description of the training job purpose                                                                                                                                                                                                                                                                                                                             |
+| `trainingConfig.mode`            | string | Yes      | Must be `"train"` for training jobs                                                                                                                                                                                                                                                                                                                                                |
+| `trainingConfig.task`            | string | Yes      | Isaac Lab task/environment name (e.g., `"Isaac-Ant-Direct"`, `"Isaac-Cartpole-Direct"`). Isaac Lab 3.0 ids carry no `-v0` suffix; a few saved 2.x ids are mapped, see the [CLI reference](ISAACLAB_CLI_REFERENCE.md#task-ids)                                                                                                                                                      |
+| `trainingConfig.numEnvs`         | number | Yes      | Number of parallel simulation environments. Higher values = faster training but more GPU memory. Recommended: 1024-8192                                                                                                                                                                                                                                                            |
+| `trainingConfig.maxIterations`   | number | Yes      | Number of policy update iterations. More iterations = longer training, potentially better policy. Recommended: 500-5000 depending on task complexity                                                                                                                                                                                                                               |
+| `trainingConfig.rlLibrary`       | string | Yes      | Reinforcement learning library to use. Options: `"rsl_rl"` (recommended for locomotion), `"rl_games"`, `"skrl"`. Any other value fails the execution, naming the value and the supported set, before a GPU node is provisioned — it is not substituted                                                                                                                             |
+| `trainingConfig.physics`         | string | No       | Physics engine for the run: `"newton_mjwarp"` (Newton, the default) or `"isaacsim_physx"` (PhysX on Isaac Sim, what earlier VAMS releases used). Absent or blank means Newton; any other value fails the execution before a GPU node is provisioned. Results differ between engines. Not every task offers both: see the [CLI reference](ISAACLAB_CLI_REFERENCE.md#physics-engine) |
+| `trainingConfig.stageAssetPaths` | list   | No       | Files and folders of the executing asset that the container downloads into `/tmp/assets` (`VAMS_ASSET_FILES_DIR`) before the run, keeping their asset-relative paths; also accepted in evaluation configs. Limits and validation: the pipeline documentation page                                                                                                                  |
 
 ---
 
@@ -174,10 +176,10 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
 ```json
 {
     "name": "Cartpole Evaluation Job",
-    "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct-v0 environment",
+    "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct environment",
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Cartpole-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "checkpointPath": "checkpoints/model_499.pt",
         "numEnvs": 4,
         "numEpisodes": 10,
@@ -192,10 +194,10 @@ The pipeline supports three methods to specify the checkpoint file (in priority 
 ```json
 {
     "name": "Ant Evaluation Job",
-    "description": "Evaluate a trained PPO policy for the Isaac-Ant-Direct-v0 environment. Videos are automatically generated and uploaded.",
+    "description": "Evaluate a trained PPO policy for the Isaac-Ant-Direct environment. Videos are automatically generated and uploaded.",
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Ant-Direct-v0",
+        "task": "Isaac-Ant-Direct",
         "checkpointPath": "checkpoints/model_1000.pt",
         "numEnvs": 4,
         "numEpisodes": 5,
@@ -212,10 +214,10 @@ This example uses auto-discovery - place a `.pt` file in the same directory as t
 ```json
 {
     "name": "Cartpole Evaluation Job",
-    "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct-v0 environment. Videos are automatically generated and uploaded.",
+    "description": "Evaluate a trained PPO policy for the Isaac-Cartpole-Direct environment. Videos are automatically generated and uploaded.",
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Cartpole-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "numEnvs": 4,
         "numEpisodes": 10,
         "stepsPerEpisode": 500,
@@ -234,26 +236,27 @@ name the same parameter the form's value wins. The numeric, boolean and choice f
 value, so they always decide; `CHECKPOINT_PATH` is the one that can be left blank, which falls through
 to the config file and then to auto-discovery.
 
-| Parameter                        | Type   | Required    | Description                                                                                                                                                                            |
-| -------------------------------- | ------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                           | string | Yes         | Display name for the job shown in VAMS UI and logs                                                                                                                                     |
-| `description`                    | string | Yes         | Human-readable description of the evaluation job purpose                                                                                                                               |
-| `trainingConfig.mode`            | string | Yes         | Must be `"evaluate"` for evaluation jobs                                                                                                                                               |
-| `trainingConfig.task`            | string | Yes         | Isaac Lab task/environment name. Must match the task used during training                                                                                                              |
-| `trainingConfig.checkpointPath`  | string | Recommended | Relative path to the trained model checkpoint within the asset (e.g., `"checkpoints/model_499.pt"`)                                                                                    |
-| `trainingConfig.policyS3Uri`     | string | Optional    | Full S3 URI to a checkpoint inside the executing asset's own bucket                                                                                                                    |
-| `trainingConfig.numEnvs`         | number | Yes         | Number of parallel environments. **Keep low (1-16) for video recording to avoid out-of-memory errors**                                                                                 |
-| `trainingConfig.numEpisodes`     | number | Yes         | Number of evaluation episodes to run. Each episode generates video frames                                                                                                              |
-| `trainingConfig.stepsPerEpisode` | number | Yes         | Simulation steps per episode. Task-dependent: Cartpole ~500, Ant ~900, Humanoid ~1000                                                                                                  |
-| `trainingConfig.rlLibrary`       | string | Yes         | RL library used during training. Must match the training configuration. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than being substituted |
+| Parameter                        | Type   | Required    | Description                                                                                                                                                                                                                                                                                         |
+| -------------------------------- | ------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                           | string | Yes         | Display name for the job shown in VAMS UI and logs                                                                                                                                                                                                                                                  |
+| `description`                    | string | Yes         | Human-readable description of the evaluation job purpose                                                                                                                                                                                                                                            |
+| `trainingConfig.mode`            | string | Yes         | Must be `"evaluate"` for evaluation jobs                                                                                                                                                                                                                                                            |
+| `trainingConfig.task`            | string | Yes         | Isaac Lab task/environment name. Must match the task used during training                                                                                                                                                                                                                           |
+| `trainingConfig.checkpointPath`  | string | Recommended | Relative path to the trained model checkpoint within the asset (e.g., `"checkpoints/model_499.pt"`)                                                                                                                                                                                                 |
+| `trainingConfig.policyS3Uri`     | string | Optional    | Full S3 URI to a checkpoint inside the executing asset's own bucket                                                                                                                                                                                                                                 |
+| `trainingConfig.numEnvs`         | number | Yes         | Number of parallel environments. **Keep low (1-16) for video recording to avoid out-of-memory errors**                                                                                                                                                                                              |
+| `trainingConfig.numEpisodes`     | number | Yes         | Number of evaluation episodes to run. Each episode generates video frames                                                                                                                                                                                                                           |
+| `trainingConfig.stepsPerEpisode` | number | Yes         | Simulation steps per episode. Task-dependent: Cartpole ~500, Ant ~900, Humanoid ~1000                                                                                                                                                                                                               |
+| `trainingConfig.rlLibrary`       | string | Yes         | RL library used during training. Must match the training configuration. Options: `"rsl_rl"`, `"rl_games"`, `"skrl"`; any other value fails the execution rather than being substituted                                                                                                              |
+| `trainingConfig.physics`         | string | No          | Physics engine for the evaluation: `"newton_mjwarp"` (default) or `"isaacsim_physx"`. Use the engine that trained the policy; a checkpoint from before the upgrade was trained on `isaacsim_physx`. A different engine is a transfer test and is noted in the run log and in `evaluate-config.json` |
 
 #### Steps Per Episode by Task
 
-| Task                     | Typical Steps/Episode | Notes           |
-| ------------------------ | --------------------- | --------------- |
-| Isaac-Cartpole-Direct-v0 | 500                   | Short episodes  |
-| Isaac-Ant-Direct-v0      | 900                   | Medium episodes |
-| Isaac-Humanoid-Direct-v0 | 1000                  | Longer episodes |
+| Task                  | Typical Steps/Episode | Notes           |
+| --------------------- | --------------------- | --------------- |
+| Isaac-Cartpole-Direct | 500                   | Short episodes  |
+| Isaac-Ant-Direct      | 900                   | Medium episodes |
+| Isaac-Humanoid-Direct | 1000                  | Longer episodes |
 
 #### Video Recording
 
@@ -319,7 +322,7 @@ Pipeline outputs are organized under the job UUID for easy identification when r
     ├── checkpoints/
     │   ├── model_100.pt          # rsl_rl: model_<iteration>.pt
     │   ├── model_200.pt
-    │   ├── <name>.pth            # rl_games: best, plus last_<name>_ep_<epoch>_rew_<reward>.pth
+    │   ├── <name>.pth            # rl_games: last_<name>_ep_<epoch>_rew__<reward>_.pth
     │   └── agent_<n>.pt          # skrl: agent_<timestep>.pt and best_agent.pt
     ├── metrics.csv           # Training metrics from TensorBoard
     ├── train-config.json     # Copy of input configuration
@@ -391,13 +394,13 @@ Note: ECR pull-through cache is **not supported** for NVIDIA NGC (nvcr.io).
 
 ## Supported Tasks
 
-| Task                             | Description              | Complexity | Training Time (1 GPU) |
-| -------------------------------- | ------------------------ | ---------- | --------------------- |
-| Isaac-Cartpole-Direct-v0         | Cartpole balancing       | Low        | 2-5 min               |
-| Isaac-Ant-Direct-v0              | Quadruped locomotion     | Medium     | 15-30 min             |
-| Isaac-Humanoid-Direct-v0         | Humanoid locomotion      | High       | 1-2 hrs               |
-| Isaac-Velocity-Flat-Anymal-D-v0  | Anymal quadruped (flat)  | Medium     | 10-15 min             |
-| Isaac-Velocity-Rough-Anymal-D-v0 | Anymal quadruped (rough) | High       | 1-2 hrs               |
+| Task                         | Description              | Complexity | Training Time (1 GPU) |
+| ---------------------------- | ------------------------ | ---------- | --------------------- |
+| Isaac-Cartpole-Direct        | Cartpole balancing       | Low        | 2-5 min               |
+| Isaac-Ant-Direct             | Quadruped locomotion     | Medium     | 15-30 min             |
+| Isaac-Humanoid-Direct        | Humanoid locomotion      | High       | 1-2 hrs               |
+| Isaac-Velocity-Flat-AnymalD  | Anymal quadruped (flat)  | Medium     | 10-15 min             |
+| Isaac-Velocity-Rough-AnymalD | Anymal quadruped (rough) | High       | 1-2 hrs               |
 
 ## Instance Types
 
