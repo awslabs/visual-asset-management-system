@@ -104,7 +104,8 @@
             ],
             "useConversion3dBasic": {
                 "enabled": true,
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "enableStepInput": false
             },
             "usePreview3dThumbnail": {
                 "enabled": false,

@@ -128,6 +128,13 @@ def changed_pipeline_rules(schema_body, stored_body=None):
             if json.dumps(stored.get(name), sort_keys=True) != json.dumps(ref, sort_keys=True)]
 
 
+def _rule_positions(schema_body):
+    """Each rule name of `schema_body` mapped to its position in the body's `rules`, the index a
+    refusal reports as `rulePosition` instead of the caller's rule name."""
+    return {name: position for position, name
+            in enumerate(((schema_body or {}).get("rules") or {}).keys())}
+
+
 def may_run_workflow(casbin_enforcer, ref):
     """Whether the caller may run the workflow a pipeline rule names, decided as the execute route
     decides it at workflow level (`executeWorkflow.execute_workflow`): Tier 1 POST on the workflow's
@@ -184,8 +191,7 @@ def pipeline_rules_refused(event, casbin_enforcer, schema_body, stored_body=None
     whatever the schema says."""
     if claims_and_roles["tokens"][0] == SYSTEM_USER:
         return None
-    positions = {name: position for position, name
-                 in enumerate(((schema_body or {}).get("rules") or {}).keys())}
+    positions = _rule_positions(schema_body)
     for rule_name, ref in changed_pipeline_rules(schema_body, stored_body):
         if not may_run_workflow(casbin_enforcer, ref):
             logger.info(f"Schema save refused: the caller may not run the workflow of pipeline "
@@ -214,18 +220,20 @@ def _rule_uses_system_record(ref):
 
 def system_pipeline_rule_refused(event, schema_body, stored_body=None):
     """The `400` refusing a save whose new or changed pipeline rule uses a system workflow or
-    pipeline (`systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE`, naming the rule); None when no
-    such rule uses one. Applies to every caller, the system user included. It runs after
+    pipeline (`systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE`), locating that rule by its position
+    in the body's `rules` (`rulePosition`) as `pipeline_rules_refused` does; None when no such rule
+    uses one. Applies to every caller, the system user included. It runs after
     `pipeline_rules_refused`, so a caller who may not run a rule's workflow, or whose rule names a
     workflow or pipeline that does not exist, gets that 403 and never learns whether it is a system
     record. A rule left as it was is not re-checked: a stored rule that uses a system record is
     recorded as an error when it is evaluated (`complianceEvaluationStore`)."""
+    positions = _rule_positions(schema_body)
     for rule_name, ref in changed_pipeline_rules(schema_body, stored_body):
         if _rule_uses_system_record(ref):
             logger.info(f"Schema save refused: pipeline rule '{rule_name}' uses a system pipeline")
             return validation_error(body={
                 "message": systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE,
-                "ruleName": rule_name}, event=event)
+                "rulePosition": positions[rule_name]}, event=event)
     return None
 
 

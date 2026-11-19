@@ -32,9 +32,9 @@ export interface StateTimeoutBatchSubmitJobProps extends TaggedBatchSubmitJobPro
  * `States.Timeout` skips every Catch, so the state that reports the outcome never runs. This adds
  * `TimeoutSeconds` to the rendered state, which the state's Catch handles.
  *
- * Step Functions cancels a `.sync` job when the execution is aborted, not when the state times out,
- * so the state's pipelineEnd ends the job itself: give that function
- * `grantBatchStateTimeoutCleanup` on every queue the state can submit to.
+ * Step Functions ends a `.sync` job when the state's own bound fires; the state's pipelineEnd ends the
+ * run's job as well, as a backup: give that function `grantBatchStateTimeoutCleanup` on every queue
+ * the state can submit to.
  *
  * It is a {@link TaggedBatchSubmitJob}, so the job carries the pipeline's job tags (`jobTags`).
  */

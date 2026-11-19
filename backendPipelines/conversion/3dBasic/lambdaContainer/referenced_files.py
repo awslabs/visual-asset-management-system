@@ -28,6 +28,14 @@ anywhere.
 
 ``resolve_reference`` applies the path rules above to one name and ``local_path_for`` keeps its local
 copy under the local root; the collectors in ``_COLLECTORS`` list the names each format references.
+
+USD layers and packages, COLLADA documents and FBX files are read for their references by the
+collectors in ``reference_collectors.py`` (vendored from the 3D thumbnail container), which need a
+format library or an XML parse. Those run in the worker child, never in this process: the caller passes
+``scan``, which reads a batch of fetched files there and returns their references. For these formats a
+reference that cannot be used never fails the fetch; it is skipped and recorded with its kind (a
+geometry layer, a data file, a texture or other file) in ``FetchReport.skipped_entries``, which the run
+reports as an incomplete conversion (or, with MISSING_REFERENCES fail, refuses before converting).
 """
 
 import json
@@ -62,6 +70,21 @@ _SHOWN_LENGTH = 200
 
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
+# Skipped references kept in FetchReport.skipped_entries.
+MAX_RECORDED_SKIPPED = 1000
+# Levels of referencing followed for a USD or COLLADA input (sublayers of sublayers, references of
+# references); the same bound usd_io applies when it opens the stage.
+SCENE_MAX_DEPTH = 8
+# The kinds a reference can have, as in reference_collectors.py.
+KIND_GEOMETRY_LAYER = "geometryLayer"
+KIND_DATA_FILE = "dataFile"
+KIND_TEXTURE_OR_OTHER = "textureOrOther"
+KIND_METADATA = "metadata"
+KIND_RENDERER_MDL = "rendererMdl"
+KIND_UNSAMPLED_TEXTURE = "unsampledTexture"
+# Kinds that load nothing into the converted model, so their absence is not reported.
+_UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
+
 
 class ReferencedFileError(ValueError):
     """A buffer the input model references cannot be used: rejected, missing, or over a limit."""
@@ -75,6 +98,15 @@ class Reference(NamedTuple):
     # A glTF/GLB buffer: the model cannot be loaded without it, so a reference that cannot be used
     # fails the conversion. Material libraries and texture images are optional and are skipped.
     required: bool
+
+
+class ScannedReference(NamedTuple):
+    """A reference a scanned collector (reference_collectors.py) returned, with what the file is to the
+    converted model (KIND_*)."""
+    raw: object
+    percent_encoded: bool
+    required: bool
+    kind: str
 
 
 # Texture image formats. An image costs memory in proportion to its decoded pixels, not to its file
@@ -126,6 +158,9 @@ class FetchLimits:
     # Decoded bytes the images may take, as a function of the bytes of the input and of the non-image
     # files fetched so far (the geometry memory they share the function with); None for no limit.
     image_budget: Optional[Callable[[int], int]] = None
+    # The reason recorded for a reference below max_depth (REFERENCE_HANDLING selected-only); None
+    # for the depth message.
+    not_followed_reason: Optional[str] = None
 
 
 @dataclass
@@ -149,6 +184,14 @@ class FetchReport:
     # Bytes of the non-image files fetched, and decoded bytes of the images fetched.
     geometry_bytes: int = 0
     image_decoded_bytes: int = 0
+    # Every reference that was not fetched, once per (reference, reason), at most
+    # MAX_RECORDED_SKIPPED: {"reference", "referrer", "reason", "kind", "rejected", "forSize"}.
+    # ``reference`` is the root-relative path of a file that was looked up, or the name as authored
+    # for one refused as outside the asset (``rejected``).
+    skipped_entries: List[dict] = field(default_factory=list)
+    # The fetched files and the files they name, as (referrer, root-relative path) pairs, for the
+    # dependency graph of REFERENCE_HANDLING convert-linked.
+    edges: List[Tuple[str, str]] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -332,15 +375,53 @@ _COLLECTORS: Dict[str, Callable[[str], List[Reference]]] = {
     ".ply": _ply_references,
 }
 
+# Formats whose references are read in the worker child (reference_collectors.py), through ``scan``.
+SCANNED_EXTENSIONS = frozenset({".usd", ".usda", ".usdc", ".usdz", ".dae", ".fbx"})
+USD_EXTENSIONS = frozenset({".usd", ".usda", ".usdc", ".usdz"})
+
 # How a fetched file is read for further references, by the extension of the file that referenced
 # it: an OBJ names only its material library, which the loader reads as an MTL whatever its name. A
-# buffer or image a glTF names is data, never a document, and a fetched model is not loaded.
+# buffer or image a glTF names is data, never a document, and a fetched model is not loaded. A USD
+# layer or package a USD file names is read as what its own extension says (``_followed_kind``).
 _FOLLOWED = {".obj": ".mtl"}
+
+
+def _followed_kind(referrer_ext: str, target: str) -> Optional[str]:
+    if referrer_ext in USD_EXTENSIONS:
+        ext = os.path.splitext(target)[1].lower()
+        return ext if ext in USD_EXTENSIONS else None
+    return _FOLLOWED.get(referrer_ext)
 
 
 def has_references(ext: str) -> bool:
     """True when files of this extension can reference other files the container fetches."""
-    return ext.lower() in _COLLECTORS
+    return ext.lower() in _COLLECTORS or ext.lower() in SCANNED_EXTENSIONS
+
+
+def _references_from_scan(entries) -> List[Reference]:
+    """``Reference`` values from the ``(value, percent_encoded, required, kind)`` tuples a scanned
+    collector returns. None of them is required here: a USD layer, COLLADA image or FBX texture that
+    cannot be fetched is skipped and reported, and the worker refuses the conversion if nothing
+    loadable remains. A COLLADA document's external instance is not composed by the loader, so it is
+    not fetched (``_NOT_COMPOSED``)."""
+    references = []
+    for value, percent_encoded, _required, kind in entries:
+        references.append(ScannedReference(value, bool(percent_encoded), False, kind or ""))
+    return references
+
+
+# The reason recorded for a COLLADA document's external instance: the loader does not compose other
+# COLLADA files, so its geometry is missing from the converted model however it is fetched.
+_NOT_COMPOSED = "the COLLADA loader does not compose instances from other files"
+
+
+def _kind_of(reference, relative: Optional[str]) -> str:
+    kind = getattr(reference, "kind", "")
+    if kind:
+        return KIND_TEXTURE_OR_OTHER if kind == KIND_UNSAMPLED_TEXTURE else kind
+    if reference.required:
+        return KIND_DATA_FILE
+    return KIND_TEXTURE_OR_OTHER
 
 
 # --------------------------------------------------------------------------------------------------
@@ -365,7 +446,9 @@ def _object_size(client, bucket: str, key: str):
 
 def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_path: str,
                            local_input_path: str, local_root: str,
-                           limits: Optional[FetchLimits] = None, logger=None) -> FetchReport:
+                           limits: Optional[FetchLimits] = None, logger=None,
+                           scan: Optional[Callable[[List[Tuple[str, str]]], Dict[str, object]]] = None
+                           ) -> FetchReport:
     """Fetch every file the input references, transitively, into ``local_root``.
 
     ``local_input_path`` is the input already downloaded at ``input_relative_path`` under
@@ -374,6 +457,10 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     for ``bucket``'s Region. A buffer reference that is rejected, names no object, or would pass a
     limit raises ``ReferencedFileError``; any other such reference is skipped, with a warning on
     ``logger`` and in ``FetchReport.skipped``.
+
+    ``scan`` reads the references of the formats in ``SCANNED_EXTENSIONS``: it is given
+    ``[(local path, extension)]`` and returns, per local path, the collector's tuples or an error text.
+    Without it those formats fetch nothing (their references are left to the loader's own confinement).
     """
     limits = limits or FetchLimits()
     report = FetchReport()
@@ -388,12 +475,28 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     unavailable: Dict[str, str] = {}
     looked_up = 0
     queue = deque([(local_input_path, input_relative_path, ext, 0)])
+    scanned: Dict[str, object] = {}
+    recorded = set()
+
+    def record(reference: Reference, rel_path: str, name: str, reason: str, rejected: bool, for_size: bool):
+        kind = _kind_of(reference, None)
+        if kind in _UNREPORTED_KINDS:
+            return
+        key = (name, reason)
+        if key in recorded or len(report.skipped_entries) >= MAX_RECORDED_SKIPPED:
+            return
+        recorded.add(key)
+        report.skipped_entries.append({
+            "reference": name, "referrer": rel_path, "reason": reason, "kind": kind,
+            "rejected": rejected, "forSize": for_size,
+            "unsampled": getattr(reference, "kind", "") == KIND_UNSAMPLED_TEXTURE})
 
     def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str,
-               for_size: bool = False):
+               for_size: bool = False, rejected: bool = False, raw_name: str = None):
         """Fail on a required reference; skip an optional one with a warning naming it."""
         if reference.required:
             raise ReferencedFileError(failure)
+        record(reference, rel_path, raw_name if raw_name is not None else name, reason, rejected, for_size)
         if for_size:
             report.skipped_for_size_count += 1
             if report.skipped_for_size_count <= MAX_SKIPPED_LOGGED:
@@ -409,7 +512,20 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     while queue:
         local_path, rel_path, file_ext, depth = queue.popleft()
         try:
-            references = _COLLECTORS[file_ext](local_path)
+            if file_ext in SCANNED_EXTENSIONS:
+                if scan is None:
+                    continue
+                if local_path not in scanned:
+                    # Every queued file of a scanned format is read in one worker run.
+                    batch = [(local_path, file_ext)] + [(item[0], item[2]) for item in queue
+                                                         if item[2] in SCANNED_EXTENSIONS and item[0] not in scanned]
+                    scanned.update(scan(batch))
+                result = scanned.get(local_path)
+                if isinstance(result, str) or result is None:
+                    raise ValueError(result or "the references could not be read")
+                references = _references_from_scan(result)
+            else:
+                references = _COLLECTORS[file_ext](local_path)
         except Exception as e:
             # A file whose references cannot be read is not one the loader can read either, so the
             # load reports it in its own terms. Nothing is fetched for it, and the resolver serves
@@ -422,11 +538,18 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
         for reference in references:
             raw = reference.raw
             if too_deep:
+                reason = limits.not_followed_reason or (
+                    f"it is {depth + 1} levels below the input, and this pipeline follows at most "
+                    f"{limits.max_depth}")
                 refuse(reference, rel_path, _shown(raw),
                        f"{rel_path} references further files {depth + 1} levels below the input; "
-                       f"this pipeline follows at most {limits.max_depth}.",
-                       f"it is {depth + 1} levels below the input, and this pipeline follows at most "
-                       f"{limits.max_depth}")
+                       f"this pipeline follows at most {limits.max_depth}.", reason,
+                       raw_name=resolve_reference(raw, referrer_dir, reference.percent_encoded) or str(raw),
+                       rejected=resolve_reference(raw, referrer_dir, reference.percent_encoded) is None)
+                continue
+            if file_ext == ".dae" and getattr(reference, "kind", "") == KIND_GEOMETRY_LAYER:
+                record(reference, rel_path, resolve_reference(raw, referrer_dir, True) or str(raw),
+                       _NOT_COMPOSED, resolve_reference(raw, referrer_dir, True) is None, False)
                 continue
             relative = resolve_reference(raw, referrer_dir, percent_encoded=reference.percent_encoded)
             target = local_path_for(local_root, relative) if relative else None
@@ -436,8 +559,10 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                        f"in the same asset. Only files inside the input's own asset are fetched: "
                        f"change the reference to a path relative to {rel_path}, or embed the data, "
                        f"and run the conversion again.",
-                       "it is not a relative path to a file in the same asset")
+                       "it is not a relative path to a file in the same asset", rejected=True,
+                       raw_name=str(raw))
                 continue
+            report.edges.append((rel_path, relative))
             if relative in available:
                 report.by_reference.setdefault(raw.strip(), available[relative])
                 continue
@@ -537,10 +662,14 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
             report.total_bytes += size
             available[relative] = target
             report.by_reference.setdefault(raw.strip(), target)
-            child_kind = _FOLLOWED.get(file_ext)
+            child_kind = _followed_kind(file_ext, relative)
             if child_kind is not None:
                 queue.append((target, relative, child_kind, depth + 1))
 
+    fetched_names = {posixpath.basename(path) for path in report.fetched}
+    report.skipped_entries = [
+        entry for entry in report.skipped_entries
+        if not (entry["unsampled"] and posixpath.basename(entry["reference"].replace("\\", "/")) in fetched_names)]
     if logger is not None:
         if report.skipped_count > MAX_SKIPPED_LOGGED:
             logger.warning(f"Skipped {report.skipped_count - MAX_SKIPPED_LOGGED} further referenced "

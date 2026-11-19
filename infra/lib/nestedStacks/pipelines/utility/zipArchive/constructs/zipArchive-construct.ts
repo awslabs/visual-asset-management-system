@@ -62,12 +62,14 @@ export const ZIP_ARCHIVE_STATE_MACHINE_TIMEOUT = cdk.Duration.minutes(11 * 60 + 
 /**
  * Heartbeat timeout of the ZipArchiveBatchJob state (#1125 D26). The container heartbeats this
  * state's task token every 2 minutes (zip_archive_pipeline/runner.py HEARTBEAT_SECONDS), so a
- * container killed without a SIGTERM (out of memory, host loss) ends its run with
- * States.HeartbeatTimeout within 30 minutes instead of at the 11-hour task timeout, and the read-time
- * reconcile finalizes its job FAILED "The archive job stopped responding". The clock starts when the
- * Batch job is submitted, so the 30 minutes also cover the job's wait in the Batch queue and its
- * Fargate start. pipelineEnd then looks the job up: one still waiting to start is cancelled and
- * reported as having waited too long, one that failed before its container ran as unable to start.
+ * container killed without a SIGTERM (out of memory, host loss) ends its run within 30 minutes
+ * instead of at the 11-hour task timeout. Step Functions records a heartbeat expiry as
+ * States.Timeout, the same error as the task timeout. The clock starts when the Batch job is
+ * submitted, so the 30 minutes also cover the job's wait in the Batch queue and its Fargate start.
+ * pipelineEnd then looks the job up and names the end: one still waiting to start is cancelled and
+ * reported as having waited too long, one that failed before its container ran as unable to start, one
+ * that ran inside the bound as having stopped responding; a job that reached the bound keeps
+ * States.Timeout. A job still queued or running is ended either way.
  */
 export const ZIP_ARCHIVE_BATCH_HEARTBEAT = cdk.Duration.minutes(30);
 
@@ -368,6 +370,12 @@ export class ZipArchiveConstruct extends Construct {
             props.pipelineSubnets,
             props.kmsKey
         );
+        // pipelineEnd tells a job that reached the token wait's bound from one that stopped sending
+        // heartbeats inside it: both end the wait with States.Timeout.
+        pipelineEndFunction.addEnvironment(
+            "STATE_TIMEOUT_SECONDS",
+            String(ZIP_ARCHIVE_BATCH_TIMEOUT.toSeconds())
+        );
 
         const pipelineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,
@@ -530,7 +538,7 @@ export class ZipArchiveConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Pipeline Lambda functions read the asset buckets and answer Step Functions task tokens. pipelineEnd lists the run's AWS Batch jobs (ListJobs supports no resource-level permission) and cancels the run's job by id, which AWS Batch generates at submit, so job/* in this account and Region is the narrowest ARN.",
+                    reason: "Pipeline Lambda functions read the asset buckets and answer Step Functions task tokens.",
                 },
                 {
                     id: "AwsSolutions-IAM4",

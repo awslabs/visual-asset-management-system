@@ -1130,7 +1130,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Convert between STL, OBJ, PLY, GLTF, GLB, etc. No VPC required.",
+        help: "Convert between STL, OBJ, PLY, GLTF, GLB, USD, DAE, 3MF, OFF and FBX, with unit and up-axis options. No VPC required.",
     },
     {
         path: "app.pipelines.useConversion3dBasic.autoRegisterWithVAMS",
@@ -1138,6 +1138,15 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.enableStepInput",
+        label: "3D basic conversion — STEP input",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Read STEP (.step, .stp) files. Adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the conversion image; off, a STEP run is refused before download.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
