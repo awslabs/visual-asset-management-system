@@ -84,14 +84,18 @@ absolute S3 key.
 
 1. The `vamsExecute` lambda **must pass through all output paths** resolved from its manifest — never hardcode empty strings. The workflow's process-output step depends on finding files at these locations.
 2. The `constructPipeline` lambda uses the appropriate output path for the container's output target, falling back to the auxiliary path only for direct/local invocations where workflow context is unavailable.
-3. **Containers must preserve the input file's relative path** when writing asset-adjacent outputs. An asset file's key is the asset's root key followed by its relative path; the root is usually `{baseAssetsPrefix}{assetId}/`, but an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID. Outputs must keep the input's relative subdirectory so process-output can locate them.
-4. **`assetId` is a workflow state variable — thread it, never derive it from S3 path segments**: vamsExecute resolves it from the manifest (`manifestHelper.resolve_pipeline_inputs`) → constructPipeline includes it in the definition dict → container reads it from the PipelineDefinition and uses it to compute the relative subdirectory. The search must allow for a key without the asset ID (an existing-folder asset, or a file an earlier workflow step wrote under the run's output folder); for such a key it returns `""` and the output is written at the top of the output folder. To keep the subfolder, take it from the input file's manifest `relativePath` (`resolved['inputFiles'][0]['relativePath']` in vamsExecute, which `manifestHelper.resolved_file_key(resolved)` returns normalized):
+3. **Containers must preserve the input file's relative path** when writing asset-adjacent outputs. An asset file's key is the asset's root key followed by its relative path; the root is usually `{baseAssetsPrefix}{assetId}/`, but an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID. Outputs must keep the input's relative subdirectory so process-output can locate them: take it from the folder of the first manifest input entry's `relativePath`, never from the key.
+4. **Thread where the input sits in its asset, and `assetId`, from the manifest — never derive either from S3 path segments.** vamsExecute copies the first input entry's `relativePath`, `assetRootS3Key` and `assetRootBucket` (`resolved['inputFiles'][0]`) as `inputRelativePath`, `inputAssetRootS3Key` and `inputAssetRootBucket`, and `resolved['assetId']` → openPipeline names each on the state machine input → constructPipeline puts them on the definition (a strict-dataclass image: `"inputAsset"` in the second Batch command element) → the container takes the subfolder from `relativePath`. Join `assetRootS3Key` only with `assetRootBucket`: a chained input is read from the run bucket while its asset root stays in the asset bucket. Search the key for the asset ID only for a launch without `relativePath`, guarded for a key without it. Add the pipeline to `MANIFEST_PATH_PIPELINES` in `backendPipelines/tests/test_pipeline_input_asset_location.py`:
 
 ```python
-# assetId comes from the pipeline definition (threaded from workflow state)
-input_parts = stage_input.objectKey.split("/")
-relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
-                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+# relative_path is the definition's inputRelativePath ("" when the launch named none)
+relative = (relative_path or "").strip("/")
+if relative:
+    relative_subdir = relative.rsplit("/", 1)[0] if "/" in relative else ""
+else:
+    input_parts = stage_input.objectKey.split("/")
+    relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                       if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
 
 5. **Read the input at its launch version.** vamsExecute forwards `resolved['inputVersionId']` → openPipeline puts `"inputVersionId"` on the state machine input → constructPipeline puts it on the definition (only when non-empty, so an image built before the field still parses a no-version definition) → the container passes it as `VersionId` on every read of the input file (download, HEAD/size checks, streamed GETs; `aws s3api get-object --version-id` for an AWS CLI container), and sends exactly today's call when it is `""`. A version deleted after launch fails the run naming the file and version. Grant the container role `s3:GetObjectVersion` on the asset buckets. `backendPipelines/tests/test_pipeline_input_versions.py` and `infra/test/pipelines/pipelineInputVersionGrants.test.ts` fail on a pipeline that misses either; see `backendPipelines/CLAUDE.md` "Input Version Threading".

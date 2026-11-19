@@ -213,7 +213,7 @@ When a pipeline writes output files that correspond to a specific input file (e.
 
 -   An asset file's key is the asset's root key followed by the file's relative path: `{assetRoot}{relative_path}/{filename}`, where the relative path has zero or more subdirectories. The root is usually `{baseAssetsPrefix}{assetId}/`, but an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID.
 -   The output paths (`outputS3AssetFilesPath`, etc.) point to the run's output folders, not to the asset. The process-output step writes each file it finds there to the same relative path within the asset.
--   Containers must include the input file's relative subdirectory in the output S3 key: `{outputDir}{relative_subdir}/{filename}.previewFile.X`.
+-   Containers must include the input file's relative subdirectory in the output S3 key: `{outputDir}{relative_subdir}/{filename}.previewFile.X`. The subdirectory is the folder of the input's manifest `relativePath`, threaded as `inputRelativePath` (see [`assetId` Threading](#assetid-threading)); the key is searched for the asset ID only when a launch carries no `relativePath`.
 
 ```
 Input key:  xd130a6d6.../test/pump.e57
@@ -227,13 +227,13 @@ Output dir: {outputS3AssetFilesPath}
 
 A container job role usually reads every asset bucket, so a path written inside an uploaded file (a glTF URI, a USD sublayer/reference/payload or texture path, an OBJ `mtllib`, an FBX texture name) is untrusted input that could pull another asset's content into this one's output. `preview/3dThumbnail/container/preview_pipeline/dependencies.py` is the worked example (ARCC BSC1, allowlist validation):
 
--   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
+-   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix: `dependencies.confinement_root` takes the manifest's `assetRootS3Key` when it is in the input's own bucket and a proper prefix of the key, then the key up to the `assetId` segment, then the key with its `relativePath` removed from the end (an asset on a `bucketExistingKey` folder, or a file an earlier step wrote, which sits in the run's output files folder at that path), else the input's own directory. Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a prim type the loader does not draw (points, curves, patches, planes, tetrahedral meshes) is named in the log and added to the same document as `counts.skippedPrimTypes` and `skippedPrims` only when present (the final document is held to the size cap by shortening the file list; a document without them is unchanged), so the document of every other run is unchanged; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
 -   To render a whole scene, use `resolve()` in the same module rather than the thumbnail's one-pass `fetch_referenced_files`: discovery downloads only the documents that name further files and sizes the rest with HeadObject, pinning each version it returned; the fetch then downloads at those versions, so a file replaced mid-run never mixes two versions into one scene. Between the phases a caller can compare the predicted bytes with its budget and re-route the run (the SYSTEM GenAI Blender branch hands an over-budget scene to its Fargate job). Every bound stops the walk instead of failing it, and the run receives a `DependencyReport` (fetched, missing, refused, cycles, the bound that stopped it, the graph) for its manifest. The SYSTEM GenAI Blender image carries a byte-identical copy as `containers/blender/scene_dependencies.py`, pinned by `system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`: edit the thumbnail module, then `cp` it over the copy.
 -   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported in the thumbnail's incomplete preview, since its FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`); the scene report `resolve()` returns still lists a missing one, because Blender's FBX importer loads them. Each collector entry is `(name, percent_encoded, required, kind)`: a three-element entry reads its third element as `required`. Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
--   Files an operator names in the run configuration, rather than files an input references, are validated where the run starts and again in the container, and a bad path, a missing file or a selection over the limits fails the run instead of being skipped, because the task asked for those files. `simulation/isaacLabTraining` (`trainingConfig.stageAssetPaths`) is the worked example: `lambda/openPipeline.py` resolves the paths against the manifest's asset root and counts files and bytes before the Batch job is submitted; `container/utils/aws/staging.py` lists them again, checks free disk and `realpath`, and exports the staging folder to the task as `VAMS_ASSET_FILES_DIR`.
+-   Files an operator names in the run configuration, rather than files an input references, are validated where the run starts and again in the container, and a bad path, a missing file or a selection over the limits fails the run instead of being skipped, because the task asked for those files. `simulation/isaacLabTraining` (`trainingConfig.stageAssetPaths`) is the worked example: `lambda/openPipeline.py` resolves the paths against the manifest's asset root and counts files and bytes before the Batch job is submitted; `container/utils/aws/staging.py` lists them again, checks free disk and `realpath`, and exports the staging folder to the task as `VAMS_ASSET_FILES_DIR`. Cosmos Transfer's control input (`controlPath`) follows the same rule for one file: `vamsExecute` accepts only a file path relative to the asset root (no URI scheme, backslash, control character, `.`, `..` or empty segment, at most 1,024 characters) and the container checks it again and joins it to the manifest's `assetRootS3Key` in `assetRootBucket` before anything is fetched.
 
 ## Parsing XML From Uploaded Files
 
@@ -589,34 +589,52 @@ file, so a change made across the deployable four does not reach it.
 
 ## `assetId` Threading
 
-**`assetId` is a workflow state variable — thread it, don't derive it.** The task body does not carry the `assetId`. The `vamsExecute` lambda resolves it from the manifest (`inputManifestS3Location`) with `manifestHelper.resolve_pipeline_inputs(data, s3_client)` (`resolved['assetId']`) and forwards it to `constructPipeline`, which includes it in the pipeline definition; the container uses it directly. Never attempt to reverse-engineer the asset ID from S3 path segments.
+**`assetId` is a workflow state variable — thread it, don't derive it.** The task body does not carry the `assetId`. The `vamsExecute` lambda resolves it from the manifest (`inputManifestS3Location`) with `manifestHelper.resolve_pipeline_inputs(data, s3_client)` (`resolved['assetId']`) and forwards it to `constructPipeline`, which includes it in the pipeline definition; the container uses it directly. Never attempt to reverse-engineer the asset ID, or the input's place in its asset, from S3 path segments.
 
-An input's S3 key does not always contain the asset ID: an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, and from the second step of a workflow on, an input can be a file an earlier step wrote, keyed under the run's output folder. A container that searches the key for the `assetId` must allow for a key that does not contain it (`list.index` raises `ValueError`); for such a key the search returns `""` and the output is written at the top of the output folder. To keep the subfolder, take it from the input file's path within its asset, which is that file's manifest `relativePath` (with a leading `/`). In a `vamsExecute` lambda it is `resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns normalized (`/` when the run has no input file).
+**Where an input sits in its asset comes from the manifest, never from the key.** An input's S3 key does not always contain the asset ID: an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, a bucket's `baseAssetsPrefix` sits in front of the asset ID, and from the second step of a workflow on an input can be a file an earlier step wrote, keyed under the run's output folder in the run bucket. Each manifest input entry carries what a pipeline needs instead:
 
-To compute the relative subdirectory in container code using the explicit `assetId`:
+| Entry field       | What it is                                                                     | Use it for                                                                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relativePath`    | the file's path within its asset, with a leading `/` (`/` for the whole asset) | the output subfolder: the folder of `relativePath` (`/scans/a/pump.e57` gives `scans/a`)                                                                                                                                                                                                              |
+| `assetRootS3Key`  | the asset's root folder (its stored `assetLocation.Key`)                       | resolving a path the run names relative to the asset root, and confining what the input references                                                                                                                                                                                                    |
+| `assetRootBucket` | the bucket `assetRootS3Key` is in                                              | the bucket to join with `assetRootS3Key`. An entry an earlier step's output shadows is read from the run bucket (`bucket`) while its root stays in the asset bucket, so never join `bucket` with `assetRootS3Key`; an entry written before the field has none, and `bucket` is then the root's bucket |
+| `key`             | the exact object                                                               | the file a run reads when it is not asset-level                                                                                                                                                                                                                                                       |
 
-```python
-# assetId comes from the pipeline definition (threaded from workflow state)
-input_parts = stage_input.objectKey.split("/")
-relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
-                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+Carry the first entry's values the way `inputVersionId` is carried, as `inputRelativePath`, `inputAssetRootS3Key` and `inputAssetRootBucket`:
+
+```
+manifest inputFiles[0].relativePath / assetRootS3Key / assetRootBucket
+  → vamsExecute: copied from resolved['inputFiles'][0] into the openPipeline message ("" without a manifest entry)
+    → openPipeline: event.get("inputRelativePath", "") (and the other two) on the state machine input
+      → constructPipeline: on the container definition, or, for a strict-dataclass image, as
+        "inputAsset": {"relativePath", "assetRootS3Key", "assetRootBucket"} in the second Batch command
+        element (see "Input Version Threading"); a state machine whose task payload names its fields
+        names them too, with a "" default (RapidPipeline EKS)
+        → container: relative subfolder from relativePath; key derivation only when it is absent
 ```
 
-**A chained step's input is not under the asset.** A later workflow step receives the prior step's outputs
-(item 11 below), whose keys follow `pipelines/{pipelineId}/{jobName}/output/{executionId}/files/{relative}/{filename}`
-and carry no `assetId`, so `input_parts.index(assetId)` raises on them. When the `assetId` is absent, take
-the relative subdirectory from the segments between `output/{executionId}/files/` and the filename, and
-still refuse a key that is neither shape rather than guessing. Image to 3D's `export.compute_relative_subdir`
-does both (`container/tests/test_output_paths.py`); its two-step workflow failed in the container on exactly
-this before the fallback existed, with the Lambda and the mesh selection already fixed for chaining.
+**The asset-ID search is the fallback for a launch without them** (a payload without a manifest, or an event from an older Lambda during an upgrade):
 
-**Pipeline state threading pattern** (applies to all pipelines, not just preview):
+```python
+# relative_path is the definition's inputRelativePath ("" when the launch named none)
+relative = (relative_path or "").strip("/")
+if relative:
+    relative_subdir = relative.rsplit("/", 1)[0] if "/" in relative else ""
+else:
+    input_parts = stage_input.objectKey.split("/")
+    relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                       if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+```
+
+The fallback must allow for a key that does not contain the asset ID (`list.index` raises `ValueError`). A chained step's key follows `pipelines/{pipelineId}/{jobName}/output/{executionId}/files/{relative}/{filename}` and carries no `assetId`; a fallback may take the subdirectory from the segments between `output/{executionId}/files/` and the filename, and refuses a key that is neither shape rather than guessing (Image to 3D's `export.compute_relative_subdir`, CAD STEP's `cad_step_naming.relative_subdir_of`). `backendPipelines/tests/test_pipeline_input_asset_location.py` checks each hop of every pipeline listed there and the Cosmos containers' subfolder; add a pipeline that keeps the input's subfolder to its `MANIFEST_PATH_PIPELINES`.
+
+**`assetId` still travels** for asset identity (metadata lookups, output naming, the arity-`none` fallback):
 
 ```
 Workflow manifest (inputManifestS3Location: assetId, inputFiles, paths, ...)
   → vamsExecute lambda: resolve assetId from the manifest, include in messagePayload
     → constructPipeline lambda: read assetId from event, include in definition dict
-      → Container: read assetId from PipelineDefinition, use for relative path computation
+      → Container: read assetId from PipelineDefinition
 ```
 
 ## Input Version Threading
