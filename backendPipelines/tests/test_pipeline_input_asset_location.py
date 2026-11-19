@@ -62,6 +62,11 @@ MANIFEST_PATH_PIPELINES = {
         "vamsExecute": ["vamsExecuteModelOps.py"],
         "openPipeline": "openPipeline.py", "builder": "constructPipeline.py",
         "builderReads": ("inputRelativePath",)},
+    "multi/rapidPipelineEKS": {
+        "vamsExecute": ["vamsExecuteRapidPipelineEKS.py"],
+        "openPipeline": "openPipeline.py", "builder": "consolidated_handler.py",
+        # Only the relative path travels: the state machine enumerates its task payload.
+        "fields": ("inputRelativePath",), "builderReads": ("inputRelativePath",)},
 }
 
 FIELDS = ("inputRelativePath", "inputAssetRootS3Key", "inputAssetRootBucket")
@@ -81,16 +86,17 @@ def _read(path):
 @pytest.mark.parametrize("pipeline", sorted(MANIFEST_PATH_PIPELINES))
 class TestTheChainCarriesTheLocation:
     def test_vams_execute_copies_the_first_entrys_fields(self, pipeline):
+        fields = MANIFEST_PATH_PIPELINES[pipeline].get("fields", FIELDS)
         for name in MANIFEST_PATH_PIPELINES[pipeline]["vamsExecute"]:
             source = _read(_lambda_path(pipeline, name))
-            for field, entry_name in ENTRY_NAMES.items():
+            for field, entry_name in ((f, ENTRY_NAMES[f]) for f in fields):
                 assert re.search(rf"['\"]{field}['\"]", source), (name, field)
                 assert re.search(rf"\.get\(['\"]{entry_name}['\"]\)", source), (name, entry_name)
 
     def test_open_pipeline_forwards_them(self, pipeline):
         source = _read(_lambda_path(pipeline, MANIFEST_PATH_PIPELINES[pipeline]["openPipeline"]))
-        for field in FIELDS:
-            assert re.search(rf"['\"]{field}['\"]:\s*event\.get\(['\"]{field}['\"]", source), field
+        for field in MANIFEST_PATH_PIPELINES[pipeline].get("fields", FIELDS):
+            assert re.search(rf"event\.get\(['\"]{field}['\"]", source), field
 
     def test_the_builder_reads_them(self, pipeline):
         source = _read(_lambda_path(pipeline, MANIFEST_PATH_PIPELINES[pipeline]["builder"]))
