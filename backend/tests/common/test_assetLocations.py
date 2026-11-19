@@ -613,6 +613,7 @@ class TestFindConflicts:
 class TestIndexReady:
     PREFIX = "/vams-test/resourceNames"
     NAME = "/vams-test/resourceNames/dataMigrations/assetLocationIndex"
+    TABLE = "vams-core-AssetStorageTable-ABC123"
 
     @pytest.fixture(autouse=True)
     def _prefix(self, monkeypatch):
@@ -627,45 +628,56 @@ class TestIndexReady:
             ssm.get_parameter.return_value = {"Parameter": {"Value": value}}
         return ssm
 
+    def _complete(self, **extra):
+        return json.dumps({"version": 1, "status": "complete", "assetTable": self.TABLE,
+                           "completedAt": "t", **extra})
+
     def test_parameter_name(self):
         assert al.index_ready_parameter_name() == self.NAME
         assert al.index_ready_parameter_name("/other/resourceNames/") == (
             "/other/resourceNames/dataMigrations/assetLocationIndex")
 
-    def test_complete_marker_is_ready(self):
-        ssm = self._ssm(json.dumps({"version": 1, "status": "complete", "completedAt": "t"}))
-        assert al.index_ready(ssm_client=ssm) is True
+    def test_complete_marker_for_this_table_is_ready(self):
+        ssm = self._ssm(self._complete())
+        assert al.index_ready(self.TABLE, ssm_client=ssm) is True
         ssm.get_parameter.assert_called_once_with(Name=self.NAME)
 
+    def test_marker_of_another_table_is_not_ready(self):
+        # A deployment removed and created again under the same names keeps the old parameter.
+        assert al.index_ready("vams-core-AssetStorageTable-NEW999",
+                              ssm_client=self._ssm(self._complete())) is False
+
     @pytest.mark.parametrize("value", [
-        json.dumps({"version": 1, "status": "running"}),
-        json.dumps({"version": 2, "status": "complete"}),
+        json.dumps({"version": 1, "status": "running", "assetTable": TABLE}),
+        json.dumps({"version": 2, "status": "complete", "assetTable": TABLE}),
+        json.dumps({"version": 1, "status": "complete"}),
         json.dumps(["complete"]),
         "complete",
         "",
     ])
     def test_anything_else_is_not_ready(self, value):
-        assert al.index_ready(ssm_client=self._ssm(value)) is False
+        assert al.index_ready(self.TABLE, ssm_client=self._ssm(value)) is False
 
     @pytest.mark.parametrize("code", ["ParameterNotFound", "AccessDeniedException", "ThrottlingException"])
     def test_an_unreadable_marker_is_not_ready(self, code):
-        assert al.index_ready(ssm_client=self._ssm(error_code=code)) is False
+        assert al.index_ready(self.TABLE, ssm_client=self._ssm(error_code=code)) is False
 
-    def test_no_prefix_is_not_ready(self, monkeypatch):
+    def test_no_prefix_or_no_table_is_not_ready(self, monkeypatch):
+        ssm = self._ssm(self._complete())
+        assert al.index_ready("", ssm_client=ssm) is False
         monkeypatch.delenv("VAMS_RESOURCE_PARAM_PREFIX")
-        ssm = self._ssm(json.dumps({"version": 1, "status": "complete"}))
-        assert al.index_ready(ssm_client=ssm) is False
+        assert al.index_ready(self.TABLE, ssm_client=ssm) is False
         ssm.get_parameter.assert_not_called()
 
     def test_answer_is_cached_both_ways(self):
         now = {"t": 100.0}
         missing = self._ssm(error_code="ParameterNotFound")
-        assert al.index_ready(ssm_client=missing, clock=lambda: now["t"]) is False
-        complete = self._ssm(json.dumps({"version": 1, "status": "complete"}))
+        assert al.index_ready(self.TABLE, ssm_client=missing, clock=lambda: now["t"]) is False
+        complete = self._ssm(self._complete())
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS - 1
-        assert al.index_ready(ssm_client=complete, clock=lambda: now["t"]) is False
+        assert al.index_ready(self.TABLE, ssm_client=complete, clock=lambda: now["t"]) is False
         complete.get_parameter.assert_not_called()
         now["t"] += 2
-        assert al.index_ready(ssm_client=complete, clock=lambda: now["t"]) is True
+        assert al.index_ready(self.TABLE, ssm_client=complete, clock=lambda: now["t"]) is True
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS - 1
-        assert al.index_ready(ssm_client=missing, clock=lambda: now["t"]) is True
+        assert al.index_ready(self.TABLE, ssm_client=missing, clock=lambda: now["t"]) is True

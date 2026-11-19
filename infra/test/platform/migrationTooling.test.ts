@@ -555,3 +555,58 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         );
     });
 });
+
+describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads", () => {
+    // backend/backend/common/assetLocations.py decides index_ready() from the marker this step writes,
+    // and AssetLocationGSI indexes the two attributes the step sets. A renamed constant on either side
+    // leaves the index empty or the marker unread, and nothing else fails.
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const script = readMigrationFile(release, release.script);
+    const backend = fs.readFileSync(
+        path.join(__dirname, "..", "../../backend/backend/common/assetLocations.py"),
+        "utf8"
+    );
+
+    /** The string or integer value assigned to `name` at module level in a Python source. */
+    function pyConstant(source: string, name: string): string {
+        const match = new RegExp(`^${name}\\s*=\\s*(?:'([^']*)'|"([^"]*)"|(\\d+))\\s*$`, "m").exec(
+            source
+        );
+        if (!match) throw new Error(`${name} is not assigned a literal`);
+        return match[1] ?? match[2] ?? match[3];
+    }
+
+    const PAIRS: ReadonlyArray<[string, string]> = [
+        ["ASSET_LOCATION_BUCKET_ATTRIBUTE", "LOCATION_BUCKET_ATTRIBUTE"],
+        ["ASSET_LOCATION_KEY_ATTRIBUTE", "LOCATION_KEY_ATTRIBUTE"],
+        ["ASSET_LOCATION_INDEX_MARKER_SUFFIX", "INDEX_READY_PARAMETER_SUFFIX"],
+        ["ASSET_LOCATION_INDEX_MARKER_VERSION", "INDEX_READY_MARKER_VERSION"],
+        ["ASSET_LOCATION_INDEX_STATUS_COMPLETE", "INDEX_READY_STATUS_COMPLETE"],
+    ];
+
+    it.each(PAIRS)("%s equals the backend's %s", (migrationName, backendName) => {
+        expect(pyConstant(script, migrationName)).toBe(pyConstant(backend, backendName));
+    });
+
+    it("writes the table name into the marker, which the backend requires", () => {
+        expect(script).toMatch(/'assetTable': self\.asset_table/);
+        expect(backend).toMatch(/marker\.get\('assetTable'\) == asset_table_name/);
+    });
+
+    it("the GSI keys on the same attribute names", () => {
+        const storage = fs.readFileSync(
+            path.join(__dirname, "..", "../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
+            "utf8"
+        );
+        const block = storage.slice(storage.indexOf('indexName: "AssetLocationGSI"'));
+        expect(block.slice(0, 400)).toContain(
+            `name: "${pyConstant(backend, "LOCATION_BUCKET_ATTRIBUTE")}"`
+        );
+        expect(block.slice(0, 400)).toContain(`name: "${pyConstant(backend, "LOCATION_KEY_ATTRIBUTE")}"`);
+    });
+
+    it("[control] the constant reader rejects a name that is not assigned", () => {
+        expect(() => pyConstant(script, "NO_SUCH_CONSTANT")).toThrow();
+    });
+});

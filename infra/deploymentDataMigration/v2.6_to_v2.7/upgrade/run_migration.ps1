@@ -1,5 +1,5 @@
 # PowerShell script to run the VAMS v2.6 to v2.7 migration (orphaned trigger cleanup, vector index
-# backfill, system-pipeline retirement report)
+# backfill, system-pipeline retirement report, asset location index backfill)
 # Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-ClearVectors] [-Async]
 #                            [-GenerateMetadataForExistingFiles]
 #                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
@@ -18,7 +18,7 @@ param(
     [switch]$ClearVectors,
     [switch]$Async,
     [switch]$GenerateMetadataForExistingFiles,
-    [ValidateSet("all", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement")]
+    [ValidateSet("all", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "assetLocationIndex")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,
@@ -123,6 +123,8 @@ try {
             Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers (without -Execute)"
             Write-Host "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
             Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
+            Write-Host "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
+            Write-Host "     says 'Completion marker written'; if not, run -Steps assetLocationIndex -Execute again"
         } else {
             Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
             Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."

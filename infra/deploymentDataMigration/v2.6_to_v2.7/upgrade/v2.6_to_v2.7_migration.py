@@ -1557,6 +1557,7 @@ class AssetLocationBackfill:
 
     def _write_marker(self, report: Dict) -> None:
         marker = {'version': ASSET_LOCATION_INDEX_MARKER_VERSION, 'status': ASSET_LOCATION_INDEX_STATUS_COMPLETE,
+                  'assetTable': self.asset_table,
                   'completedAt': self.now().isoformat(), 'assetRows': report['counts']['scanned'],
                   'indexed': report['counts']['indexed'],
                   'notIndexed': sum(report['counts'][reason] for reason in NOT_INDEXED_REASONS)}

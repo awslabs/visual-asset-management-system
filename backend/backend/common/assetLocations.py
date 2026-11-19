@@ -470,7 +470,7 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
 #######################
 
 _index_ready_lock = threading.Lock()
-_index_ready_cache: Dict[str, Any] = {'value': None, 'at': 0.0}
+_index_ready_cache: Dict[str, Tuple[bool, float]] = {}
 _ssm_client = None
 
 
@@ -483,9 +483,11 @@ def index_ready_parameter_name(resource_param_prefix: Optional[str] = None) -> O
     return f"{prefix}/{INDEX_READY_PARAMETER_SUFFIX}"
 
 
-def marker_says_complete(value: Optional[str]) -> bool:
-    """Whether a marker parameter value records a completed backfill of this marker version."""
-    if not value:
+def marker_says_complete(value: Optional[str], asset_table_name: str) -> bool:
+    """Whether a marker parameter value records a completed backfill of this marker version for
+    `asset_table_name`. A marker written for another table (a deployment removed and created again
+    under the same name, a restored table) does not count."""
+    if not value or not asset_table_name:
         return False
     try:
         marker = json.loads(value)
@@ -493,49 +495,49 @@ def marker_says_complete(value: Optional[str]) -> bool:
         return False
     return (isinstance(marker, dict)
             and marker.get('version') == INDEX_READY_MARKER_VERSION
-            and marker.get('status') == INDEX_READY_STATUS_COMPLETE)
+            and marker.get('status') == INDEX_READY_STATUS_COMPLETE
+            and marker.get('assetTable') == asset_table_name)
 
 
 def reset_index_ready_cache() -> None:
-    """Forget the cached readiness answer (tests, and a caller that must re-read it now)."""
+    """Forget the cached readiness answers (tests, and a caller that must re-read now)."""
     with _index_ready_lock:
-        _index_ready_cache['value'] = None
-        _index_ready_cache['at'] = 0.0
+        _index_ready_cache.clear()
 
 
-def index_ready(ssm_client=None, clock: Callable[[], float] = time.monotonic) -> bool:
-    """Whether the location index covers every asset row: the backfill's completion marker
-    exists and records `complete`. Until it does, every decision keeps the logic that does not
-    read the index.
+def index_ready(asset_table_name: str, ssm_client=None, clock: Callable[[], float] = time.monotonic) -> bool:
+    """Whether the location index covers every row of `asset_table_name`: the backfill's completion
+    marker exists, records `complete` and names that table. Until it does, every decision keeps the
+    logic that does not read the index.
 
-    The answer is cached per container for INDEX_READY_CACHE_TTL_SECONDS either way. A marker
-    that cannot be read (no prefix, a missing parameter, AccessDenied, throttling) answers False,
-    so a failure falls back to the checks that do not depend on the index.
+    The answer is cached per container and table for INDEX_READY_CACHE_TTL_SECONDS either way. A
+    marker that cannot be read (no prefix, a missing parameter, AccessDenied, throttling) answers
+    False, so a failure falls back to the checks that do not depend on the index.
     """
     global _ssm_client
     now = clock()
     with _index_ready_lock:
-        cached = _index_ready_cache['value']
-        if cached is not None and now - _index_ready_cache['at'] < INDEX_READY_CACHE_TTL_SECONDS:
-            return cached
+        cached = _index_ready_cache.get(asset_table_name)
+        if cached is not None and now - cached[1] < INDEX_READY_CACHE_TTL_SECONDS:
+            return cached[0]
     name = index_ready_parameter_name()
     ready = False
-    if name:
+    if name and asset_table_name:
         try:
             if ssm_client is None:
                 if _ssm_client is None:
                     _ssm_client = boto3.client('ssm', config=_SSM_CLIENT_CONFIG)
                 ssm_client = _ssm_client
             value = ssm_client.get_parameter(Name=name)['Parameter']['Value']
-            ready = marker_says_complete(value)
+            ready = marker_says_complete(value, asset_table_name)
             if not ready:
-                logger.warning(f"Location index marker {name} does not record a completed backfill")
+                logger.warning(f"Location index marker {name} does not record a completed backfill "
+                               f"of {asset_table_name}")
         except Exception as e:
             code = getattr(e, 'response', {}).get('Error', {}).get('Code', type(e).__name__)
             if code != 'ParameterNotFound':
                 logger.warning(f"Location index marker {name} could not be read ({code}); "
                                "the index is treated as not ready")
     with _index_ready_lock:
-        _index_ready_cache['value'] = ready
-        _index_ready_cache['at'] = now
+        _index_ready_cache[asset_table_name] = (ready, now)
     return ready
