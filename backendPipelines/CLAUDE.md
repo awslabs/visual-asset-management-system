@@ -398,6 +398,20 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     change. `incomplete_result.py` writes `conversion-incomplete.json` (the shape and caps of
     `preview-incomplete.json`) to the manifest's `outputs.results` prefix and builds the completion message
     and the MISSING_REFERENCES fail refusal.
+-   FBX is read by the Assimp command-line tool (`/opt/assimp/bin/assimp`), which the Dockerfile's
+    `assimp-builder` stage compiles from the pinned, hash-checked release source on the same base image digest
+    (Assimp publishes no prebuilt Linux tool; the tool also needs the assbin and assxml exporters to link).
+    `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
+    environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
+    the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.
+-   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
+    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the `step` Poetry
+    group, `poetry export --only step`). `lambda.py` refuses a STEP run before any S3 call when the variable is
+    not `true`. `step_limits.py` is the thumbnail CAD handler's placement count, vendored with a drift test in
+    `tests/test_3dbasic_step_input.py`. cascadio writes metres and keeps Z up. `run_golden.sh` with
+    `GOLDEN_STEP=1` builds and tests the STEP image and asserts the default image holds no Open CASCADE files.
+-   `model_formats.prune_for_output` removes curves (kept for glTF/GLB only) and points beside triangles (for
+    the triangle-only outputs) before an export: a STEP file's edges and annotations load that way.
 -   `size_check.DAE_OUTPUT_EXPANSION_FACTORS` apply instead of `MEMORY_EXPANSION_FACTORS` when the output is COLLADA,
     whose exporter holds the model twice. A format added to the handler needs both measured.
 -   Tests that convert real files (`test_3dbasic_new_formats.py`, `test_3dbasic_units_axes.py`,
