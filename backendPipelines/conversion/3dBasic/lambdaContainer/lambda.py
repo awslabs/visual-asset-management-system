@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import expansion_bounds
 import incomplete_result
 import referenced_files
 import size_check
@@ -907,6 +908,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
             "tool_timeout_seconds": int(worker_timeout_seconds()),
+            "max_scene_nodes": expansion_bounds.max_scene_nodes(memory_bytes),
             "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
         }, work_dir) or {}
         removed = ((worker_result.get("report") or {}).get("removed")) or []

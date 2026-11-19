@@ -4,11 +4,12 @@
 """A COLLADA or USD scene is sized before its loader expands it (backendPipelines/CLAUDE.md "Sizing a
 Container's Work to Its Task").
 
-A scene whose levels each place the level below twice describes 2^depth placements in a few kilobytes.
-``trimesh`` builds an entry for every COLLADA placement and ``Usd.Stage.Open`` composes every USD prim
-before any bound of the walk can apply, so ``expansion_bounds`` counts both from the file first and
-``model_formats``/``usd_io`` refuse a scene over the conversion bound. Real libraries throughout; a
-refusal is checked by the loader never being reached."""
+Nested instances multiply, so the size of a scene differs from the size of its file. ``trimesh`` builds
+an entry for every COLLADA placement of every primitive element, and ``Usd.Stage.Open`` composes every
+USD prim before the walk's own bound can apply, so ``expansion_bounds`` counts both from the file first
+and ``model_formats``/``usd_io`` refuse a scene over the conversion bound. Real libraries throughout; a
+refusal is checked by the loader never being reached. The tests give the bound to the job, so a small
+scene stands for a large one."""
 
 import os
 import sys
@@ -40,10 +41,10 @@ from pxr import Usd  # noqa: E402
 _TRIANGLE = "0 0 0 1 0 0 0 1 0"
 
 
-def dae(depth, triangles=1, cycle=False, instances=1):
+def dae(depth, triangles=1, cycle=False, instances=1, primitives=1):
     """Library node n_k holds an instance of n_(k-1) and a child node holding a second one; n_0 holds
-    ``instances`` placements of one geometry of ``triangles`` triangles, so the scene places
-    2^depth * instances copies."""
+    ``instances`` placements of one geometry of ``primitives`` primitive elements of ``triangles``
+    triangles each."""
     library = ['<node id="n0">' + '<instance_geometry url="#g"/>' * instances + '</node>']
     for k in range(1, depth + 1):
         library.append(f'<node id="n{k}"><instance_node url="#n{k - 1}"/>'
@@ -62,7 +63,7 @@ def dae(depth, triangles=1, cycle=False, instances=1):
 <source id="p"><float_array id="pa" count="{3 * (triangles + 2)}">{positions}</float_array>
 <technique_common><accessor source="#pa" count="{triangles + 2}" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
 <vertices id="v"><input semantic="POSITION" source="#p"/></vertices>
-<triangles count="{triangles}"><input semantic="VERTEX" source="#v" offset="0"/><p>{indices}</p></triangles>
+{"".join(f'<triangles count="{triangles}" material="m{i}"><input semantic="VERTEX" source="#v" offset="0"/><p>{indices}</p></triangles>' for i in range(primitives))}
 </mesh></geometry></library_geometries>
 <library_nodes>{"".join(library)}</library_nodes>
 <library_visual_scenes><visual_scene id="s"><node id="root"><instance_node url="#{top}"/></node></visual_scene></library_visual_scenes>
@@ -84,11 +85,25 @@ def usda(depth, instanceable=False):
     return "\n".join(out)
 
 
-def _job(directory, name, text):
+def instanced_usda(prototype_prims, instances):
+    """A prototype of ``prototype_prims`` cubes and ``instances`` instanceable prims that reference it."""
+    out = ['#usda 1.0', '(', '    defaultPrim = "World"', ')', '', 'def Xform "Proto"', '{']
+    out += [f'    def Cube "c{i}"\n    {{\n    }}' for i in range(prototype_prims)]
+    out += ['}', '', 'def Xform "World"', '{']
+    out += [f'    def Xform "i{i}" (\n        instanceable = true\n        references = </Proto>\n    )\n    {{\n    }}'
+            for i in range(instances)]
+    out += ['}', '']
+    return "\n".join(out)
+
+
+def _job(directory, name, text, max_scene_nodes=None):
     path = directory / name
     path.write_text(text)
-    return {"input_file": str(path), "input_dir": str(directory), "input_relative_path": name,
-            "by_reference": {}, "input_name": name}
+    job = {"input_file": str(path), "input_dir": str(directory), "input_relative_path": name,
+           "by_reference": {}, "input_name": name}
+    if max_scene_nodes is not None:
+        job["max_scene_nodes"] = max_scene_nodes
+    return job
 
 
 def _all_prims(path):
@@ -126,18 +141,18 @@ def _import_without_open(refuse):
 
 @pytest.mark.unit
 class TestColladaInstancing:
-    def test_a_doubling_scene_is_refused_before_trimesh_reads_it(self, tmp_path):
-        job = _job(tmp_path, "nested.dae", dae(30))
+    def test_a_scene_whose_placements_exceed_the_bound_is_refused_before_trimesh_reads_it(self, tmp_path):
+        job = _job(tmp_path, "nested.dae", dae(12), max_scene_nodes=1000)
         trimesh_stub = MagicMock()
         started = time.monotonic()
-        with pytest.raises(ValueError, match=r"nested\.dae: the COLLADA scene expands to more than 200,000 "
-                                             r"placements, more than this function converts"):
+        with pytest.raises(ValueError, match=r"nested\.dae: the COLLADA scene expands to more than 1,000 "
+                                             r"nodes, more than this function converts"):
             model_formats.load_model(job, trimesh_stub)
         assert time.monotonic() - started < 5
         trimesh_stub.load.assert_not_called()
 
-    def test_the_message_names_placements_not_memory(self, tmp_path):
-        job = _job(tmp_path, "nested.dae", dae(30))
+    def test_the_message_names_nodes_not_memory(self, tmp_path):
+        job = _job(tmp_path, "nested.dae", dae(12), max_scene_nodes=1000)
         with pytest.raises(ValueError) as refused:
             model_formats.load_model(job, MagicMock())
         assert "memory" not in str(refused.value)
@@ -149,20 +164,40 @@ class TestColladaInstancing:
         assert sum(len(g.faces) for g in loaded.dump()) == 2 ** 8
 
     @pytest.mark.parametrize("depth", [1, 3, 5, 9])
-    def test_the_count_is_never_below_what_trimesh_places(self, tmp_path, depth):
-        job = _job(tmp_path, "nested.dae", dae(depth, triangles=3, instances=2))
+    @pytest.mark.parametrize("primitives", [1, 3])
+    def test_the_count_is_never_below_what_trimesh_places(self, tmp_path, depth, primitives):
+        job = _job(tmp_path, "nested.dae", dae(depth, triangles=3, instances=2, primitives=primitives))
         size = expansion_bounds.collada_scene_size(job["input_file"], 10 ** 6)
         loaded = trimesh.load(job["input_file"])
         placed_triangles = sum(len(g.faces) for g in loaded.dump())
-        assert placed_triangles == 3 * 2 * 2 ** depth
+        assert placed_triangles == 3 * 2 * primitives * 2 ** depth
+        assert size.nodes >= len(loaded.graph.nodes_geometry) >= 2 * primitives * 2 ** depth
         assert size.triangles >= placed_triangles
         assert size.vertices >= 3 * placed_triangles
-        assert size.stored_triangles == 3
+        assert size.stored_triangles == 3 * primitives
+
+    def test_each_primitive_element_of_a_placed_geometry_counts_as_a_node(self, tmp_path):
+        # 64 placements of a geometry of 20 primitive elements place 1,280 scene nodes in a file whose
+        # placements alone count about 250.
+        many = _job(tmp_path, "many.dae", dae(6, primitives=20))
+        one = _job(tmp_path, "one.dae", dae(6, primitives=1))
+        with pytest.raises(ValueError, match="expands to more than 1,000 nodes"):
+            model_formats.check_collada_scene(many["input_file"], "many.dae", max_nodes=1000)
+        model_formats.check_collada_scene(one["input_file"], "one.dae", max_nodes=1000)
+        assert len(trimesh.load(many["input_file"]).graph.nodes_geometry) == 64 * 20
+
+    def test_a_small_file_with_many_primitive_elements_is_refused_before_it_loads(self, tmp_path):
+        job = _job(tmp_path, "prims.dae", dae(8, primitives=100), max_scene_nodes=10_000)
+        assert os.path.getsize(job["input_file"]) < 20_000
+        trimesh_stub = MagicMock()
+        with pytest.raises(ValueError, match=r"prims\.dae: the COLLADA scene expands to more than 10,000 nodes"):
+            model_formats.load_model(job, trimesh_stub)
+        trimesh_stub.load.assert_not_called()
 
     def test_the_bound_is_the_conversion_bound_unless_given(self, tmp_path):
-        job = _job(tmp_path, "nested.dae", dae(10))  # 2^10 placements, 2^11 + 2^10 or so nodes
+        job = _job(tmp_path, "nested.dae", dae(10))
         model_formats.check_collada_scene(job["input_file"], "nested.dae")
-        with pytest.raises(ValueError, match="expands to more than 100 placements"):
+        with pytest.raises(ValueError, match="expands to more than 100 nodes"):
             model_formats.check_collada_scene(job["input_file"], "nested.dae", max_nodes=100)
 
     def test_a_node_that_places_itself_is_refused(self, tmp_path):
@@ -173,7 +208,7 @@ class TestColladaInstancing:
         trimesh_stub.load.assert_not_called()
 
     def test_instanced_triangles_past_the_budget_are_refused(self, tmp_path):
-        # 2^6 placements of a 100-triangle geometry against a 1,000-triangle budget.
+        # Placements of a 100-triangle geometry against a 1,000-triangle budget.
         job = _job(tmp_path, "many.dae", dae(6, triangles=100))
         with pytest.raises(ValueError, match="places more than 1,000 triangles through instancing"):
             model_formats.check_collada_scene(job["input_file"], "many.dae", max_triangles=1000)
@@ -201,7 +236,7 @@ class TestColladaInstancing:
             scan.data(piece)
         scan.end("p")
         scan.end("triangles")
-        assert scan.geometries["g"] == [5, 1]
+        assert scan.geometries["g"] == [5, 1, 1]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -210,34 +245,36 @@ class TestColladaInstancing:
 
 @pytest.mark.unit
 class TestUsdComposition:
-    def test_a_doubling_scene_is_refused_before_a_stage_is_opened(self, tmp_path, stage_never_opened):
+    def test_a_scene_whose_prims_exceed_the_bound_is_refused_before_a_stage_is_opened(
+            self, tmp_path, stage_never_opened):
         path = tmp_path / "nested.usda"
-        path.write_text(usda(24))
+        path.write_text(usda(12))
+        limit = scene_limits.SceneLimit("nested.usda", max_nodes=1000)
         started = time.monotonic()
-        with pytest.raises(ValueError, match=r"nested\.usda: the USD scene expands to more than 200,000 prims "
+        with pytest.raises(ValueError, match=r"nested\.usda: the USD scene expands to more than 1,000 prims "
                                              r"through its references, more than this function converts"):
-            usd_io.read_usd(str(path), str(tmp_path))
+            usd_io.read_usd(str(path), str(tmp_path), limit=limit)
         assert time.monotonic() - started < 5
 
-    def test_a_scaled_scene_that_composes_slowly_is_refused_too(self, tmp_path, stage_never_opened):
-        # 16 levels is 590,000 prims: the stage opens in seconds, the walk would take minutes.
+    def test_the_default_bound_is_the_shared_one(self, tmp_path, stage_never_opened):
+        assert expansion_bounds.CONVERSION_MAX_SCENE_NODES == scene_limits.MAX_SCENE_NODES
         path = tmp_path / "nested.usda"
-        path.write_text(usda(16))
-        with pytest.raises(ValueError, match="expands to more than 200,000 prims"):
+        path.write_text(usda(24))
+        with pytest.raises(ValueError, match="expands to more than 1,000,000 prims"):
             usd_io.read_usd(str(path), str(tmp_path))
 
     def test_the_message_names_nodes_not_memory(self, tmp_path):
         path = tmp_path / "nested.usda"
-        path.write_text(usda(24))
+        path.write_text(usda(12))
         with pytest.raises(ValueError) as refused:
-            usd_io.read_usd(str(path), str(tmp_path))
+            usd_io.read_usd(str(path), str(tmp_path), limit=scene_limits.SceneLimit("n", max_nodes=1000))
         assert "memory" not in str(refused.value)
 
     def test_a_scene_below_the_bound_still_converts(self, tmp_path):
         path = tmp_path / "nested.usda"
         path.write_text(usda(6))
         scene, meters, up = usd_io.read_usd(str(path), str(tmp_path))
-        # The file's other prims (L0 to L6) are scene content too; the 2^6 cubes are the Root's.
+        # The file's other prims (L0 to L6) are scene content too; the cubes under Root are the placed ones.
         assert len([name for name in scene.geometry if name.startswith("Root_")]) == 2 ** 6
 
     @pytest.mark.parametrize("depth", [1, 4, 8])
@@ -298,6 +335,27 @@ over "A"
         path = tmp_path / "root.usda"
         assert expansion_bounds.usd_composed_prims(str(path), 10 ** 6) >= _all_prims(path)
 
+    def test_instanceable_content_counts_once_for_each_prototype(self, tmp_path):
+        path = tmp_path / "instanced.usda"
+        path.write_text(instanced_usda(prototype_prims=100, instances=3000))
+        count = expansion_bounds.usd_composed_prims(str(path), 1_000_000)
+        assert count < 5000  # 3,000 instances and 100 prims, not 303,000
+        assert count >= 3100
+
+    def test_distinct_prototypes_each_count_their_own_content(self, tmp_path):
+        path = tmp_path / "two.usda"
+        text = instanced_usda(prototype_prims=100, instances=10)
+        text += ('def Xform "Other"\n{\n' + "".join(f'    def Cube "o{i}"\n    {{\n    }}\n' for i in range(50))
+                 + '}\n\ndef Xform "World2" (\n    instanceable = true\n    references = </Other>\n)\n{\n}\n')
+        path.write_text(text)
+        assert expansion_bounds.usd_composed_prims(str(path), 1_000_000) >= 100 + 50
+
+    def test_an_instanced_scene_converts_under_the_default_bound(self, tmp_path):
+        path = tmp_path / "instanced.usda"
+        path.write_text(instanced_usda(prototype_prims=20, instances=100))
+        scene, _meters, _up = usd_io.read_usd(str(path), str(tmp_path))
+        assert len([name for name in scene.geometry if name.startswith("World_")]) == 20 * 100
+
     def test_instanceable_prims_count_once_and_the_walk_bound_still_applies(self, tmp_path):
         path = tmp_path / "instanced.usda"
         path.write_text(usda(20, instanceable=True))
@@ -321,8 +379,21 @@ over "A"
         with pytest.raises(ValueError, match=r"expands to too many nodes to read in the time this function has"):
             usd_io.read_usd(str(path), str(tmp_path), deadline=time.monotonic() - 1)
 
-    def test_the_conversion_bound_is_below_the_shared_one(self):
-        assert expansion_bounds.CONVERSION_MAX_SCENE_NODES < scene_limits.MAX_SCENE_NODES
+    def test_the_node_bound_follows_the_memory_of_the_task(self):
+        mb = 1024 ** 2
+        assert expansion_bounds.max_scene_nodes(None) == 1_000_000
+        assert expansion_bounds.max_scene_nodes(10_240 * mb) == 1_000_000
+        assert expansion_bounds.max_scene_nodes(3_008 * mb) == 1_000_000
+        assert expansion_bounds.max_scene_nodes(30_720 * mb) == 3_000_000
+
+    def test_a_job_carries_the_bound_of_its_task(self, tmp_path):
+        nested = usda(12)
+        refused = _job(tmp_path, "nested.usda", nested, max_scene_nodes=1000)
+        with pytest.raises(ValueError, match="expands to more than 1,000 prims"):
+            model_formats.load_model(refused, trimesh)
+        larger = _job(tmp_path, "nested.usda", nested, max_scene_nodes=1_000_000)
+        scene, _meters, _up = model_formats.load_model(larger, trimesh)
+        assert scene.geometry
 
     def test_load_model_passes_a_deadline_from_the_workers_time(self, tmp_path, monkeypatch):
         job = _job(tmp_path, "nested.usda", usda(2))

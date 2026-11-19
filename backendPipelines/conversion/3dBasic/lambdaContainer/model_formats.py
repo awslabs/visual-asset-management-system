@@ -26,6 +26,7 @@ import numpy as np
 
 import archive_guard
 import expansion_bounds
+import scene_limits
 import units_axes
 import usd_io
 import vertex_normals
@@ -160,7 +161,7 @@ def check_collada_scene(path, name, max_triangles=None, max_nodes=None):
     except ValueError as e:
         raise ValueError(f"{name} could not be read as COLLADA: {e}")
     if not limit.expect(size.nodes):
-        raise ValueError(f"{name}: the COLLADA scene expands to more than {limit.max_nodes:,} placements, "
+        raise ValueError(f"{name}: the COLLADA scene expands to more than {limit.max_nodes:,} nodes, "
                          f"more than this function converts.")
     allowed_triangles = max(limit.max_triangles, size.stored_triangles)
     if size.triangles > allowed_triangles:
@@ -171,6 +172,11 @@ def check_collada_scene(path, name, max_triangles=None, max_nodes=None):
         raise ValueError(f"{name}: the COLLADA scene places more than {allowed_vertices:,} vertices through "
                          f"instancing, more than this function converts.")
     return size
+
+
+def job_max_scene_nodes(job):
+    """The node bound a job carries (set from the task's memory), the default when it carries none."""
+    return int(job.get("max_scene_nodes") or expansion_bounds.CONVERSION_MAX_SCENE_NODES)
 
 
 # The share of the worker's time a USD scene may spend being read; the rest is for writing the output.
@@ -321,12 +327,14 @@ def load_model(job, trimesh):
     extension = os.path.splitext(job["input_name"])[1].lower()
     if extension in USD_EXTENSIONS:
         budget = float(job.get("tool_timeout_seconds") or 600) * USD_READ_TIME_SHARE
-        scene, meters, up = usd_io.read_usd(path, job["input_dir"], deadline=time.monotonic() + budget)
+        limit = scene_limits.SceneLimit(os.path.basename(path), max_nodes=job_max_scene_nodes(job))
+        scene, meters, up = usd_io.read_usd(path, job["input_dir"], limit=limit,
+                                            deadline=time.monotonic() + budget)
         return scene, meters, up
     declared_meters = declared_up = None
     if extension == '.dae':
         declared_meters, declared_up = _check_dae(path)
-        check_collada_scene(path, os.path.basename(path))
+        check_collada_scene(path, os.path.basename(path), max_nodes=job_max_scene_nodes(job))
     elif extension == '.3mf':
         _check_3mf(path, os.path.dirname(path))
     resolver = referenced_files.ConfinedResolver(

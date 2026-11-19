@@ -5,13 +5,14 @@
 The size a COLLADA or USD scene expands to, counted from the file before a library expands it.
 
 A scene format whose elements refer to one another places the same child once per reference, so the
-number of placements a library builds can be far larger than the file. ``fbx_scene.scene_size`` counts
-an FBX scene before Assimp reads it; this module does the same for the two formats whose loader would
-otherwise expand the scene itself (ARCC BSC1: size limits on untrusted input):
+size of the scene a library builds can differ greatly from the size of the file. ``fbx_scene.scene_size``
+counts an FBX scene before Assimp reads it; this module does the same for the two formats whose loader
+expands the scene itself:
 
 * ``collada_scene_size`` counts the nodes, vertices and triangles ``trimesh`` places for a COLLADA
-  document (``instance_node`` and nested ``node`` elements), in one pass over the document through the
-  hardened parser (``xml_guard``) and a memoised count over the node graph.
+  document (``instance_node`` and nested ``node`` elements, and one node for each primitive element of
+  each geometry placed), in one pass over the document through the hardened parser (``xml_guard``) and
+  a memoised count over the node graph.
 * ``usd_composed_prims`` counts the prims ``Usd.Stage.Open`` composes, from the layers' own prim specs
   and composition arcs (references, payloads, inherits, specializes, sublayers, variants), without
   composing a stage.
@@ -26,13 +27,23 @@ from typing import NamedTuple
 
 import xml_guard
 
-# Scene nodes a conversion walk visits at most. A walk costs time and memory per node (a trimesh
-# COLLADA placement holds about 8 KB while the scene graph is built; a USD geometry prim costs about
-# half a millisecond to read), so a conversion stops well below the 1,000,000 of ``scene_limits``,
-# which also bounds the thumbnail renderer's lighter walk.
-CONVERSION_MAX_SCENE_NODES = 200_000
+# Scene nodes a conversion counts and walks at most on a function of ``REFERENCE_MEMORY_BYTES``, the
+# same bound as ``scene_limits.MAX_SCENE_NODES``. ``max_scene_nodes`` scales it with the memory of the
+# task, as the input size limits scale (``size_check``); the walk's time is bounded by its deadline.
+CONVERSION_MAX_SCENE_NODES = 1_000_000
+REFERENCE_MEMORY_BYTES = 10_240 * 1024 ** 2
 
-# Counts above this are reported as this, so a deep doubling never builds huge integers.
+
+def max_scene_nodes(memory_bytes=None):
+    """The node bound for a task with ``memory_bytes`` of memory: ``CONVERSION_MAX_SCENE_NODES`` for a
+    task of ``REFERENCE_MEMORY_BYTES`` or less (or one whose memory is not known), in proportion to the
+    memory above that."""
+    if not memory_bytes or memory_bytes <= REFERENCE_MEMORY_BYTES:
+        return CONVERSION_MAX_SCENE_NODES
+    return int(CONVERSION_MAX_SCENE_NODES * memory_bytes // REFERENCE_MEMORY_BYTES)
+
+
+# Counts above this are reported as this.
 _CAP = 1 << 62
 # The most prim bundles the USD count visits before it reports the scene as over the bound: every
 # bundle it visits stands for at least one prim of the composed stage.
@@ -59,7 +70,8 @@ class SceneSize(NamedTuple):
     stored_triangles: int
 
 
-_PRIMITIVES = ("triangles", "polylist", "polygons", "trifans", "tristrips")
+_PRIMITIVES = ("triangles", "polylist", "polygons", "trifans", "tristrips", "lines", "linestrips")
+_LINES = ("lines", "linestrips")
 _LEAF_INSTANCES = ("instance_controller", "instance_camera", "instance_light")
 _TOKEN = re.compile(r"\S+")
 
@@ -79,7 +91,7 @@ class _ColladaScan:
 
     def __init__(self):
         self.children = {}        # node key -> [(kind, reference)]
-        self.geometries = {}      # geometry id -> [corners, triangles]
+        self.geometries = {}      # geometry id -> [corners, triangles, primitive elements]
         self.scene_urls = []
         self.visual_scenes = []
         self._stack = []          # (local tag, node key or None)
@@ -122,7 +134,7 @@ class _ColladaScan:
                 self.scene_urls.append(("vs", target))
         elif name == "geometry" and parent_name == "library_geometries":
             self._geometry = attributes.get("id") or ""
-            self.geometries.setdefault(self._geometry, [0, 0])
+            self.geometries.setdefault(self._geometry, [0, 0, 0])
         elif self._geometry is not None and name in _PRIMITIVES:
             polygons = 0
             if name == "polylist":
@@ -153,10 +165,14 @@ class _ColladaScan:
         elif self._primitive is not None and name == self._primitive[0]:
             kind, polygons, stride, tokens = self._primitive
             corners = tokens // max(stride, 1)
-            triangles = corners // 3 if kind == "triangles" else max(corners - 2 * polygons, 0)
+            if kind in _LINES:
+                triangles = 0
+            else:
+                triangles = corners // 3 if kind == "triangles" else max(corners - 2 * polygons, 0)
             total = self.geometries[self._geometry]
             total[0] += corners
             total[1] += triangles
+            total[2] += 1
             self._primitive = None
         elif name == "geometry":
             self._geometry = None
@@ -173,7 +189,7 @@ class _ColladaScan:
 
 def _placed(children, geometries, roots, over):
     """(nodes, vertices, triangles) placed under ``roots``, nodes at most ``over``, memoised over the
-    node graph. Iterative, so a deep chain cannot exhaust the interpreter's recursion limit; a node met
+    node graph. Iterative, so the depth of a chain of nodes does not matter; a node met
     again inside its own subtree is a cycle (``ExpansionCycle``)."""
     in_progress = object()
     counted = {}
@@ -197,8 +213,9 @@ def _placed(children, geometries, roots, over):
             kind, reference = kids[frame[1]]
             frame[1] += 1
             if kind == "geometry":
-                vertices, triangles = geometries.get(reference, (0, 0))
-                _accumulate(frame, (1, vertices, triangles), 2)
+                vertices, triangles, primitives = geometries.get(reference, (0, 0, 0))
+                # trimesh adds one scene node and one mesh for each primitive element of a placement.
+                _accumulate(frame, (max(primitives, 1), vertices, triangles), 2)
             elif kind == "leaf":
                 _accumulate(frame, (1, 0, 0), 2)
             else:
@@ -243,7 +260,7 @@ def collada_scene_size(path, max_nodes):
     nodes, vertices, triangles = _placed(scan.children, scan.geometries, roots, max_nodes + 1)
     stored = scan.geometries.values()
     return SceneSize(nodes, vertices, triangles,
-                     min(sum(v for v, _ in stored), _CAP), min(sum(t for _, t in stored), _CAP))
+                     min(sum(g[0] for g in stored), _CAP), min(sum(g[1] for g in stored), _CAP))
 
 
 # --------------------------------------------------------------------------------------------------
@@ -336,18 +353,18 @@ class _Composition:
         return bundles
 
     def _children(self, bundle):
-        """(self count, plain dependencies, groups of alternative dependencies, instanceable), each
-        dependency a ``(key, bundle)`` pair."""
+        """(self count, arc targets, child bundles, groups of alternative dependencies, instanceable),
+        each dependency a ``(key, bundle)`` pair."""
         root_id, specs, body = bundle
         root_layer = self._roots[root_id]
         names = {}
-        plain, groups = [], []
+        arcs, plain, groups = [], [], []
         instanceable = False
         forbidden = False
         for spec in specs:
             for child in spec.nameChildren:
                 names.setdefault(child.name, []).append(child)
-            plain.extend(self._arc_targets(root_layer, spec))
+            arcs.extend(self._arc_targets(root_layer, spec))
             for variant_set in (spec.variantSets.values() if spec.variantSets else ()):
                 alternatives = [self.bundle(root_layer, (variant.primSpec,), True)
                                 for variant in variant_set.variants.values()]
@@ -360,7 +377,7 @@ class _Composition:
                     forbidden = True
         for children in names.values():
             plain.append(self.bundle(root_layer, children))
-        return (0 if body else 1), plain, groups, (instanceable and not forbidden and not body)
+        return (0 if body else 1), arcs, plain, groups, (instanceable and not forbidden and not body)
 
     def count(self, root_layer):
         """Prims the stage composed from ``root_layer`` holds, instanceable prims counted once with
@@ -371,17 +388,17 @@ class _Composition:
         visits = 0
 
         def make(entry):
-            own, plain, groups, instanced = self._children(entry[1])
-            flat = plain + [alternative for group in groups for alternative in group]
-            return [entry[0], own, plain, groups, instanced, flat, 0]
+            own, arcs, plain, groups, instanced = self._children(entry[1])
+            flat = arcs + plain + [alternative for group in groups for alternative in group]
+            return [entry[0], own, arcs, plain, groups, instanced, flat, 0]
 
         stack = [make(top)]
         open_keys.add(top[0])
         while stack:
             frame = stack[-1]
-            if frame[6] < len(frame[5]):
-                entry = frame[5][frame[6]]
-                frame[6] += 1
+            if frame[7] < len(frame[6]):
+                entry = frame[6][frame[7]]
+                frame[7] += 1
                 if entry[0] in memo:
                     continue
                 if entry[0] in open_keys:
@@ -392,15 +409,18 @@ class _Composition:
                 open_keys.add(entry[0])
                 stack.append(make(entry))
                 continue
-            key, own, plain, groups, instanced = frame[:5]
-            below = sum(memo[k] for k, _ in plain)
+            key, own, arcs, plain, groups, instanced = frame[:6]
+            local = sum(memo[k] for k, _ in plain)
             for group in groups:
-                below += max(memo[k] for k, _ in group)
+                local += max(memo[k] for k, _ in group)
+            shared = sum(memo[k] for k, _ in arcs)
             if instanced:
-                extras[key] = below
-                total = own
+                # Instances with the same arcs share one prototype: its content counts once.
+                prototype = frozenset(k for k, _ in arcs)
+                extras[prototype] = max(extras.get(prototype, 0), shared)
+                total = own + local
             else:
-                total = own + below
+                total = own + local + shared
             memo[key] = min(total, _CAP)
             open_keys.discard(key)
             stack.pop()
