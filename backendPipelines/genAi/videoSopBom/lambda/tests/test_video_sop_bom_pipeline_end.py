@@ -221,8 +221,8 @@ class TestFailureCauses:
         assert "AWS Batch queue" in cause
 
     def test_a_batch_state_timeout_ends_the_runs_job(self):
-        # Step Functions does not cancel the .sync job on a state timeout; pipelineEnd ends it so a
-        # queued job does not start after the run has failed and its scratch prefix is gone.
+        # Step Functions ends the .sync job at the state's bound; pipelineEnd ends it too, as a
+        # backup, so a queued job does not start after the run has failed and its scratch prefix is gone.
         mod = _load()
         batch = MagicMock()
         batch.list_jobs.return_value = {"jobSummaryList": [

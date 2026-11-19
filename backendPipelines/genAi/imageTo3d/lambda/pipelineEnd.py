@@ -34,9 +34,9 @@ batch = boto3.client(
     config=retry_config
 )
 
-# Step Functions cancels a .sync Batch job when the execution is stopped, not when the Batch state's
-# own bound fires, so after that timeout the run's job, still queued or running, is ended here; else
-# it would start or go on on a GPU after the run had failed. The queues are every queue a model's
+# Step Functions ends a .sync Batch job when the Batch state's own bound fires; after that timeout the
+# run's job, still queued or running, is ended here as well, as a backup, so it cannot start or go on
+# on a GPU after the run had failed. The queues are every queue a model's
 # state submits to (BATCH_JOB_QUEUES, comma-separated); the job name is unique to the run.
 BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
 LIVE_BATCH_JOB_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"})

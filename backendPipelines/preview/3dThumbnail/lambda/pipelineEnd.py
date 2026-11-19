@@ -26,9 +26,9 @@ batch = boto3.client(
     config=retry_config
 )
 
-# Step Functions cancels a .sync Batch job when the execution is stopped, not when the Batch state's
-# own bound fires (States.Timeout), so after that timeout the run's job, still queued or running, is
-# ended here; else it would start or go on after the run had failed. The queue is the one the tier
+# Step Functions ends a .sync Batch job when the Batch state's own bound fires (States.Timeout); after
+# that timeout the run's job, still queued or running, is ended here as well, as a backup, so it
+# cannot start or go on after the run had failed. The queue is the one the tier
 # states submit to (BATCH_JOB_QUEUES); the job name is unique to the run.
 STATE_TIMEOUT_ERROR = "States.Timeout"
 BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]

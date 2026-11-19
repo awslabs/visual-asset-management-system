@@ -443,7 +443,7 @@ Aborting a run stops the pipeline state machine and terminates the AWS Batch job
 
 ### Run waits in RUNNABLE
 
-A job that stays `RUNNABLE` while another run is `RUNNING` is waiting on the AWS Fargate On-Demand vCPU quota (see [Prerequisites](#prerequisites)). The wait counts against the AWS Batch state's 7 hour 45 minute bound, not against the 6-hour attempt bound. A run still waiting or running at that bound fails with a cause that names the queue wait.
+A job that stays `RUNNABLE` while another run is `RUNNING` is waiting on the AWS Fargate On-Demand vCPU quota (see [Prerequisites](#prerequisites)). The wait counts against the AWS Batch state's 7 hour 45 minute bound, not against the 6-hour attempt bound. A run still waiting or running at that bound fails with a cause that names the queue wait, and its AWS Batch job is ended, so a job that waited past the bound never runs; run the pipeline again later.
 
 ### Container fails to start
 
