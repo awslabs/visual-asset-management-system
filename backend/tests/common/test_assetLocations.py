@@ -16,7 +16,6 @@ import threading
 from unittest.mock import MagicMock
 
 import pytest
-from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
 from backend.tests.pagingStub import Pager
@@ -209,13 +208,9 @@ class TestObjectKeyFor:
         assert al.object_key_for(location, al.relative_path_in(location, key)) == key
 
 
-_serializer = TypeSerializer()
 
 BUCKET = "vams-assets"
 
-
-def _wire(row):
-    return {name: _serializer.serialize(value) for name, value in row.items()}
 
 
 def _row(database_id, asset_id, location, bucket=BUCKET, bucket_id="b1", **extra):
@@ -234,7 +229,8 @@ def _row(database_id, asset_id, location, bucket=BUCKET, bucket_id="b1", **extra
 class FakeLocationTable:
     """An asset table holding `rows` with AssetLocationGSI over them.
 
-    `query` (on `meta.client`) serves the two key conditions the module issues, in wire format,
+    `query` (on `meta.client`) serves the two key conditions the module issues, in the plain values
+    a resource table's client takes and returns,
     `page_size` rows a page with a LastEvaluatedKey after each full page. `get_item` serves the
     base table by primary key. Every index query is recorded in `queries`."""
 
@@ -253,27 +249,27 @@ class FakeLocationTable:
         assert kwargs["TableName"] == self.name
         assert kwargs["IndexName"] == al.LOCATION_INDEX_NAME
         values = kwargs["ExpressionAttributeValues"]
-        bucket = values[":b"]["S"]
+        bucket = values[":b"]
         condition = kwargs["KeyConditionExpression"]
         with self._lock:
             self.queries.append(kwargs)
         indexed = [r for r in self.rows
                    if r.get(al.LOCATION_BUCKET_ATTRIBUTE) == bucket and r.get(al.LOCATION_KEY_ATTRIBUTE)]
         if "begins_with" in condition:
-            prefix = values[":p"]["S"]
+            prefix = values[":p"]
             matches = [r for r in indexed if r[al.LOCATION_KEY_ATTRIBUTE].startswith(prefix)]
         else:
-            key = values[":k"]["S"]
+            key = values[":k"]
             matches = [r for r in indexed if r[al.LOCATION_KEY_ATTRIBUTE] == key]
         matches.sort(key=lambda r: (r[al.LOCATION_KEY_ATTRIBUTE], r["databaseId"], r["assetId"]))
-        start = int(kwargs.get("ExclusiveStartKey", {}).get("offset", {}).get("N", "0"))
+        start = int(kwargs.get("ExclusiveStartKey", {}).get("offset", 0))
         size = kwargs.get("Limit") or self.page_size or len(matches) or 1
         page = matches[start:start + size]
-        response = {"Items": [_wire({k: r[k] for k in ("databaseId", "assetId", "bucketId",
+        response = {"Items": [({k: r[k] for k in ("databaseId", "assetId", "bucketId",
                                                        al.LOCATION_BUCKET_ATTRIBUTE,
                                                        al.LOCATION_KEY_ATTRIBUTE)}) for r in page]}
         if start + size < len(matches) or (self.page_size and len(page) == size and start + size == len(matches)):
-            response["LastEvaluatedKey"] = {"offset": {"N": str(start + size)}}
+            response["LastEvaluatedKey"] = {"offset": start + size}
         return response
 
     def get_item(self, Key, **kwargs):
@@ -342,7 +338,7 @@ class TestResolveOwner:
     def test_one_query_per_candidate(self):
         table = FakeLocationTable([_row("db1", "a1", "projects/alpha/")])
         al.resolve_owner(table, BUCKET, "projects/alpha/sub/model.glb")
-        asked = sorted(q["ExpressionAttributeValues"][":k"]["S"] for q in table.queries)
+        asked = sorted(q["ExpressionAttributeValues"][":k"] for q in table.queries)
         assert asked == sorted(["projects/alpha/sub/model.glb", "projects/alpha/sub/",
                                 "projects/alpha/", "projects/"])
 
@@ -419,7 +415,7 @@ class TestResolveOwner:
         queries_before = len(table.queries)
         al.resolve_owner(table, BUCKET, "projects/alpha/x.glb")
         # The deepest-hit lookup was dropped from the cache, so it is read again.
-        asked_again = [q["ExpressionAttributeValues"][":k"]["S"] for q in table.queries[queries_before:]]
+        asked_again = [q["ExpressionAttributeValues"][":k"] for q in table.queries[queries_before:]]
         assert asked_again == ["projects/alpha/"]
 
     def test_row_that_moved_location_is_not_confirmed(self):
@@ -470,7 +466,7 @@ class TestResolveOwnerCache:
         al.resolve_owner(table, BUCKET, "projects/alpha/y.glb")
         # The hit on the owning folder came from the cache; the new key and the expired miss on
         # `projects/` were read again.
-        assert sorted(q["ExpressionAttributeValues"][":k"]["S"] for q in table.queries[first:]) == [
+        assert sorted(q["ExpressionAttributeValues"][":k"] for q in table.queries[first:]) == [
             "projects/", "projects/alpha/y.glb"]
         # The confirmation runs on every call.
         assert len(table.get_item_calls) == 2
@@ -563,10 +559,10 @@ class TestFindConflicts:
 
     def test_descendant_lookup_pages_past_an_empty_page(self):
         # A page may come back empty and still carry a key; the lookup continues from it.
-        row = _wire({"databaseId": "db1", "assetId": "a1", "bucketId": "b1",
+        row = ({"databaseId": "db1", "assetId": "a1", "bucketId": "b1",
                      al.LOCATION_BUCKET_ATTRIBUTE: BUCKET,
                      al.LOCATION_KEY_ATTRIBUTE: "projects/alpha/deep/"})
-        descendants = Pager({"Items": [], "LastEvaluatedKey": {"k": {"S": "c1"}}},
+        descendants = Pager({"Items": [], "LastEvaluatedKey": {"k": "c1"}},
                             {"Items": [row]}, name="descendant lookup")
         exact = FakeLocationTable([])
 
@@ -582,7 +578,7 @@ class TestFindConflicts:
         descendants.assert_paged_to_exhaustion()
 
     def test_descendant_lookup_that_never_ends_is_an_error(self):
-        endless = Pager(*[{"Items": [], "LastEvaluatedKey": {"k": {"S": f"c{i}"}}} for i in range(10)],
+        endless = Pager(*[{"Items": [], "LastEvaluatedKey": {"k": f"c{i}"}} for i in range(10)],
                         name="endless descendant lookup", max_reads=20)
         exact = FakeLocationTable([])
 

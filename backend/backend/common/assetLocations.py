@@ -49,7 +49,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import boto3
-from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
@@ -192,7 +191,6 @@ INDEX_READY_MARKER_VERSION = 1
 INDEX_READY_STATUS_COMPLETE = "complete"
 INDEX_READY_CACHE_TTL_SECONDS = 300
 
-_deserializer = TypeDeserializer()
 _SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 3, 'mode': 'adaptive'})
 
 
@@ -305,20 +303,22 @@ def _store_lookup(bucket: str, location: str, entries: Tuple[LocationEntry, ...]
         _lookup_cache[(bucket, location)] = (now, entries)
 
 
-def _entry_from_wire(item: Dict[str, Any]) -> LocationEntry:
-    plain = {name: _deserializer.deserialize(value) for name, value in item.items()}
+def _entry_from_item(item: Dict[str, Any]) -> LocationEntry:
     return LocationEntry(
-        database_id=str(plain.get('databaseId', '')),
-        asset_id=str(plain.get('assetId', '')),
-        bucket_id=str(plain.get('bucketId', '')),
-        location=str(plain.get(LOCATION_KEY_ATTRIBUTE, '')),
+        database_id=str(item.get('databaseId', '')),
+        asset_id=str(item.get('assetId', '')),
+        bucket_id=str(item.get('bucketId', '')),
+        location=str(item.get(LOCATION_KEY_ATTRIBUTE, '')),
     )
 
 
 def _query_index(client, table_name: str, key_condition: str, values: Dict[str, Any],
                  limit: Optional[int] = None, max_pages: int = MAX_PAGES_PER_LOOKUP) -> List[LocationEntry]:
     """Every index row the key condition selects, paged on the presence of LastEvaluatedKey. With
-    `limit`, stop once that many rows are in hand."""
+    `limit`, stop once that many rows are in hand.
+
+    `client` is the asset table's `meta.client`, which takes and returns plain Python values (the
+    resource layer serializes them), so it is safe to share across the lookup threads."""
     query_kwargs = {
         'TableName': table_name,
         'IndexName': LOCATION_INDEX_NAME,
@@ -331,7 +331,7 @@ def _query_index(client, table_name: str, key_condition: str, values: Dict[str, 
     entries: List[LocationEntry] = []
     for _ in range(max_pages):
         response = client.query(**query_kwargs)
-        entries.extend(_entry_from_wire(item) for item in response.get('Items', []))
+        entries.extend(_entry_from_item(item) for item in response.get('Items', []))
         if limit is not None and len(entries) >= limit:
             return entries[:limit]
         if 'LastEvaluatedKey' not in response:
@@ -343,7 +343,7 @@ def _query_index(client, table_name: str, key_condition: str, values: Dict[str, 
 def _lookup_exact(client, table_name: str, bucket: str, location: str) -> Tuple[LocationEntry, ...]:
     return tuple(_query_index(
         client, table_name, '#b = :b AND #k = :k',
-        {':b': {'S': bucket}, ':k': {'S': location}}))
+        {':b': bucket, ':k': location}))
 
 
 def _lookup_all(table, bucket: str, locations: List[str], use_cache: bool) -> Dict[str, Tuple[LocationEntry, ...]]:
@@ -457,7 +457,7 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
     folder_form = location if location.endswith('/') else location + '/'
     descendants = _query_index(
         table.meta.client, table.name, '#b = :b AND begins_with(#k, :p)',
-        {':b': {'S': bucket}, ':p': {'S': folder_form}},
+        {':b': bucket, ':p': folder_form},
         limit=1, max_pages=max_descendant_pages)
     for entry in descendants:
         if entry not in conflicts:
