@@ -1040,7 +1040,7 @@ def delete_existing_preview_files(bucket: str, base_file_key: str, keep: Optiona
         if preview_file == keep:
             # The copy that follows writes a new version of this key. A delete marker before it
             # raises an S3 removal whose provenance cannot be read (a HEAD of a delete marker answers
-            # 405), which the compliance trigger would evaluate as a user change (#1713).
+            # 405), which the compliance trigger would evaluate as a user change.
             continue
         try:
             # Add delete marker (soft delete)

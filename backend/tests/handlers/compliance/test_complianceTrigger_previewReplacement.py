@@ -78,8 +78,8 @@ class TestASupersededRemovalIsTheWorkflowsWrite:
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
     def test_a_removal_rewritten_by_a_user_is_evaluated(self):
-        mocks = _run_removal(PREVIEW, _current("upload", datetime(2026, 3, 1, 12, 0, 1,
-                                                                 tzinfo=timezone.utc)))
+        written_at = datetime(2026, 3, 1, 12, 0, 1, tzinfo=timezone.utc)
+        mocks = _run_removal(PREVIEW, _current("upload", written_at))
         mocks["run_evaluation"].assert_called_once()
 
     def test_a_workflow_version_older_than_the_removal_does_not_supersede_it(self):
@@ -137,6 +137,27 @@ class TestOnAVersionedBucket:
         s3.delete_object(Bucket="asset-bucket", Key=PREVIEW)
         record = self._removal_record(s3, PREVIEW)
         s3.put_object(Bucket="asset-bucket", Key=PREVIEW, Body=b"gif2",
+                      Metadata={"vams-changesource": "workflowExecution"})
+        assert trigger.removal_superseded_by_workflow_write(record, record["s3"], record) is True
+
+    def _encoded_removal(self, s3, key, encoded_key):
+        s3.put_object(Bucket="asset-bucket", Key=key, Body=b"glb")
+        s3.delete_object(Bucket="asset-bucket", Key=key)
+        record = self._removal_record(s3, key)
+        record["s3"]["object"]["key"] = encoded_key
+        return record
+
+    def test_a_workflow_write_of_the_raw_key_does_not_supersede_the_decoded_keys_removal(self, s3):
+        """The event names `a b.glb` as `a+b.glb`. A workflow write of a different object that is
+        literally named `a+b.glb` is not this removal's key."""
+        record = self._encoded_removal(s3, f"{ASSET}/a b.glb", f"{ASSET}/a+b.glb")
+        s3.put_object(Bucket="asset-bucket", Key=f"{ASSET}/a+b.glb", Body=b"other",
+                      Metadata={"vams-changesource": "workflowExecution"})
+        assert trigger.removal_superseded_by_workflow_write(record, record["s3"], record) is False
+
+    def test_an_encoded_key_is_read_decoded(self, s3):
+        record = self._encoded_removal(s3, f"{ASSET}/a b.glb", f"{ASSET}/a+b.glb")
+        s3.put_object(Bucket="asset-bucket", Key=f"{ASSET}/a b.glb", Body=b"glb2",
                       Metadata={"vams-changesource": "workflowExecution"})
         assert trigger.removal_superseded_by_workflow_write(record, record["s3"], record) is True
 
