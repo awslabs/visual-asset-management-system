@@ -142,6 +142,49 @@ def test_the_route_listing_lists_the_routes_of_each_deployed_switch(switches):
     assert {path for path in _listed_paths() if path.startswith("/addon/")} == {"/addon/physna/viewer"}
 
 
+AUDIT_ON = "AUDITLOGSEARCH"
+AUDIT_PATHS = {
+    "/audit/log-groups",
+    "/audit/queries",
+    "/audit/queries/{queryId}",
+    "/audit/queries/{queryId}/export",
+}
+
+
+def test_the_route_listing_lists_the_audit_routes_only_with_audit_log_search_on(switches):
+    switches(OFF)
+    assert _listed_paths() & AUDIT_PATHS == set()
+    switches(EDH_ALL)  # add-ons do not stand in for the audit switch
+    assert _listed_paths() & AUDIT_PATHS == set()
+    switches(AUDIT_ON)
+    assert AUDIT_PATHS <= _listed_paths()
+    switches(f"PHYSNA_ADDON,{AUDIT_ON}")
+    assert AUDIT_PATHS <= _listed_paths()
+    switches(None)  # a Lambda not told (local server): everything listed
+    assert AUDIT_PATHS <= _listed_paths()
+
+
+def test_the_allowed_route_check_evaluates_and_audits_the_audit_routes_only_with_search_on(switches):
+    switches(OFF)
+    probed_off, listed_off, written_off = _allowed_probe(deny=True)
+    assert probed_off, "no pair was evaluated, so the assertions below would be vacuous"
+    assert [path for path in probed_off if path.startswith("/audit/")] == []
+    assert listed_off & AUDIT_PATHS == set()
+    switches(AUDIT_ON)
+    probed_on, listed_on, written_on = _allowed_probe(deny=True)
+    # Five method+path pairs on four paths (the query route has GET and DELETE).
+    assert len([path for path in probed_on if path.startswith("/audit/")]) == 5
+    assert len(probed_on) == len(probed_off) + 5
+    assert len(written_on) == len(written_off) + 5
+
+
+def test_the_auditlog_permission_object_type_is_offered_with_the_search_off(switches):
+    # Core authorization stays: the object type and the admin's seeded constraint do not depend on the
+    # switch, so turning search on later needs no role migration.
+    switches(OFF)
+    assert "auditLog" in _object_types()
+
+
 def _allowed_probe(deny):
     """Run GET /auth/routes/api/allowed; return the probed paths, the listed paths and the denial
     records written."""

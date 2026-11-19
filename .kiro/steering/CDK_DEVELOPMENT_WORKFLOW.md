@@ -72,13 +72,14 @@ CoreVAMSStack (root)
   +-- LambdaLayers
   +-- StorageResourcesBuilder (foundation: DynamoDB, S3, SNS, SQS, EventBridge, KMS, CloudWatch)
   |     |
-  |     +-- ResourceNamesBuilder (publishes 75 SSM resource-name parameters)
+  |     +-- ResourceNamesBuilder (publishes 76 SSM resource-name parameters)
   |     +-- AuthBuilder                                     -> storage, resourceNames
   |     +-- ApiBuilder (primary API route Lambda wiring)     -> storage, resourceNames
   |     +-- ApiBuilder2 (secondary API stack: Tags, Tag Types, Auth Constraints, asset history,
   |     |    the pipeline / pipeline template / workflow / workflow trigger / execution routes,
   |     |    and the compliance routes + trigger / workflow-callback Lambdas)
   |     |                                                    -> storage, resourceNames, ApiBuilder
+  |     +-- ApiBuilder3 (audit log search; own template body budget; only when app.auditLogging.search.enabled) -> storage, resourceNames
   |     +-- SearchBuilder (OpenSearch, vector indexing, POST /search/nlp)  -> storage, resourceNames, ApiBuilder2,
   |     |                                                                    PipelineBuilder (when the system-workflow reindexer exists)
   |     |    (its system-workflow launcher invokes the ApiBuilder2 executeWorkflow Lambda by name; its vector
@@ -91,7 +92,7 @@ CoreVAMSStack (root)
   |     +-- CustomBuilder (fork extension point)             -> storage, resourceNames
   |     +-- RestApi (ApiNestedStack: API Gateway + authorizer)
   |     |                                                    -> storage, AuthBuilder, ApiBuilder,
-  |     |                                                       ApiBuilder2, SearchBuilder, AddonBuilder,
+  |     |                                                       ApiBuilder2, ApiBuilder3, SearchBuilder, AddonBuilder,
   |     |                                                       CustomBuilder
   |     +-- StaticWeb (CloudFront or ALB hosting)            -> storage, RestApi, AuthBuilder
   |
@@ -167,7 +168,7 @@ interface storageResources {
         errors: logs.LogGroup;
     };
     dynamo: {
-        // 57 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
+        // 58 DynamoDB tables -- see the interface at the top of storageBuilder-nestedStack.ts
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
@@ -493,7 +494,7 @@ const featureEnabled = true; // BAD - should be configurable
 
 #### **Rule 2: Feature Switches Must Be Defined**
 
-New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record, or keep the feature's own change bookkeeping current at no more than one write per change, so that bookkeeping is already correct when the record is written), nothing beyond idle storage, those invocations and that bookkeeping is billed, the core requests the feature observes cost exactly what they cost without it, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas, the trigger's queue and `/compliance/*` routes always deploy; the trigger consumes the indexer topics through its own queue, records each metadata or link change on the asset row (one conditional UpdateItem per change, in every database, bound or not), removes a permanently deleted asset's compliance record, registers a new asset of a bound database, and evaluates nothing without a binding; the workflow callback no-ops without one. The metadata and link requests themselves do no compliance work, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify.
+New features get a switch in `vamsAppFeatures.ts` and are gated by config in the core stack. The one accepted carve-out (root `CLAUDE.md` Rule 6): a feature that is inert until an operator configures it at runtime — none of its behavior applies until a record is written through its own API (an event-driven Lambda of the feature may run per event and no-op without that record, or keep the feature's own change bookkeeping current at no more than one write per change, so that bookkeeping is already correct when the record is written), nothing beyond idle storage, those invocations and that bookkeeping is billed, the core requests the feature observes cost exactly what they cost without it, and access is governed by Casbin like every other route — may deploy without a switch. Compliance is the example: its tables, Lambdas, the trigger's queue and `/compliance/*` routes always deploy; the trigger consumes the indexer topics through its own queue, records each metadata or link change on the asset row (one conditional UpdateItem per change, in every database, bound or not), removes a permanently deleted asset's compliance record, registers a new asset of a bound database, and evaluates nothing without a binding; the workflow callback no-ops without one. The metadata and link requests themselves do no compliance work, so no compliance behavior applies until a schema is bound. A feature that does work on its own (a poller, a scheduled job, an event consumer that acts on every event) does not qualify. Audit log search has a switch, on by default (owner decision 2026-11-18, root `CLAUDE.md` Rule 6): `app.auditLogging.search.enabled` (`VAMS_APP_FEATURES.AUDITLOGSEARCH`), off in the EU Sovereign template because Amazon CloudWatch Logs Insights is not available there, and refused as `true` in `aws-eusc`. Off removes the search capability only (`/audit/*` routes, the ApiBuilder3 stack, the Lambda, `AuditLogQueriesStorageTable`, the web page, CLI commands and MCP tools); audit recording, the `auditLog` object type and the admin's seeded constraint stay. Its routes carry `ApiRoute.addon_feature=CORE_FEATURE_AUDIT_LOG_SEARCH` and the core stack adds `AUDITLOGSEARCH` to `ADDON_FEATURES_ENABLED`, so the route listings and allowed-route checks leave them out when off.
 
 ```typescript
 // ✅ CORRECT - Add to vamsAppFeatures.ts
@@ -615,22 +616,26 @@ The worked example is the orchestration bus audit rule in `storageBuilder-nested
 #### **Rule 6: CDK Nag Compliance Required**
 
 ```typescript
-// ✅ CORRECT - Add justified suppressions
-NagSuppressions.addResourceSuppressions(
-    myResource,
-    [
-        {
-            id: "AwsSolutions-IAM5",
-            reason: "This role requires wildcard permissions for dynamic resource access in the VAMS asset management system. The scope is limited to VAMS-specific resources within the deployment account.",
-        },
-    ],
-    true
-);
+// ✅ CORRECT - Add justified suppressions. IAM4/IAM5 go through addIamNagSuppressions
+// (lib/helper/security.ts), which writes them only on the IAM resources under the scope that
+// the rule reads.
+addIamNagSuppressions(myFunction, [
+    {
+        id: "AwsSolutions-IAM5",
+        reason: "Index ARNs of one named table: a table grant covers its global secondary indexes.",
+        appliesTo: [{ regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g" }],
+    },
+]);
 
 // ❌ INCORRECT - Don't suppress without justification
 NagSuppressions.addResourceSuppressions(myResource, [
     { id: "AwsSolutions-IAM5", reason: "Suppressed" }, // BAD - no justification
 ]);
+
+// ❌ INCORRECT - applyToChildren copies an IAM suppression onto every resource under the scope
+// (the function, its security group, its permissions), which cdk-nag never reads there and which
+// counts against the 1,000,000-byte template limit (#1647)
+NagSuppressions.addResourceSuppressions(myFunction, [iamSuppression], true);
 ```
 
 #### **Rule 7: Encryption Standards**
@@ -2043,7 +2048,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 2. **Configuration Driven**: All pipelines must be configurable via `config.ts`
 3. **VPC Awareness**: Distinguish between VPC-required and optional pipelines
 4. **Container Separation**: Keep container code separate from Lambda orchestration
-5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: its handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. trimesh decodes model text that is not UTF-8 only through `charset_normalizer`, which the 3D Basic Conversion image does not install, so that pipeline reads the text as UTF-8 first (`check_input_text` in `lambda.py`) and fails with a message saying the file could not be read (#910). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References".
+5. **Required Lambda Files (CRITICAL)**: Every pipeline `lambda/` directory MUST include `__init__.py`, `customLogging/__init__.py`, and `customLogging/logger.py`. Copy from any existing pipeline (e.g., `backendPipelines/3dRecon/splatToolbox/lambda/`). Without these, Lambda fails with `No module named 'customLogging'`. All `customLogging/logger.py` copies must stay byte-identical (verify with `find backendPipelines -path '*/lambda/customLogging/logger.py' -exec md5sum {} \; | awk '{print $1}' | sort -u`, which must print one hash): the logger redacts task tokens from every log line, so edit one copy, propagate to the rest in the same change, and add the new pipeline's path to `LOGGER_COPIES` in `backendPipelines/tests/test_pipeline_logger_identity.py` (the one list; `test_pipeline_logger_formatter.py` reads it too). Log an event as a structured field (`logger.info("Event", event=event)`), never as an f-string, and never log a task token on its own. The same byte-identity rule applies to every vendored `manifestHelper.py`. The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py` instead, and VAMS reads a Lambda step's log group only for lines that contain the workflow execution id: its handler puts the body's `workflowExecutionId` on every line with `logger.append_keys` after the task-token check and removes it with `remove_keys` first thing in each invocation, and a module that logs on the handler's behalf uses a Powertools child logger of the handler's service (`child=True`) so its lines carry the id too. trimesh decodes model text that is not UTF-8 only through `charset_normalizer`, which the 3D Basic Conversion image does not install, so that pipeline reads the text as UTF-8 first (`check_input_text` in `lambda.py`) and fails with a message saying the file could not be read (#910). The 3D Basic Conversion also checks the input size before downloading (`size_check.py`) and parses the model in a worker process without AWS credentials (`conversion_worker.py`), and installs its packages by hash (`pip install --require-hashes`). Full rule: `backendPipelines/CLAUDE.md` "Files a Model Input References" and "3D Basic Conversion image: how a model is read and written".
 6. **Error Handling**: Implement comprehensive error handling and logging
 7. **Resource Cleanup**: Ensure proper cleanup of temporary resources
 8. **VPC Builder Updates (CRITICAL)**: A pipeline whose compute is an AWS Batch, ECS, or Fargate job must be added to condition blocks in `infra/lib/nestedStacks/vpc/vpcBuilder-nestedStack.ts` — **which ones depends on the subnets its compute runs in.** Decide that first, by looking at what `pipelineBuilder-nestedStack.ts` passes as the pipeline's `pipelineSubnets`: `pipelineNetwork.isolatedSubnets.pipeline` or `pipelineNetwork.privateSubnets.pipeline`. Search for `useSplatToolbox` (private) and `usePreview3dThumbnail` (isolated) to see both treatments. A Lambda-only pipeline appears in no block: it has no container image to pull and no compute environment to place, and its functions join the VPC only under `useGlobalVpc.useForAllLambdas`. When a pipeline offers a container branch behind a sub-flag, key the block condition — and the `vpcRequiringFeatures` entry in `config.ts` — on **`enabled && <sub-flag>`**, never on the pipeline's `enabled` alone, or the pipeline forces a VPC on every deployment that enables it.
@@ -2435,8 +2440,9 @@ Every deploy-time seed `AwsCustomResource` (the auth defaults, the system and ad
 -   **`setupSecurityAndLoggingEnvironmentAndPermissions`**: Grants read on auth/constraints/userRoles/roles tables. Grants CloudWatch PutLogEvents on all 9 audit log groups. **No longer injects table or log group environment variables** (non-pipeline handlers resolve these from SSM).
 -   **`globalLambdaEnvironmentsAndPermissions`**: Adds `VAMS_RESOURCE_PARAM_PREFIX` env var (SSM parameter prefix for resource name resolution) and grants ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath on the deployment's resource-name parameter prefix.
 -   **`isCognitoMfaCheckEnabled`** (used by the authorizer builder only): computes whether the API Gateway authorizer can reach Cognito for the MFA-preference check (Cognito enabled and the authorizer running **outside** the VPC — `FALSE` when Lambdas run in the VPC via `useForAllLambdas`, regardless of partition, because VAMS creates no Cognito VPC interface endpoints). Sets `COGNITO_AUTH_ENABLED` on the **authorizer Lambda only**; the authorizer resolves MFA status via `AdminGetUser` and passes `vams:mfaEnabled` to handlers through the authorizer context, so handler Lambdas need no Cognito access.
--   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions), scoped to the function instead of the whole stack
--   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards
+-   **`suppressCdkNagLambda`**: Applies the standard per-Lambda IAM4/IAM5 suppressions (AWSLambdaBasicExecutionRole, AWSLambdaVPCAccessExecutionRole, wildcard KMS actions) on the function's role and policies, instead of the whole stack
+-   **`suppressCdkNagErrorsByGrantReadWrite`**: Suppresses AwsSolutions-IAM5 for S3 and resource wildcards, on the IAM policies under the scope
+-   **`addIamNagSuppressions`**: Adds IAM4/IAM5 suppressions to the IAM resources under a scope that each rule reads (roles for IAM4; policies, and roles with inline policies, for IAM5) instead of `NagSuppressions.addResourceSuppressions(scope, ..., true)`, which copies them onto every resource (#1647). Throws on any other rule id
 -   **`suppressCdkNagLambdaFrameworkResources`**: Called once on the core stack. Applies the same IAM4/IAM5 suppressions only to CDK-generated framework roles (custom-resource providers, bucket deployments, `AwsCustomResource`) and VAMS custom-resource roles that the per-function helper cannot reach
 
 **IAM inline policy budget** (mirrors `infra/CLAUDE.md`): IAM refuses a role whose inline policies exceed 10,240 characters, and deployed sizes grow with the stack name, the partition and Region names, a customer managed key and an enabled execution type, so a role that fits in a commercial synth can fail a GovCloud deploy. CDK's own overflow split moves what does not fit into generated `OverflowPolicy<n>` managed policies by its size estimate; `cdk.json` sets `@aws-cdk/aws-iam.arnSizeEstimate` to 280 (CDK's default 150 is below real table ARNs of about 200) so that split keeps every role's inline total under the budget in every partition (#1499). Every role in `apiBuilder` and `apiBuilder2` stays at or under 9,216 (90%) in the commercial, CMK, GovCloud, EU Sovereign and worst-case cells (`infra/test/security/iamInlinePolicyBudget.test.ts`, estimator `infra/test/support/iamPolicySize.ts`; a role already above it is a named, shrink-only exception). On a large role, write DynamoDB grants as exact statements (each table once, only the actions the handler calls, only the indexes it queries), pinned by a backend test that records the handler's calls and a synth test of the same list; and split routes needing grants the rest do not onto their own function: the execution service handler runs as `executionService` (lists, abort, re-run), `executionDetails` (details and its pages), `executionLogs` (logs) and `executionPermanentDelete` (permanent delete), with `EXECUTION_SERVICE_ROUTES` selecting the routes each function serves. The workflow-lock statements of the lock handlers (the execution service and the execution details function among them) stay in a role-inline `ExecutionLockPolicy` (`attachExecutionLockPolicy`) of their own and never in a role's default or overflow policy: CDK splits only the default policy, and CloudFormation updates the default and overflow policies separately during a deploy, so a lock call could be refused mid-deploy. `workflowExecutionLockGrants.test.ts` pins it in every shipped template, the customer-managed-key cell and the worst-case cell (owner decision 2026-11-14).

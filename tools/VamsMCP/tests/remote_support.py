@@ -71,6 +71,8 @@ class FakeDeployment:
         self.search_status = 200
         self.api_delay = 0.0
         self.refused_users: set = set()
+        # The /secure-config feature list (a comma-separated string, as the API may send it).
+        self.features = "AUTHPROVIDER_COGNITO"
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self._server = ThreadingHTTPServer(("127.0.0.1", self.port), self._handler())
@@ -206,7 +208,7 @@ class FakeDeployment:
                 if deployment.api_delay:
                     time.sleep(deployment.api_delay)
                 if route == "/secure-config":
-                    return self._json(200, {"featuresEnabled": "AUTHPROVIDER_COGNITO"})
+                    return self._json(200, {"featuresEnabled": deployment.features})
                 if route == "/database":
                     query = parse_qs(urlsplit(self.path).query)
                     page = int((query.get("startingToken") or ["0"])[0])

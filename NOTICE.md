@@ -194,12 +194,12 @@ This software includes third party software subject to the following copyrights:
 
 | Name                  | Version | License      |
 | :-------------------- | :------ | :----------- |
-| aws-lambda-powertools | 3.2.0   | MIT-0        |
-| jmespath              | 1.0.1   | MIT          |
-| numpy                 | 2.0.1   | BSD-3-Clause |
+| aws-lambda-powertools | 3.41.0  | MIT-0        |
+| jmespath              | 1.1.0   | MIT          |
+| numpy                 | 2.5.5   | BSD-3-Clause |
 | pillow                | 13.0.0  | MIT-CMU      |
-| trimesh               | 4.8.3   | MIT          |
-| typing-extensions     | 4.12.2  | Python-2.0   |
+| trimesh               | 5.2.1   | MIT          |
+| typing-extensions     | 4.16.0  | Python-2.0   |
 
 **Other Pipeline Components**
 

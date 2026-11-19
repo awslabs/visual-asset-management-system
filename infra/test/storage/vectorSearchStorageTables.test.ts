@@ -224,9 +224,12 @@ describe("ResourceNamesBuilder publishes the vector table name", () => {
                         "/resourceNames/lambdaFunctions/"
                     )
             );
-            const expected = Object.entries(RESOURCE_PARAM_KEYS)
+            const registered = Object.entries(RESOURCE_PARAM_KEYS)
                 .filter(([category]) => category !== "lambdaFunctions")
                 .reduce((n, [, keys]) => n + Object.keys(keys).length, 0);
+            // The audit log queries table is built, and published, only when audit log search is
+            // enabled; the EU Sovereign template turns it off.
+            const expected = name === "eusovereign" ? registered - 1 : registered;
             expect(published).toHaveLength(expected);
         }
     );
