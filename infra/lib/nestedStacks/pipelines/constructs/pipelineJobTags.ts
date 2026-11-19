@@ -121,30 +121,33 @@ function requestTagConditions(tags: PipelineJobTags): Record<string, unknown> {
 }
 
 /**
- * `batch:TagResource` for the tags `SubmitJob` carries: on jobs in this account and Region (a job id
- * is generated at submit, so `job/*` is the narrowest ARN), and only for these two tags with this
- * pipeline's values.
+ * `batch:TagResource` for the tags `SubmitJob` carries, limited to these two tags with this pipeline's
+ * values. AWS Batch authorizes that tagging against the resources the submit names as well as the new
+ * job: a live submit with tags and a grant on `job/*` alone is refused on the job definition. So the
+ * grant names jobs (a job id is generated at submit), job definitions (submitted by name, by
+ * revision-less ARN or by revision) and job queues in this account and Region, the same scope as
+ * aws-cdk-lib's own `batch:SubmitJob` grant on `job-definition/*`.
  */
 export function batchJobTaggingStatement(
     scope: Construct,
     tags: PipelineJobTags
 ): iam.PolicyStatement {
     const stack = Stack.of(scope);
+    const arn = (resource: string) =>
+        `arn:${ServiceHelper.Partition()}:batch:${stack.region}:${stack.account}:${resource}/*`;
     return new iam.PolicyStatement({
         actions: ["batch:TagResource"],
-        resources: [
-            `arn:${ServiceHelper.Partition()}:batch:${stack.region}:${stack.account}:job/*`,
-        ],
+        resources: [arn("job"), arn("job-definition"), arn("job-queue")],
         conditions: requestTagConditions(tags),
     });
 }
 
 const BATCH_JOB_TAGGING_NAG_REASON =
-    "batch:TagResource is evaluated when SubmitJob carries tags. A job id is generated at submit, so job/* in this account and Region is the narrowest ARN; conditions on aws:RequestTag and aws:TagKeys allow only the vams:stackname and vams:pipeline tags with this pipeline's own values.";
+    "batch:TagResource is evaluated when SubmitJob carries tags, against the new job and the job definition and job queue the submit names. A job id is generated at submit, and the job definition is named by name or ARN, so job/*, job-definition/* and job-queue/* in this account and Region are the narrowest ARNs; conditions on aws:RequestTag and aws:TagKeys allow only the vams:stackname and vams:pipeline tags with this pipeline's own values.";
 
-/** cdk-nag `appliesTo` entry for the `job/*` resource of {@link batchJobTaggingStatement}. */
+/** cdk-nag `appliesTo` entry for the wildcard resources of {@link batchJobTaggingStatement}. */
 export const BATCH_JOB_TAGGING_NAG_APPLIES_TO = {
-    regex: "/^Resource::arn:(?:aws(?:-[a-z-]+)?|<AWS::Partition>):batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job\\/\\*$/g",
+    regex: "/^Resource::arn:(?:aws(?:-[a-z-]+)?|<AWS::Partition>):batch:(?:[a-z0-9-]+|<AWS::Region>):(?:\\d{12}|<AWS::AccountId>):job(?:-definition|-queue)?\\/\\*$/g",
 };
 
 /**
@@ -195,7 +198,7 @@ export class TaggedBatchSubmitJob extends tasks.BatchSubmitJob {
     }
 }
 
-/** Suppresses AwsSolutions-IAM5 for the `job/*` tagging grant on a state machine and its role. */
+/** Suppresses AwsSolutions-IAM5 for the wildcard tagging grant on a state machine and its role. */
 export function suppressBatchJobTaggingNag(stateMachine: Construct): void {
     NagSuppressions.addResourceSuppressions(
         stateMachine,

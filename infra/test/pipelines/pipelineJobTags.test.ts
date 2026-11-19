@@ -218,6 +218,18 @@ describe("tag-on-create grants", () => {
             )
         );
 
+    // AWS Batch authorizes SubmitJob's tagging against the job definition and job queue as well as the
+    // new job; a grant on job/* alone was refused at the first live submit (PR #1706 smoke).
+    const expectTaggingResources = (statement: any): void => {
+        const resources = [].concat(statement.Resource).map((r: any) => JSON.stringify(r));
+        for (const type of ["job", "job-definition", "job-queue"]) {
+            expect(resources.some((r) => r.includes(`:batch:${REGION}:${ACCOUNT}:${type}/*`))).toBe(
+                true
+            );
+        }
+        expect(resources).toHaveLength(3);
+    };
+
     test.each([
         ["TaggedBatchSubmitJob", TaggedBatchSubmitJob],
         ["StateTimeoutBatchSubmitJob", StateTimeoutBatchSubmitJob],
@@ -240,9 +252,7 @@ describe("tag-on-create grants", () => {
             expect(stack.resolve(task.toStateJson()).Parameters.Tags).toEqual(tags);
             const statements = tagResourceStatements(Template.fromStack(stack));
             expect(statements).toHaveLength(1);
-            expect(JSON.stringify(statements[0].Resource)).toContain(
-                `:batch:${REGION}:${ACCOUNT}:job/*`
-            );
+            expectTaggingResources(statements[0]);
             expect(statements[0].Condition).toEqual(expectedConditions);
         }
     );
@@ -261,6 +271,7 @@ describe("tag-on-create grants", () => {
         expect(JSON.parse(env.Properties.Environment.Variables.PIPELINE_JOB_TAGS)).toEqual(tags);
         const statements = tagResourceStatements(template);
         expect(statements).toHaveLength(1);
+        expectTaggingResources(statements[0]);
         expect(statements[0].Condition).toEqual(expectedConditions);
     });
 
