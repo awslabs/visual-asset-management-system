@@ -503,3 +503,32 @@ class TestFbxUnit:
                "input_relative_path": "a.fbx", "by_reference": {}, "input_name": "a.fbx"}
         with pytest.raises(RuntimeError, match="Assimp tool is not in this image"):
             model_formats.load_model(job, trimesh)
+
+
+@pytest.mark.unit
+class TestGeometryAnOutputCannotHold:
+    """A STEP file's edges and annotations load as curves (Path3D) and points beside its solids; OBJ,
+    3MF and the other exporters failed on them (found converting NIST STEP test files)."""
+
+    def _scene(self):
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.box(), geom_name="solid")
+        scene.add_geometry(trimesh.load_path(np.array([[0, 0, 0], [1, 1, 1.0]])), geom_name="edge")
+        scene.add_geometry(trimesh.PointCloud(np.random.default_rng(2).random((5, 3))), geom_name="pmi")
+        return scene
+
+    @pytest.mark.parametrize("output,kept", [
+        (".obj", {"solid", "pmi"}), (".ply", {"solid", "pmi"}), (".usdc", {"solid", "pmi"}),
+        (".3mf", {"solid"}), (".stl", {"solid"}), (".dae", {"solid"}), (".off", {"solid"}),
+        (".glb", {"solid", "edge", "pmi"}),
+    ])
+    def test_only_what_the_output_holds_is_kept_and_the_export_succeeds(self, tmp_path, output, kept):
+        scene = self._scene()
+        model_formats.prune_for_output(scene, output)
+        assert set(scene.geometry) == kept
+        export = tmp_path / "export"
+        export.mkdir()
+        job = {"output_filetype": output, "output_file": str(export / f"o{output}"), "input_name": "s.step"}
+        import units_axes
+        model_formats.export_model(self._scene(), units_axes.plan(units_axes.Options(), output, 1.0, "z"), job)
+        assert os.path.getsize(export / f"o{output}") > 0

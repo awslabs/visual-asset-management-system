@@ -326,10 +326,38 @@ def _write_3mf(loaded, plan, output_file):
         source.close()
 
 
+# The outputs whose exporter writes curves (trimesh Path geometry); every other drops them.
+PATH_OUTPUTS = ('.glb', '.gltf')
+# The outputs that store triangles only; a point cloud beside triangles in one scene is dropped there.
+TRIANGLE_ONLY_OUTPUTS = ('.stl', '.dae', '.3mf', '.off')
+
+
+def prune_for_output(loaded, extension, logger=None):
+    """Remove from a scene the geometry the output format cannot hold: curves (a STEP file's edges and
+    product and manufacturing information load as Path geometry) for every output but glTF and GLB, and
+    point clouds beside triangles for a triangle-only output. ``check_exportable`` has already refused
+    a model that has nothing the output can hold. Returns the number of geometries removed."""
+    import trimesh
+    if not isinstance(loaded, trimesh.Scene):
+        return 0
+    removed = []
+    for name, geometry in list(loaded.geometry.items()):
+        is_path = isinstance(geometry, trimesh.path.path.Path)
+        is_points = isinstance(geometry, trimesh.PointCloud)
+        if (is_path and extension not in PATH_OUTPUTS) or (is_points and extension in TRIANGLE_ONLY_OUTPUTS):
+            removed.append(name)
+    for name in removed:
+        loaded.delete_geometry(name)
+    if removed and logger is not None:
+        logger.info(f"{len(removed)} curve or point geometries are not written to {extension}")
+    return len(removed)
+
+
 def export_model(loaded, plan, job):
     """Apply ``plan`` and write ``job["output_file"]`` in ``job["output_filetype"]``."""
     extension = job["output_filetype"]
     output_file = job["output_file"]
+    prune_for_output(loaded, extension)
     apply_plan(loaded, plan)
     if extension in USD_EXTENSIONS:
         usd_io.write_usd(loaded, output_file, plan.meters_per_unit, plan.up_axis, extension, job["input_name"])
