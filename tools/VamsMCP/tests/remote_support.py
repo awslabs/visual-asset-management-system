@@ -64,6 +64,11 @@ class FakeDeployment:
         self.jwks_status = 200
         self.jwks_fetches = 0
         self.api_authorizations: List[str] = []
+        # The (route, JSON body) of every POST, PUT and DELETE the fake API received.
+        self.api_writes: List[tuple] = []
+        # The status the natural-language search route answers; anything but 200 is an error whose
+        # message carries the request's Authorization header, to prove a tool error never shows it.
+        self.search_status = 200
         self.api_delay = 0.0
         self.refused_users: set = set()
         self.port = free_port()
@@ -174,10 +179,14 @@ class FakeDeployment:
 
             def _write(self):  # POST, PUT and DELETE reach the same fake API routes
                 length = int(self.headers.get("Content-Length") or 0)
-                if length:
-                    self.rfile.read(length)
+                raw = self.rfile.read(length) if length else b""
                 path = urlsplit(self.path).path
                 if path.startswith("/api/"):
+                    try:
+                        body = json.loads(raw or b"null")
+                    except ValueError:
+                        body = None
+                    deployment.api_writes.append((path[len("/api"):], body))
                     return self._api(path[len("/api"):])
                 return self._json(404, {"message": "not found"})
 
@@ -205,6 +214,16 @@ class FakeDeployment:
                     if route == "/database" and query.get("pageSize") == ["1"]:
                         body["NextToken"] = str(page + 1)
                     return self._json(200, body)
+                if route == "/search/nlp":
+                    if deployment.search_status != 200:
+                        return self._json(deployment.search_status,
+                                          {"message": f"Search is busy; the request carried {header}"})
+                    hit = {"_id": f"db-of-{user}#a1#/part.glb", "_score": 0.9,
+                           "_source": {"str_databaseid": f"db-of-{user}", "str_assetid": "a1",
+                                       "str_key": "/part.glb"},
+                           "_vector": {"distance": 0.2, "fileClass": "mesh"}}
+                    return self._json(200, {"hits": {"total": {"value": 1, "relation": "gte"}, "hits": [hit]},
+                                            "nlp": {"truncated": False}, "warnings": []})
                 return self._json(404, {"message": "not found"})
 
         return Handler

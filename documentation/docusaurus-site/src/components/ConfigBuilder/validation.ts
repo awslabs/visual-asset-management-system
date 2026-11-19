@@ -33,6 +33,15 @@ import type { ConfigShape, Rule } from "./types";
 import { isCidr, isVpceId } from "./fields/presignedUrlFormats";
 import { ipAddressFamily } from "./fields/ipAddressFormats";
 import {
+    BEDROCK_MODEL_ID_MAX_LENGTH,
+    SYSTEM_GENAI_MAX_MAX_TOKENS,
+    SYSTEM_GENAI_MIN_MAX_TOKENS,
+    embeddingFamilySummary,
+    embeddingModelFamily,
+    bedrockProfilePrefixIssue,
+    systemGenAiModelIdIssue,
+} from "./fields/bedrockModelFormats";
+import {
     g,
     isAbsent,
     isBlank,
@@ -57,6 +66,8 @@ const EXTERNAL_OAUTH_USER_ID_CLAIM_PATTERN = /^(?!vams:)[A-Za-z0-9_:.-]+$/i;
 const EXTERNAL_OAUTH_JWT_AUDIENCE_CLAIMS = ["aud", "client_id"];
 // config.ts API_CUSTOM_DOMAIN_PARTITIONS.
 const API_CUSTOM_DOMAIN_PARTITIONS = ["aws", "aws-us-gov"];
+// config.ts VECTOR_SEARCH_PARTITIONS.
+const VECTOR_SEARCH_PARTITIONS = ["aws", "aws-us-gov"];
 const COMMERCIAL_DNS_SUFFIX = "amazonaws.com";
 
 /**
@@ -401,6 +412,8 @@ const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "g6.12xlarge": 4,
     "g6.24xlarge": 4,
     "g6.48xlarge": 8,
+    "gr6.4xlarge": 1,
+    "gr6.8xlarge": 1,
     "g6e.xlarge": 1,
     "g6e.2xlarge": 1,
     "g6e.4xlarge": 1,
@@ -435,6 +448,80 @@ function unverifiedGpuInstanceTypes(cfg: ConfigShape, path: string): string[] {
     const types = g(cfg, path);
     if (!Array.isArray(types)) return [];
     return types.filter((t) => GPU_COUNT_BY_INSTANCE_TYPE[String(t)] === undefined);
+}
+
+// What one Isaac Lab Batch job reserves, mirroring ISAAC_LAB_JOB_VCPUS / ISAAC_LAB_JOB_MEMORY_MIB /
+// ISAAC_LAB_JOB_GPUS in infra/config/config.ts. AWS Batch accepts a compute environment whose instance
+// types cannot hold the job and then leaves the job RUNNABLE with no error.
+const ISAAC_LAB_JOB_VCPUS = 8;
+const ISAAC_LAB_JOB_MEMORY_MIB = 32768;
+const ISAAC_LAB_JOB_GPUS = 1;
+
+// vCPUs and installed memory (MiB) of the g5, g6, gr6 and g6e types, mirroring
+// ISAAC_LAB_CAPABLE_INSTANCE_SPECS in infra/config/config.ts. Keep the two tables in step; the drift
+// check does not cover this file.
+const ISAAC_LAB_CAPABLE_INSTANCE_SPECS: Record<string, { vcpus: number; memoryMiB: number }> = {
+    "g5.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g5.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g5.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g5.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g5.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g5.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g5.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g5.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "g6.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g6.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g6.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g6.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g6.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g6.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g6.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g6.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "gr6.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "gr6.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.xlarge": { vcpus: 4, memoryMiB: 32768 },
+    "g6e.2xlarge": { vcpus: 8, memoryMiB: 65536 },
+    "g6e.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "g6e.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.16xlarge": { vcpus: 64, memoryMiB: 524288 },
+    "g6e.12xlarge": { vcpus: 48, memoryMiB: 393216 },
+    "g6e.24xlarge": { vcpus: 96, memoryMiB: 786432 },
+    "g6e.48xlarge": { vcpus: 192, memoryMiB: 1572864 },
+};
+
+// Families whose GPU has no RT cores, or under 16 GB of video memory, mirroring
+// ISAAC_LAB_UNSUPPORTED_FAMILIES in infra/config/config.ts.
+const ISAAC_LAB_UNSUPPORTED_FAMILIES = ["g4dn", "p3", "p3dn", "p4d", "p4de", "p5", "p5e", "p5en"];
+
+/** Memory ECS registers for an instance, mirroring estimatedRegisteredMemoryMiB in config.ts. */
+function estimatedRegisteredMemoryMiB(installedMiB: number): number {
+    return Math.floor(installedMiB * 0.97) - 32;
+}
+
+/** Why an Isaac Lab instance type can never run the job, or undefined when it can (or is unknown). */
+function isaacLabInstanceTypeProblem(instanceType: string): string | undefined {
+    if (ISAAC_LAB_UNSUPPORTED_FAMILIES.includes(instanceType.split(".")[0])) {
+        return `${instanceType} has a GPU without RT cores or with under 16 GB of video memory`;
+    }
+    const spec = ISAAC_LAB_CAPABLE_INSTANCE_SPECS[instanceType];
+    if (spec === undefined) return undefined;
+    const gpus = GPU_COUNT_BY_INSTANCE_TYPE[instanceType];
+    if (gpus !== ISAAC_LAB_JOB_GPUS) {
+        return `${instanceType} has ${gpus} GPUs and the job uses ${ISAAC_LAB_JOB_GPUS}`;
+    }
+    if (spec.vcpus < ISAAC_LAB_JOB_VCPUS) {
+        return `${instanceType} has ${spec.vcpus} vCPUs and the job needs ${ISAAC_LAB_JOB_VCPUS}`;
+    }
+    if (estimatedRegisteredMemoryMiB(spec.memoryMiB) < ISAAC_LAB_JOB_MEMORY_MIB) {
+        return `${instanceType} registers under ${ISAAC_LAB_JOB_MEMORY_MIB} MiB of memory with Amazon ECS`;
+    }
+    return undefined;
+}
+
+/** The Isaac Lab instanceTypes entries, or undefined when the field is absent (getConfig() defaults it). */
+function isaacLabInstanceTypes(cfg: ConfigShape): unknown[] | undefined {
+    const types = g(cfg, "app.pipelines.useIsaacLabTraining.instanceTypes");
+    return types === undefined ? undefined : Array.isArray(types) ? types : [];
 }
 
 /** The three NVIDIA Cosmos 3 Super variants that share one AWS Batch compute environment. */
@@ -777,12 +864,6 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useSplatToolbox.enabled"),
     },
     {
-        id: "vpc-required-genai-metadata-labeling",
-        label: "pipelines.useGenAiMetadata3dLabeling",
-        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.enabled"],
-        appliesWhen: (c) => !!g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled"),
-    },
-    {
         id: "vpc-required-rapidpipeline-ecs",
         label: "pipelines.useRapidPipeline.useEcs",
         fieldPaths: ["app.pipelines.useRapidPipeline.useEcs.enabled"],
@@ -817,6 +898,18 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         label: "pipelines.usePreview3dThumbnail",
         fieldPaths: ["app.pipelines.usePreview3dThumbnail.enabled"],
         appliesWhen: (c) => !!g(c, "app.pipelines.usePreview3dThumbnail.enabled"),
+    },
+    {
+        id: "vpc-required-system-genai-fargate-renderer",
+        label: "pipelines.useSystemGenAiMetadata.useFargateRenderer",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.enabled",
+            "app.pipelines.useSystemGenAiMetadata.useFargateRenderer",
+        ],
+        // The render branch exists only in an enabled pipeline, so both flags are the condition.
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
+            !!g(c, "app.pipelines.useSystemGenAiMetadata.useFargateRenderer"),
     },
     {
         id: "vpc-required-nvidia-cosmos",
@@ -870,30 +963,107 @@ function requiresGovCloudFlag(region: unknown): boolean {
 }
 
 /**
- * The GenAI labeling pipeline is enabled in a Region without Amazon Rekognition: the aws-eusc
- * partition or the us-gov-east-1 Region. Silent while the region is unset.
+ * The partition rules of a GenAI pipeline's Amazon Bedrock model id (config.ts:
+ * `validateBedrockProfilePrefix`, which the Video SOP/BOM, CAD STEP agent and Blender agent checks
+ * call): an error for a cross-Region inference-profile prefix the configured Region's partition does
+ * not offer (fields/bedrockModelFormats.ts), and a warning for the commercial "us." prefix in an AWS
+ * GovCloud (US) Region. Silent while the pipeline is off, the id is empty or the Region is unset.
  */
-function genAiRekognitionUnavailable(c: ConfigShape): boolean {
-    const region = g(c, "env.region");
-    return (
-        !!g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled") &&
-        (partitionForRegionName(region) === "aws-eusc" || region === "us-gov-east-1")
-    );
+function bedrockProfilePrefixRules(
+    idPrefix: string,
+    field: string,
+    path: string,
+    enabled: (c: ConfigShape) => boolean
+): Rule[] {
+    const issue = (c: ConfigShape) => {
+        if (!enabled(c)) return undefined;
+        const id = String(g(c, path) ?? "").trim();
+        if (id === "") return undefined;
+        return bedrockProfilePrefixIssue(id, partitionForRegionName(g(c, "env.region")));
+    };
+    return [
+        {
+            id: `${idPrefix}-prefix-partition`,
+            severity: "error",
+            fieldPaths: [path, "env.region"],
+            appliesWhen: (c) => issue(c) === "foreign-prefix",
+            message: `${field} carries a cross-Region inference-profile prefix from another partition: "us-gov." exists only in AWS GovCloud (US); "global.", "eu.", "apac.", "au.", "jp." and "in." only in the commercial partition; "us." in the commercial partition, and in AWS GovCloud (US) with a warning. Use a model id or inference profile offered in the configured Region's partition.`,
+        },
+        {
+            id: `${idPrefix}-prefix-unverified`,
+            severity: "warning",
+            fieldPaths: [path, "env.region"],
+            appliesWhen: (c) => issue(c) === "unverified-prefix",
+            message: `${field} carries the commercial "us." cross-Region inference-profile prefix in an AWS GovCloud (US) Region. Verify that this inference profile exists in your GovCloud account before deploying; GovCloud profiles use the "us-gov." prefix.`,
+        },
+    ];
 }
 
-/**
- * True when the VPC builder creates the Rekognition interface endpoint for the GenAI labeling
- * pipeline (vpcBuilder-nestedStack.ts: addVpcEndpoints, not loadContextIgnoreVPCStacks, and
- * useForAllLambdas).
- */
-function createsRekognitionEndpoint(c: ConfigShape): boolean {
-    return (
-        !!g(c, "app.useGlobalVpc.enabled") &&
-        !!g(c, "app.useGlobalVpc.useForAllLambdas") &&
-        !!g(c, "app.useGlobalVpc.addVpcEndpoints") &&
-        !g(c, "env.loadContextIgnoreVPCStacks")
-    );
+// ----- Audit log search limits (config.ts resolveAuditSearchConfig: an absent key takes its default, a
+// present one must be an integer in range) -----
+const AUDIT_SEARCH_LIMITS: ReadonlyArray<readonly [string, number, number]> = [
+    ["maxQueryWindowDays", 1, 366],
+    ["maxRows", 1, 10000],
+    ["maxConcurrentQueries", 1, 20],
+    ["queryDeadlineSeconds", 10, 900],
+    ["maxContainsTermLength", 3, 128],
+    ["maxContainsTerms", 1, 5],
+    ["handleRetentionMinutes", 5, 1440],
+];
+
+function auditSearchValue(c: ConfigShape, key: string): unknown {
+    return g(c, `app.auditLogging.search.${key}`);
 }
+
+function outOfRange(value: unknown, min: number, max: number): boolean {
+    if (value === undefined || value === null) return false;
+    return typeof value !== "number" || !Number.isInteger(value) || value < min || value > max;
+}
+
+function auditSearchLongPollMax(c: ConfigShape): number {
+    const apiTimeout = g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime");
+    return Math.min(25, (typeof apiTimeout === "number" ? apiTimeout : 29) - 4);
+}
+
+const AUDIT_SEARCH_RULES: Rule[] = [
+    ...AUDIT_SEARCH_LIMITS.map(
+        ([key, min, max]): Rule => ({
+            id: `audit-search-${key}-in-range`,
+            severity: "error",
+            fieldPaths: [`app.auditLogging.search.${key}`],
+            appliesWhen: (c) => outOfRange(auditSearchValue(c, key), min, max),
+            message: `app.auditLogging.search.${key} must be an integer from ${min} to ${max}. Leave it out for the default.`,
+        })
+    ),
+    {
+        id: "audit-search-per-user-cap-within-vams-wide",
+        severity: "error",
+        fieldPaths: [
+            "app.auditLogging.search.maxConcurrentQueriesPerUser",
+            "app.auditLogging.search.maxConcurrentQueries",
+        ],
+        appliesWhen: (c) => {
+            const wide = auditSearchValue(c, "maxConcurrentQueries");
+            const perUser = auditSearchValue(c, "maxConcurrentQueriesPerUser");
+            const wideValue = typeof wide === "number" ? wide : 5;
+            return outOfRange(perUser, 1, wideValue);
+        },
+        message:
+            "app.auditLogging.search.maxConcurrentQueriesPerUser must be an integer from 1 to the VAMS-wide maxConcurrentQueries. Leave it out for the default.",
+    },
+    {
+        id: "audit-search-long-poll-within-api-timeout",
+        severity: "error",
+        fieldPaths: [
+            "app.auditLogging.search.longPollWaitSeconds",
+            "app.api.apiGatewayRest.apiGatewayTimeoutTime",
+        ],
+        appliesWhen: (c) =>
+            outOfRange(auditSearchValue(c, "longPollWaitSeconds"), 0, auditSearchLongPollMax(c)),
+        message:
+            "app.auditLogging.search.longPollWaitSeconds must be an integer from 0 to 25 and at most the API Gateway timeout minus 4 seconds. Leave it out for the default.",
+    },
+];
 
 const CORE_RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
@@ -950,6 +1120,28 @@ const CORE_RULES: Rule[] = [
         },
         message:
             "app.auditLogging.recordReads must be true or false (a JSON boolean). Leave it out to record reads.",
+    },
+    ...AUDIT_SEARCH_RULES,
+    {
+        id: "audit-search-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.auditLogging.search.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.auditLogging.search.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.auditLogging.search.enabled must be true or false (a JSON boolean). Leave it out to deploy Audit Log Search.",
+    },
+    {
+        id: "audit-search-not-in-eusc",
+        severity: "error",
+        fieldPaths: ["env.region", "app.auditLogging.search.enabled"],
+        appliesWhen: (c) =>
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc" &&
+            g(c, "app.auditLogging.search.enabled") === true,
+        message:
+            "Audit Log Search needs Amazon CloudWatch Logs Insights, which is not available in the AWS European Sovereign Cloud (aws-eusc). Set app.auditLogging.search.enabled to false there; the recording of audit events is not affected.",
     },
     {
         id: "govcloud-no-deadline-cloud",
@@ -1041,21 +1233,66 @@ const CORE_RULES: Rule[] = [
             "Isaac Lab Training requires accepting the NVIDIA EULA — set useIsaacLabTraining.acceptNvidiaEula to true.",
     },
 
+    // ----- Isaac Lab instance types
+    // (config.ts: "Every instance type must be able to run the job" in the useIsaacLabTraining block,
+    // and validateIsaacLabInstanceTypes) -----
+    {
+        id: "isaac-instance-types",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useIsaacLabTraining.instanceTypes"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useIsaacLabTraining.enabled")) return false;
+            const types = isaacLabInstanceTypes(c);
+            if (types === undefined) return false;
+            return (
+                types.length === 0 ||
+                types.some((t) => typeof t !== "string" || t.trim() === "") ||
+                types.some((t) => isaacLabInstanceTypeProblem(String(t)) !== undefined)
+            );
+        },
+        message:
+            "useIsaacLabTraining.instanceTypes must be a non-empty list of instance types that can each run " +
+            "the Isaac Lab job: one GPU with RT cores and 16 GB or more of video memory (G5, G6, GR6 or G6e), " +
+            `at least ${ISAAC_LAB_JOB_VCPUS} vCPUs and more than ${ISAAC_LAB_JOB_MEMORY_MIB} MiB of registered ` +
+            "memory. g5.2xlarge and g6.2xlarge are too small, multi-GPU sizes such as g6e.12xlarge leave GPUs " +
+            "idle, and g4dn and P-series GPUs lack RT cores or video memory. AWS Batch otherwise leaves the job " +
+            "RUNNABLE without an error.",
+    },
+    {
+        id: "isaac-instance-types-unverified",
+        severity: "warning",
+        fieldPaths: ["app.pipelines.useIsaacLabTraining.instanceTypes"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useIsaacLabTraining.enabled") &&
+            (isaacLabInstanceTypes(c) || []).some(
+                (t) =>
+                    typeof t === "string" &&
+                    t.trim() !== "" &&
+                    !ISAAC_LAB_UNSUPPORTED_FAMILIES.includes(t.split(".")[0]) &&
+                    ISAAC_LAB_CAPABLE_INSTANCE_SPECS[t] === undefined
+            ),
+        message:
+            "useIsaacLabTraining.instanceTypes includes an instance type whose size and GPU cannot be " +
+            `verified here. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS} vCPUs, ${ISAAC_LAB_JOB_MEMORY_MIB} ` +
+            `MiB of registered memory, ${ISAAC_LAB_JOB_GPUS} GPU and an NVIDIA GPU with RT cores and 16 GB of ` +
+            "video memory. Confirm the type offers them, because AWS Batch leaves the job RUNNABLE on one that " +
+            "does not.",
+    },
+
     // ----- Pipeline upload trigger without registration
     // (config.ts: "The upload trigger ships with the VamsSchemaRegistration custom resource") -----
     //
     // The trigger is created by the registration custom resource, which exists only when
     // autoRegisterWithVAMS is true, so an armed trigger on an unregistered pipeline is discarded
-    // silently. One rule per pipeline, over the same five config.ts iterates, so the marker lands on
+    // silently. One rule per pipeline, over the same pipelines config.ts iterates, so the marker lands on
     // the pipeline whose two adjacent toggles disagree.
     ...(
         [
-            "useConversionCadMeshMetadataExtraction",
             "useConversionCoordinateTransform",
             "useGenAiCadStepAgent",
             "usePreviewPcPotreeViewer",
             "usePreview3dThumbnail",
-            "useGenAiMetadata3dLabeling",
+            "useSystemGenAiMetadata",
         ] as const
     ).map((name): Rule => {
         const base = `app.pipelines.${name}`;
@@ -1488,21 +1725,14 @@ const CORE_RULES: Rule[] = [
         message:
             "useImageTo3d.models.blenderagent.bedrockModelId must be set when the Blender agent is enabled. Foundation model availability differs by partition and account; the restricted-partition presets leave it empty.",
     },
-    {
-        id: "imageto3d-blenderagent-model-id-commercial-only-prefix",
-        severity: "error",
-        fieldPaths: ["app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId", "env.region"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
-            if (!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")) return false;
-            const id = String(
-                g(c, "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId") ?? ""
-            );
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
-        },
-        message:
-            'useImageTo3d.models.blenderagent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition.',
-    },
+    ...bedrockProfilePrefixRules(
+        "imageto3d-blenderagent-model-id",
+        "useImageTo3d.models.blenderagent.bedrockModelId",
+        "app.pipelines.useImageTo3d.models.blenderagent.bedrockModelId",
+        (c) =>
+            !!g(c, "app.pipelines.useImageTo3d.enabled") &&
+            !!g(c, "app.pipelines.useImageTo3d.models.blenderagent.enabled")
+    ),
     {
         id: "imageto3d-blenderagent-image-editing-region",
         severity: "error",
@@ -2426,6 +2656,18 @@ const CORE_RULES: Rule[] = [
             !g(c, "app.openSearch.useServerless.enabled") &&
             !g(c, "app.openSearch.useProvisioned.enabled"),
         message: "reindexOnCdkDeploy requires OpenSearch Serverless or Provisioned to be enabled.",
+    },
+
+    // ----- Vector reindex flag (config.ts: "Error check for the vector reindex flag") -----
+    {
+        id: "vector-reindex-requires-vector-search",
+        severity: "error",
+        fieldPaths: ["app.vectorSearch.reindexOnCdkDeploy", "app.vectorSearch.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.vectorSearch.reindexOnCdkDeploy") === true &&
+            !g(c, "app.vectorSearch.enabled"),
+        message:
+            "app.vectorSearch.reindexOnCdkDeploy requires app.vectorSearch.enabled to be true.",
     },
 
     // ----- Auth providers (config.ts: "Check when implementing auth providers") -----
@@ -3394,55 +3636,494 @@ const CORE_RULES: Rule[] = [
         message: `${label} is enabled but ecrContainerImageURI is still empty or holds the template placeholder. Subscribe to the AWS Marketplace container and set the image URI, or disable the pipeline.`,
     })),
 
-    // ----- Amazon Rekognition availability (config.ts: "Amazon Rekognition is not offered in the AWS European Sovereign Cloud partition") -----
+    // ----- Retired pipeline blocks (config.ts: "is not a supported configuration option") -----
+    // Only a block whose enabled is exactly true fails; a disabled block, or one without enabled, is
+    // ignored by getConfig() and passes here too.
     {
-        id: "genai-rekognition-endpoint-unavailable-in-region",
+        id: "retired-pipeline-keys",
         severity: "error",
-        fieldPaths: [
-            "app.pipelines.useGenAiMetadata3dLabeling.enabled",
-            "app.useGlobalVpc.useForAllLambdas",
-            "app.useGlobalVpc.addVpcEndpoints",
-            "env.region",
-        ],
-        appliesWhen: (c) => genAiRekognitionUnavailable(c) && createsRekognitionEndpoint(c),
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.enabled"],
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled") === true ||
+            g(c, "app.pipelines.useConversionCadMeshMetadataExtraction.enabled") === true,
         message:
-            "useGenAiMetadata3dLabeling calls Amazon Rekognition, which is not offered in the AWS European Sovereign Cloud (aws-eusc) or in AWS GovCloud (US-East) (us-gov-east-1). With useGlobalVpc.useForAllLambdas and addVpcEndpoints the VPC builder also requests a Rekognition interface endpoint the Region does not offer. Set useGenAiMetadata3dLabeling.enabled to false for this Region.",
-    },
-    {
-        id: "genai-rekognition-unavailable-in-region",
-        severity: "warning",
-        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.enabled", "env.region"],
-        appliesWhen: (c) => genAiRekognitionUnavailable(c) && !createsRekognitionEndpoint(c),
-        message:
-            "useGenAiMetadata3dLabeling calls Amazon Rekognition, which is not offered in the AWS European Sovereign Cloud (aws-eusc) or in AWS GovCloud (US-East) (us-gov-east-1). The deployment succeeds, but every execution of the pipeline fails at its Rekognition call. Set useGenAiMetadata3dLabeling.enabled to false for this Region.",
+            "An enabled app.pipelines.useGenAiMetadata3dLabeling or app.pipelines.useConversionCadMeshMetadataExtraction block is not a supported configuration option; the pipelines they configured are replaced by app.pipelines.useSystemGenAiMetadata. Set the block's enabled to false or remove it (see Update the solution, v2.6 to v2.7).",
     },
 
-    // ----- Bedrock model id (config.ts: "cross-Region inference-profile prefix exists only in the commercial partition") -----
+    // ----- System GenAI metadata pipeline
+    // (config.ts: "pipelines.useSystemGenAiMetadata is enabled with useGenAiAnalysis but
+    // bedrockModels.analysisModelId is empty",
+    // "lambdaLimits.${field} must be a positive integer") -----
+    // The analysis model is required by the GenAI layer only: an attributes-only pipeline
+    // (useGenAiAnalysis false, the EU Sovereign preset) names none. useGenAiAnalysis is absent-as-true.
     {
-        id: "bedrock-model-id-required",
+        id: "system-genai-analysis-model-id",
         severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId"],
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+            "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis",
+        ],
         appliesWhen: (c) =>
-            g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled") &&
-            isBlank(g(c, "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId")),
+            !!g(c, "app.pipelines.useSystemGenAiMetadata.enabled") &&
+            g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis") !== false &&
+            isBlank(g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId")),
         message:
-            "useGenAiMetadata3dLabeling requires a bedrockModelId available in this partition and Region. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
+            "useSystemGenAiMetadata with the GenAI analysis on requires bedrockModels.analysisModelId: a vision-capable model id or inference profile available in this partition and Region. Set useGenAiAnalysis to false for an attributes-only pipeline (the EU Sovereign Cloud preset ships that way because no model is verified there).",
     },
+    // (config.ts validateSystemGenAiModelId: "is an ARN", "which is not an Amazon Bedrock model id",
+    // "cross-Region inference-profile prefix exists only in the", "verify that this inference profile
+    // exists in your") -----
+    // One rule per field and outcome. The analysis and text models are checked while the GenAI layer is
+    // on (the text model only when set); the embedding model whenever the pipeline is enabled and the id
+    // is set, because the embedding function is granted it either way. The partition rules are keyed on
+    // the partition the configured region resolves to; `env.partition` is derived at synth and is not
+    // part of config.json.
+    ...(
+        [
+            ["analysis", "analysisModelId", true],
+            ["text", "textModelId", true],
+            ["embedding", "embeddingModelId", false],
+        ] as const
+    ).flatMap(([name, field, needsGenAi]): Rule[] => {
+        const path = `app.pipelines.useSystemGenAiMetadata.bedrockModels.${field}`;
+        const checked = (c: ConfigShape): string | undefined => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return undefined;
+            if (
+                needsGenAi &&
+                g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis") === false
+            )
+                return undefined;
+            const id = g(c, path);
+            return typeof id === "string" && id.trim() !== "" ? id : undefined;
+        };
+        const issue = (c: ConfigShape) => {
+            const id = checked(c);
+            return id === undefined
+                ? undefined
+                : systemGenAiModelIdIssue(id, partitionForRegionName(g(c, "env.region")));
+        };
+        return [
+            {
+                id: `system-genai-${name}-model-arn`,
+                severity: "error",
+                fieldPaths: [path],
+                appliesWhen: (c) => issue(c) === "arn",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} is an ARN. Set the foundation-model id or the system-defined cross-Region inference-profile id instead: each function is granted the model it names, so an application inference profile, provisioned throughput or imported model ARN is not supported.`,
+            },
+            {
+                id: `system-genai-${name}-model-format`,
+                severity: "error",
+                fieldPaths: [path],
+                appliesWhen: (c) => issue(c) === "format",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} is not an Amazon Bedrock model id: expected provider.model with an optional :version, in lower case letters, digits, '.', '-' and '_', optionally behind a cross-Region inference-profile prefix, at most ${BEDROCK_MODEL_ID_MAX_LENGTH} characters.`,
+            },
+            {
+                id: `system-genai-${name}-model-prefix-partition`,
+                severity: "error",
+                fieldPaths: [path, "env.region"],
+                appliesWhen: (c) => issue(c) === "foreign-prefix",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} carries a cross-Region inference-profile prefix from another partition: "us-gov." exists only in AWS GovCloud (US); "global.", "eu.", "apac.", "au.", "jp." and "in." only in the commercial partition; "us." in the commercial partition, and in AWS GovCloud (US) with a warning. Use a model id or inference profile offered in the configured Region's partition.`,
+            },
+            {
+                id: `system-genai-${name}-model-prefix-unverified`,
+                severity: "warning",
+                fieldPaths: [path, "env.region"],
+                // The commercial "us." prefix in a GovCloud Region is accepted, not rejected: some model
+                // cards list the GovCloud source Regions under it.
+                appliesWhen: (c) => issue(c) === "unverified-prefix",
+                message: `pipelines.useSystemGenAiMetadata.bedrockModels.${field} carries the commercial "us." cross-Region inference-profile prefix in an AWS GovCloud (US) Region. Verify that this inference profile exists in your GovCloud account before deploying; the GovCloud preset names the "us-gov." form.`,
+            },
+        ];
+    }),
     {
-        id: "bedrock-model-id-commercial-only-prefix",
+        id: "system-genai-text-model-type",
         severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId", "env.region"],
-        // Keyed on the partition the configured region resolves to. `env.partition` is derived at
-        // synth from that region and is not part of config.json, so it is never present here.
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId"],
+        // null is the cleared text field and is backfilled to empty (the analysis model answers).
         appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useGenAiMetadata3dLabeling.enabled")) return false;
-            const id = String(
-                g(c, "app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId") ?? ""
-            );
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            if (g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis") === false)
+                return false;
+            const value = g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId");
+            return !isAbsent(value) && typeof value !== "string";
         },
         message:
-            'bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
+            "pipelines.useSystemGenAiMetadata.bedrockModels.textModelId must be a model id string, or empty to use the analysis model.",
+    },
+    {
+        id: "system-genai-anthropic-use-case-form",
+        severity: "warning",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+        ],
+        // The condition is the ids alone: a disabled pipeline with an Anthropic id warns too.
+        appliesWhen: (c) =>
+            ["analysisModelId", "textModelId"].some((field) =>
+                String(
+                    g(c, `app.pipelines.useSystemGenAiMetadata.bedrockModels.${field}`) ?? ""
+                ).includes("anthropic.")
+            ),
+        message:
+            "The analysis or text model is an Anthropic model. Anthropic requires a one-time use-case form per AWS organization before the first invocation; until it is submitted, executions end FAILED with BedrockAccessDenied while file attributes are still written.",
+    },
+    // (config.ts: "analysisModelSupportsImages must be true or false",
+    // "inference.maxTokens must be an integer between", "inference.temperature must be a number between
+    // 0 and 1, or null") -----
+    // Checked whenever the pipeline is enabled. An absent value is backfilled with its default; an
+    // explicit null temperature means "send no temperature" and is valid.
+    {
+        id: "system-genai-analysis-model-supports-images",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages"
+            );
+            return !isAbsent(value) && typeof value !== "boolean";
+        },
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelSupportsImages must be true or false.",
+    },
+    {
+        id: "system-genai-inference-max-tokens",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens"
+            );
+            if (isAbsent(value)) return false;
+            return (
+                typeof value !== "number" ||
+                !Number.isInteger(value) ||
+                value < SYSTEM_GENAI_MIN_MAX_TOKENS ||
+                value > SYSTEM_GENAI_MAX_MAX_TOKENS
+            );
+        },
+        message: `pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens must be an integer between ${SYSTEM_GENAI_MIN_MAX_TOKENS} and ${SYSTEM_GENAI_MAX_MAX_TOKENS}.`,
+    },
+    {
+        id: "system-genai-inference-temperature",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature"],
+        // undefined is backfilled with the default; null is valid. A cleared number field is "".
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature"
+            );
+            if (value === undefined || value === null) return false;
+            return typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1;
+        },
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockModels.inference.temperature must be a number between 0 and 1, or null in config.json to send no temperature (for a model that rejects the parameter).",
+    },
+    ...(
+        [
+            ["system-genai-max-input-file-size", "maxInputFileSizeMb"],
+            ["system-genai-max-point-cloud-points", "maxPointCloudPoints"],
+        ] as const
+    ).map(
+        ([id, field]): Rule => ({
+            id,
+            severity: "error",
+            fieldPaths: [`app.pipelines.useSystemGenAiMetadata.lambdaLimits.${field}`],
+            appliesWhen: (c) => {
+                if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+                const value = g(c, `app.pipelines.useSystemGenAiMetadata.lambdaLimits.${field}`);
+                if (isAbsent(value)) return false; // getConfig() fills an absent limit with its default
+                return typeof value !== "number" || !Number.isInteger(value) || value <= 0;
+            },
+            message: `pipelines.useSystemGenAiMetadata.lambdaLimits.${field} must be a positive integer.`,
+        })
+    ),
+    {
+        id: "system-genai-bedrock-guardrail-pair",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion",
+        ],
+        // Both fields name one guardrail; the check is not gated on the pipeline state.
+        appliesWhen: (c) =>
+            !isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
+            ) !==
+            !isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion")
+            ),
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both guardrailIdentifier and guardrailVersion, or neither.",
+    },
+    // (config.ts: "guardrailIdentifier must be the guardrail's 12-character id", "guardrailVersion must
+    // be "DRAFT" or a published version number", "is enabled without a bedrockGuardrail")
+    {
+        id: "system-genai-guardrail-identifier-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier"],
+        // The IAM grant composes the guardrail ARN from the id, so an ARN or a name here is a malformed
+        // resource and every analysis call is denied. Not gated on the pipeline state, like the pair rule.
+        appliesWhen: (c) => {
+            const id = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier"
+            );
+            return !isBlank(id) && !/^[a-z0-9]{12}$/.test(String(id));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier must be the guardrail\'s 12-character id (lowercase letters and digits, for example "kb4v3hkqvi6f"), not its ARN or name.',
+    },
+    {
+        id: "system-genai-guardrail-version-format",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion"],
+        appliesWhen: (c) => {
+            const version = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion"
+            );
+            return !isBlank(version) && !/^(DRAFT|[1-9][0-9]{0,7})$/.test(String(version));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion must be "DRAFT" or a published version number (for example "1").',
+    },
+    // (config.ts: "create.promptAttackInputStrength must be one of", "create.piiFilter must be one of",
+    // "create.enabled is true while guardrailIdentifier names an operator-owned guardrail")
+    {
+        id: "system-genai-guardrail-prompt-attack-strength",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength",
+        ],
+        // getConfig() fills an absent value with LOW, so only a present value outside the set fails.
+        appliesWhen: (c) => {
+            const strength = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength"
+            );
+            return !isAbsent(strength) && !["LOW", "MEDIUM", "HIGH"].includes(String(strength));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength must be "LOW", "MEDIUM" or "HIGH".',
+    },
+    {
+        id: "system-genai-guardrail-pii-filter",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter"],
+        appliesWhen: (c) => {
+            const filter = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter"
+            );
+            return !isAbsent(filter) && !["off", "anonymize", "block"].includes(String(filter));
+        },
+        message:
+            'pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter must be "off", "anonymize" or "block".',
+    },
+    {
+        id: "system-genai-guardrail-create-and-identifier",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+        ],
+        // The analysis functions carry one guardrail identifier, so the created guardrail and an
+        // operator-owned one are exclusive. Not gated on the pipeline state, like the pair rule.
+        appliesWhen: (c) =>
+            g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled") === true &&
+            !isBlank(
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier")
+            ),
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled is true while guardrailIdentifier names an operator-owned guardrail. Turn the created guardrail off to use the operator-owned one, or clear guardrailIdentifier and guardrailVersion.",
+    },
+    // (config.ts: "Every Amazon Bedrock call the system GenAI metadata pipeline makes carries a guardrail")
+    {
+        id: "system-genai-guardrail-required",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.enabled",
+            "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis",
+            "app.vectorSearch.enabled",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled",
+            "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier",
+        ],
+        // The analysis Converse calls (GenAI layer on) and the screen of the embedded text (vector search
+        // on) both go through the guardrail, in every partition. getConfig() fills an absent
+        // create.enabled with true when no guardrail is named and an absent useGenAiAnalysis with true.
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useSystemGenAiMetadata.enabled")) return false;
+            const analysis = g(c, "app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis");
+            const analysisOn = isAbsent(analysis) ? true : analysis === true;
+            const vectorOn = g(c, "app.vectorSearch.enabled") === true;
+            if (!analysisOn && !vectorOn) return false;
+            return (
+                g(c, "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled") ===
+                    false &&
+                isBlank(
+                    g(
+                        c,
+                        "app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier"
+                    )
+                )
+            );
+        },
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockGuardrail creates no guardrail and names none, while the GenAI analysis or vector search sends file content to Amazon Bedrock. Turn on bedrockGuardrail.create.enabled, or create a guardrail with a prompt-attack input filter in this account and Region and set bedrockGuardrail.guardrailIdentifier and guardrailVersion.",
+    },
+
+    // ----- Vector search (config.ts: "Vector search runs on Amazon DynamoDB vector search and an Amazon
+    // Bedrock embedding model", "app.vectorSearch.enabled requires app.pipelines.useSystemGenAiMetadata.enabled",
+    // "vectorSearch.indexingConcurrency must be an integer between") -----
+    {
+        id: "vector-search-partition",
+        severity: "error",
+        fieldPaths: ["app.vectorSearch.enabled", "env.region"],
+        // An allow-list (config.ts VECTOR_SEARCH_PARTITIONS): the European Sovereign Cloud has no DynamoDB
+        // vector search, and China and the ISO partitions are unverified. Silent while the region is unset.
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const partition = partitionForRegionName(g(c, "env.region"));
+            return partition !== undefined && !VECTOR_SEARCH_PARTITIONS.includes(partition);
+        },
+        message:
+            "Vector search (DynamoDB vector search with an Amazon Bedrock embedding model) is supported only in the commercial (aws) and AWS GovCloud (US) (aws-us-gov) partitions. Set app.vectorSearch.enabled to false in this Region's partition.",
+    },
+    {
+        id: "vector-search-govcloud-model-access",
+        severity: "warning",
+        fieldPaths: ["app.vectorSearch.enabled", "app.govCloud.enabled"],
+        appliesWhen: (c) => !!g(c, "app.vectorSearch.enabled") && !!g(c, "app.govCloud.enabled"),
+        message:
+            "Vector search in a GovCloud deployment: Amazon Bedrock model access is a manual step in both the GovCloud account and its linked commercial account. Confirm the embedding and analysis models are enabled before the first execution.",
+    },
+    {
+        id: "vector-search-requires-system-genai",
+        severity: "error",
+        fieldPaths: ["app.vectorSearch.enabled", "app.pipelines.useSystemGenAiMetadata.enabled"],
+        appliesWhen: (c) =>
+            !!g(c, "app.vectorSearch.enabled") &&
+            !g(c, "app.pipelines.useSystemGenAiMetadata.enabled"),
+        message:
+            "app.vectorSearch.enabled requires app.pipelines.useSystemGenAiMetadata.enabled; the system GenAI metadata pipeline produces the embeddings the vector index holds.",
+    },
+    {
+        id: "vector-search-trigger-required",
+        severity: "error",
+        fieldPaths: [
+            "app.vectorSearch.enabled",
+            "app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS",
+            "app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            // getConfig() fills an absent autoRegisterWithVAMS with true and an absent trigger with false.
+            const register = g(c, "app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS");
+            const registerOn = isAbsent(register) ? true : register === true;
+            const triggerOn =
+                g(c, "app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload") ===
+                true;
+            return !(registerOn && triggerOn);
+        },
+        message:
+            "app.vectorSearch.enabled requires app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS and autoRegisterAutoTriggerOnFileUpload to be true; vectors are produced by the system workflow's upload trigger.",
+    },
+    // (config.ts: "bedrockModels.embeddingModelId is empty while app.vectorSearch.enabled is true",
+    // "bedrockModels.embeddingDimensions must be an integer between 1 and") -----
+    {
+        id: "vector-search-embedding-model-id",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId"],
+        appliesWhen: (c) =>
+            !!g(c, "app.vectorSearch.enabled") &&
+            isBlank(g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId")),
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is empty while app.vectorSearch.enabled is true. Set an embedding model id available in this partition and Region (for example amazon.titan-embed-text-v2:0).",
+    },
+    {
+        id: "vector-search-embedding-dimensions",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const value = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions"
+            );
+            if (isAbsent(value)) return false; // filled with 1024 by getConfig()
+            return (
+                typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 4096
+            );
+        },
+        message:
+            "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions must be an integer between 1 and 4096 (the vector index dimension).",
+    },
+    // (config.ts: "which is not a model of a supported embedding family", "Supported widths:") -----
+    // The families and widths of the backend's embedding model table (fields/bedrockModelFormats.ts).
+    // An absent id or width is backfilled with Titan Text Embeddings V2 at 1024, which is supported.
+    {
+        id: "vector-search-embedding-model-family",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const id = g(c, "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId");
+            if (isBlank(id) || typeof id !== "string") return false;
+            return embeddingModelFamily(id) === undefined;
+        },
+        message: `pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is not a model of a supported embedding family. Supported families and widths: ${embeddingFamilySummary()}.`,
+    },
+    {
+        id: "vector-search-embedding-dimensions-family",
+        severity: "error",
+        fieldPaths: [
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+            "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions",
+        ],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const rawId = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId"
+            );
+            const id = isAbsent(rawId) ? "amazon.titan-embed-text-v2:0" : rawId;
+            if (typeof id !== "string") return false;
+            const family = embeddingModelFamily(id);
+            if (family === undefined) return false;
+            const rawWidth = g(
+                c,
+                "app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions"
+            );
+            const width = isAbsent(rawWidth) ? 1024 : rawWidth;
+            // An out-of-range width is the range rule's finding.
+            if (typeof width !== "number" || !Number.isInteger(width) || width < 1 || width > 4096)
+                return false;
+            return !family.dimensions.includes(width);
+        },
+        message: `pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions is a width the embedding model does not produce. Supported families and widths: ${embeddingFamilySummary()}.`,
+    },
+    {
+        id: "vector-search-indexing-concurrency-range",
+        severity: "error",
+        fieldPaths: ["app.vectorSearch.indexingConcurrency"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.vectorSearch.enabled")) return false;
+            const value = g(c, "app.vectorSearch.indexingConcurrency");
+            if (isAbsent(value)) return false; // filled with 5 by getConfig()
+            return (
+                typeof value !== "number" || !Number.isInteger(value) || value < 2 || value > 1000
+            );
+        },
+        message:
+            "vectorSearch.indexingConcurrency must be an integer between 2 and 1000 (Lambda SQS event-source MaximumConcurrency bound).",
     },
     // The Video SOP/BOM Extraction pipeline's id goes through the same getConfig() helper
     // (validateBedrockModelId), so the two rules above are restated for its path.
@@ -3456,18 +4137,12 @@ const CORE_RULES: Rule[] = [
         message:
             "useGenAiVideoSopBom requires a bedrockModelId available in this partition and Region; one model serves the pipeline's text and vision calls. The restricted-partition presets leave it empty because the commercial cross-Region inference profiles do not exist there.",
     },
-    {
-        id: "video-sop-bom-bedrock-model-id-commercial-only-prefix",
-        severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiVideoSopBom.bedrockModelId", "env.region"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")) return false;
-            const id = String(g(c, "app.pipelines.useGenAiVideoSopBom.bedrockModelId") ?? "");
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
-        },
-        message:
-            'useGenAiVideoSopBom.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition. Use a model id offered in this partition (GovCloud uses the "us-gov." prefix).',
-    },
+    ...bedrockProfilePrefixRules(
+        "video-sop-bom-bedrock-model-id",
+        "useGenAiVideoSopBom.bedrockModelId",
+        "app.pipelines.useGenAiVideoSopBom.bedrockModelId",
+        (c) => !!g(c, "app.pipelines.useGenAiVideoSopBom.enabled")
+    ),
 
     // ----- Video SOP/BOM Extraction partition and limits
     // (config.ts: "not validated outside the commercial and GovCloud partitions") -----
@@ -3568,18 +4243,12 @@ const CORE_RULES: Rule[] = [
         message:
             "useGenAiCadStepAgent requires a bedrockModelId available in this partition and Region.",
     },
-    {
-        id: "cad-step-agent-bedrock-model-id-commercial-only-prefix",
-        severity: "error",
-        fieldPaths: ["app.pipelines.useGenAiCadStepAgent.bedrockModelId", "env.region"],
-        appliesWhen: (c) => {
-            if (!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")) return false;
-            const id = String(g(c, "app.pipelines.useGenAiCadStepAgent.bedrockModelId") ?? "");
-            return !isCommercialPartition(c) && (id.startsWith("global.") || id.startsWith("us."));
-        },
-        message:
-            'useGenAiCadStepAgent.bedrockModelId uses a "global." or "us." cross-Region inference-profile prefix, which exists only in the commercial partition.',
-    },
+    ...bedrockProfilePrefixRules(
+        "cad-step-agent-bedrock-model-id",
+        "useGenAiCadStepAgent.bedrockModelId",
+        "app.pipelines.useGenAiCadStepAgent.bedrockModelId",
+        (c) => !!g(c, "app.pipelines.useGenAiCadStepAgent.enabled")
+    ),
     {
         id: "cad-step-agent-openai-secret-arn",
         severity: "error",

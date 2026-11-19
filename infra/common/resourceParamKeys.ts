@@ -67,8 +67,11 @@ export const RESOURCE_PARAM_KEYS = {
         workflowStorageV2: "dynamoTables/workflowStorageV2",
         workflowTriggersStorage: "dynamoTables/workflowTriggersStorage",
         workflowExecutionLocksStorage: "dynamoTables/workflowExecutionLocksStorage",
+        // Vector search tables
+        vectorEmbeddingsStorage: "dynamoTables/vectorEmbeddingsStorage",
         largeObjectCopyJobsStorage: "dynamoTables/largeObjectCopyJobsStorage",
         zipDownloadRequestsStorage: "dynamoTables/zipDownloadRequestsStorage",
+        auditLogQueriesStorage: "dynamoTables/auditLogQueriesStorage",
         // Compliance tables
         complianceSchemaStorage: "dynamoTables/complianceSchemaStorage",
         complianceAssetStateStorage: "dynamoTables/complianceAssetStateStorage",
@@ -89,6 +92,7 @@ export const RESOURCE_PARAM_KEYS = {
     // Lambda function names consumed by data-migration tooling and external bridge stacks
     lambdaFunctions: {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
+        vectorReindexer: "lambdaFunctions/vectorReindexer",
         importGlobalPipelineWorkflow: "lambdaFunctions/importGlobalPipelineWorkflow",
         // The large object copy engine, read by the workflow output step (which cannot take the
         // name as an environment variable: the engine references it).

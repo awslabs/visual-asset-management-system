@@ -27,7 +27,7 @@ Reads are recorded by default. An administrator can turn read records off with t
 
 The records are written to the Amazon CloudWatch Logs audit log groups of the deployment, one group per kind of event (actions, file uploads, file downloads, authorization decisions, errors and changes to roles and access). Who can read them is decided by the AWS account's IAM permissions, not by VAMS roles. Records are kept for one year by default.
 
-Ask your administrator for read access to the audit log groups, or for a report.
+Ask your administrator for read access to the audit log groups, or for a report. If your role allows it, you can also search the records from the web interface under **Admin - Auth** > **Audit Log Search**. See [Audit Log Search](audit-logs.md).
 
 ---
 
@@ -43,5 +43,7 @@ Common questions and how the records answer them:
 | How much data lands in each database each day?    | The bytes on bucket sync records (files written directly to the bucket), summed by database and day |
 | Who runs pipelines, and for how long?             | The `workflowExecutionEnd` records: the user the run was for, its outcome and its duration          |
 | What fails, and why?                              | Records with `outcome` `failed`, counted by action and reason                                       |
+
+Users with the `auditLog` permission can also search these records from the API: see the [Audit Log Search API](../api/audit.md).
 
 Ready-to-run Amazon CloudWatch Logs Insights queries for each of these are in [Audit Logging](../developer/audit-logging.md#cost-attribution). For prices in your Region, use the [Amazon CloudWatch pricing page](https://aws.amazon.com/cloudwatch/pricing/) or the AWS Pricing Calculator.

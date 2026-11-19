@@ -22,6 +22,10 @@ handler after the write succeeds (``workflowService.py`` is the reference placem
 from typing import Dict, Optional, Tuple
 
 from common.apiRoutes import (
+    API_AUDIT_LOG_GROUPS,
+    API_AUDIT_QUERIES,
+    API_AUDIT_QUERY_BY_ID,
+    API_AUDIT_QUERY_EXPORT,
     ALL_API_ROUTES,
     API_AMPLIFY_CONFIG,
     API_ARCHIVE_ASSET,
@@ -115,6 +119,7 @@ from common.apiRoutes import (
     API_ROLES,
     API_ROLE_BY_ID,
     API_SEARCH,
+    API_SEARCH_NLP,
     API_SEARCH_SIMPLE,
     API_SECURE_CONFIG,
     API_SET_PRIMARY_FILE,
@@ -462,6 +467,7 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # Search: the request (index, filters, page) is recorded and the hit count, never the hits.
     **route_entries(API_SEARCH, {POST: spec("search", "search", KIND_SEARCH)}),
     **route_entries(API_SEARCH_SIMPLE, {POST: spec("search", "search", KIND_SEARCH)}),
+    **route_entries(API_SEARCH_NLP, {POST: spec("search", "search", KIND_SEARCH)}),
     # Compliance. The compliance services also write their own audit trail (the compliance audit
     # table, read by the two audit routes); these records are the VAMS action records of the calls.
     **route_entries(API_COMPLIANCE_SCHEMAS, {
@@ -512,6 +518,16 @@ CORE_AUDIT_ROUTE_ACTIONS: Dict[RouteMethod, AuditSpec] = {
     # The two audit routes read the compliance audit trail.
     **route_entries(API_COMPLIANCE_AUDIT, {GET: read("complianceAuditList", "complianceAudit")}),
     **route_entries(API_COMPLIANCE_AUDIT_ASSET, {GET: read("complianceAuditList", "complianceAudit")}),
+    # Audit log search. The viewer's own use of audit data is audited: starting and stopping a search
+    # are writes, a poll is a read (the secondary auditQueryResults records one that returned rows),
+    # an export is a download. Everything that moves audit data is recorded also with recordReads off.
+    **route_entries(API_AUDIT_LOG_GROUPS, {GET: read("auditLogGroupsList", "auditQuery")}),
+    **route_entries(API_AUDIT_QUERIES, {POST: spec("auditQueryStart", "auditQuery")}),
+    **route_entries(API_AUDIT_QUERY_BY_ID, {
+        GET: read("auditQueryStatus", "auditQuery"),
+        DELETE: spec("auditQueryStop", "auditQuery"),
+    }),
+    **route_entries(API_AUDIT_QUERY_EXPORT, {GET: spec("auditQueryExport", "auditQuery", KIND_DOWNLOAD)}),
 }
 
 _HEAD_REASON = "returns object headers only, no content; the GET of the same file is recorded"
@@ -544,6 +560,8 @@ CORE_AUDIT_SECONDARY_ACTIONS: Tuple[AuditSpec, ...] = (
     spec("zipDownloadCancel", "export"),
     # A zip download read, list or create that found the job's run ended finalizes the job.
     spec("zipDownloadReconcile", "export"),
+    # A poll of an audit search that returned rows (the route action auditQueryStatus is a poll with none).
+    spec("auditQueryResults", "auditQuery", KIND_DOWNLOAD),
 )
 
 # Actions recorded by handlers that serve no API route. The actor is the system; onBehalfOf names
@@ -555,6 +573,7 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.indexing.sqsBucketSync", spec("assetSync", "asset")),
     SystemAction("handlers.indexing.sqsBucketSync", spec("fileSync", "file")),
     SystemAction("handlers.indexing.crReindexer", spec("searchReindex", "system")),
+    SystemAction("handlers.osVectorSearch.vectorReindexer", spec("searchReindex", "system")),
     SystemAction("handlers.workflows.sfn.processWorkflowExecutionOutput", spec("workflowOutputIngest", "execution")),
     SystemAction("handlers.workflows.sfn.processWorkflowExecutionOutput", spec("workflowExecutionEnd", "execution")),
     SystemAction("handlers.workflows.sfn.handleExecutionError", spec("workflowExecutionEnd", "execution")),
@@ -588,8 +607,10 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
 
 # Handlers that serve no API route and record no action, with the reason.
 AUDIT_SYSTEM_EXEMPT: Dict[str, str] = {
-    "handlers.indexing.assetIndexer": "search index upkeep derived from a recorded change",
-    "handlers.indexing.fileIndexer": "search index upkeep derived from a recorded change",
+    "handlers.osSemanticSearch.osAssetIndexer": "search index upkeep derived from a recorded change",
+    "handlers.osSemanticSearch.osFileIndexer": "search index upkeep derived from a recorded change",
+    "handlers.osVectorSearch.vectorIndexer": "vector index upkeep derived from a recorded change or analysis run",
+    "handlers.osVectorSearch.systemWorkflowLauncher": "each launch is an executeWorkflow call, which records it",
     "handlers.indexing.snsQueuing": "fans a recorded change out to the indexers",
     "handlers.sendEmail.sendEmail": "delivers the notification of a recorded subscription",
 }

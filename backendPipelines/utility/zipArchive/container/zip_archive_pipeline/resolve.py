@@ -5,7 +5,9 @@
 
 Folders and the whole asset expand to their current files (the latest version of each key that is not
 a delete marker), explicit files keep their pinned version or resolve to the current one, and an
-asset-version pin is already a resolved list. Every member is then head-checked on its exact version:
+asset-version pin is already a resolved list. Preview companions (``{file}.previewFile.{ext}``) are left
+out unless the run or the request sets ``includePreviewFiles``. Every member is then head-checked on its
+exact version:
 a delete marker, a missing version, an archive storage class, a ``vams-status`` of archived or deleted,
 or a blocked extension or media type refuses the WHOLE archive (owner rule: no partial archives), as
 do an entry name the archive writers would refuse and the file and size limits.
@@ -17,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from botocore.exceptions import ClientError
 
 from .engine.zipstream import check_member_name
-from .rules import ARCHIVED_IN_SELECTION, Refusal, is_archived, is_blocked
+from .rules import ARCHIVED_IN_SELECTION, Refusal, is_archived, is_blocked, is_preview_companion
 
 
 def relative_path(key, base_key):
@@ -50,11 +52,18 @@ def list_current(s3_client, bucket, prefix):
         kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
 
 
-def expand_selection(s3_client, bucket, base_key, entries, pinned_files=None):
-    """Members ({bucket, key, versionId, size, relativePath, mtime}) and empty-folder relative paths."""
+def expand_selection(s3_client, bucket, base_key, entries, pinned_files=None, include_preview_files=False):
+    """Members ({bucket, key, versionId, size, relativePath, mtime}) and empty-folder relative paths.
+
+    Preview companions (``{file}.previewFile.{ext}``) are left out unless ``include_preview_files``: an
+    explicit one, a pinned one and every one a folder or the whole asset lists, as the file list hides
+    them. A folder that holds only preview companions then reads as empty."""
+    def wanted(key):
+        return include_preview_files or not is_preview_companion(key)
+
     members, seen, markers = [], set(), []
     for pinned in pinned_files or []:
-        if pinned["key"] in seen:
+        if pinned["key"] in seen or not wanted(pinned["key"]):
             continue
         seen.add(pinned["key"])
         members.append({"bucket": bucket, "key": pinned["key"], "versionId": pinned.get("versionId"),
@@ -63,13 +72,14 @@ def expand_selection(s3_client, bucket, base_key, entries, pinned_files=None):
     for entry in entries or []:
         key = entry["key"]
         if entry["type"] == "file":
-            if key not in seen:
+            if key not in seen and wanted(key):
                 seen.add(key)
                 members.append({"bucket": bucket, "key": key, "versionId": entry.get("versionId"),
                                 "size": None, "relativePath": relative_path(key, base_key),
                                 "mtime": 0})
             continue
         files, folder_markers = list_current(s3_client, bucket, key)
+        files = [f for f in files if wanted(f[0])]
         if not files and not folder_markers:
             raise Refusal("A selected folder is empty or does not exist")
         markers.extend(folder_markers)

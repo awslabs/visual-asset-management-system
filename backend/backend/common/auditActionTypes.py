@@ -84,6 +84,8 @@ AUDIT_ENTITY_TYPES = frozenset({
     # (its state, quarantine and exception), a cascade, and the compliance audit trail.
     "complianceSchema", "complianceBinding", "complianceEvaluation", "complianceState",
     "complianceCascade", "complianceAudit",
+    # Audit log search: one search handle (a query over the audit log groups).
+    "auditQuery",
 })
 
 # A canonical action name: lower camelCase <entity><Verb>, letters and digits only. It is written

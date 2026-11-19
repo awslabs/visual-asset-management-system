@@ -55,6 +55,7 @@ const ComplianceSchemas = lazyWithRetry(() => import("./pages/ComplianceSchemas"
 const ComplianceQuarantine = lazyWithRetry(() => import("./pages/ComplianceQuarantine"));
 const ComplianceCascades = lazyWithRetry(() => import("./pages/ComplianceCascades"));
 const ComplianceAuditLog = lazyWithRetry(() => import("./pages/ComplianceAuditLog"));
+const AuditLogSearch = lazyWithRetry(() => import("./pages/auth/AuditLogSearch"));
 const DatabaseCompliance = lazyWithRetry(() => import("./pages/DatabaseCompliance"));
 
 export interface RouteOption {
@@ -71,8 +72,8 @@ export interface RouteOption {
 
 const coreRouteTable: RouteOption[] = [
     { path: "/", Page: LandingPage, active: "#/" },
-    { path: "/search", Page: SearchPage, active: "#/" },
-    { path: "/search/:databaseId/assets", Page: SearchPage, active: "#/" },
+    { path: "/search", Page: SearchPage, active: "#/assets/" },
+    { path: "/search/:databaseId/assets", Page: SearchPage, active: "#/assets/" },
     { path: "/assets", Page: SearchPage, active: "#/assets/" },
     { path: "/databases", Page: Databases, active: "#/databases/" },
     {
@@ -257,6 +258,11 @@ const coreRouteTable: RouteOption[] = [
         path: "/compliance/audit",
         Page: ComplianceAuditLog,
         active: "#/compliance/audit/",
+    },
+    {
+        path: "/auth/audit-log-search",
+        Page: AuditLogSearch,
+        active: "#/auth/audit-log-search/",
     },
     {
         path: "*",

@@ -25,6 +25,7 @@ import {
     handlerOf,
     synthTemplate,
 } from "../support/templateSynth";
+import { VAMS_APP_FEATURES as CORE_FEATURES } from "../../common/vamsAppFeatures";
 import { enableEdh } from "./edh/support/edhSynth";
 import { addonObjectTypeFeatures } from "./support/addonBackendConstants";
 import { enableRouteContributingAddons } from "./support/addonTestHooks";
@@ -63,6 +64,10 @@ function listingEnvironment(s: SynthResult): {
     return { listing, others };
 }
 
+const auditSearchOff = (c: any) => {
+    c.app.auditLogging.search.enabled = false;
+};
+
 const expectEveryListingLambda = (s: SynthResult, value: string) => {
     const { listing, others } = listingEnvironment(s);
     expect(listing).toEqual(Object.fromEntries(LISTING_HANDLERS.map((h) => [h, value])));
@@ -70,17 +75,29 @@ const expectEveryListingLambda = (s: SynthResult, value: string) => {
 };
 
 describe("the add-on switches reach the listing Lambdas", () => {
+    // Audit log search (a core feature gated by the same list) is on in the commercial and GovCloud
+    // templates and off in the EU Sovereign one, where Logs Insights is not available.
     test.each(ALL_TEMPLATES)(
-        "%s as shipped: each of the three carries the variable, empty",
+        "%s as shipped: each of the three carries the variable, with no add-on",
         (name: TemplateName) => {
-            expectEveryListingLambda(synthTemplate(name), "");
+            expectEveryListingLambda(
+                synthTemplate(name),
+                name === "eusovereign" ? "" : CORE_FEATURES.AUDITLOGSEARCH
+            );
         }
     );
+
+    test("audit log search switched off: the variable is empty, and on again it names the switch", () => {
+        expectEveryListingLambda(
+            synthTemplate("commercial", { mutate: auditSearchOff, mutateKey: "auditSearchOff" }),
+            ""
+        );
+    });
 
     test("with EDH Workstations on: its switch", () => {
         expectEveryListingLambda(
             synthTemplate("commercial", { mutate: enableEdh, mutateKey: "edhWorkstationsEnabled" }),
-            ADDON_APP_FEATURES.EDH_WORKSTATIONS
+            [ADDON_APP_FEATURES.EDH_WORKSTATIONS, CORE_FEATURES.AUDITLOGSEARCH].join(",")
         );
     });
 
@@ -95,6 +112,7 @@ describe("the add-on switches reach the listing Lambdas", () => {
                 ADDON_APP_FEATURES.EDH_WORKSTATIONS,
                 ADDON_APP_FEATURES.EDH_CONTAINERS,
                 ADDON_APP_FEATURES.EDH_AMI_RECIPES,
+                CORE_FEATURES.AUDITLOGSEARCH,
             ].join(",")
         );
     });
@@ -170,6 +188,12 @@ describe("the backend reads the same variable and switch names", () => {
     test("the variable name", () => {
         expect(backendSource()).toMatch(
             new RegExp(`^ADDON_FEATURES_ENABLED_ENV = "${ADDON_FEATURES_ENABLED_ENV}"$`, "m")
+        );
+    });
+
+    test("the audit log search switch name mirrors VAMS_APP_FEATURES.AUDITLOGSEARCH", () => {
+        expect(backendSource()).toMatch(
+            new RegExp(`^CORE_FEATURE_AUDIT_LOG_SEARCH = "${CORE_FEATURES.AUDITLOGSEARCH}"$`, "m")
         );
     });
 

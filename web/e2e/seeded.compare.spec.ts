@@ -5,9 +5,11 @@
 
 import { test, expect, Locator, Page } from "@playwright/test";
 import {
+    cachedFeaturesEnabled,
     chooseSelectOption,
     collectPageErrors,
     compareSeed,
+    gotoFresh,
     openAssetFile,
     openFileManager,
     selectTreePath,
@@ -17,7 +19,22 @@ import {
     watchConsoleErrors,
     watchCspViolations,
     watchRequestHosts,
+    searchModeCase,
 } from "./support/fixtures";
+
+/**
+ * The search cases list the seeded files with an empty keyword query (match_all), so they need the
+ * keyword engine: without OpenSearch (`NOOPENSEARCH`) the page has no "Search by keywords" box, and
+ * they skip with the reason (#1634). Reading the cached switches loads `/`, so a case then opens its
+ * search route with `gotoFresh` rather than a hash change during the app's start (D135).
+ */
+async function skipWithoutKeywordSearch(page: Page): Promise<void> {
+    const engines = searchModeCase(await cachedFeaturesEnabled(page));
+    test.skip(
+        engines !== "both" && engines !== "keyword-only",
+        "Keyword search is off: this deployment has no OpenSearch (NOOPENSEARCH), so the page has no keyword box"
+    );
+}
 
 /**
  * Compare-mode surfaces, driven against the deployed app. SEEDED: the `seeded.` prefix marks this as a
@@ -285,7 +302,8 @@ test.describe("compare mode", () => {
     });
 
     test("search Compare/View Selected enable by count and type", async ({ page }) => {
-        await page.goto(`/#/search/${A!.databaseId}/assets`, { waitUntil: "domcontentloaded" });
+        await skipWithoutKeywordSearch(page);
+        await gotoFresh(page, `/#/search/${A!.databaseId}/assets`);
         await expect(page.getByRole("button", { name: "Files", exact: true }).first()).toBeVisible({
             timeout: 60_000,
         });
@@ -505,7 +523,8 @@ test.describe("compare mode: files without an extension (seeded viewer samples)"
         page,
     }) => {
         needSamples("noext-readme", "dotfile-gitignore", "pdf");
-        await page.goto(`/#/search/${DB}/assets`, { waitUntil: "domcontentloaded" });
+        await skipWithoutKeywordSearch(page);
+        await gotoFresh(page, `/#/search/${DB}/assets`);
         const filesTab = page.getByRole("button", { name: "Files", exact: true }).first();
         await expect(filesTab).toBeVisible({ timeout: 60_000 });
         await filesTab.click();

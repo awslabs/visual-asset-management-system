@@ -18,6 +18,9 @@ SYSTEM_RECORD_REFUSALS: FrozenSet[str] = frozenset({
     "System workflows cannot be archived or restored through the API; the deployment owns them.",
     "Templates of system pipelines cannot be added or deleted.",
     "Triggers of system workflows cannot be added or deleted.",
+    # A compliance schema save whose pipeline rule uses a system pipeline or workflow.
+    ("A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata "
+     "rule on its genai_* fields."),
 })
 
 # (prefix, suffix) of each message that names the refused field between them.

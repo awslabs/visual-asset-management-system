@@ -13,11 +13,12 @@
  *
  * Keep them byte-for-byte in sync with those files. `makeDefaultConfig()`
  * returns a deep clone so callers can freely mutate. GovCloud differs from
- * Commercial in ~13 values (FIPS, KMS, govCloud, VPC with cross-Region S3
- * endpoints off, OpenSearch serverless-
- * vs-provisioned, Location Service, ALB-vs-CloudFront, bedrock model id, GenAI
- * auto-trigger). EU Sovereign Cloud is GovCloud with 4 further differences
- * (region, FIPS off, aws-eusc certificate ARN, amazonaws.eu ECR URIs).
+ * Commercial in the values buildGovCloud() sets (FIPS, KMS, govCloud, VPC with
+ * cross-Region S3 endpoints off, OpenSearch serverless-vs-provisioned, Location
+ * Service, ALB-vs-CloudFront, vector search off, the system GenAI pipeline off
+ * with a GovCloud model id). EU Sovereign Cloud is GovCloud with the values
+ * buildEuSovereign() sets (region, FIPS off, aws-eusc certificate ARN,
+ * amazonaws.eu ECR URIs, empty embedding and analysis model ids).
  */
 
 import type { ConfigShape, Profile } from "./types";
@@ -242,6 +243,11 @@ const COMMERCIAL: ConfigShape = {
             },
             reindexOnCdkDeploy: false,
         },
+        vectorSearch: {
+            enabled: true,
+            indexingConcurrency: 5,
+            reindexOnCdkDeploy: false,
+        },
         useLocationService: { enabled: true },
         useAlb: {
             enabled: false,
@@ -289,10 +295,36 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterAutoTriggerOnFileUpload: false,
                 downscaleSelfPreviewableImages: false,
             },
-            useConversionCadMeshMetadataExtraction: {
-                enabled: false,
+            useSystemGenAiMetadata: {
+                enabled: true,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
+                useFargateRenderer: false,
+                useGenAiAnalysis: true,
+                bedrockModels: {
+                    analysisModelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    textModelId: "",
+                    analysisModelSupportsImages: true,
+                    embeddingModelId: "amazon.titan-embed-text-v2:0",
+                    embeddingDimensions: 1024,
+                    inference: {
+                        maxTokens: 2048,
+                        temperature: 0.2,
+                    },
+                },
+                lambdaLimits: {
+                    maxInputFileSizeMb: 2048,
+                    maxPointCloudPoints: 20000000,
+                },
+                bedrockGuardrail: {
+                    guardrailIdentifier: "",
+                    guardrailVersion: "",
+                    create: {
+                        enabled: true,
+                        promptAttackInputStrength: "LOW",
+                        piiFilter: "anonymize",
+                    },
+                },
             },
             useConversionCoordinateTransform: {
                 enabled: false,
@@ -321,12 +353,6 @@ const COMMERCIAL: ConfigShape = {
                 enabled: false,
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: true,
-            },
-            useGenAiMetadata3dLabeling: {
-                enabled: false,
-                bedrockModelId: "global.anthropic.claude-sonnet-5-5",
-                autoRegisterWithVAMS: true,
-                autoRegisterAutoTriggerOnFileUpload: false,
             },
             useGenAiVideoSopBom: {
                 enabled: false,
@@ -383,6 +409,19 @@ const COMMERCIAL: ConfigShape = {
                 useCodeBuild: false,
                 autoRegisterWithVAMS: true,
                 keepWarmInstance: false,
+                instanceTypes: [
+                    "g6.4xlarge",
+                    "g6.8xlarge",
+                    "g6.16xlarge",
+                    "gr6.4xlarge",
+                    "gr6.8xlarge",
+                    "g6e.2xlarge",
+                    "g6e.4xlarge",
+                    "g6e.8xlarge",
+                    "g5.4xlarge",
+                    "g5.8xlarge",
+                    "g5.16xlarge",
+                ],
             },
             useNvidiaCosmos: cloneConfig(COSMOS_DEFAULT),
             useNvidiaCosmos3: cloneConfig(COSMOS3_DEFAULT),
@@ -453,6 +492,18 @@ const COMMERCIAL: ConfigShape = {
         },
         auditLogging: {
             recordReads: true,
+            search: {
+                enabled: true,
+                maxQueryWindowDays: 31,
+                maxRows: 1000,
+                maxConcurrentQueries: 5,
+                maxConcurrentQueriesPerUser: 2,
+                queryDeadlineSeconds: 300,
+                longPollWaitSeconds: 20,
+                maxContainsTermLength: 64,
+                maxContainsTerms: 3,
+                handleRetentionMinutes: 60,
+            },
         },
         webUi: {
             optionalBannerHtmlMessage: "",
@@ -514,13 +565,18 @@ function buildGovCloud(): ConfigShape {
     cfg.app.useAlb.certificateArn =
         "arn:aws-us-gov:acm:<REGION>:<ACCOUNTID>:certificate/<CERTIFICATEID>";
     cfg.app.useCloudFront.enabled = false;
-    // Left empty: the "global." cross-Region inference profiles exist only in the commercial
-    // partition, and getConfig() rejects one here. The operator sets a model id offered in their
-    // partition when they enable the pipeline (it ships disabled).
-    cfg.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId = "";
-    cfg.app.pipelines.useGenAiMetadata3dLabeling.autoRegisterAutoTriggerOnFileUpload = true;
-    // The same reason: one model id serves this pipeline's text and vision calls, and the commercial
-    // default is a "global." inference profile.
+    // Off in the restricted partitions; Amazon Bedrock model access there is a manual, two-account step.
+    cfg.app.vectorSearch.enabled = false;
+    cfg.app.pipelines.useSystemGenAiMetadata.enabled = false;
+    // Amazon Bedrock Guardrails is offered in AWS GovCloud (US), and getConfig() refuses a pipeline that
+    // calls Amazon Bedrock with no guardrail, so the deployment creates one there as in commercial.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = true;
+    // The GovCloud preset names the "us-gov." inference profile; getConfig() also accepts a "us."
+    // profile there, with a warning.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId =
+        "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    // Left empty: one model id serves the Video SOP/BOM pipeline's text and vision calls, and the
+    // commercial default is a "global." inference profile, which getConfig() rejects here.
     cfg.app.pipelines.useGenAiVideoSopBom.bedrockModelId = "";
     // AgentCore Runtime is commercial-only, so the restricted presets ship the Fargate runtime with
     // the model id left for the operator, as for the labeling pipeline above.
@@ -554,10 +610,21 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useRapidPipeline.useEcs.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useRapidPipeline.useEks.ecrContainerImageURI = euEcr;
     cfg.app.pipelines.useModelOps.ecrContainerImageURI = euEcr;
+    // No embedding or analysis model is verified in the partition, so neither is preset, and the
+    // pipeline's GenAI layer is off: enabling the pipeline there yields an attributes-only run.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId = "";
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId = "";
+    cfg.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = false;
+    // Amazon Bedrock Guardrails availability there is unverified and the attributes-only pipeline makes
+    // no Amazon Bedrock call, so no guardrail is created; turning on the GenAI layer requires one.
+    cfg.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled = false;
     // CodeBuild is not offered in the EU Sovereign Cloud (config.ts codeBuildSupportedPartitions).
     cfg.app.pipelines.useGenAiCadStepAgent.useCodeBuild = false;
     // The in-account CodeBuild container build is supported in the aws and aws-us-gov partitions.
     cfg.app.pipelines.useImageTo3d.useCodeBuild = false;
+    // Audit log search needs Amazon CloudWatch Logs Insights, which the EU Sovereign Cloud lacks.
+    // The recording of audit events is not affected.
+    cfg.app.auditLogging.search.enabled = false;
     return cfg;
 }
 

@@ -88,8 +88,11 @@ class ResourceParamKeys:
     WORKFLOW_STORAGE_TABLE_V2 = "dynamoTables/workflowStorageV2"
     WORKFLOW_TRIGGERS_STORAGE_TABLE = "dynamoTables/workflowTriggersStorage"
     WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE = "dynamoTables/workflowExecutionLocksStorage"
+    # Vector search tables
+    VECTOR_EMBEDDINGS_STORAGE_TABLE = "dynamoTables/vectorEmbeddingsStorage"
     LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = "dynamoTables/largeObjectCopyJobsStorage"
     ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE = "dynamoTables/zipDownloadRequestsStorage"
+    AUDIT_LOG_QUERIES_STORAGE_TABLE = "dynamoTables/auditLogQueriesStorage"
     # Compliance tables
     COMPLIANCE_SCHEMA_STORAGE_TABLE = "dynamoTables/complianceSchemaStorage"
     COMPLIANCE_ASSET_STATE_STORAGE_TABLE = "dynamoTables/complianceAssetStateStorage"
@@ -123,6 +126,7 @@ class ResourceParamKeys:
 
     # Lambda function names consumed by migration tooling and external bridge stacks
     CR_OS_REINDEXER_FUNCTION = "lambdaFunctions/crOsReindexer"
+    VECTOR_REINDEXER_FUNCTION = "lambdaFunctions/vectorReindexer"
     IMPORT_GLOBAL_PIPELINE_WORKFLOW_FUNCTION = "lambdaFunctions/importGlobalPipelineWorkflow"
     LARGE_OBJECT_COPY_ENGINE_FUNCTION = "lambdaFunctions/largeObjectCopyEngine"
 

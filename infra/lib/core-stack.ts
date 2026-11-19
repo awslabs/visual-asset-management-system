@@ -11,6 +11,7 @@ import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-nestedStack";
 import { ApiBuilder2NestedStack } from "./nestedStacks/apiLambda/apiBuilder2-nestedStack";
+import { ApiBuilder3NestedStack } from "./nestedStacks/apiLambda/apiBuilder3-nestedStack";
 import { StorageResourcesBuilderNestedStack } from "./nestedStacks/storage/storageBuilder-nestedStack";
 import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedStack";
 import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
@@ -271,6 +272,28 @@ export class CoreVAMSStack extends cdk.Stack {
             apiBuilder2NestedStack.addStackDependency(resourceNamesNestedStack);
             apiBuilder2NestedStack.addStackDependency(apiBuilderNestedStack);
 
+            //Deploy Backend API framework - third stack (nested stack), only when audit log search is on
+            //(app.auditLogging.search.enabled, default true; false in the EU Sovereign template).
+            //Holds the audit log search Lambda and its /audit routes (kept out of ApiBuilder2 to leave
+            //that template headroom under the 1,000,000 byte limit). It needs only the storage tables
+            //and the resource-name parameters, not the other API stacks. With the switch off the stack,
+            //its Lambda, routes and IAM, and the handle table in the storage stack, are not built.
+            const auditSearchEnabled = Config.isAuditSearchEnabled(props.config);
+            let apiBuilder3NestedStack: ApiBuilder3NestedStack | undefined;
+            if (auditSearchEnabled) {
+                apiBuilder3NestedStack = new ApiBuilder3NestedStack(this, "ApiBuilder3", {
+                    config: props.config,
+                    registry: apiRouteRegistry,
+                    storageResources: storageResourcesNestedStack.storageResources,
+                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                    vpc: this.vpc,
+                    subnets: this.subnetsIsolated,
+                });
+                apiBuilder3NestedStack.addStackDependency(storageResourcesNestedStack);
+                apiBuilder3NestedStack.addStackDependency(resourceNamesNestedStack);
+                this.enabledFeatures.push(VAMS_APP_FEATURES.AUDITLOGSEARCH);
+            }
+
             //Deploy OpenSearch Serverless (nested stack)
             const searchBuilderNestedStack = new SearchBuilderNestedStack(
                 this,
@@ -280,10 +303,13 @@ export class CoreVAMSStack extends cdk.Stack {
                 storageResourcesNestedStack.storageResources,
                 lambdaLayers.lambdaCommonBaseLayer,
                 this.vpc,
-                this.subnetsIsolated
+                this.subnetsIsolated,
+                apiBuilder2NestedStack.executeWorkflowV2FunctionName
             );
             searchBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             searchBuilderNestedStack.addStackDependency(resourceNamesNestedStack);
+            // The system-workflow launcher invokes the execute-workflow lambda built in ApiBuilder2.
+            searchBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
 
             //Set feature for no opensearch in neither provisioned or serverless selected
             if (
@@ -291,6 +317,12 @@ export class CoreVAMSStack extends cdk.Stack {
                 !props.config.app.openSearch.useServerless.enabled
             ) {
                 this.enabledFeatures.push(VAMS_APP_FEATURES.NOOPENSEARCH);
+            }
+
+            //Natural-language file search. The web and CLI gate the NLP search surfaces on this switch,
+            //independently of NOOPENSEARCH: a deployment may publish both, either, or neither.
+            if (props.config.app.vectorSearch.enabled) {
+                this.enabledFeatures.push(VAMS_APP_FEATURES.VECTORSEARCH);
             }
 
             ///Optional Pipelines (Nested Stack)
@@ -313,6 +345,15 @@ export class CoreVAMSStack extends cdk.Stack {
             pipelineBuilderNestedStack.addStackDependency(storageResourcesNestedStack);
             // The V2 vamsSchema registration CRs invoke the import lambda built in ApiBuilder2.
             pipelineBuilderNestedStack.addStackDependency(apiBuilder2NestedStack);
+            // The vector reindexer enqueues launches of the system GenAI metadata workflow, which the
+            // pipeline stack's vamsSchema registration writes; with reindexOnCdkDeploy the search stack's
+            // custom resource reads that row during the deploy, so the pipeline stack must land first.
+            // The reindexer exists whenever the system pipeline is on and registered, vector search on
+            // or off, so the same ordering holds for both. Neither stack consumes the other's outputs,
+            // so the ordering introduces no cycle.
+            if (Config.systemWorkflowReindexerEnabled(props.config)) {
+                searchBuilderNestedStack.addStackDependency(pipelineBuilderNestedStack);
+            }
 
             ///Optional Addons (Nested Stack)
             const addonBuilderNestedStack = new AddonBuilderNestedStack(this, "AddonBuilder", {
@@ -342,7 +383,12 @@ export class CoreVAMSStack extends cdk.Stack {
             // The Lambdas that list API routes and permission object types (the constraint editor's
             // lists and the allowed-route checks) leave out the entries of an add-on this deployment
             // does not build. The value is a plain string, so it adds no cross-stack reference.
-            const addonFeaturesEnabled = addonBuilderNestedStack.enabledFeatures.join(",");
+            // The audit log search switch (a core feature gated like an add-on, so its /audit routes
+            // leave the listings when it is off) is carried in the same list.
+            const addonFeaturesEnabled = [
+                ...addonBuilderNestedStack.enabledFeatures,
+                ...(auditSearchEnabled ? [VAMS_APP_FEATURES.AUDITLOGSEARCH] : []),
+            ].join(",");
             for (const listingFunction of [
                 ...apiBuilderNestedStack.addonFeatureListingFunctions,
                 ...apiBuilder2NestedStack.addonFeatureListingFunctions,
@@ -413,6 +459,9 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(authBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilder2NestedStack);
+            if (apiBuilder3NestedStack) {
+                apiNestedStack.addStackDependency(apiBuilder3NestedStack);
+            }
             apiNestedStack.addStackDependency(searchBuilderNestedStack);
             apiNestedStack.addStackDependency(addonBuilderNestedStack);
             apiNestedStack.addStackDependency(customBuilderNestedStack);

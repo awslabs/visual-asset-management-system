@@ -10,6 +10,14 @@ import sys
 import types
 
 import pytest
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+    ResponseStreamingError,
+)
 from unittest.mock import MagicMock, patch
 
 from backend.backend.common.workflows import triggerMatching as tm
@@ -301,7 +309,8 @@ class TestLaunchRefusedByAnExecutionLock:
 class TestExecuteInvokeIsNotRetried:
     """The executeWorkflowV2 Invoke is synchronous and launches an execution per delivered request, so
     a botocore retry of a slow-but-successful call would launch duplicate runs. The client must
-    deliver exactly one attempt and wait out the callee's full runtime."""
+    deliver exactly one attempt per call and wait out the callee's full runtime; only a connection that
+    failed before delivery is sent again (TestConnectionFailureIsSentAgain)."""
 
     def test_invoke_client_delivers_one_attempt(self):
         # botocore normalizes to total_max_attempts (initial attempt included), so 1 means no retry.
@@ -317,6 +326,101 @@ class TestExecuteInvokeIsNotRetried:
         # max_attempts=5 normalizes to 6 total attempts (5 retries on top of the initial one).
         assert wd.s3_client.meta.config.retries.get("total_max_attempts") == 6
         assert wd.dynamodb.meta.client.meta.config.retries.get("total_max_attempts") == 6
+
+
+_ENDPOINT = "https://lambda.us-east-1.amazonaws.com/2015-03-31/functions/t-execv2/invocations"
+
+
+def _closed():
+    return ConnectionClosedError(endpoint_url=_ENDPOINT, error="RemoteDisconnected", request=None)
+
+
+def _invoke_launching():
+    """An Invoke response like executeWorkflowV2's 200 launch."""
+    return _invoke_answering(200, "Workflow launched").invoke.return_value
+
+
+@pytest.mark.unit
+class TestConnectionFailureIsSentAgain:
+    """#1521: a launch over a pooled connection the network closed while the dispatcher was idle failed
+    with "Connection was closed before we received a valid response", executeWorkflow never had the
+    call, and the dispatcher, which treats each launch as best-effort, dropped it: the upload's workflow
+    never ran. A connection failure before delivery is now sent again right away, at most twice
+    (common/workflows/executeWorkflowInvoke.py, shared with the reindex launcher); anything that answered
+    or may have run is not."""
+
+    @pytest.mark.parametrize("error", [
+        _closed(),
+        EndpointConnectionError(endpoint_url=_ENDPOINT, error="Name or service not known"),
+        ConnectTimeoutError(endpoint_url=_ENDPOINT, error="timed out"),
+    ], ids=["closed", "endpoint", "connect-timeout"])
+    def test_a_connection_failure_is_sent_again_and_launches_once(self, error):
+        client = MagicMock()
+        client.invoke.side_effect = [error, _invoke_launching()]
+        with patch(f"{DMOD}.lambda_client", client):
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is True
+        assert client.invoke.call_count == 2
+        first, second = (c.kwargs for c in client.invoke.call_args_list)
+        # The same launch is sent again: same function, same event.
+        assert first == second and first["FunctionName"] == wd.execute_workflow_v2_function
+
+    def test_a_retried_launch_counts_once_for_the_uploaded_file(self):
+        trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
+                   "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".glb"]},
+                                                      "defaultTemplateIds": {}}}
+        client = MagicMock()
+        client.invoke.side_effect = [_closed(), _invoke_launching()]
+        with patch(f"{DMOD}._resolve_asset_relative_key", return_value=("db1", "a1", "/model.glb", "", "")), \
+             patch(f"{DMOD}._workflow_is_dispatchable", return_value=True), \
+             patch(f"{DMOD}.lambda_client", client):
+            assert wd._dispatch_uploaded_file("b1", "a1/model.glb", [trigger]) == 1
+        assert client.invoke.call_count == 2
+
+    def test_three_connection_failures_give_up_and_report_the_launch_failed(self):
+        client = MagicMock()
+        client.invoke.side_effect = _closed()
+        with patch(f"{DMOD}.lambda_client", client), patch(f"{DMOD}.logger") as log:
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        assert client.invoke.call_count == 3
+        log.exception.assert_called_once()
+
+    @pytest.mark.parametrize("message", sorted(
+        set(el.LOCK_CONFLICT_MESSAGE_BY_SCOPE.values()) | {el.LOCK_CONFLICT_MESSAGE}))
+    def test_a_lock_conflict_is_not_sent_again(self, message):
+        client = _invoke_answering(400, message)
+        with patch(f"{DMOD}.lambda_client", client):
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        client.invoke.assert_called_once()
+
+    @pytest.mark.parametrize("status", [400, 500])
+    def test_an_answer_from_execute_workflow_is_not_sent_again(self, status):
+        client = _invoke_answering(status, "refused")
+        with patch(f"{DMOD}.lambda_client", client):
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        client.invoke.assert_called_once()
+
+    def test_a_function_error_is_not_sent_again(self):
+        payload = MagicMock()
+        payload.read.return_value = json.dumps({"errorMessage": "boom", "errorType": "Exception"}).encode()
+        client = MagicMock()
+        client.invoke.return_value = {"StatusCode": 200, "FunctionError": "Unhandled", "Payload": payload}
+        with patch(f"{DMOD}.lambda_client", client):
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        client.invoke.assert_called_once()
+
+    @pytest.mark.parametrize("error", [
+        ReadTimeoutError(endpoint_url=_ENDPOINT, error="Read timed out"),
+        ResponseStreamingError(error="IncompleteRead"),
+        ClientError({"Error": {"Code": "TooManyRequestsException", "Message": "Rate Exceeded."}}, "Invoke"),
+    ], ids=["read-timeout", "response-stream", "service-error"])
+    def test_a_failure_after_delivery_or_a_service_error_is_not_sent_again(self, error):
+        # A read timeout comes after the 900 s executeWorkflow can run and a broken stream after it
+        # answered, so the call may have launched; a service error is Lambda's answer.
+        client = MagicMock()
+        client.invoke.side_effect = error
+        with patch(f"{DMOD}.lambda_client", client):
+            assert wd._invoke_execute("db1", "wf1", {"triggerType": "fileUpload"}) is False
+        client.invoke.assert_called_once()
 
 
 @pytest.mark.unit

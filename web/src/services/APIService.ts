@@ -12,6 +12,7 @@ import {
 import { markUnanswered, requestFailureMessage } from "./networkFailure";
 import { default as vamsConfig } from "../config";
 import { ensureApiStage } from "../utils/apiEndpoint";
+import type { NlpSearchRequest, NlpSearchResponse } from "../components/search/types";
 
 // Components tell a blocked request from a permission denial through the service layer.
 export { isRequestBlocked };
@@ -3480,6 +3481,21 @@ export const fetchSearchMappings = async () => {
     }
 };
 
+export const searchNlp = async (
+    body: NlpSearchRequest
+): Promise<[boolean, NlpSearchResponse | string]> => {
+    try {
+        const response = await apiClient.post("search/nlp", {
+            "Content-type": "application/json",
+            body,
+        } as any);
+        return [true, response as NlpSearchResponse];
+    } catch (error: any) {
+        console.log(error);
+        return [false, error?.message];
+    }
+};
+
 /**
  * POST /ingest-asset, either stage. The structured response is the data: the initialize stage
  * answers `{ message, uploadId, files }` (each file with `relativeKey`, `uploadIdS3`, `numParts`
@@ -3696,6 +3712,97 @@ export const deleteZipDownload = async ({ databaseId, assetId, requestId, intent
         return [true, response];
     } catch (error: any) {
         return zipFailure(error, "Failed to remove the zip download");
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+// Audit-log search (`/audit/*`). Five routes, one function each. Every function answers
+// `[true, data]` or `[false, message, status?]`; the page shows `message` as is (the API's
+// errors are generic and name no group or value) and tells 403, 404 and 429 apart by `status`.
+// ---------------------------------------------------------------------------------------------
+
+const auditFailure = (error: any, fallback: string): [false, string, number | undefined] => {
+    const status = isRequestBlocked(error) ? undefined : error?.status;
+    return [false, error?.message || fallback, typeof status === "number" ? status : undefined];
+};
+
+const auditQueryPath = (queryId: string) => `audit/queries/${encodeURIComponent(queryId)}`;
+
+/** The log groups the caller may search, with their actions, entity types and the search limits. */
+export const fetchAuditLogGroups = async () => {
+    try {
+        return [true, await apiClient.get("audit/log-groups", {})];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to load the audit log groups");
+    }
+};
+
+/** Starts a search (`POST /audit/queries`); the body holds named filters only, never query text. */
+export const startAuditQuery = async (body: Record<string, unknown>) => {
+    try {
+        return [true, await apiClient.post("audit/queries", { body })];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to start the audit search");
+    }
+};
+
+/**
+ * One long-poll of a search: waits on the server up to `wait` seconds for a terminal state, and
+ * returns the status, statistics and one page of rows. `startingToken` pages a finished query.
+ */
+export const getAuditQuery = async ({
+    queryId,
+    wait,
+    pageSize,
+    startingToken,
+    sort,
+}: {
+    queryId: string;
+    wait?: number;
+    pageSize?: number;
+    startingToken?: string;
+    sort?: string;
+}) => {
+    try {
+        const queryStringParameters: Record<string, string> = {};
+        if (wait !== undefined) queryStringParameters.wait = `${wait}`;
+        if (pageSize !== undefined) queryStringParameters.pageSize = `${pageSize}`;
+        if (startingToken) queryStringParameters.startingToken = startingToken;
+        if (sort) queryStringParameters.sort = sort;
+        return [true, await apiClient.get(auditQueryPath(queryId), { queryStringParameters })];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to read the audit search");
+    }
+};
+
+/** Stops a running search (`DELETE /audit/queries/{queryId}`). */
+export const stopAuditQuery = async (queryId: string) => {
+    try {
+        return [true, await apiClient.del(auditQueryPath(queryId), {})];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to stop the audit search");
+    }
+};
+
+/** One export chunk (`GET /audit/queries/{queryId}/export`); follow `NextToken` for the rest. */
+export const exportAuditQuery = async ({
+    queryId,
+    format,
+    startingToken,
+}: {
+    queryId: string;
+    format: "csv" | "ndjson";
+    startingToken?: string;
+}) => {
+    try {
+        const queryStringParameters: Record<string, string> = { format };
+        if (startingToken) queryStringParameters.startingToken = startingToken;
+        return [
+            true,
+            await apiClient.get(`${auditQueryPath(queryId)}/export`, { queryStringParameters }),
+        ];
+    } catch (error: any) {
+        return auditFailure(error, "Failed to export the audit search");
     }
 };
 

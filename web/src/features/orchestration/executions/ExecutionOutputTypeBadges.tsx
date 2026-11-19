@@ -65,7 +65,7 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
                                 e.stopPropagation();
                                 setResultOpen(true);
                             }}
-                            aria-label="View execution result"
+                            aria-label="Result: view the execution result"
                             data-testid="output-type-badge-result"
                         >
                             {type}

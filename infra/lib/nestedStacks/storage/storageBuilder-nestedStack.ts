@@ -13,7 +13,7 @@ import * as s3not from "aws-cdk-lib/aws-s3-notifications";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as events from "aws-cdk-lib/aws-events";
 import * as cdk from "aws-cdk-lib";
-import { Duration, RemovalPolicy, NestedStack } from "aws-cdk-lib";
+import { Duration, RemovalPolicy, NestedStack, Validations } from "aws-cdk-lib";
 import { BlockPublicAccess } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import {
@@ -43,9 +43,50 @@ import {
     buildFileIndexerSnsQueuingFunction,
     buildAssetIndexerSnsQueuingFunction,
     buildDatabaseIndexerSnsQueuingFunction,
-} from "../../lambdaBuilder/searchIndexBucketSyncFunctions";
+} from "../../lambdaBuilder/indexingFunctions";
 import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "../resourceNames/resourceNameRegistry";
+
+/** Attribute that holds the embedding vector (a list of numbers) on a vector embeddings item. */
+const VECTOR_ATTRIBUTE_NAME = "embedding";
+
+/**
+ * Equality-filter attributes of the vector index; every item writes all seven as strings. The
+ * SearchSchema is fixed for the life of an index, so every attribute a search may filter on is
+ * declared here (segmentKind is "none" on a whole-file item, "videoTime" or "textChunk" on a segment).
+ */
+const VECTOR_INDEX_FILTER_ATTRIBUTES = [
+    "databaseId",
+    "isLatest",
+    "isArchived",
+    "fileClass",
+    "fileExt",
+    "embeddingModelId",
+    "segmentKind",
+] as const;
+
+/** Non-key attributes projected into the vector index, so a search hit needs no base-table read. */
+const VECTOR_INDEX_PROJECTED_ATTRIBUTES = [
+    "databaseId",
+    "assetId",
+    "filePath",
+    "versionId",
+    "isLatest",
+    "isArchived",
+    "fileClass",
+    "fileExt",
+    "embeddingModelId",
+    "fileSize",
+    "contentType",
+    "indexedAt",
+    "sourceModalities",
+    "previewFileKey",
+    "segmentKey",
+    "segmentKind",
+    "segmentLabel",
+    "segmentStartMs",
+    "segmentEndMs",
+] as const;
 
 /**
  * KEYS_ONLY index of WorkflowExecutionLocksStorageTable on the holder (workflowExecutionId): the lock rows
@@ -68,6 +109,13 @@ export const LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX = "WorkflowExecutionIdIndex"
  */
 export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
 export const ZIP_DOWNLOAD_ASSET_INDEX = "AssetIndex";
+
+/**
+ * Sparse index of AuditLogQueriesStorageTable on openKey (the constant "open", written only while a
+ * search holds a concurrency slot and removed when it ends): lists the open searches for the
+ * VAMS-wide and per-user caps. Must equal OPEN_INDEX in backend/backend/handlers/audit/auditLogService.py.
+ */
+export const AUDIT_LOG_OPEN_QUERIES_INDEX = "OpenQueriesIndex";
 
 /**
  * Top-level auxiliary-bucket prefix of Download as Zip archives. Mirrored as
@@ -185,8 +233,11 @@ export interface storageResources {
         workflowStorageTableV2: dynamodb.Table;
         workflowTriggersStorageTable: dynamodb.Table;
         workflowExecutionLocksStorageTable: dynamodb.Table; // PK lockKey; TTL expiresAt; one row per concurrency lock a running execution holds
+        // Vector search tables
+        vectorEmbeddingsStorageTable: dynamodb.Table;
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
         zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSIs UserAssetIndex, AssetIndex; TTL expiresAt; Download as Zip jobs
+        auditLogQueriesStorageTable?: dynamodb.Table; // PK queryId; sparse GSI OpenQueriesIndex; TTL expiresAt; audit log search handles. Absent when app.auditLogging.search.enabled is false
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -1772,6 +1823,31 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Audit Log Queries — one row per audit log search (PK queryId, a UUID the service generates; the owner
+    // is the userId attribute). Holds the validated filters, the CloudWatch Logs Insights query id, the
+    // status, the deadline and the poll lease. OpenQueriesIndex (PK openKey = "open") is sparse: a row is
+    // in it only while its search holds a concurrency slot, so counting the index counts the open
+    // searches against app.auditLogging.search.maxConcurrentQueries. expiresAt (epoch seconds) is the TTL,
+    // app.auditLogging.search.handleRetentionMinutes after the last use of the search (the service writes
+    // it and treats a row past it as not found). The row also holds the contains terms of a search until
+    // the search is stopped or exported. Built only when app.auditLogging.search.enabled
+    // is true (the default); access is decided by authorization. Encrypted with the shared CMK when
+    // app.useKmsCmkEncryption is on (dynamodbDefaultProps); removal policy RETAIN like every VAMS table,
+    // and auto-named (no explicit tableName), so a retained table never collides with a redeploy.
+    const auditLogQueriesStorageTable = Config.isAuditSearchEnabled(config)
+        ? new dynamodb.Table(scope, "AuditLogQueriesStorageTable", {
+              ...dynamodbDefaultProps,
+              partitionKey: { name: "queryId", type: dynamodb.AttributeType.STRING },
+              timeToLiveAttribute: "expiresAt",
+          })
+        : undefined;
+    auditLogQueriesStorageTable?.addGlobalSecondaryIndex({
+        indexName: AUDIT_LOG_OPEN_QUERIES_INDEX,
+        partitionKey: { name: "openKey", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "createdAtEpoch", type: dynamodb.AttributeType.NUMBER },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // Executions by OUTPUT asset. An asset's execution history is the union of runs that read it and
     // runs that wrote to it, and the latter cannot be found any other way: a results-only or
     // generate-from-nothing pipeline (inputFileArity 'none') has no input rows at all, so its output
@@ -2526,6 +2602,73 @@ export function storageResourcesBuilder(
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // Vector Embeddings — one item per (file, S3 version) embedding plus one per segment (video time
+    // window or text chunk) of a version, written only by the vector indexer in the search stack. PK
+    // is the composite databaseId:assetId; SK is the fileVersionKey (hash-bounded file path + "#" +
+    // S3 VersionId, "null" on unversioned buckets, + "#" + segment key on a segment item), so one
+    // Query covers an asset, begins_with covers a file's items across versions, and a longer
+    // begins_with covers one version's segments. No streams, TTL, or GSIs.
+    //
+    // Created in every deployment, vector search on or off; only its vector index follows the switch.
+    // It holds items only after vector search has been enabled, and keeping it while the feature is
+    // off preserves the embeddings across an off-on cycle: a table gated on the switch would be
+    // retained on the way off (RETAIN) and a new, empty one created on the way back on, orphaning the
+    // embeddings and re-billing every file's analysis on the reindex. It also keeps its resource-name
+    // parameter and backend constant independent of the switch.
+    const vectorEmbeddingsStorageTable = new dynamodb.Table(scope, "VectorEmbeddingsStorageTable", {
+        ...dynamodbDefaultProps,
+        partitionKey: {
+            name: "databaseId:assetId",
+            type: dynamodb.AttributeType.STRING,
+        },
+        sortKey: {
+            name: "fileVersionKey",
+            type: dynamodb.AttributeType.STRING,
+        },
+    });
+
+    // The vector index and its filter attributes exist only while vector search is enabled. The L2
+    // Table has no typed VectorIndexes property, so the index is a raw property override on the
+    // CfnTable, and AttributeDefinitions is overridden in full because CreateTable rejects a
+    // SearchSchema attribute that is declared without an index using it. The SearchSchema cannot be
+    // changed after the index is created; a new filter attribute means a new index name. Both
+    // overrides should become the typed property once aws-cdk-lib ships one.
+    if (config.app.vectorSearch.enabled) {
+        const cfnVectorTable = vectorEmbeddingsStorageTable.node.defaultChild as dynamodb.CfnTable;
+        cfnVectorTable.addPropertyOverride("AttributeDefinitions", [
+            { AttributeName: "databaseId:assetId", AttributeType: "S" },
+            { AttributeName: "fileVersionKey", AttributeType: "S" },
+            ...VECTOR_INDEX_FILTER_ATTRIBUTES.map((name) => ({
+                AttributeName: name,
+                AttributeType: "S",
+            })),
+        ]);
+        cfnVectorTable.addPropertyOverride("VectorIndexes", [
+            {
+                IndexName: config.vectorIndexName,
+                VectorAttribute: { AttributeName: VECTOR_ATTRIBUTE_NAME },
+                Dimensions:
+                    config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions,
+                DistanceFunction: "COSINE",
+                Projection: {
+                    ProjectionType: "INCLUDE",
+                    NonKeyAttributes: [...VECTOR_INDEX_PROJECTED_ATTRIBUTES],
+                },
+                SearchSchema: VECTOR_INDEX_FILTER_ATTRIBUTES.map((name) => ({
+                    AttributeName: name,
+                    SearchSchemaElementType: "INLINE_FILTER",
+                })),
+            },
+        ]);
+        // CloudFormation creates, updates, and drift-checks VectorIndexes, but the published resource
+        // schema and the bundled CloudFormation-Validate rules do not list the property, so the
+        // validator's schema warning is acknowledged here.
+        Validations.of(cfnVectorTable).acknowledge({
+            id: "CloudFormation-Validate::F3002",
+            reason: "AWS::DynamoDB::Table.VectorIndexes is accepted by CloudFormation but absent from the published resource schema; the VAMS vector embeddings table needs the index and the L2 Table has no typed property for it.",
+        });
+    }
+
     ///DEPRECATED TABLES - KEPT FOR DATA MIGRATION PURPOSES
 
     const assetLinksStorageTableDeprecated = new dynamodb.Table(scope, "AssetLinksStorageTable", {
@@ -2870,8 +3013,11 @@ export function storageResourcesBuilder(
             workflowStorageTableV2: workflowStorageTableV2,
             workflowTriggersStorageTable: workflowTriggersStorageTable,
             workflowExecutionLocksStorageTable: workflowExecutionLocksStorageTable,
+            // Vector search tables
+            vectorEmbeddingsStorageTable: vectorEmbeddingsStorageTable,
             largeObjectCopyJobsStorageTable: largeObjectCopyJobsStorageTable,
             zipDownloadRequestsStorageTable: zipDownloadRequestsStorageTable,
+            auditLogQueriesStorageTable: auditLogQueriesStorageTable,
             // Compliance tables
             complianceSchemaStorageTable: complianceSchemaStorageTable,
             complianceAssetStateStorageTable: complianceAssetStateStorageTable,
@@ -3520,10 +3666,20 @@ export function storageResourcesBuilder(
             storageResources.dynamo.workflowTriggersStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.workflowExecutionLocksStorage]:
             storageResources.dynamo.workflowExecutionLocksStorageTable.tableName,
+        // Vector search tables
+        [RESOURCE_PARAM_KEYS.dynamoTables.vectorEmbeddingsStorage]:
+            storageResources.dynamo.vectorEmbeddingsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.largeObjectCopyJobsStorage]:
             storageResources.dynamo.largeObjectCopyJobsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.zipDownloadRequestsStorage]:
             storageResources.dynamo.zipDownloadRequestsStorageTable.tableName,
+        // Only when audit log search is on: its handle table does not exist otherwise.
+        ...(storageResources.dynamo.auditLogQueriesStorageTable
+            ? {
+                  [RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage]:
+                      storageResources.dynamo.auditLogQueriesStorageTable.tableName,
+              }
+            : {}),
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,

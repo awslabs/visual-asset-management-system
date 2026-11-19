@@ -26,6 +26,7 @@ import {
     DEFAULT_CONFIG_FILE_NAME,
     resolveConfigFilePath,
 } from "./configFile";
+import embeddingModelTable from "../../backend/backend/common/vectorsearch/embeddingModels.json";
 
 dotenv.config({ quiet: true });
 
@@ -37,7 +38,7 @@ dotenv.config({ quiet: true });
 // CloudFormation receives.
 // ============================================================================================
 
-export const VAMS_VERSION = "2.6.7";
+export const VAMS_VERSION = "2.7.0";
 
 export const LAMBDA_PYTHON_RUNTIME = Runtime.PYTHON_3_12;
 export const LAMBDA_NODE_RUNTIME = Runtime.NODEJS_22_X;
@@ -112,6 +113,35 @@ export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 // into `apiGatewayRest.apiGatewayTimeoutTime`; it doubles as the validation floor below.
 export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 
+// Audit log search (`app.auditLogging.search.*`): defaults and ceilings of the limits the search Lambda
+// enforces. The Lambda reads the same ceilings (backend/backend/handlers/audit/auditLogService.py and
+// common/auditSearch/queryBuilder.py), so a value above a ceiling is refused here rather than being
+// held silently there. getConfig() validates the block; an absent block or key takes its default.
+export const AUDIT_SEARCH_DEFAULTS = {
+    maxQueryWindowDays: 31,
+    maxRows: 1000,
+    maxConcurrentQueries: 5,
+    maxConcurrentQueriesPerUser: 2,
+    queryDeadlineSeconds: 300,
+    longPollWaitSeconds: 20,
+    maxContainsTermLength: 64,
+    maxContainsTerms: 3,
+    handleRetentionMinutes: 60,
+};
+export const AUDIT_SEARCH_CEILINGS = {
+    maxQueryWindowDays: 366,
+    maxRows: 10000,
+    maxConcurrentQueries: 20,
+    queryDeadlineSeconds: 900,
+    // The long-poll wait is at most this and at most the API timeout minus AUDIT_SEARCH_POLL_HEADROOM_SECONDS.
+    longPollWaitSeconds: 25,
+    maxContainsTermLength: 128,
+    maxContainsTerms: 5,
+    handleRetentionMinutes: 1440,
+};
+export const AUDIT_SEARCH_MIN_HANDLE_RETENTION_MINUTES = 5;
+export const AUDIT_SEARCH_POLL_HEADROOM_SECONDS = 4;
+
 // GPUs each NVIDIA Cosmos 3 job reserves, and therefore the minimum its tier's instance types must
 // carry. The container shards the checkpoint's parameters across the devices the job holds, so the
 // reservation is what makes a multi-GPU instance's memory usable; a tier pointed at a smaller
@@ -122,6 +152,79 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 // COSMOS3_SUPER_GPU_COUNT is referenced only by the getConfig() instance-type checks below.
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
+
+// What one Isaac Lab Batch job reserves, and so what every instance type in its compute environment
+// must offer. The isaacLabTraining construct passes these to the job definition, and
+// validateIsaacLabInstanceTypes() checks each configured instance type against them: AWS Batch accepts
+// a compute environment whose types cannot hold the job, then leaves the job RUNNABLE with no error.
+export const ISAAC_LAB_JOB_VCPUS = 8;
+export const ISAAC_LAB_JOB_MEMORY_MIB = 32768;
+export const ISAAC_LAB_JOB_GPUS = 1;
+
+// The instance types the Isaac Lab compute environment uses when app.pipelines.useIsaacLabTraining
+// names none. Every one carries one NVIDIA RT-core GPU with 24 GB or more of video memory (L4, A10G
+// or L40S; Isaac Sim needs RT cores and 16 GB), at least ISAAC_LAB_JOB_VCPUS vCPUs, and more
+// registered memory than ISAAC_LAB_JOB_MEMORY_MIB. g5.2xlarge and g6.2xlarge are left out: their
+// 32 GiB of installed memory registers below the 32,768 MiB the job asks for. The list is wide on
+// purpose, because AWS Batch can only find capacity among the types it is given.
+export const DEFAULT_ISAAC_LAB_INSTANCE_TYPES: readonly string[] = [
+    "g6.4xlarge",
+    "g6.8xlarge",
+    "g6.16xlarge",
+    "gr6.4xlarge",
+    "gr6.8xlarge",
+    "g6e.2xlarge",
+    "g6e.4xlarge",
+    "g6e.8xlarge",
+    "g5.4xlarge",
+    "g5.8xlarge",
+    "g5.16xlarge",
+];
+
+// Amazon Bedrock embedding model the vector index is built from when config.json names none, and the
+// vector width that model emits by default. Both reach infrastructure: the model id is handed to the
+// embedding Lambdas, and the width is an immutable property of the DynamoDB vector index.
+export const VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID = "amazon.titan-embed-text-v2:0";
+export const VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS = 1024;
+// Event-source MaximumConcurrency of the system-workflow launcher, which paces a reindex.
+export const VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY = 5;
+
+// Lambda-renderer ceilings of the system GenAI metadata pipeline: a file above the size, or a point
+// cloud above the point count, is analysed from its attributes alone unless useFargateRenderer is on.
+export const SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB = 2048;
+export const SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS = 20000000;
+
+// Inference settings of the system GenAI metadata pipeline's analysis requests. The defaults are the
+// values those requests have always carried; a null temperature leaves the parameter out of the
+// request, for models that reject it. The bounds getConfig() holds maxTokens to are in the checks
+// section (SYSTEM_GENAI_MIN_MAX_TOKENS, SYSTEM_GENAI_MAX_MAX_TOKENS).
+export const SYSTEM_GENAI_DEFAULT_MAX_TOKENS = 2048;
+export const SYSTEM_GENAI_DEFAULT_TEMPERATURE = 0.2;
+
+/**
+ * The geographic prefixes of Amazon Bedrock's system-defined cross-Region inference profiles, and the
+ * partitions each is offered in, from the Geo and Global inference ids on the Amazon Bedrock model
+ * cards. `us.` is also listed for the AWS GovCloud (US) source Regions of some models, so it is let
+ * through there with a warning (`warnIn`). The IAM grant of a profile id is derived by removing the
+ * prefix, so a prefix missing here would be granted as a model id that does not exist.
+ */
+export const BEDROCK_INFERENCE_PROFILE_PREFIXES: Readonly<
+    Record<string, { partitions: readonly string[]; warnIn?: readonly string[] }>
+> = {
+    global: { partitions: ["aws"] },
+    us: { partitions: ["aws"], warnIn: ["aws-us-gov"] },
+    "us-gov": { partitions: ["aws-us-gov"] },
+    eu: { partitions: ["aws"] },
+    apac: { partitions: ["aws"] },
+    au: { partitions: ["aws"] },
+    jp: { partitions: ["aws"] },
+    in: { partitions: ["aws"] },
+};
+
+/** Matches the leading cross-Region inference-profile prefix of a model id, and only a leading one. */
+export const BEDROCK_INFERENCE_PROFILE_PREFIX = new RegExp(
+    `^(${Object.keys(BEDROCK_INFERENCE_PROFILE_PREFIXES).join("|")})\\.`
+);
 
 // CloudWatch log-group name patterns the executionLogs Lambda (the execution logs view) may read
 // registered sub-process logs from when app.pipelines.executionLogReadPrefixes is absent. Each entry is
@@ -149,11 +252,11 @@ export const VIDEO_SOP_BOM_MAX_TOTAL_INPUT_SIZE_MB = 16384;
 export const VIDEO_SOP_BOM_EPHEMERAL_STORAGE_GIB = 100;
 export const VIDEO_SOP_BOM_MAX_KEY_FRAMES_CEILING = 200;
 
-// The Amazon Bedrock model the commercial partition uses when the GenAI 3D Metadata Labeling or the
-// GenAI CAD STEP agent pipeline names none. It is a commercial cross-Region inference profile, so the
-// restricted-partition templates ship the model id empty instead. Bedrock refuses a model whose
-// lifecycle status is LEGACY to an account that has not called it for 30 days, so this names an
-// ACTIVE model; the config templates and the ConfigBuilder presets carry the same id.
+// The Amazon Bedrock model the commercial partition uses when the GenAI CAD STEP agent pipeline names
+// none. It is a commercial cross-Region inference profile, so the restricted-partition templates ship
+// the model id empty instead. Bedrock refuses a model whose lifecycle status is LEGACY to an account
+// that has not called it for 30 days, so this names an ACTIVE model; the config templates and the
+// ConfigBuilder presets carry the same id.
 export const GENAI_DEFAULT_BEDROCK_MODEL_ID = "global.anthropic.claude-sonnet-5-5";
 
 // The RapidPipeline EKS timeout chain. Three clocks bound a run, each enforced by a different service,
@@ -302,6 +405,18 @@ export const EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS = ["aud"];
 // synchronous request/response API. Compared against, never assigned.
 export const API_GATEWAY_MAX_TIMEOUT_SECONDS = 300;
 
+// The shapes Amazon Bedrock gives a guardrail id (the 12-character `guardrailId` of CreateGuardrail, not
+// an ARN or a name) and a guardrail version (`DRAFT` or a published version number). The IAM grant
+// composes the guardrail ARN from the id, so any other shape is a malformed resource.
+export const SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN = /^[a-z0-9]{12}$/;
+export const SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN = /^(DRAFT|[1-9][0-9]{0,7})$/;
+
+// The strengths Amazon Bedrock Guardrails accepts for a content filter's input side, and the three
+// sensitive-information treatments the created guardrail offers. Each is the closed set the CDK
+// guardrail definition renders from, so a value outside it is rejected at synth.
+export const SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS = ["LOW", "MEDIUM", "HIGH"] as const;
+export const SYSTEM_GENAI_GUARDRAIL_PII_FILTERS = ["off", "anonymize", "block"] as const;
+
 /**
  * Region names accepted for an external bucket's bucketRegion: a partition prefix
  * (us, eu, ap, cn, eusc, ...), one or more area words (east, gov-west, iso-east,
@@ -351,6 +466,48 @@ export const ROUTE53_HOSTED_ZONE_ID_PATTERN = /^Z[A-Z0-9]{1,31}$/;
 // Amazon Cognito's username limit. Used to reject an over-long app.adminUserId at synthesis rather
 // than letting CreateUser fail mid-deploy and roll the core stack back.
 export const COGNITO_USERNAME_MAX_LENGTH = 128;
+
+// DynamoDB vector index bounds: the widest vector the service stores, and the range AWS Lambda accepts
+// for an SQS event-source MaximumConcurrency. Compared against, never assigned.
+export const VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS = 4096;
+export const VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY = 2;
+export const VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY = 1000;
+// The partitions vector search may be enabled in: DynamoDB vector search and the Amazon Bedrock embedding
+// models are offered in both. Any other partition is refused in getConfig() until its support is verified.
+export const VECTOR_SEARCH_PARTITIONS = ["aws", "aws-us-gov"];
+
+// The range getConfig() accepts for the system GenAI metadata pipeline's maxTokens. Compared
+// against, never assigned.
+export const SYSTEM_GENAI_MIN_MAX_TOKENS = 256;
+export const SYSTEM_GENAI_MAX_MAX_TOKENS = 8192;
+
+/**
+ * The embedding model families, read from the table the adapter itself reads at import
+ * (`backend/backend/common/vectorsearch/embeddingModels.json`), so a model or width it cannot embed
+ * is refused at synthesis rather than at the first embedding call. In table order.
+ */
+export const EMBEDDING_MODEL_FAMILIES: readonly EmbeddingModelFamily[] =
+    embeddingModelTable.families;
+
+/**
+ * A foundation-model id (`provider.model[:version[:variant]]`), with or without a profile prefix: lower
+ * case letters, digits, `.`, `-` and `_`. Anything else, an ARN included, is refused, because the id is
+ * both the `modelId` of every request and the resource of the function's `bedrock:InvokeModel` grant.
+ */
+export const BEDROCK_MODEL_ID_PATTERN = /^[a-z0-9-]+\.[a-z0-9][a-z0-9._-]*(:[a-z0-9]+)*$/;
+export const BEDROCK_MODEL_ID_MAX_LENGTH = 128;
+
+// How validateSystemGenAiModelId's messages name a partition and its accounts.
+const PARTITION_LABELS: Record<string, string> = {
+    aws: "commercial partition",
+    "aws-us-gov": "AWS GovCloud (US) partition",
+    "aws-eusc": "AWS European Sovereign Cloud partition",
+};
+const PARTITION_ACCOUNT_LABELS: Record<string, string> = {
+    aws: "commercial",
+    "aws-us-gov": "GovCloud",
+    "aws-eusc": "European Sovereign Cloud",
+};
 
 // External OAuth: the token claims the authorizer may compare with lambdaAuthorizorJWTAudience
 // (lambdaAuthorizorJWTAudienceClaims); the default list is declared in the deployment section above.
@@ -433,6 +590,8 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "g6.12xlarge": 4,
     "g6.24xlarge": 4,
     "g6.48xlarge": 8,
+    "gr6.4xlarge": 1,
+    "gr6.8xlarge": 1,
     "g6e.xlarge": 1,
     "g6e.2xlarge": 1,
     "g6e.4xlarge": 1,
@@ -450,6 +609,55 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "p5.48xlarge": 8,
     "p5e.48xlarge": 8,
     "p5en.48xlarge": 8,
+};
+
+// vCPUs and installed memory (MiB) of the accelerated instance types whose GPU has RT cores and 16 GB
+// or more of video memory: g5 (A10G, 24 GB), g6 and gr6 (L4, 24 GB) and g6e (L40S, 48 GB). The names
+// that also appear in GPU_COUNT_BY_INSTANCE_TYPE carry their GPU count there. A type outside this
+// table is not rejected on size alone; see validateIsaacLabInstanceTypes().
+export const ISAAC_LAB_CAPABLE_INSTANCE_SPECS: Record<
+    string,
+    { vcpus: number; memoryMiB: number }
+> = {
+    "g5.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g5.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g5.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g5.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g5.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g5.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g5.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g5.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "g6.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g6.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g6.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g6.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g6.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g6.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g6.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g6.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "gr6.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "gr6.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.xlarge": { vcpus: 4, memoryMiB: 32768 },
+    "g6e.2xlarge": { vcpus: 8, memoryMiB: 65536 },
+    "g6e.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "g6e.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.16xlarge": { vcpus: 64, memoryMiB: 524288 },
+    "g6e.12xlarge": { vcpus: 48, memoryMiB: 393216 },
+    "g6e.24xlarge": { vcpus: 96, memoryMiB: 786432 },
+    "g6e.48xlarge": { vcpus: 192, memoryMiB: 1572864 },
+};
+
+// Instance families Isaac Sim cannot use, with the reason. GPUs without RT cores cannot run its
+// renderer (A100, H100, V100), and the T4 in g4dn reports about 15 GiB, under the 16 GB it needs.
+const ISAAC_LAB_UNSUPPORTED_FAMILIES: Record<string, string> = {
+    g4dn: "its NVIDIA T4 GPU reports about 15 GiB of video memory, under the 16 GB Isaac Sim needs",
+    p3: "its NVIDIA V100 GPU has no RT cores, which Isaac Sim needs",
+    p3dn: "its NVIDIA V100 GPU has no RT cores, which Isaac Sim needs",
+    p4d: "its NVIDIA A100 GPU has no RT cores, which Isaac Sim needs",
+    p4de: "its NVIDIA A100 GPU has no RT cores, which Isaac Sim needs",
+    p5: "its NVIDIA H100 GPU has no RT cores, which Isaac Sim needs",
+    p5e: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
+    p5en: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
 };
 
 /** Strings a CDK context value or environment variable may use to mean true. */
@@ -502,6 +710,119 @@ export const ZIP_DOWNLOADS_BOUNDS: Record<
  * (`isFargateCpuMemory`): 4 vCPU 8-30 GiB, 8 vCPU 16-60 GiB in 4 GiB steps, 16 vCPU 32-120 GiB in
  * 8 GiB steps. */
 export const ZIP_DOWNLOADS_COMPUTE_VCPUS: readonly number[] = [4, 8, 16];
+
+/** One embedding model family the backend's embedding adapter serves. */
+export interface EmbeddingModelFamily {
+    family: string;
+    displayName: string;
+    exampleModelId: string;
+    modelIdPattern: string;
+    dimensions: number[];
+    maxInputChars: number;
+}
+
+// The guardrail settings' value types, from the closed sets in the checks section.
+export type SystemGenAiGuardrailPromptAttackStrength =
+    (typeof SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS)[number];
+export type SystemGenAiGuardrailPiiFilter = (typeof SYSTEM_GENAI_GUARDRAIL_PII_FILTERS)[number];
+
+/** The family of an embedding model id: the first whose pattern matches, as the adapter decides it. */
+export function embeddingModelFamily(modelId: string): EmbeddingModelFamily | undefined {
+    return EMBEDDING_MODEL_FAMILIES.find((entry) => new RegExp(entry.modelIdPattern).test(modelId));
+}
+
+/**
+ * Refuses a Bedrock model id of the system GenAI metadata pipeline that VAMS cannot call or grant: an
+ * ARN, a value outside the id format, or a cross-Region inference-profile prefix not offered in the
+ * deployment's partition. Warns instead where the prefix is listed for the partition by some model
+ * cards only. `fieldPath` is the `pipelines....` path the messages name.
+ */
+export function validateSystemGenAiModelId(
+    fieldPath: string,
+    modelId: string,
+    partition: string
+): void {
+    if (modelId.startsWith("arn:")) {
+        throw new Error(
+            `Configuration Error: ${fieldPath} is an ARN ("${modelId}"). Set the foundation-model id or ` +
+                "the system-defined cross-Region inference-profile id instead (for example " +
+                '"global.anthropic.claude-haiku-4-5-20251001-v1:0" or ' +
+                '"amazon.titan-embed-text-v2:0"): each function is granted the model it names, so an ' +
+                "application inference profile, provisioned throughput or imported model ARN is not " +
+                "supported."
+        );
+    }
+    if (modelId.length > BEDROCK_MODEL_ID_MAX_LENGTH || !BEDROCK_MODEL_ID_PATTERN.test(modelId)) {
+        throw new Error(
+            `Configuration Error: ${fieldPath} is ${JSON.stringify(
+                modelId
+            )}, which is not an Amazon ` +
+                "Bedrock model id: expected provider.model with an optional :version, in lower case " +
+                "letters, digits, '.', '-' and '_', optionally behind a cross-Region inference-profile " +
+                `prefix (${Object.keys(BEDROCK_INFERENCE_PROFILE_PREFIXES)
+                    .map((prefix) => `"${prefix}."`)
+                    .join(", ")}), at most ${BEDROCK_MODEL_ID_MAX_LENGTH} characters.`
+        );
+    }
+    validateBedrockProfilePrefix(fieldPath, modelId, partition);
+}
+
+/**
+ * Refuses a Bedrock model id whose cross-Region inference-profile prefix (the
+ * `BEDROCK_INFERENCE_PROFILE_PREFIXES` table) is not offered in the deployment's partition, and warns
+ * where the prefix is listed for the partition by some model cards only (`warnIn`). A bare model id
+ * passes. Every GenAI pipeline's model-id check calls it, so they refuse the same ids: in AWS GovCloud
+ * (US) `us-gov.` is offered and `us.` warns; in the AWS European Sovereign Cloud no prefix is offered;
+ * in the commercial partition every prefix but `us-gov.` is. `fieldPath` is the path the messages name.
+ */
+export function validateBedrockProfilePrefix(
+    fieldPath: string,
+    modelId: string,
+    partition: string
+): void {
+    const prefix = BEDROCK_INFERENCE_PROFILE_PREFIX.exec(modelId)?.[1];
+    if (prefix === undefined) return;
+    const offered = BEDROCK_INFERENCE_PROFILE_PREFIXES[prefix];
+    if (offered.warnIn?.includes(partition)) {
+        console.warn(
+            `Configuration Warning: ${fieldPath} is "${modelId}", whose "${prefix}." cross-Region ` +
+                "inference-profile prefix is the commercial one; verify that this inference profile " +
+                `exists in your ${
+                    PARTITION_ACCOUNT_LABELS[partition] ?? partition
+                } account before ` +
+                "deploying" +
+                (partition === "aws-us-gov"
+                    ? ' (AWS GovCloud (US) names its own profiles with the "us-gov." prefix).'
+                    : ".")
+        );
+        return;
+    }
+    if (!offered.partitions.includes(partition)) {
+        throw new Error(
+            `Configuration Error: ${fieldPath} is "${modelId}", whose "${prefix}." cross-Region ` +
+                `inference-profile prefix exists only in the ${offered.partitions
+                    .map((p) => PARTITION_LABELS[p] ?? p)
+                    .join(" and ")}. This deployment targets ${partition}. Use a model id or ` +
+                "inference profile offered there."
+        );
+    }
+}
+
+// The DynamoDB vector index is named from the embedding model and width that produced its vectors, so
+// a model change is a differently named index rather than an edit of an immutable index property.
+export function slugModelId(modelId: string): string {
+    return modelId
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+}
+
+export function deriveVectorIndexName(
+    embeddingModelId: string,
+    embeddingDimensions: number
+): string {
+    return `vec-${slugModelId(embeddingModelId)}-${embeddingDimensions}`;
+}
 
 /**
  * Whether a Region sits outside the Territory the Tencent Hunyuan 3D 2.0 Community License Agreement
@@ -686,11 +1007,11 @@ function validateOutboundHttpsEndpoint(endpoint: string, configPath: string) {
  * Requires an enabled GenAI pipeline's Amazon Bedrock model id to be set and to exist in the
  * deployment's partition.
  *
- * The id carries a cross-Region inference-profile prefix, and the prefixes are partition-specific:
- * `global.` and `us.` are commercial, GovCloud uses `us-gov.`. The value is passed through to the
- * Lambda unvalidated, and the IAM grant is derived by stripping the prefix — so a commercial profile
- * id in a restricted partition produces both a model that does not exist and a grant that does not
- * match it. `flagPath` is the `pipelines.<flag>` path the message names.
+ * The id may carry a cross-Region inference-profile prefix, and the prefixes are partition-specific
+ * (`BEDROCK_INFERENCE_PROFILE_PREFIXES`). The value is passed through to the pipeline unvalidated, and
+ * the IAM grant is derived by stripping the prefix, so a profile id from another partition produces
+ * both a model that does not exist and a grant that does not match it; `validateBedrockProfilePrefix`
+ * refuses it. `flagPath` is the `pipelines.<flag>` path the message names.
  */
 export function validateBedrockModelId(flagPath: string, modelId: string, partition: string): void {
     if (modelId.trim() === "") {
@@ -700,15 +1021,7 @@ export function validateBedrockModelId(flagPath: string, modelId: string, partit
                 "empty because the commercial cross-Region inference profiles do not exist there)."
         );
     }
-    const commercialOnlyPrefix = ["global.", "us."].find((prefix) => modelId.startsWith(prefix));
-    if (commercialOnlyPrefix && partition !== "aws") {
-        throw new Error(
-            `Configuration Error: ${flagPath}.bedrockModelId is "${modelId}", whose ` +
-                `"${commercialOnlyPrefix}" cross-Region inference-profile prefix exists only in the ` +
-                `commercial partition. This deployment targets ${partition}. Use a model id or ` +
-                `inference profile offered there (GovCloud uses the "us-gov." prefix).`
-        );
-    }
+    validateBedrockProfilePrefix(`${flagPath}.bedrockModelId`, modelId.trim(), partition);
 }
 
 /**
@@ -741,6 +1054,89 @@ function validateInstanceTypeGpuCount(
                     `GPU(s). This tier's jobs reserve ${requiredGpus} GPUs, so AWS Batch can never ` +
                     `place them on it and they stay RUNNABLE without reporting an error. Use an ` +
                     `instance type with at least ${requiredGpus} GPUs (for example g6e.12xlarge).`
+            );
+        }
+    }
+}
+
+/**
+ * Memory (MiB) the Amazon ECS agent registers for an instance with the given installed memory, as a
+ * conservative estimate. The agent registers what the operating system reports, which is less than
+ * the installed amount (AWS documents 7,985 MiB for an 8 GiB m4.large, 97.5%), and the Batch AMI holds
+ * back a further 32 MiB. 97% less 32 MiB stays under both, so a type that clears the job's memory by
+ * this estimate clears it in practice. A 32 GiB type registers about 31.5 GiB and never fits a job
+ * that asks for 32,768 MiB.
+ */
+export function estimatedRegisteredMemoryMiB(installedMiB: number): number {
+    return Math.floor(installedMiB * 0.97) - 32;
+}
+
+/**
+ * Checks the instance types of the Isaac Lab compute environment against the job they must run.
+ *
+ * Throws for a type that the Isaac Lab job can never run on, because AWS Batch accepts the compute
+ * environment and then leaves the job RUNNABLE without an error:
+ *  - an empty list, or an entry that is not a string;
+ *  - a family with no RT-core GPU or too little video memory (g4dn, P-series);
+ *  - a type with a GPU count other than the job's one (a larger one idles the rest and bills for it);
+ *  - a type with fewer vCPUs than the job asks for, or too little registered memory.
+ * Warns, rather than throwing, for a type this table does not know, so a newly released family can be
+ * tried, and says that the deployer must confirm it.
+ */
+export function validateIsaacLabInstanceTypes(instanceTypes: unknown, configPath: string) {
+    if (
+        !Array.isArray(instanceTypes) ||
+        instanceTypes.length === 0 ||
+        instanceTypes.some((t) => typeof t !== "string" || t.trim() === "")
+    ) {
+        throw new Error(
+            `Configuration Error: ${configPath} must be a non-empty list of EC2 instance type names ` +
+                `(for example g6e.2xlarge). AWS Batch cannot run the Isaac Lab job without one.`
+        );
+    }
+    for (const instanceType of instanceTypes as string[]) {
+        const family = instanceType.split(".")[0];
+        const unsupportedReason = ISAAC_LAB_UNSUPPORTED_FAMILIES[family];
+        if (unsupportedReason) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which Isaac Lab cannot ` +
+                    `use: ${unsupportedReason}. Use a G5, G6, GR6 or G6e instance type with one GPU ` +
+                    `(for example g6e.2xlarge).`
+            );
+        }
+        const spec = ISAAC_LAB_CAPABLE_INSTANCE_SPECS[instanceType];
+        if (spec === undefined) {
+            console.warn(
+                `Configuration Warning: ${configPath} includes ${instanceType}, whose size and GPU VAMS ` +
+                    `cannot verify. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS} vCPUs, ` +
+                    `${ISAAC_LAB_JOB_MEMORY_MIB} MiB of registered memory, ${ISAAC_LAB_JOB_GPUS} GPU and an ` +
+                    `NVIDIA GPU with RT cores and 16 GB of video memory. Confirm the type offers them, ` +
+                    `because AWS Batch leaves the job RUNNABLE on a type that does not.`
+            );
+            continue;
+        }
+        const gpus = GPU_COUNT_BY_INSTANCE_TYPE[instanceType];
+        if (gpus !== ISAAC_LAB_JOB_GPUS) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${gpus} GPUs. ` +
+                    `The Isaac Lab job uses ${ISAAC_LAB_JOB_GPUS}, so a type with more leaves the others ` +
+                    `idle and billed. Use a single-GPU type (for example g6e.4xlarge).`
+            );
+        }
+        if (spec.vcpus < ISAAC_LAB_JOB_VCPUS) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${spec.vcpus} ` +
+                    `vCPUs. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS}, so AWS Batch can never place it ` +
+                    `there. Use a type with at least ${ISAAC_LAB_JOB_VCPUS} vCPUs.`
+            );
+        }
+        const registeredMiB = estimatedRegisteredMemoryMiB(spec.memoryMiB);
+        if (registeredMiB < ISAAC_LAB_JOB_MEMORY_MIB) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${spec.memoryMiB} ` +
+                    `MiB of installed memory and registers about ${registeredMiB} MiB with Amazon ECS. The ` +
+                    `Isaac Lab job asks for ${ISAAC_LAB_JOB_MEMORY_MIB} MiB, so AWS Batch can never place ` +
+                    `it there. Use a type with more memory (for example g6e.2xlarge or g6.4xlarge).`
             );
         }
     }
@@ -1006,32 +1402,180 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
 
 /**
  * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
- * value that is not a JSON boolean is a configuration error rather than being read as truthy.
- * Exported for the config tests.
+ * value that is not a JSON boolean is a configuration error rather than being read as truthy. The
+ * `search` block fills each absent key with its default (`enabled` is `true` when absent, `false` in aws-eusc:
+ * audit log search is deployed unless a deployment turns it off); a value that is not an integer in range, or
+ * an `enabled` that is not a boolean, is a configuration error. `enabled: true` in the `aws-eusc`
+ * partition is refused because Amazon CloudWatch Logs Insights is not available there. Exported for the config tests.
  */
 export function resolveAuditLoggingConfig(config: ConfigPublic): void {
-    const app = config.app as ConfigPublic["app"] & { auditLogging?: unknown };
+    const app = config.app as unknown as { auditLogging?: unknown };
     if (app.auditLogging === undefined || app.auditLogging === null) {
+        // `search` is filled with its defaults below.
         app.auditLogging = { recordReads: true };
-        return;
-    }
-    if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
+    } else if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
         throw new Error(
             "Configuration Error: app.auditLogging must be an object, for example " +
                 '{"recordReads": true}.'
         );
     }
-    const block = app.auditLogging as { recordReads?: unknown };
+    const block = app.auditLogging as { recordReads?: unknown; search?: unknown };
     if (block.recordReads === undefined || block.recordReads === null) {
         block.recordReads = true;
-        return;
-    }
-    if (typeof block.recordReads !== "boolean") {
+    } else if (typeof block.recordReads !== "boolean") {
         throw new Error(
             "Configuration Error: app.auditLogging.recordReads must be true or false (a JSON " +
                 `boolean), not ${JSON.stringify(block.recordReads)}.`
         );
     }
+    resolveAuditSearchConfig(block, config);
+}
+
+function auditSearchInteger(
+    search: Record<string, unknown>,
+    key: keyof typeof AUDIT_SEARCH_DEFAULTS,
+    min: number,
+    max: number
+): number {
+    const value = search[key];
+    if (value === undefined || value === null) {
+        return AUDIT_SEARCH_DEFAULTS[key];
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+        throw new Error(
+            `Configuration Error: app.auditLogging.search.${key} must be an integer from ${min} to ` +
+                `${max}, not ${JSON.stringify(value)}.`
+        );
+    }
+    return value;
+}
+
+function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPublic): void {
+    if (block.search === undefined || block.search === null) {
+        block.search = {};
+    } else if (typeof block.search !== "object" || Array.isArray(block.search)) {
+        throw new Error(
+            "Configuration Error: app.auditLogging.search must be an object of search limits, for " +
+                'example {"maxRows": 1000}.'
+        );
+    }
+    const search = block.search as Record<string, unknown>;
+    const known = new Set(Object.keys(AUDIT_SEARCH_DEFAULTS));
+    for (const key of Object.keys(search)) {
+        if (key !== "enabled" && !known.has(key)) {
+            throw new Error(
+                `Configuration Error: app.auditLogging.search.${key} is not a known setting. ` +
+                    `Known settings: enabled, ${Array.from(known).join(", ")}.`
+            );
+        }
+    }
+    // On/off switch for the search capability only (routes, Lambda, query table, web page, CLI and MCP
+    // tools). Recording of audit events is not affected. Absent = on (off in aws-eusc). The EU Sovereign Cloud has no
+    // CloudWatch Logs Insights, so a search deployment there cannot work and is refused.
+    // An absent key is on everywhere except aws-eusc, where it is off so that a configuration written
+    // before this key existed still synthesizes there; an explicit true in aws-eusc is refused.
+    let enabled = config.env?.partition !== "aws-eusc";
+    if (search.enabled !== undefined && search.enabled !== null) {
+        if (typeof search.enabled !== "boolean") {
+            throw new Error(
+                "Configuration Error: app.auditLogging.search.enabled must be true or false (a JSON " +
+                    `boolean), not ${JSON.stringify(search.enabled)}.`
+            );
+        }
+        enabled = search.enabled;
+    }
+    if (enabled && config.env?.partition === "aws-eusc") {
+        throw new Error(
+            "Configuration Error: app.auditLogging.search.enabled is true, but audit log search needs " +
+                "Amazon CloudWatch Logs Insights, which is not available in the 'aws-eusc' partition " +
+                "(AWS European Sovereign Cloud). Set app.auditLogging.search.enabled to false there; " +
+                "the recording of audit events is not affected."
+        );
+    }
+    const resolved = {
+        enabled,
+        maxQueryWindowDays: auditSearchInteger(
+            search,
+            "maxQueryWindowDays",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxQueryWindowDays
+        ),
+        maxRows: auditSearchInteger(search, "maxRows", 1, AUDIT_SEARCH_CEILINGS.maxRows),
+        maxConcurrentQueries: auditSearchInteger(
+            search,
+            "maxConcurrentQueries",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxConcurrentQueries
+        ),
+        maxConcurrentQueriesPerUser: 0,
+        queryDeadlineSeconds: auditSearchInteger(
+            search,
+            "queryDeadlineSeconds",
+            10,
+            AUDIT_SEARCH_CEILINGS.queryDeadlineSeconds
+        ),
+        longPollWaitSeconds: 0,
+        handleRetentionMinutes: 0,
+        maxContainsTermLength: auditSearchInteger(
+            search,
+            "maxContainsTermLength",
+            3,
+            AUDIT_SEARCH_CEILINGS.maxContainsTermLength
+        ),
+        maxContainsTerms: auditSearchInteger(
+            search,
+            "maxContainsTerms",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxContainsTerms
+        ),
+    };
+    // The per-user cap can never exceed the VAMS-wide cap. A default per-user cap larger than a
+    // lowered VAMS-wide cap follows the VAMS-wide cap; an explicit one above it is an error.
+    const perUserExplicit = search.maxConcurrentQueriesPerUser;
+    resolved.maxConcurrentQueriesPerUser = auditSearchInteger(
+        search,
+        "maxConcurrentQueriesPerUser",
+        1,
+        resolved.maxConcurrentQueries
+    );
+    if (perUserExplicit === undefined || perUserExplicit === null) {
+        resolved.maxConcurrentQueriesPerUser = Math.min(
+            AUDIT_SEARCH_DEFAULTS.maxConcurrentQueriesPerUser,
+            resolved.maxConcurrentQueries
+        );
+    }
+    // The long poll holds one API request, so it stays below the API integration timeout.
+    const apiTimeout =
+        config.app.api?.apiGatewayRest?.apiGatewayTimeoutTime ??
+        API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+    const longPollMax = Math.min(
+        AUDIT_SEARCH_CEILINGS.longPollWaitSeconds,
+        apiTimeout - AUDIT_SEARCH_POLL_HEADROOM_SECONDS
+    );
+    resolved.longPollWaitSeconds = auditSearchInteger(
+        search,
+        "longPollWaitSeconds",
+        0,
+        longPollMax
+    );
+    resolved.handleRetentionMinutes = auditSearchInteger(
+        search,
+        "handleRetentionMinutes",
+        AUDIT_SEARCH_MIN_HANDLE_RETENTION_MINUTES,
+        AUDIT_SEARCH_CEILINGS.handleRetentionMinutes
+    );
+    block.search = resolved;
+}
+
+/**
+ * Whether audit log search is deployed: `app.auditLogging.search.enabled`, which getConfig() always
+ * resolves. A config that skipped getConfig() (a unit-test harness) and has no value gets the same
+ * default getConfig() applies: on, except off in aws-eusc.
+ */
+export function isAuditSearchEnabled(config: ConfigPublic): boolean {
+    const value = (config.app as unknown as { auditLogging?: { search?: { enabled?: unknown } } })
+        .auditLogging?.search?.enabled;
+    return typeof value === "boolean" ? value : config.env?.partition !== "aws-eusc";
 }
 
 export function getConfig(app: cdk.App): Config {
@@ -1060,6 +1604,27 @@ export function getConfig(app: cdk.App): Config {
             `Configuration Error: the configuration file ${configFilePath} is not valid JSON ` +
                 `(${(error as Error).message}).`
         );
+    }
+    //Configuration keys of the two retired pipelines that app.pipelines.useSystemGenAiMetadata replaces.
+    //A block under either key whose `enabled` is exactly `true` fails validation, because no stack
+    //deploys the pipeline it asks for. A block that is not enabled (false, missing, or any other
+    //value) is left untouched and never read, so a config.json that still carries the blocks
+    //disabled deploys as it is. An absent key needs nothing.
+    const retiredPipelineKeys = [
+        "useGenAiMetadata3dLabeling",
+        "useConversionCadMeshMetadataExtraction",
+    ];
+    const rawPipelines = (configPublic.app?.pipelines ?? {}) as unknown as Record<string, unknown>;
+    for (const key of retiredPipelineKeys) {
+        const block = rawPipelines[key] as { enabled?: unknown } | null | undefined;
+        if (block?.enabled === true) {
+            throw new Error(
+                `Configuration Error: app.pipelines.${key} is enabled, and it is not a supported ` +
+                    "configuration option: the pipeline it configured is replaced by " +
+                    `app.pipelines.useSystemGenAiMetadata. Set app.pipelines.${key}.enabled to false ` +
+                    "or remove the block, and follow deployment/update-the-solution.md#v26-to-v27."
+            );
+        }
     }
     const config: Config = <Config>configPublic;
 
@@ -1271,10 +1836,6 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.usePreviewPcPotreeViewer.enabled = false;
     }
 
-    if (config.app.pipelines.useGenAiMetadata3dLabeling.enabled == undefined) {
-        config.app.pipelines.useGenAiMetadata3dLabeling.enabled = false;
-    }
-
     if (config.app.pipelines.useRapidPipeline.useEcs.enabled == undefined) {
         config.app.pipelines.useRapidPipeline.useEcs.enabled = false;
     }
@@ -1294,6 +1855,7 @@ export function getConfig(app: cdk.App): Config {
             useCodeBuild: false,
             autoRegisterWithVAMS: true,
             keepWarmInstance: false,
+            instanceTypes: [...DEFAULT_ISAAC_LAB_INSTANCE_TYPES],
         };
     }
 
@@ -1307,6 +1869,21 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
         config.app.pipelines.useIsaacLabTraining.keepWarmInstance = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.instanceTypes == undefined) {
+        config.app.pipelines.useIsaacLabTraining.instanceTypes = [
+            ...DEFAULT_ISAAC_LAB_INSTANCE_TYPES,
+        ];
+    }
+
+    // Every instance type must be able to run the job: Batch otherwise accepts the compute
+    // environment and leaves the job RUNNABLE without an error.
+    if (config.app.pipelines.useIsaacLabTraining.enabled) {
+        validateIsaacLabInstanceTypes(
+            config.app.pipelines.useIsaacLabTraining.instanceTypes,
+            "app.pipelines.useIsaacLabTraining.instanceTypes"
+        );
     }
 
     // Validate NVIDIA EULA acceptance when Isaac Lab Training is enabled
@@ -1431,6 +2008,285 @@ export function getConfig(app: cdk.App): Config {
             throw new Error(
                 "Configuration Error: pipelines.usePreview3dThumbnail.largeTierThresholdGiB must be " +
                     `a positive number of GiB. Received: ${JSON.stringify(threshold)}`
+            );
+        }
+    }
+
+    if (config.app.pipelines.useSystemGenAiMetadata == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata = {
+            enabled: false,
+            autoRegisterWithVAMS: true,
+            autoRegisterAutoTriggerOnFileUpload: true,
+            useFargateRenderer: false,
+            useGenAiAnalysis: true,
+            bedrockModels: {
+                analysisModelId: "",
+                textModelId: "",
+                analysisModelSupportsImages: true,
+                embeddingModelId: VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID,
+                embeddingDimensions: VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS,
+                inference: {
+                    maxTokens: SYSTEM_GENAI_DEFAULT_MAX_TOKENS,
+                    temperature: SYSTEM_GENAI_DEFAULT_TEMPERATURE,
+                },
+            },
+            lambdaLimits: {
+                maxInputFileSizeMb: SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB,
+                maxPointCloudPoints: SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS,
+            },
+            bedrockGuardrail: {
+                guardrailIdentifier: "",
+                guardrailVersion: "",
+                create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
+            },
+        };
+    }
+    if (config.app.pipelines.useSystemGenAiMetadata.enabled == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.enabled = false;
+    }
+    if (config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = false;
+    }
+    //The Bedrock analysis is a layer on top of the extraction, so the pipeline runs without it: with
+    //useGenAiAnalysis false every file still gets its extracted attributes, the typed ext_* promotion
+    //and the location, and no Converse call is made.
+    if (config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis = true;
+    }
+    //Every Bedrock model the pipeline and the vector index use is named in one block, so a model is
+    //upgraded or swapped in one place.
+    {
+        const pipeline = config.app.pipelines.useSystemGenAiMetadata as Record<string, any>;
+        if (pipeline.bedrockModels == undefined) {
+            pipeline.bedrockModels = {};
+        }
+        const models = pipeline.bedrockModels as Record<string, any>;
+        if (models.analysisModelId == undefined) {
+            models.analysisModelId = "";
+        }
+        if (models.embeddingModelId == undefined) {
+            models.embeddingModelId = VECTOR_SEARCH_DEFAULT_EMBEDDING_MODEL_ID;
+        }
+        if (models.embeddingDimensions == undefined) {
+            models.embeddingDimensions = VECTOR_SEARCH_DEFAULT_EMBEDDING_DIMENSIONS;
+        }
+        //The text model answers the text-only requests; unset, those requests go to the analysis model.
+        //A null is the ConfigBuilder's cleared text field.
+        if (models.textModelId == undefined) {
+            models.textModelId = "";
+        }
+        if (models.analysisModelSupportsImages == undefined) {
+            models.analysisModelSupportsImages = true;
+        }
+        if (models.inference == undefined) {
+            models.inference = {};
+        }
+        if (models.inference.maxTokens == undefined) {
+            models.inference.maxTokens = SYSTEM_GENAI_DEFAULT_MAX_TOKENS;
+        }
+        //null is the operator's "send no temperature", so only an absent key takes the default.
+        if (models.inference.temperature === undefined) {
+            models.inference.temperature = SYSTEM_GENAI_DEFAULT_TEMPERATURE;
+        }
+    }
+    if (config.app.pipelines.useSystemGenAiMetadata.lambdaLimits == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.lambdaLimits = {
+            maxInputFileSizeMb: SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB,
+            maxPointCloudPoints: SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS,
+        };
+    }
+    if (config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxInputFileSizeMb =
+            SYSTEM_GENAI_DEFAULT_MAX_INPUT_FILE_SIZE_MB;
+    }
+    if (config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.lambdaLimits.maxPointCloudPoints =
+            SYSTEM_GENAI_DEFAULT_MAX_POINT_CLOUD_POINTS;
+    }
+    //The Amazon Bedrock guardrail applied to every analysis prompt: either the one the deployment
+    //creates (bedrockGuardrail.create) or an operator-owned one named by guardrailIdentifier and
+    //guardrailVersion. Both fields of the pair name one guardrail, so a half-set pair is a configuration
+    //mistake in either pipeline state.
+    if (config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail == undefined) {
+        config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail = {
+            guardrailIdentifier: "",
+            guardrailVersion: "",
+            create: { enabled: true, promptAttackInputStrength: "LOW", piiFilter: "anonymize" },
+        };
+    }
+    config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier ??= "";
+    config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion ??= "";
+    {
+        const guardrail = config.app.pipelines.useSystemGenAiMetadata.bedrockGuardrail;
+        const identifierSet = String(guardrail.guardrailIdentifier).trim() !== "";
+        const versionSet = String(guardrail.guardrailVersion).trim() !== "";
+        if (identifierSet !== versionSet) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail requires both " +
+                    "guardrailIdentifier and guardrailVersion, or neither. Received: " +
+                    JSON.stringify({
+                        guardrailIdentifier: guardrail.guardrailIdentifier,
+                        guardrailVersion: guardrail.guardrailVersion,
+                    })
+            );
+        }
+        //The identifier is the 12-character guardrail id, not its ARN: the IAM grant composes the ARN
+        //from it (Service("BEDROCK").ARN("guardrail", id)), so an ARN here yields a malformed resource
+        //and every analysis call is denied. The version is "DRAFT" or a published version number, as
+        //Bedrock's ApplyGuardrail contract defines them.
+        if (
+            identifierSet &&
+            !SYSTEM_GENAI_GUARDRAIL_IDENTIFIER_PATTERN.test(guardrail.guardrailIdentifier)
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailIdentifier " +
+                    `must be the guardrail's 12-character id (lowercase letters and digits, for example ` +
+                    `"kb4v3hkqvi6f"), not its ARN or name. Received: ${JSON.stringify(
+                        guardrail.guardrailIdentifier
+                    )}`
+            );
+        }
+        if (
+            versionSet &&
+            !SYSTEM_GENAI_GUARDRAIL_VERSION_PATTERN.test(guardrail.guardrailVersion)
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.guardrailVersion " +
+                    `must be "DRAFT" or a published version number (for example "1"). Received: ` +
+                    JSON.stringify(guardrail.guardrailVersion)
+            );
+        }
+        //The guardrail the deployment creates: a PROMPT_ATTACK input filter at the configured strength
+        //(output NONE) and, unless piiFilter is "off", sensitive-information filters that anonymize or
+        //block PII and credentials in the prompt. Created by default; a configuration written before
+        //the block existed that already names an operator-owned guardrail keeps that guardrail, so
+        //an absent create.enabled follows the pair rather than replacing it.
+        if (guardrail.create == undefined) {
+            guardrail.create = {
+                enabled: !identifierSet,
+                promptAttackInputStrength: "LOW",
+                piiFilter: "anonymize",
+            };
+        }
+        guardrail.create.enabled ??= !identifierSet;
+        guardrail.create.promptAttackInputStrength ??= "LOW";
+        guardrail.create.piiFilter ??= "anonymize";
+        if (
+            !SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS.includes(
+                guardrail.create.promptAttackInputStrength
+            )
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.promptAttackInputStrength " +
+                    `must be one of ${JSON.stringify(
+                        SYSTEM_GENAI_GUARDRAIL_PROMPT_ATTACK_STRENGTHS
+                    )}. Received: ${JSON.stringify(guardrail.create.promptAttackInputStrength)}`
+            );
+        }
+        if (!SYSTEM_GENAI_GUARDRAIL_PII_FILTERS.includes(guardrail.create.piiFilter)) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.piiFilter " +
+                    `must be one of ${JSON.stringify(
+                        SYSTEM_GENAI_GUARDRAIL_PII_FILTERS
+                    )}. Received: ${JSON.stringify(guardrail.create.piiFilter)}`
+            );
+        }
+        //One guardrail per deployment: the created one or the operator's, never both, since the
+        //analysis functions carry a single guardrail identifier.
+        if (guardrail.create.enabled && identifierSet) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail.create.enabled is " +
+                    "true while guardrailIdentifier names an operator-owned guardrail. Set create.enabled " +
+                    "to false to use the operator-owned guardrail, or clear guardrailIdentifier and " +
+                    "guardrailVersion to use the guardrail the deployment creates."
+            );
+        }
+    }
+
+    //Natural-language file search over the embeddings the system GenAI metadata pipeline produces.
+    //Keyed on that pipeline and on the restricted-partition flag: a config.json without the block (or
+    //without its enabled) follows the pipeline outside GovCloud/EU Sovereign, and stays off inside them.
+    //It turns on only when every setting the vector checks below require is on, as the register flags
+    //resolve further down (an absent autoRegisterWithVAMS registers, an absent upload trigger is
+    //disarmed); otherwise it resolves to disabled with the warning that names the settings to add,
+    //rather than failing on a setting the operator never wrote.
+    const vectorSearchEnabledWasUnset =
+        config.app.vectorSearch == undefined || config.app.vectorSearch.enabled == undefined;
+    const systemPipelineForVector = config.app.pipelines.useSystemGenAiMetadata;
+    const vectorSearchDefaultEnabled =
+        systemPipelineForVector.enabled === true &&
+        (systemPipelineForVector.autoRegisterWithVAMS == undefined ||
+            systemPipelineForVector.autoRegisterWithVAMS === true) &&
+        systemPipelineForVector.autoRegisterAutoTriggerOnFileUpload === true &&
+        !(config.app.govCloud.enabled === true);
+    if (config.app.vectorSearch == undefined) {
+        config.app.vectorSearch = {
+            enabled: vectorSearchDefaultEnabled,
+            indexingConcurrency: VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY,
+            reindexOnCdkDeploy: false,
+        };
+    }
+    if (config.app.vectorSearch.enabled == undefined) {
+        config.app.vectorSearch.enabled = vectorSearchDefaultEnabled;
+    }
+    if (config.app.vectorSearch.indexingConcurrency == undefined) {
+        config.app.vectorSearch.indexingConcurrency = VECTOR_SEARCH_DEFAULT_INDEXING_CONCURRENCY;
+    }
+    // Same deploy-time override shape as the OpenSearch flag, under its own context key because the
+    // two reindexers rebuild different stores and an operator may want only one of them.
+    config.app.vectorSearch.reindexOnCdkDeploy = resolveConfigBool(
+        "vectorReindexOnCdkDeploy",
+        app.node.tryGetContext("vectorReindexOnCdkDeploy"),
+        config.app.vectorSearch.reindexOnCdkDeploy ?? false
+    );
+    if (
+        vectorSearchEnabledWasUnset &&
+        !config.app.vectorSearch.enabled &&
+        config.env.partition === "aws"
+    ) {
+        console.warn(
+            "Configuration Warning: app.vectorSearch is not set and resolves to disabled. " +
+                "Natural-language file search is available in this partition; to enable it add " +
+                '"vectorSearch": { "enabled": true, "indexingConcurrency": 5 } under "app", name the ' +
+                "embedding model in app.pipelines.useSystemGenAiMetadata.bedrockModels " +
+                '(embeddingModelId "amazon.titan-embed-text-v2:0", embeddingDimensions 1024), and set ' +
+                "app.pipelines.useSystemGenAiMetadata.enabled, autoRegisterWithVAMS and " +
+                "autoRegisterAutoTriggerOnFileUpload to true (the pipeline produces the embeddings)."
+        );
+    }
+    config.vectorIndexName = deriveVectorIndexName(
+        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId,
+        config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions
+    );
+
+    //Every Amazon Bedrock call the system GenAI metadata pipeline makes carries a guardrail with a
+    //prompt-attack input filter: the analysis Converse calls (file content, rendered views, operator
+    //vocabulary) when the GenAI layer is on, and the ApplyGuardrail screen of the text it embeds when
+    //vector search is on. A configuration that makes either call with no guardrail, neither created nor
+    //named, is refused in every partition; there is no opt-out. Checked after the vector search backfill
+    //because an unset vectorSearch.enabled follows the pipeline.
+    {
+        const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+        const guardrail = pipeline.bedrockGuardrail;
+        const guardrailSet =
+            guardrail.create?.enabled === true ||
+            String(guardrail.guardrailIdentifier ?? "").trim() !== "";
+        // Both calls are the pipeline's; vector search on with the pipeline off fails on its own rule below.
+        const analysisOn = pipeline.enabled === true && pipeline.useGenAiAnalysis === true;
+        const vectorOn = pipeline.enabled === true && config.app.vectorSearch.enabled === true;
+        if ((analysisOn || vectorOn) && !guardrailSet) {
+            const callers = [
+                analysisOn ? "the GenAI analysis (useSystemGenAiMetadata.useGenAiAnalysis)" : "",
+                vectorOn ? "vector search (app.vectorSearch.enabled)" : "",
+            ].filter((caller) => caller !== "");
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockGuardrail creates no " +
+                    `guardrail and names none, while ${callers.join(
+                        " and "
+                    )} sends file content to Amazon Bedrock. ` +
+                    "Set bedrockGuardrail.create.enabled to true, or create a guardrail with a " +
+                    "prompt-attack input filter in this account and Region and set " +
+                    "bedrockGuardrail.guardrailIdentifier and guardrailVersion."
             );
         }
     }
@@ -1618,7 +2474,7 @@ export function getConfig(app: cdk.App): Config {
                 hunyuan3d: { enabled: false },
                 // An agent (OpenAI Codex CLI) driving headless Blender against a vision model on Amazon
                 // Bedrock. Off by default: it needs Bedrock model access, and the model id is
-                // per-partition and per-account entitlement like the labeling pipeline's.
+                // per-partition and per-account entitlement like the SYSTEM GenAI analysis model's.
                 blenderagent: {
                     enabled: false,
                     bedrockModelId: "",
@@ -1737,23 +2593,6 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
 
-    if (config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled == undefined) {
-        config.app.pipelines.useConversionCadMeshMetadataExtraction.enabled = false;
-    }
-    if (
-        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS ==
-        undefined
-    ) {
-        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterWithVAMS = true;
-    }
-    if (
-        config.app.pipelines.useConversionCadMeshMetadataExtraction
-            .autoRegisterAutoTriggerOnFileUpload == undefined
-    ) {
-        config.app.pipelines.useConversionCadMeshMetadataExtraction.autoRegisterAutoTriggerOnFileUpload =
-            false;
-    }
-
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
         config.app.pipelines.useConversionCoordinateTransform = {
             enabled: false,
@@ -1868,12 +2707,11 @@ export function getConfig(app: cdk.App): Config {
     };
 
     defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
-    defaultAutoRegisterFlags(config.app.pipelines.useConversionCadMeshMetadataExtraction, true);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiCadStepAgent, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
-    defaultAutoRegisterFlags(config.app.pipelines.useGenAiMetadata3dLabeling, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useSystemGenAiMetadata, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiVideoSopBom);
     defaultAutoRegisterFlags(config.app.pipelines.useSplatToolbox);
     defaultAutoRegisterFlags(config.app.pipelines.useRapidPipeline?.useEcs);
@@ -1901,13 +2739,11 @@ export function getConfig(app: cdk.App): Config {
         autoRegisterWithVAMS?: boolean;
         autoRegisterAutoTriggerOnFileUpload?: boolean;
     }>({
-        useConversionCadMeshMetadataExtraction:
-            config.app.pipelines.useConversionCadMeshMetadataExtraction,
         useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
         useGenAiCadStepAgent: config.app.pipelines.useGenAiCadStepAgent,
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
-        useGenAiMetadata3dLabeling: config.app.pipelines.useGenAiMetadata3dLabeling,
+        useSystemGenAiMetadata: config.app.pipelines.useSystemGenAiMetadata,
     })) {
         if (
             block?.enabled &&
@@ -2485,8 +3321,6 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreviewPcPotreeViewer");
     if (config.app.pipelines.useSplatToolbox.enabled)
         vpcRequiringFeatures.push("pipelines.useSplatToolbox");
-    if (config.app.pipelines.useGenAiMetadata3dLabeling.enabled)
-        vpcRequiringFeatures.push("pipelines.useGenAiMetadata3dLabeling");
     if (config.app.pipelines.useRapidPipeline.useEcs.enabled)
         vpcRequiringFeatures.push("pipelines.useRapidPipeline.useEcs");
     if (config.app.pipelines.useRapidPipeline.useEks.enabled)
@@ -2499,6 +3333,13 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
     if (config.app.pipelines.useMediaPreviews.enabled)
         vpcRequiringFeatures.push("pipelines.useMediaPreviews");
+    //The Fargate render branch exists only in an enabled pipeline (the VPC builder keys its endpoints
+    //the same way), so the sub-flag on a disabled pipeline demands nothing.
+    if (
+        config.app.pipelines.useSystemGenAiMetadata.enabled &&
+        config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer
+    )
+        vpcRequiringFeatures.push("pipelines.useSystemGenAiMetadata.useFargateRenderer");
     if (config.app.pipelines.useNvidiaCosmos.enabled)
         vpcRequiringFeatures.push("pipelines.useNvidiaCosmos");
     if (config.app.pipelines.useNvidiaCosmos3.enabled)
@@ -2826,7 +3667,8 @@ export function getConfig(app: cdk.App): Config {
         // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
         // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
         // handled the same way: the commercial template carries a model id, the restricted-partition
-        // templates ship it empty, and a commercial-only inference-profile prefix is rejected elsewhere.
+        // templates ship it empty, and an inference-profile prefix the partition does not offer is
+        // rejected (validateBedrockProfilePrefix).
         const agent = imageTo3dModels?.blenderagent;
         if (agent?.enabled) {
             const agentModelId = (agent.bedrockModelId ?? "").trim();
@@ -2839,17 +3681,11 @@ export function getConfig(app: cdk.App): Config {
                         `ships global.openai.gpt-6-astra).`
                 );
             }
-            const agentCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
-                agentModelId.startsWith(prefix)
+            validateBedrockProfilePrefix(
+                "useImageTo3d.models.blenderagent.bedrockModelId",
+                agentModelId,
+                config.env.partition
             );
-            if (agentCommercialOnlyPrefix && config.env.partition !== "aws") {
-                throw new Error(
-                    `Configuration Error: useImageTo3d.models.blenderagent.bedrockModelId is ` +
-                        `"${agentModelId}", whose "${agentCommercialOnlyPrefix}" cross-Region inference-profile ` +
-                        `prefix exists only in the commercial partition. This deployment targets ` +
-                        `${config.env.partition}. Use a model id or inference profile offered there.`
-                );
-            }
             if (
                 agent.useStabilityImageEditing &&
                 !(config.env.partition === "aws" && config.env.region.startsWith("us-"))
@@ -2966,47 +3802,134 @@ export function getConfig(app: cdk.App): Config {
         }
     }
 
-    // Amazon Rekognition is not offered in the AWS European Sovereign Cloud partition or in the
-    // AWS GovCloud (US-East) Region, and the GenAI metadata labeling pipeline calls DetectLabels on
-    // every rendered image, so every execution there fails at that call. With useForAllLambdas and
-    // addVpcEndpoints the VPC builder also creates a Rekognition interface endpoint, which the
-    // Region does not offer, so that combination is rejected; any other enabled combination is
-    // warned about.
-    if (
-        config.app.pipelines.useGenAiMetadata3dLabeling?.enabled &&
-        (config.env.partition === "aws-eusc" || config.env.region === "us-gov-east-1")
-    ) {
-        const rekognitionUnavailable =
-            `pipelines.useGenAiMetadata3dLabeling is not supported in ${config.env.region} ` +
-            `(${config.env.partition}): the pipeline calls Amazon Rekognition, which is not ` +
-            `offered in that Region`;
-        const disablePipeline = "Set pipelines.useGenAiMetadata3dLabeling.enabled to false.";
-        if (
-            config.app.useGlobalVpc.enabled &&
-            config.app.useGlobalVpc.useForAllLambdas &&
-            config.app.useGlobalVpc.addVpcEndpoints &&
-            !config.env.loadContextIgnoreVPCStacks
-        ) {
+    //The system GenAI metadata pipeline: its Lambda-renderer ceilings, its models and its inference
+    //settings. Every model id is checked by validateSystemGenAiModelId: the id format (an ARN is
+    //refused, because the id is also the function's grant) and the cross-Region inference-profile
+    //prefix, which is partition-specific (BEDROCK_INFERENCE_PROFILE_PREFIXES). The IAM grant is derived
+    //by stripping the prefix, so a prefix from another partition yields both a model that does not
+    //exist and a grant that does not match it. A bare in-Region id is valid everywhere.
+    const systemGenAiModels = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+    const analysisModelId = systemGenAiModels.analysisModelId ?? "";
+    const textModelId = systemGenAiModels.textModelId ?? "";
+    const genAiAnalysisOn =
+        config.app.pipelines.useSystemGenAiMetadata.enabled &&
+        config.app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis;
+    if (config.app.pipelines.useSystemGenAiMetadata.enabled) {
+        const limits = config.app.pipelines.useSystemGenAiMetadata.lambdaLimits;
+        const limitChecks: Array<[string, unknown]> = [
+            ["maxInputFileSizeMb", limits.maxInputFileSizeMb],
+            ["maxPointCloudPoints", limits.maxPointCloudPoints],
+        ];
+        for (const [field, value] of limitChecks) {
+            if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+                throw new Error(
+                    `Configuration Error: pipelines.useSystemGenAiMetadata.lambdaLimits.${field} must be ` +
+                        `a positive integer. Received: ${JSON.stringify(value)}`
+                );
+            }
+        }
+    }
+    //The analysis model is required only by the GenAI layer: an attributes-only pipeline
+    //(useGenAiAnalysis false) names no analysis model and makes no Converse call.
+    if (genAiAnalysisOn) {
+        if (typeof analysisModelId !== "string" || analysisModelId.trim() === "") {
             throw new Error(
-                `Configuration Error: ${rekognitionUnavailable}, and with ` +
-                    `useGlobalVpc.useForAllLambdas and addVpcEndpoints the VPC builder also ` +
-                    `requests a Rekognition interface endpoint the Region does not offer. ` +
-                    `${disablePipeline}`
+                "Configuration Error: pipelines.useSystemGenAiMetadata is enabled with useGenAiAnalysis " +
+                    "but bedrockModels.analysisModelId is empty. Set a vision-capable model id or inference " +
+                    "profile available in this partition and Region, or set useGenAiAnalysis to false for an " +
+                    "attributes-only pipeline (the EU Sovereign Cloud template ships that way because no " +
+                    "model is verified there)."
             );
         }
-        console.warn(
-            `Configuration Warning: ${rekognitionUnavailable}, so every execution of the ` +
-                `pipeline fails at its Rekognition call. ${disablePipeline}`
-        );
-    }
-
-    // Both GenAI pipelines pass their Bedrock model id through to a Lambda unvalidated, so the id is
-    // checked here against the partition it is deployed into (see validateBedrockModelId).
-    if (config.app.pipelines.useGenAiMetadata3dLabeling?.enabled) {
-        validateBedrockModelId(
-            "pipelines.useGenAiMetadata3dLabeling",
-            config.app.pipelines.useGenAiMetadata3dLabeling.bedrockModelId ?? "",
+        validateSystemGenAiModelId(
+            "pipelines.useSystemGenAiMetadata.bedrockModels.analysisModelId",
+            analysisModelId,
             config.env.partition
+        );
+        //Empty means the text-only requests go to the analysis model.
+        if (typeof textModelId !== "string") {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.textModelId must be " +
+                    `a model id string, or empty to use the analysis model. Received: ${JSON.stringify(
+                        textModelId
+                    )}`
+            );
+        }
+        if (textModelId.trim() !== "") {
+            validateSystemGenAiModelId(
+                "pipelines.useSystemGenAiMetadata.bedrockModels.textModelId",
+                textModelId,
+                config.env.partition
+            );
+        }
+    }
+    //The inference settings and the image flag reach every analysis request, so they are checked
+    //whenever the pipeline is deployed, not only while the GenAI layer is on. So is the embedding
+    //model's id, which the embedding function is granted whether or not vector search is on; its
+    //family and width are checked with vector search below.
+    if (config.app.pipelines.useSystemGenAiMetadata.enabled) {
+        const embeddingModelId = systemGenAiModels.embeddingModelId;
+        if (typeof embeddingModelId === "string" && embeddingModelId.trim() !== "") {
+            validateSystemGenAiModelId(
+                "pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId",
+                embeddingModelId,
+                config.env.partition
+            );
+        }
+        if (typeof systemGenAiModels.analysisModelSupportsImages !== "boolean") {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels." +
+                    "analysisModelSupportsImages must be true or false. Received: " +
+                    JSON.stringify(systemGenAiModels.analysisModelSupportsImages)
+            );
+        }
+        const inference = systemGenAiModels.inference;
+        const maxTokens = inference.maxTokens;
+        if (
+            typeof maxTokens !== "number" ||
+            !Number.isInteger(maxTokens) ||
+            maxTokens < SYSTEM_GENAI_MIN_MAX_TOKENS ||
+            maxTokens > SYSTEM_GENAI_MAX_MAX_TOKENS
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.inference.maxTokens " +
+                    `must be an integer between ${SYSTEM_GENAI_MIN_MAX_TOKENS} and ` +
+                    `${SYSTEM_GENAI_MAX_MAX_TOKENS}. Received: ${JSON.stringify(maxTokens)}`
+            );
+        }
+        const temperature = inference.temperature;
+        if (
+            temperature !== null &&
+            (typeof temperature !== "number" ||
+                !Number.isFinite(temperature) ||
+                temperature < 0 ||
+                temperature > 1)
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.inference." +
+                    "temperature must be a number between 0 and 1, or null to send no temperature " +
+                    `(for a model that rejects the parameter). Received: ${JSON.stringify(
+                        temperature
+                    )}`
+            );
+        }
+    }
+    //The use-case form is a property of the model id, not of the pipeline state, so the warning is
+    //printed for a disabled pipeline too (the shipped GovCloud template is that case).
+    const anthropicModelFields = (
+        [
+            ["analysisModelId", analysisModelId],
+            ["textModelId", textModelId],
+        ] as const
+    )
+        .filter(([, id]) => typeof id === "string" && id.includes("anthropic."))
+        .map(([field]) => `pipelines.useSystemGenAiMetadata.bedrockModels.${field}`);
+    if (anthropicModelFields.length > 0) {
+        console.warn(
+            `Configuration Warning: ${anthropicModelFields.join(" and ")} names an ` +
+                "Anthropic model. Anthropic requires a one-time use-case form per AWS organization " +
+                "before the first invocation; until it is submitted, executions end FAILED with " +
+                "BedrockAccessDenied while file attributes are still written."
         );
     }
 
@@ -3114,17 +4037,11 @@ export function getConfig(app: cdk.App): Config {
                     "is empty. Set a model id available in this partition and Region."
             );
         }
-        const cadCommercialOnlyPrefix = ["global.", "us."].find((prefix) =>
-            bedrockModelId.startsWith(prefix)
+        validateBedrockProfilePrefix(
+            "pipelines.useGenAiCadStepAgent.bedrockModelId",
+            bedrockModelId.trim(),
+            config.env.partition
         );
-        if (cadCommercialOnlyPrefix && config.env.partition !== "aws") {
-            throw new Error(
-                `Configuration Error: pipelines.useGenAiCadStepAgent.bedrockModelId is ` +
-                    `"${bedrockModelId}", whose "${cadCommercialOnlyPrefix}" cross-Region ` +
-                    `inference-profile prefix exists only in the commercial partition. This ` +
-                    `deployment targets ${config.env.partition}.`
-            );
-        }
         const openAiSecret = cad.openAi?.apiKeySecretArn ?? "";
         const openAiModel = cad.openAi?.modelId ?? "";
         if (openAiSecret.trim() !== "" || openAiModel.trim() !== "") {
@@ -3747,6 +4664,13 @@ export function getConfig(app: cdk.App): Config {
         );
     }
 
+    //Error check for the vector reindex flag - requires vector search to be enabled
+    if (config.app.vectorSearch?.reindexOnCdkDeploy && !config.app.vectorSearch.enabled) {
+        throw new Error(
+            "Configuration Error: app.vectorSearch.reindexOnCdkDeploy requires app.vectorSearch.enabled to be true!"
+        );
+    }
+
     //Check when implementing auth providers
     if (
         config.app.authProvider.useCognito.enabled &&
@@ -3973,6 +4897,129 @@ export function getConfig(app: cdk.App): Config {
             `Configuration Error: AWS Deadline Cloud is not available in the '${config.env.partition}' partition. ` +
                 "Set app.pipelines.deadlineCloudExecutionTypeEnabled to false."
         );
+    }
+
+    //Vector search runs on Amazon DynamoDB vector search and an Amazon Bedrock embedding model, offered
+    //together only in the commercial and AWS GovCloud (US) partitions VAMS supports it in. Written as an
+    //allow-list keyed on the partition rather than app.govCloud.enabled (GovCloud offers it): the European
+    //Sovereign Cloud does not offer DynamoDB vector search, and China and the ISO partitions are
+    //unverified, so each is refused here instead of failing at the first index create or Bedrock call.
+    if (
+        config.app.vectorSearch.enabled &&
+        !VECTOR_SEARCH_PARTITIONS.includes(config.env.partition)
+    ) {
+        throw new Error(
+            "Configuration Error: vector search (DynamoDB vector search with an Amazon Bedrock " +
+                `embedding model) is not available in the '${config.env.partition}' partition; it is ` +
+                `supported in ${VECTOR_SEARCH_PARTITIONS.map((p) => `'${p}'`).join(" and ")}. ` +
+                "Set app.vectorSearch.enabled to false."
+        );
+    }
+
+    //Supported in GovCloud; Amazon Bedrock model access there is enabled by hand. Per the Amazon
+    //Bedrock User Guide (model access in AWS GovCloud (US)), a third-party model is enabled in both the
+    //GovCloud account and its linked commercial account, and an Amazon model in the GovCloud account only.
+    if (config.app.vectorSearch.enabled && config.app.govCloud.enabled) {
+        console.warn(
+            "Configuration Warning: app.vectorSearch.enabled is true in a GovCloud deployment. Amazon " +
+                "Bedrock model access there is a manual step: a third-party model (such as Anthropic " +
+                "Claude or Cohere) is enabled in both the GovCloud account and its linked commercial " +
+                "account, and an Amazon model (such as Amazon Titan) in the GovCloud account only. " +
+                `Confirm the embedding model ` +
+                `(${config.app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId}) ` +
+                "and the analysis model are enabled before the first execution."
+        );
+    }
+
+    //The system GenAI metadata pipeline is the only producer of embeddings, and its upload trigger is
+    //what runs it for every new file version. Both are required explicitly rather than switched on,
+    //for the reason given above vpcRequiringFeatures: a silently changed pipeline set hides a
+    //deployment change from the operator.
+    if (config.app.vectorSearch.enabled && !config.app.pipelines.useSystemGenAiMetadata.enabled) {
+        throw new Error(
+            "Configuration Error: app.vectorSearch.enabled requires " +
+                "app.pipelines.useSystemGenAiMetadata.enabled to be true; the system GenAI metadata " +
+                "pipeline produces the embeddings the vector index holds."
+        );
+    }
+    if (
+        config.app.vectorSearch.enabled &&
+        !(
+            config.app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS === true &&
+            config.app.pipelines.useSystemGenAiMetadata.autoRegisterAutoTriggerOnFileUpload === true
+        )
+    ) {
+        throw new Error(
+            "Configuration Error: app.vectorSearch.enabled requires " +
+                "app.pipelines.useSystemGenAiMetadata.autoRegisterWithVAMS and " +
+                "autoRegisterAutoTriggerOnFileUpload to be true; vectors are produced by the system " +
+                "workflow's upload trigger."
+        );
+    }
+    if (config.app.vectorSearch.enabled) {
+        const models = config.app.pipelines.useSystemGenAiMetadata.bedrockModels;
+        const embeddingModelId = models.embeddingModelId ?? "";
+        if (typeof embeddingModelId !== "string" || embeddingModelId.trim() === "") {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is " +
+                    "empty while app.vectorSearch.enabled is true. Set an embedding model id available in " +
+                    "this partition and Region (for example amazon.titan-embed-text-v2:0)."
+            );
+        }
+        const dimensions = models.embeddingDimensions;
+        if (
+            typeof dimensions !== "number" ||
+            !Number.isInteger(dimensions) ||
+            dimensions < 1 ||
+            dimensions > VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS
+        ) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions " +
+                    `must be an integer between 1 and ${VECTOR_SEARCH_MAX_EMBEDDING_DIMENSIONS} (the vector ` +
+                    `index dimension). Received: ${JSON.stringify(dimensions)}`
+            );
+        }
+        //The embedding adapter serves the families of its model table only, each at fixed widths; any
+        //other model or width would build an index no embedding call can fill.
+        const family = embeddingModelFamily(embeddingModelId);
+        if (family === undefined) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId is " +
+                    `"${embeddingModelId}", which is not a model of a supported embedding family: ` +
+                    EMBEDDING_MODEL_FAMILIES.map(
+                        (entry) => `${entry.displayName} (for example ${entry.exampleModelId})`
+                    ).join(", ") +
+                    "."
+            );
+        }
+        if (!family.dimensions.includes(dimensions)) {
+            throw new Error(
+                "Configuration Error: pipelines.useSystemGenAiMetadata.bedrockModels.embeddingDimensions " +
+                    `is ${dimensions}, which ${family.displayName} (${embeddingModelId}) does not ` +
+                    `produce. Supported widths: ${family.dimensions.join(", ")}.`
+            );
+        }
+    }
+    //The launcher's event-source MaximumConcurrency paces every reindex run, so the value is checked
+    //whenever the reindexer is built: with vector search on, and with it off while the system pipeline
+    //is on and registered. CDK validates MaximumConcurrency at synth too, but misses 0 and non-integers
+    //and names the CDK property rather than this field.
+    if (systemWorkflowReindexerEnabled(config)) {
+        const concurrency = config.app.vectorSearch.indexingConcurrency;
+        if (
+            typeof concurrency !== "number" ||
+            !Number.isInteger(concurrency) ||
+            concurrency < VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY ||
+            concurrency > VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY
+        ) {
+            throw new Error(
+                "Configuration Error: vectorSearch.indexingConcurrency must be an integer between " +
+                    `${VECTOR_SEARCH_MIN_INDEXING_CONCURRENCY} and ${VECTOR_SEARCH_MAX_INDEXING_CONCURRENCY} ` +
+                    "(Lambda SQS event-source MaximumConcurrency bound); it paces every reindex run " +
+                    "of the system GenAI metadata workflow. " +
+                    `Received: ${JSON.stringify(concurrency)}`
+            );
+        }
     }
 
     // Fields VAMS passes to the authorizer and the web client must be set: null, "" and "UNDEFINED"
@@ -5262,6 +6309,23 @@ export function crossRegionS3EndpointRegions(config: ConfigPublic): string[] {
 }
 
 /**
+ * Whether the deployment builds the system-workflow reindexer: the `vectorReindexer` Lambda, the
+ * system-workflow launch queue and its launcher, their dead-letter queues and alarms, and the
+ * `lambdaFunctions/vectorReindexer` parameter. True whenever the system GenAI metadata pipeline is
+ * enabled and registers its workflow, which the reindexer launches, with vector search on or off. With
+ * vector search off a reindex run (`enqueue`) is the bulk way to analyze files that predate the
+ * pipeline. Vector search on always builds it (getConfig() also requires the pipeline and its
+ * registration then). Read after getConfig() has resolved `autoRegisterWithVAMS`.
+ */
+export function systemWorkflowReindexerEnabled(config: ConfigPublic): boolean {
+    const pipeline = config.app.pipelines.useSystemGenAiMetadata;
+    return (
+        config.app.vectorSearch?.enabled === true ||
+        (pipeline?.enabled === true && pipeline.autoRegisterWithVAMS === true)
+    );
+}
+
+/**
  * The REST API custom domain host, or undefined when `app.api.apiGatewayRest.customDomain` is off.
  *
  * The REST API construct, the amplify-config function and the web CSP all read the host from here,
@@ -5361,6 +6425,11 @@ export interface ConfigPublic {
             };
             reindexOnCdkDeploy: boolean;
         };
+        vectorSearch: {
+            enabled: boolean;
+            indexingConcurrency: number;
+            reindexOnCdkDeploy: boolean;
+        };
         useLocationService: {
             enabled: boolean;
         };
@@ -5388,11 +6457,6 @@ export interface ConfigPublic {
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
-            };
-            useConversionCadMeshMetadataExtraction: {
-                enabled: boolean;
-                autoRegisterWithVAMS: boolean;
-                autoRegisterAutoTriggerOnFileUpload: boolean;
             };
             useConversionCoordinateTransform: {
                 enabled: boolean;
@@ -5444,12 +6508,6 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
             };
-            useGenAiMetadata3dLabeling: {
-                enabled: boolean;
-                bedrockModelId: string;
-                autoRegisterWithVAMS: boolean;
-                autoRegisterAutoTriggerOnFileUpload: boolean;
-            };
             useGenAiVideoSopBom: {
                 enabled: boolean;
                 useCodeBuild: boolean;
@@ -5497,6 +6555,7 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 keepWarmInstance: boolean;
+                instanceTypes: string[];
             };
             usePreview3dThumbnail: {
                 enabled: boolean;
@@ -5527,6 +6586,37 @@ export interface ConfigPublic {
                  * (under 5 MiB), when the JPEG is meaningfully smaller. Off by default.
                  */
                 downscaleSelfPreviewableImages: boolean;
+            };
+            useSystemGenAiMetadata: {
+                enabled: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+                useFargateRenderer: boolean;
+                useGenAiAnalysis: boolean;
+                bedrockModels: {
+                    analysisModelId: string;
+                    textModelId: string;
+                    analysisModelSupportsImages: boolean;
+                    embeddingModelId: string;
+                    embeddingDimensions: number;
+                    inference: {
+                        maxTokens: number;
+                        temperature: number | null;
+                    };
+                };
+                lambdaLimits: {
+                    maxInputFileSizeMb: number;
+                    maxPointCloudPoints: number;
+                };
+                bedrockGuardrail: {
+                    guardrailIdentifier: string;
+                    guardrailVersion: string;
+                    create: {
+                        enabled: boolean;
+                        promptAttackInputStrength: SystemGenAiGuardrailPromptAttackStrength;
+                        piiFilter: SystemGenAiGuardrailPiiFilter;
+                    };
+                };
             };
             useNvidiaCosmos: {
                 enabled: boolean;
@@ -5753,6 +6843,21 @@ export interface ConfigPublic {
         auditLogging: {
             // Whether read actions (gets, lists, searches) write audit records. Absent = true.
             recordReads: boolean;
+            // Audit log search: an on/off switch and its limits. Absent block or key = the default.
+            search: {
+                // Search capability only (routes, Lambda, query table, web page, CLI, MCP); recording
+                // of audit events is not affected. Absent = true (false in aws-eusc). Refused as true in aws-eusc.
+                enabled: boolean;
+                maxQueryWindowDays: number; // days a search may span (default 31, ceiling 366)
+                maxRows: number; // rows a search returns (default 1000, ceiling 10000)
+                maxConcurrentQueries: number; // open searches VAMS-wide (default 5, ceiling 20)
+                maxConcurrentQueriesPerUser: number; // open searches per user (default 2, at most the VAMS-wide value)
+                queryDeadlineSeconds: number; // a search is stopped after this (default 300, ceiling 900)
+                longPollWaitSeconds: number; // server wait of one poll (default 20, ceiling min(25, API timeout - 4))
+                maxContainsTermLength: number; // characters of one contains term (default 64, ceiling 128)
+                maxContainsTerms: number; // contains terms per search (default 3, ceiling 5)
+                handleRetentionMinutes: number; // minutes a search handle (and its contains terms) lives after its last activity (default 60, 5 to 1440)
+            };
         };
         api: {
             apiType: string;
@@ -5795,6 +6900,7 @@ export interface Config extends ConfigPublic {
     openSearchAssetIndexNameSSMParam: string;
     openSearchFileIndexNameSSMParam: string;
     openSearchDomainEndpointSSMParam: string;
+    vectorIndexName: string; // DynamoDB vector index on the embeddings table, derived from app.vectorSearch
     locationServiceApiKeyArnSSMParam: string; // Location Service API key SSM parameter
     webUrlDeploymentSSMParam: string; // Web URL Deployment SSM parameter
     resourceNamesSSMParamPrefix: string; // Prefix for resource-name SSM parameters

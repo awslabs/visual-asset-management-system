@@ -67,6 +67,11 @@
             },
             "reindexOnCdkDeploy": false
         },
+        "vectorSearch": {
+            "enabled": false,
+            "indexingConcurrency": 5,
+            "reindexOnCdkDeploy": false
+        },
         "useLocationService": {
             "enabled": false
         },
@@ -122,10 +127,36 @@
                 "autoRegisterAutoTriggerOnFileUpload": false,
                 "downscaleSelfPreviewableImages": false
             },
-            "useConversionCadMeshMetadataExtraction": {
+            "useSystemGenAiMetadata": {
                 "enabled": false,
                 "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
+                "autoRegisterAutoTriggerOnFileUpload": true,
+                "useFargateRenderer": false,
+                "useGenAiAnalysis": false,
+                "bedrockModels": {
+                    "analysisModelId": "",
+                    "textModelId": "",
+                    "analysisModelSupportsImages": true,
+                    "embeddingModelId": "",
+                    "embeddingDimensions": 1024,
+                    "inference": {
+                        "maxTokens": 2048,
+                        "temperature": 0.2
+                    }
+                },
+                "lambdaLimits": {
+                    "maxInputFileSizeMb": 2048,
+                    "maxPointCloudPoints": 20000000
+                },
+                "bedrockGuardrail": {
+                    "guardrailIdentifier": "",
+                    "guardrailVersion": "",
+                    "create": {
+                        "enabled": false,
+                        "promptAttackInputStrength": "LOW",
+                        "piiFilter": "anonymize"
+                    }
+                }
             },
             "useConversionCoordinateTransform": {
                 "enabled": false,
@@ -158,12 +189,6 @@
             },
             "usePreviewPcPotreeViewer": {
                 "enabled": false,
-                "autoRegisterWithVAMS": true,
-                "autoRegisterAutoTriggerOnFileUpload": true
-            },
-            "useGenAiMetadata3dLabeling": {
-                "enabled": false,
-                "bedrockModelId": "",
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": true
             },
@@ -218,7 +243,20 @@
                 "acceptNvidiaEula": false,
                 "useCodeBuild": false,
                 "autoRegisterWithVAMS": true,
-                "keepWarmInstance": false
+                "keepWarmInstance": false,
+                "instanceTypes": [
+                    "g6.4xlarge",
+                    "g6.8xlarge",
+                    "g6.16xlarge",
+                    "gr6.4xlarge",
+                    "gr6.8xlarge",
+                    "g6e.2xlarge",
+                    "g6e.4xlarge",
+                    "g6e.8xlarge",
+                    "g5.4xlarge",
+                    "g5.8xlarge",
+                    "g5.16xlarge"
+                ]
             },
             "useNvidiaCosmos": {
                 "enabled": false,
@@ -488,7 +526,19 @@
             }
         },
         "auditLogging": {
-            "recordReads": true
+            "recordReads": true,
+            "search": {
+                "enabled": false,
+                "maxQueryWindowDays": 31,
+                "maxRows": 1000,
+                "maxConcurrentQueries": 5,
+                "maxConcurrentQueriesPerUser": 2,
+                "queryDeadlineSeconds": 300,
+                "longPollWaitSeconds": 20,
+                "maxContainsTermLength": 64,
+                "maxContainsTerms": 3,
+                "handleRetentionMinutes": 60
+            }
         },
         "webUi": {
             "optionalBannerHtmlMessage": "",

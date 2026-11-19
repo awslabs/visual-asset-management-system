@@ -426,12 +426,14 @@ Output includes total count, list of enabled feature names, and last updated tim
 | `ALBDEPLOY`                     | Application Load Balancer deployment mode                                     |
 | `CLOUDFRONTDEPLOY`              | Amazon CloudFront deployment mode                                             |
 | `NOOPENSEARCH`                  | Disable Amazon OpenSearch Service functionality                               |
+| `VECTORSEARCH`                  | Natural-language (vector) search over files; enables `search nlp`             |
 | `AUTHPROVIDER_COGNITO`          | Amazon Cognito authentication provider                                        |
 | `AUTHPROVIDER_COGNITO_SAML`     | Amazon Cognito user pool federated to a SAML identity provider                |
 | `AUTHPROVIDER_COGNITO_OIDC`     | Amazon Cognito user pool federated to an OIDC identity provider               |
 | `AUTHPROVIDER_EXTERNALOAUTHIDP` | External OAuth identity provider                                              |
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type                                    |
 | `ZIPDOWNLOADS`                  | Download as Zip (`vamscli zip-download` commands)                             |
+| `AUDITLOGSEARCH`                | Audit Log Search (`vamscli audit` commands)                                   |
 
 An enabled add-on adds feature switches of its own, which `vamscli features list` also shows and which are listed on the add-on's pages. See [Add-ons Overview](../../developer/addons-overview.md).
 
