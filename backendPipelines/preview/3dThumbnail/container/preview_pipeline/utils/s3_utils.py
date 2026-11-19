@@ -301,7 +301,9 @@ def get_json(bucket_name, object_key):
     return json.loads(body) if body.strip() else None
 
 
-def put_json(bucket_name, object_key, payload):
+def put_json_payload(bucket_name, object_key, payload):
+    """Serialise a JSON-able payload (sorted keys, 2-space indent) and write it; raises on failure.
+    Distinct from ``put_json`` above, which writes bytes the caller already built."""
     body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
     client.put_object(Bucket=bucket_name, Key=object_key, Body=body, ContentType="application/json")
     return object_key
