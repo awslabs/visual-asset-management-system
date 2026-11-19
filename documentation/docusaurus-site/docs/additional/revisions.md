@@ -46,6 +46,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Isaac Lab GPU instance pool** — The compute environment launches only GPU instance types that can run the job: one RT-core GPU, at least 8 vCPUs and more registered memory than the 32 GiB the job asks for. The default list is wider, with 11 single-GPU G5, G6, GR6 and G6E types. CPU-only instance classes are no longer added, and `keepWarmInstance` keeps one instance the job can run on. The new `app.pipelines.useIsaacLabTraining.instanceTypes` option sets the list, and deployment fails at synthesis for a type that cannot run the job. (issue #1308)
 -   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593)
 -   **Isaac Lab rl_games and skrl checkpoints** — Training with `rlLibrary` set to `rl_games` or `skrl` uploads the checkpoints the library writes to the run's `checkpoints/` folder, as `rsl_rl` already did: the `.pth` files of an `rl_games` run and the `agent_<timestep>.pt` and `best_agent.pt` files of a `skrl` run. A training run that finds no checkpoint to upload fails, after its logs and configuration are uploaded. Evaluation without a checkpoint path also finds `.pth` files, and selects the latest checkpoint by the chosen library's file naming, ignoring other libraries' checkpoints on the asset. (issue #1315)
 

@@ -622,7 +622,7 @@ Some pipelines (Isaac Lab Training, Gaussian Splat Toolbox, Image to 3D) require
 
 **Resolution:**
 
-1. Verify GPU instance type availability in your AWS Region (e.g., `g6e.2xlarge`, `g5.xlarge`).
+1. Verify GPU instance type availability in your AWS Region (e.g., `g6e.2xlarge`, `g5.xlarge`). For Isaac Lab Training, check the types in `app.pipelines.useIsaacLabTraining.instanceTypes` against your Region and Availability Zones, and see [Instance types](../pipelines/nvidia-isaac-lab.md#instance-types).
 2. Request a service quota increase for the required instance types through the AWS Service Quotas console.
 3. For Isaac Lab Training, consider enabling the `keepWarmInstance` option to reduce cold start times at the cost of continuous compute charges.
 
