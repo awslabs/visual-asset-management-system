@@ -278,6 +278,7 @@ const COMMERCIAL: ConfigShape = {
             useConversion3dBasic: {
                 enabled: true,
                 autoRegisterWithVAMS: true,
+                enableStepInput: false,
             },
             usePreview3dThumbnail: {
                 enabled: false,

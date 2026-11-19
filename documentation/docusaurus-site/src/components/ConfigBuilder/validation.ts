@@ -1115,6 +1115,18 @@ const CORE_RULES: Rule[] = [
         appliesWhen: (c) => g(c, "app.govCloud.enabled") && g(c, "app.useLocationService.enabled"),
         message: "GovCloud must have app.useLocationService.enabled set to false.",
     },
+    // ----- 3D basic conversion STEP input (config.ts resolveConversion3dBasicStepInput: absent = false) -----
+    {
+        id: "conversion-3dbasic-step-input-boolean",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useConversion3dBasic.enableStepInput"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useConversion3dBasic.enableStepInput");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.pipelines.useConversion3dBasic.enableStepInput must be true or false (a JSON boolean). Leave it out to keep STEP input off.",
+    },
     // ----- Audit logging (config.ts resolveAuditLoggingConfig: absent = true, else a boolean) -----
     {
         id: "audit-logging-record-reads-boolean",

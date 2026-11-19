@@ -23,9 +23,10 @@ import {
     PLY_POINT_SIZE_FRACTION,
     USD_FORMATS,
 } from "./fileLoaders";
-import { loadOCCTFile } from "./occtLoader";
+import { isOcctNoGeometryError, loadOCCTFile, occtNoGeometryMessage } from "./occtLoader";
 
 jest.mock("./occtLoader", () => ({
+    ...jest.requireActual("./occtLoader"),
     loadOCCTFile: jest.fn(),
 }));
 
@@ -103,6 +104,15 @@ describe("loadFile OCCT error messages", () => {
 
         expect(message).toBe("Failed to load CAD file: Unsupported OCCT format: xyz");
         expect(message).not.toContain(SETTING);
+    });
+
+    it("passes the no-geometry message through unwrapped so the viewer recognizes it (#1734)", async () => {
+        mockedLoadOCCTFile.mockRejectedValue(new Error(occtNoGeometryMessage("STEP")));
+
+        const message = await failureMessage();
+
+        expect(message).toBe(occtNoGeometryMessage("STEP"));
+        expect(isOcctNoGeometryError(message)).toBe(true);
     });
 
     it("revokes the blob URL when the loader fails", async () => {
