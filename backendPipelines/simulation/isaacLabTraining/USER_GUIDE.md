@@ -27,7 +27,7 @@ Train a new policy from scratch:
 {
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "numEnvs": 4096,
         "maxIterations": 1500,
         "rlLibrary": "rsl_rl"
@@ -47,7 +47,7 @@ Reference a checkpoint within the same asset using a relative path:
 {
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Cartpole-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "checkpointPath": "checkpoints/model_300.pt",
         "numEnvs": 100,
         "numEpisodes": 50,
@@ -66,7 +66,7 @@ naming any other bucket is rejected before the job starts:
 {
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "policyS3Uri": "s3://vams-assets-bucket/asset-123/policies/ant_trained.pt",
         "numEnvs": 100,
         "numEpisodes": 50,
@@ -105,7 +105,7 @@ The "Physics engine" field selects the engine for the run:
 
 Runs that do not name an engine run on Newton: saved configurations, edited template bodies without the field, JSON input files and Isaac Sim connector launches. Results differ from earlier PhysX runs. A policy trained before the upgrade was trained on PhysX, so evaluating it on Newton is a transfer test and not a like-for-like evaluation. When an evaluation can tell that its checkpoint was trained on the other engine, it prints a note and records it as `physicsNote` in `evaluate-config.json`, and it still runs.
 
-A task that does not offer the engine you chose fails at the start with a message naming the options. A custom environment ported from Isaac Lab 2.x usually declares PhysX only: set "Physics engine" to `isaacsim_physx`, and port the package to Python 3.12 (the Isaac Lab environment runs Python 3.12, and a wheel built for another Python is refused).
+A task that lists presets but not the engine you chose fails at the start with a message naming the options. A task that lists no physics presets (the AutoMate tasks, and most custom or ported environments) runs on the physics it registers: the run log says so and `train-config.json` records `task-default`. Port a custom environment package to Python 3.12 (the Isaac Lab environment runs Python 3.12, and a wheel built for another Python is refused).
 
 **List all environments:**
 
@@ -330,7 +330,7 @@ To evaluate a trained policy without training:
 ```json
 {
     "trainingConfig": {
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "mode": "evaluate",
         "policyPath": "s3://vams-assets-bucket/asset-123/policies/my_policy.pt",
         "numEnvs": 100

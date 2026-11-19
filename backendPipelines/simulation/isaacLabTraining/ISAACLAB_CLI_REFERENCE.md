@@ -63,7 +63,9 @@ Things to know:
 -   **Results differ between engines.** A saved configuration, a built-in template or an Isaac Sim connector launch that does not name an engine now runs on Newton. A checkpoint trained before the upgrade was trained on PhysX.
 -   **Evaluate on the engine that trained the policy.** Evaluating on the other engine is a transfer test. A checkpoint carries observations and actions and not the engine, so it loads on either, and the behaviour is similar and not identical. When the evaluation can read the training run's `train-config.json` and the engines differ, the run prints a note and records it as `physicsNote` in `evaluate-config.json`. The note never fails the run. Robots with branched kinematics may also need joint and body ordering overrides that the pipeline does not expose.
 -   **A task offers the engines it lists.** `./isaaclab.sh list_envs --keyword <task> --show_presets` prints them. A task that does not list the chosen engine fails 11 to 17 seconds after the command starts, before Isaac Sim starts, and the pipeline reports `Task <id> does not offer physics=<value> ... Options for this task: ...`.
--   **Environments ported from Isaac Lab 2.x** usually declare PhysX only. With the default engine they fail at the start; set `physics` to `isaacsim_physx`.
+-   **Tasks that list no physics presets** (the AutoMate tasks, `IsaacContrib-Velocity-*-AnymalC-Direct` and most custom or ported environments) reject both engines, so the pipeline leaves the `physics=` selector out and the task runs on the physics it registers. The run log says `Task <id> declares no physics presets; it runs on its registered physics. The physics setting is ignored.` and `train-config.json` records `physics` as `task-default`. For a task the pipeline does not know, the container reads Isaac Lab's rejection and runs the task once more without the selector.
+-   **`--num_envs` is always passed.** The pipeline sets it for every run (4096 for training, 100 for evaluation unless `numEnvs` is set) so runs are comparable and bounded, instead of using each task's own default.
+-   **Checkpoints from Isaac Lab 2.x.** `rl_games` and `skrl` checkpoints load. `rsl_rl` checkpoints do not: rsl_rl 5.x stores the actor and critic in a new format, so the run stops before Isaac Sim starts with a message naming the cause. Retrain on 3.0.
 -   **The first run on a new instance compiles kernels.** Warp and Newton compile on first use. A cold Newton training start measured 88 to 112 seconds against 25 seconds warm on PhysX. The cache lives in the container, so every job starts cold.
 
 ---
@@ -207,7 +209,7 @@ NVIDIA tests Isaac Sim 6.2 on driver 595.58.03 or newer on Linux. The pipeline r
 
 **Cause**: The task does not list that engine.
 
-**Solution**: Set "Physics engine" to one of the options in the message. For an environment ported from Isaac Lab 2.x, use `isaacsim_physx`.
+**Solution**: Set "Physics engine" to one of the options in the message. A task that lists no presets does not raise this error: it runs on its registered physics.
 
 ### Out of GPU Memory
 

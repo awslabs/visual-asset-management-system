@@ -42,7 +42,7 @@ for k, v in {"AWS_DEFAULT_REGION": "us-east-1", "AWS_REGION": "us-east-1"}.items
 _ASSET_FILE = json.dumps({
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "numEnvs": 4096,
         "maxIterations": 9999,
         "checkpointPath": "checkpoints/from_file.pt",
@@ -143,7 +143,7 @@ class TestManifestConfigurationWins:
     def test_no_configuration_falls_back_entirely_to_the_input_file(self):
         definition = _definition(_event())
         assert definition["trainingConfig"]["mode"] == "train"
-        assert definition["trainingConfig"]["task"] == "Isaac-Ant-v0"
+        assert definition["trainingConfig"]["task"] == "Isaac-Ant"
         assert definition["trainingConfig"]["maxIterations"] == 9999
 
     def test_the_input_file_supplies_no_compute_section(self):
@@ -154,7 +154,7 @@ class TestManifestConfigurationWins:
 
     def test_a_blank_configuration_value_falls_through(self):
         definition = _definition(_event(trainingConfig={"mode": "train", "task": "   "}))
-        assert definition["trainingConfig"]["task"] == "Isaac-Ant-v0"
+        assert definition["trainingConfig"]["task"] == "Isaac-Ant"
 
 
 @pytest.mark.unit
