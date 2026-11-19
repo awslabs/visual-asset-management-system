@@ -6,7 +6,9 @@
 import React from "react";
 import { RESERVATION_FULL_START_MESSAGE } from "../api/outcome";
 import { isStartStalled } from "../labels";
+import { DESKTOP_ERROR_MESSAGE } from "../workstations/ConnectLink";
 import type {
+    ConnectionUnavailableReason,
     EdhFailure,
     StartFailure,
     WorkstationActivity,
@@ -41,6 +43,11 @@ interface WorkstationStatusBadgeProps {
     instanceType?: string | null;
     /** Why the last start left the desktop stopped; titles the badge with its sentence. */
     startFailure?: StartFailure | null;
+    /**
+     * Why the workstation cannot be connected to. `DESKTOP_ERROR` (EDH reports a workstation that has
+     * run in error) keeps the state's label, never moving, and titles the badge with its sentence.
+     */
+    connectionUnavailableReason?: ConnectionUnavailableReason | null;
 }
 
 /** The sentence shown for each `lastError` code; a code outside the set falls back to the generic one. */
@@ -256,6 +263,7 @@ const WorkstationStatusBadge: React.FC<WorkstationStatusBadgeProps> = ({
     sessionId,
     instanceType,
     startFailure,
+    connectionUnavailableReason,
 }) => {
     // A start the sweep found stalled reads Start stalled; otherwise the service's `activity` decides,
     // and a record without the field falls back to the state.
@@ -266,6 +274,8 @@ const WorkstationStatusBadge: React.FC<WorkstationStatusBadgeProps> = ({
               (state === "CREATING" && !!sessionId)
             : activity === "starting";
     const isStopping = activity === "stopping";
+    // EDH reports the workstation in error: it is not moving until EDH recovers it or the user stops it.
+    const desktopError = !isStalled && connectionUnavailableReason === "DESKTOP_ERROR";
     const config = isStalled
         ? startStalledStyle
         : isStarting
@@ -273,8 +283,10 @@ const WorkstationStatusBadge: React.FC<WorkstationStatusBadgeProps> = ({
         : isStopping
         ? { ...statusConfig.STOPPED, label: "Stopping" }
         : statusConfig[state] || unknownStatusStyle(state as string);
-    // The non-terminal phases get a moving indicator, a pulsing dot; a stalled start is not moving.
-    const isMoving = !isStalled && (state === "CREATING" || isStarting || isStopping);
+    // The non-terminal phases get a moving indicator, a pulsing dot; a stalled start, and a workstation
+    // EDH reports in error, are not moving.
+    const isMoving =
+        !isStalled && !desktopError && (state === "CREATING" || isStarting || isStopping);
     const failedStart = describeStartFailure({
         state,
         activity,
@@ -288,6 +300,8 @@ const WorkstationStatusBadge: React.FC<WorkstationStatusBadgeProps> = ({
             title={
                 failedStart
                     ? failedStart.message
+                    : desktopError
+                    ? DESKTOP_ERROR_MESSAGE
                     : state === "ORPHANED" || lastError === "LEASE_EXPIRED"
                     ? describeLastError(lastError)
                     : edhState || undefined

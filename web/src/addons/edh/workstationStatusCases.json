@@ -1,5 +1,5 @@
 {
-    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, the stalled start included), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none), and, on a running workstation that cannot be connected to, the sentence the web shows under its inert Connect and `get` prints as Connection (`connectionUnavailableMessage`, absent on the other cases). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
+    "description": "Workstation records covering every state x activity x lastError combination of the start-status contract (feature #536, the stalled start included), each with what the web status badge shows (`badge`), what `vamscli edh workstation list` prints in its State column (`state`, the badge's last word upper-cased: `Start stalled` prints `STALLED`), and the start-failure sentence and detail line both the web and `vamscli edh workstation get` show (null when none), and, on a workstation whose record says why it cannot be connected to (`connectionUnavailableReason`: a running desktop whose display session ended, or a desktop that has run which EDH reports in error), the sentence the web shows under its Connect and `get` prints as Connection (`connectionUnavailableMessage`, absent on the other cases). Read by web/src/addons/edh/components/WorkstationStatusBadge.cases.test.tsx and tools/VamsCLI/tests/addon/test_edh_start_status.py, so the two clients cannot drift apart.",
     "cases": [
         {
             "name": "a stopped workstation whose start is in progress",
@@ -179,6 +179,63 @@
             "connectionUnavailableMessage": "The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect."
         },
         {
+            "name": "a running desktop EDH reports in error",
+            "record": {
+                "state": "ACTIVE",
+                "edhState": "error",
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "connectionUnavailableReason": "DESKTOP_ERROR",
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Active",
+            "state": "ACTIVE",
+            "startFailureMessage": null,
+            "startFailureDetail": null,
+            "connectionUnavailableMessage": "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect."
+        },
+        {
+            "name": "a stopped desktop EDH reports in error",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "error",
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "connectionUnavailableReason": "DESKTOP_ERROR",
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": null,
+            "startFailureDetail": null,
+            "connectionUnavailableMessage": "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect."
+        },
+        {
+            "name": "a started desktop EDH reports in error before it was seen running",
+            "record": {
+                "state": "CREATING",
+                "edhState": "error",
+                "activity": null,
+                "lastError": null,
+                "startFailure": null,
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "connectionUnavailableReason": "DESKTOP_ERROR",
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Creating",
+            "state": "CREATING",
+            "startFailureMessage": null,
+            "startFailureDetail": null,
+            "connectionUnavailableMessage": "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect."
+        },
+        {
             "name": "a stopped desktop",
             "record": {
                 "state": "STOPPED",
@@ -232,6 +289,27 @@
             "state": "STOPPED",
             "startFailureMessage": "AWS had no capacity for g5.16xlarge in this workstation's Availability Zone (us-west-2b) when it was started. A stopped workstation keeps its disk and starts only in that zone, so it stays stopped; start it again later.",
             "startFailureDetail": "AWS: InsufficientInstanceCapacity in us-west-2b"
+        },
+        {
+            "name": "a start EC2 accepted and then returned to stopped for lack of capacity",
+            "record": {
+                "state": "STOPPED",
+                "edhState": "stopped",
+                "activity": null,
+                "lastError": "CAPACITY_UNAVAILABLE",
+                "startFailure": {
+                    "errorCode": "Server.InsufficientInstanceCapacity",
+                    "availabilityZone": "us-west-2b",
+                    "observedAt": "2026-11-19T15:19:30Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Stopped",
+            "state": "STOPPED",
+            "startFailureMessage": "AWS had no capacity for g5.16xlarge in this workstation's Availability Zone (us-west-2b) when it was started. A stopped workstation keeps its disk and starts only in that zone, so it stays stopped; start it again later.",
+            "startFailureDetail": "AWS: Server.InsufficientInstanceCapacity in us-west-2b"
         },
         {
             "name": "a start refused for capacity whose Availability Zone could not be read",

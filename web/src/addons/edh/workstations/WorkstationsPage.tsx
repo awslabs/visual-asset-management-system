@@ -353,6 +353,7 @@ const StatusCell: React.FC<{ row: WorkstationRecord }> = ({ row }) => (
             sessionId={row.sessionId}
             instanceType={row.instanceType}
             startFailure={row.startFailure}
+            connectionUnavailableReason={row.connectionUnavailableReason}
         />
         {(row.state === "ORPHANED" || row.lastError === "LEASE_EXPIRED") && (
             <span className="block text-xs text-text-secondary">
