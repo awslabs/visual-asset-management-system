@@ -417,6 +417,21 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `GOLDEN_STEP=1` builds and tests the STEP image and asserts the default image holds no Open CASCADE files.
 -   `model_formats.prune_for_output` removes curves (kept for glTF/GLB only) and points beside triangles (for
     the triangle-only outputs) before an export: a STEP file's edges and annotations load that way.
+-   The image has no SciPy, and trimesh falls back to O(vertices x faces) loops for some work without it,
+    above all `Trimesh.vertex_normals`. Outputs that always write normals (USD, COLLADA) take them from
+    `vertex_normals.angle_weighted_vertex_normals` (NumPy, the same weighting); do not read
+    `mesh.vertex_normals` on the conversion path, and do not fill the normal cache for OBJ/PLY/glTF, whose
+    exporters write normals only when cached. `tests/test_3dbasic_no_scipy.py` converts a 163,842-vertex mesh
+    to every output in a child with SciPy blocked, under a time bound; this suite's CI environment is built
+    from `requirements.txt` and has no SciPy either.
+-   A loose USD output's companions are written beside the layer, and `usd_io.relink_for_output_extension`
+    rewrites every loose layer's references for the run's output path extension (the manifest's
+    `outputTarget.fileBaseExecutionPathExtension`), which the write-back inserts before each file's own
+    name (rule 7). `normalize_output_path_extension` and `apply_output_path_extension` there are vendored from
+    `backend/backend/common/workflows/outputPathExtension.py` (drift test in
+    `tests/test_3dbasic_output_prefix.py`). `usd_io.dependency_graph` (convert-linked) follows composition
+    arcs, value clips and asset-typed attributes only, never layer or prim metadata such as a component's
+    `assetInfo` identifier.
 -   `size_check.DAE_OUTPUT_EXPANSION_FACTORS` apply instead of `MEMORY_EXPANSION_FACTORS` when the output is COLLADA,
     whose exporter holds the model twice. A format added to the handler needs both measured.
 -   Tests that convert real files (`test_3dbasic_new_formats.py`, `test_3dbasic_units_axes.py`,
