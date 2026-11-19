@@ -338,7 +338,9 @@ class TestReconcileRow:
 
     def test_a_pending_desktop_keeps_its_key(self):
         updates, revoke, delete_secret = rec.reconcile_row(_row("a"), _index(_desktop("sess-a", "placing")), NOW)
-        assert updates == {"state": rec.STATE_CREATING, "edhState": "placing", "connectionAvailable": False}
+        # The desktop has run, so the row keeps that through CREATING (``startAcceptedAt``, stamped by the sweep).
+        assert updates == {"state": rec.STATE_CREATING, "edhState": "placing", "connectionAvailable": False,
+                           "startAcceptedAt": start_stamp(NOW)}
         assert (revoke, delete_secret) == (False, False)
 
     def test_an_unknown_edh_state_keeps_the_stored_state_and_the_key(self):
@@ -542,7 +544,8 @@ class TestReconcileRow:
     def test_a_start_edh_lists_under_way_clears_the_rows_start_stamp(self):
         row = _start_stamped_row("a")
         updates, revoke, delete_secret = rec.reconcile_row(row, _index(_desktop("sess-a", "pending")), NOW)
-        assert updates == {"state": rec.STATE_CREATING, "edhState": "pending", "startRequestedAt": None}
+        assert updates == {"state": rec.STATE_CREATING, "edhState": "pending", "startRequestedAt": None,
+                           "startAcceptedAt": start_stamp(NOW)}
         assert (revoke, delete_secret) == (False, False)
 
     def test_a_desktop_edh_still_lists_stopped_keeps_the_rows_start_stamp(self):

@@ -525,7 +525,7 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
             desktop = resumed = _resumed_desktop(row, index)
     updates: Dict[str, Any] = {}
     if desktop is not None:
-        updates = observed_row_attributes(row, desktop)
+        updates = observed_row_attributes(row, desktop, now)
         if resumed is not None:
             # The row follows its desktop's new session; the never-auto-start schedule is set on it afresh.
             updates["sessionId"] = str(resumed[EDH_SESSION_ID_FIELD])

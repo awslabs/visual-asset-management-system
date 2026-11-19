@@ -231,9 +231,11 @@ START_IN_PROGRESS_SECONDS = 420
 # How old the stamp of an unresolved start (a STOPPED row still marked ``activity`` starting) is when the
 # session sweep records it START_FAILED, provided EDH still reports the desktop stopped.
 START_RESOLVE_SECONDS = 600
-# The stamp the launch worker writes (``start_stamp`` form) when it records a start of a stopped desktop EDH
-# accepted, and only then -- a new launch never carries it; every write that moves the row out of CREATING clears
-# it. An internal row attribute: the record does not return it.
+# The stamp (``start_stamp`` form) of a desktop that has run being back in CREATING: the launch worker writes it when
+# it records a start of a stopped desktop EDH accepted, and a read of EDH's state writes it when it moves a row whose
+# desktop has run (``desktop_has_run``) into CREATING -- a start made from EDH's own console, or EDH holding a running
+# desktop whose Amazon DCV check failed back as pending. A new launch never carries it; every write that moves the
+# row out of CREATING clears it. An internal row attribute: the record does not return it.
 START_ACCEPTED_FIELD = "startAcceptedAt"
 # How old that stamp is when the session sweep records the start START_STALLED, provided the row is still CREATING
 # and EDH still lists the desktop in one of ``START_STALL_EDH_STATES``. A resumed desktop normally reports running
@@ -523,7 +525,7 @@ def connection_checks_due(rows, now=None):
     return due[:CONNECTION_CHECKS_PER_LIST]
 
 
-def observed_row_attributes(row, desktop):
+def observed_row_attributes(row, desktop, now=None):
     """The row attributes EDH's desktop record implies, limited to those that differ from the row:
     the session id a row lacks, the raw and mapped state (``state_for_edh_desktop``: EDH's ``error`` orphans only a
     new launch that never ran), connectability and the reason a desktop is not connectable (``connection_verdict``),
@@ -536,6 +538,7 @@ def observed_row_attributes(row, desktop):
     state is not lease-stopped and the stamp is what ages a stopped one toward deletion, the clearing of the
     start-in-progress stamp from a desktop seen past stopped, which has taken the start that stamp holds a second
     one off for, the clearing of an accepted start's stamp (``startAcceptedAt``) from a row moving out of CREATING,
+    its stamping at ``now`` (the current instant when not given) on a row whose desktop has run moving into CREATING,
     and the clearing of the start mark (``activity``) from a desktop seen running or failed, whose start is over."""
     edh_state = desktop.get(EDH_SESSION_STATE_FIELD)
     attributes = {}
@@ -560,6 +563,11 @@ def observed_row_attributes(row, desktop):
             attributes[START_FAILURE_FIELD] = None
         if attributes['state'] != STATE_CREATING and row.get(START_ACCEPTED_FIELD) is not None:
             attributes[START_ACCEPTED_FIELD] = None
+        elif (attributes['state'] == STATE_CREATING and row.get('state') != STATE_CREATING
+              and row.get(START_ACCEPTED_FIELD) is None and desktop_has_run(row)):
+            # The desktop has run: the row keeps that through CREATING, so EDH's ``error`` or an unlisted desktop
+            # never reads it as a new launch, and a start that does not finish is found stalled.
+            attributes[START_ACCEPTED_FIELD] = start_stamp(now or datetime.now(timezone.utc))
         if attributes['state'] in (STATE_ACTIVE, STATE_CREATING) and row.get('leaseStoppedAt'):
             attributes['leaseStoppedAt'] = None
         if state_for_edh_session_state(edh_state, None) not in (None, STATE_STOPPED):

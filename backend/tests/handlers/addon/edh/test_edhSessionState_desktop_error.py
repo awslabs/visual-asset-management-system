@@ -12,6 +12,7 @@ connectable with ``DESKTOP_ERROR``, and the record returns that reason and no ``
 row without the stamp -- is still ORPHANED with ``LAUNCH_ERROR`` and no reason."""
 
 import pytest
+from datetime import datetime, timezone
 
 from backend.backend.handlers.addon.edh.common import edhSessionState as state
 
@@ -144,6 +145,43 @@ class TestTheMerge:
             changed = state.observed_row_attributes(row, _listed(edh_state))
             assert changed["connectionUnavailableReason"] is None
             assert changed.get("state", "ACTIVE") == expected
+
+
+@pytest.mark.unit
+class TestADesktopThatHasRunKeepsThatThroughCreating:
+    """EDH holds a running desktop whose Amazon DCV check failed back as ``pending``, and a start made from EDH's own
+    console moves a stopped one to ``pending``: VAMS maps both to CREATING. The merge stamps ``startAcceptedAt`` on
+    such a row, so a later ``error`` or an unlisted desktop does not read it as a new launch."""
+
+    NOW = datetime(2026, 11, 19, 17, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("state_value, fields", [
+        ("ACTIVE", {}), ("STOPPED", {"edhState": "stopped"}),
+        ("DELETED", {"edhUnlistedAt": "2026-11-19T15:10:00+00:00"}),
+    ], ids=["active", "stopped", "deleted while unlisted"])
+    @pytest.mark.parametrize("edh_state", ["pending", "placing"])
+    def test_a_row_that_has_run_moving_into_creating_is_stamped(self, state_value, fields, edh_state):
+        changed = state.observed_row_attributes(_row(state_value, **fields), _listed(edh_state), self.NOW)
+        assert changed["state"] == state.STATE_CREATING
+        assert changed["startAcceptedAt"] == state.start_stamp(self.NOW)
+
+    def test_the_stamp_keeps_a_later_error_off_orphaned(self):
+        stamped = {**_row("ACTIVE"), **state.observed_row_attributes(_row("ACTIVE"), _listed("pending"), self.NOW)}
+        changed = state.observed_row_attributes(stamped, _listed("error"))
+        assert "state" not in changed
+        assert changed["connectionUnavailableReason"] == "DESKTOP_ERROR"
+
+    def test_a_new_launch_is_never_stamped(self):
+        row = _row("CREATING", edhState="placing", connectionAvailable=False)
+        assert "startAcceptedAt" not in state.observed_row_attributes(row, _listed("pending"), self.NOW)
+
+    def test_a_row_already_stamped_keeps_its_stamp(self):
+        row = _row("CREATING", edhState="pending", connectionAvailable=False, startAcceptedAt=ACCEPTED)
+        assert "startAcceptedAt" not in state.observed_row_attributes(row, _listed("placing"), self.NOW)
+
+    def test_an_orphaned_failed_launch_edh_lists_again_is_not_stamped(self):
+        row = _row("ORPHANED", edhState="error", lastError="LAUNCH_ERROR", connectionAvailable=False)
+        assert "startAcceptedAt" not in state.observed_row_attributes(row, _listed("pending"), self.NOW)
 
 
 @pytest.mark.unit
