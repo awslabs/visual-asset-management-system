@@ -45,6 +45,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Added:**
 
 -   **Execution config overrides at pipeline registration** — A deployment can register an existing pipeline bundle with a different callback mode, timeouts or Lambda name through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without a second bundle. A registration without the property is unchanged. A change to a value the generated state machines encode redeploys every workflow that uses the pipeline, custom workflows included, and running executions finish on the definition they started with. (issue #1732)
+-   **3D Basic Conversion: AWS Batch target and safer large outputs** — The conversion image builds a second target for AWS Batch that runs the same conversion code as the Lambda function, and a USD output refuses a mesh whose arrays the format cannot hold (`.usda` arrays whose text reaches 2 GB, which usd-core dropped without an error, and `.usdc` or `.usdz` arrays past the 2 GiB crate limit) with a message that suggests another output. A PLY over 4 GiB is refused before it is downloaded, and a USD crate that cannot be decompressed reports that the file could not be read. The Batch tier is deployed by a later change. (issue #1732)
 
 **Key fixes:**
 
