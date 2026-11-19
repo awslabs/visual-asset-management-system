@@ -310,6 +310,20 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 Use a Chromium-based browser (Google Chrome, Microsoft Edge) or Mozilla Firefox for WASM-dependent viewers. Non-WASM viewers and standard mesh formats work in all supported browsers.
 
+### Three.js Viewer Cannot Build Geometry from a CAD File
+
+The Three.js Viewer reads `.stp`, `.step`, `.iges`, `.igs` and `.brep` files with OpenCascade, which turns each part into a triangle mesh. Some files open but give parts with no triangles.
+
+**Symptoms:**
+
+-   Opening a STEP, IGES or BREP file shows "The viewer could not build any geometry from this `<format>` file" and nothing is drawn
+-   Some parts of a CAD file are missing while the others show
+
+**Resolution:**
+
+-   The viewer leaves out the parts that have no geometry and draws the rest. When no part has geometry, it shows the message instead of an empty scene ([#1734](https://github.com/awslabs/visual-asset-management-system/issues/1734)).
+-   Convert the file to GLB and open the converted file. For STEP, the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) does this when `app.pipelines.useConversion3dBasic.enableStepInput` is `true`. For IGES and BREP, export GLB from a CAD application.
+
 ### BabylonJS Gaussian Splat Viewer Reports SPZ Format Version 4
 
 The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3. Babylon.js reads SPZ version 4 only through the `@adobe/spz` WebAssembly module, which the VAMS Content Security Policy does not allow to load.
@@ -670,6 +684,19 @@ See [Configuration reference](../deployment/configuration-reference.md) for the 
 **Resolution:**
 
 These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
+
+### 3D Basic Conversion Refuses a STEP File or Reports an Incomplete Conversion
+
+**Symptoms:**
+
+-   A run on a `.step` or `.stp` file fails with `STEP input is not enabled in this deployment`.
+-   A run succeeds with `Converted <file>, but the converted file is incomplete`, and the execution's Output Results list `conversion-incomplete.json`.
+-   A run fails with `was not converted because MISSING_REFERENCES is fail`.
+
+**Resolution:**
+
+-   STEP input is off by default because it adds Open CASCADE to the conversion image. Set `app.pipelines.useConversion3dBasic.enableStepInput` to `true` in `infra/config/config.json` and deploy again; the image is rebuilt with cascadio. See the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) and the [configuration reference](../deployment/configuration-reference.md).
+-   An incomplete conversion names the referenced files it could not include in `conversion-incomplete.json` and the run log, with the reason for each. Upload a missing file to the asset at the path the model names, or change a reference that points outside the asset (an absolute path, a URL, or a path that leaves the asset) to a relative path, and run the conversion again. Set the template's Missing references option to `fail` to stop such a run instead of converting without the files.
 
 ### Media Preview Run Completes With No Preview
 

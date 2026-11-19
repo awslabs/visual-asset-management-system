@@ -72,6 +72,10 @@ class TestTheCopiesHaveNotDrifted:
         assert "from size_check" in expected, "the canonical import line changed; update the vendored copy"
         assert _vendored("archive_guard.py") == expected
 
+    def test_fbx_scene_matches_the_canonical_file(self):
+        # No import lines differ: the module imports only the standard library and numpy.
+        assert _vendored("fbx_scene.py") == _canonical("format_handlers/fbx_scene.py")
+
     @pytest.mark.parametrize("name", ["UnsafeXmlError", "_forbid", "_qualified", "_safe_expat", "parse_xml"])
     def test_each_xml_guard_function_is_the_canonical_one(self, name):
         source = _canonical("format_handlers/xml_mesh_handler.py")

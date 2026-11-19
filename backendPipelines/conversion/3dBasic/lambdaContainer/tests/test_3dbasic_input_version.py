@@ -65,7 +65,7 @@ class TestTheHandlerConvertsTheVersion:
                              MagicMock(return_value=("s3://abkt/xid/m.stl", OUTPUT, "", VERSION))), \
                 patch.object(mod, "convert_input_output", convert):
             mod.lambda_handler({"body": {"inputManifestS3Location": "s3://abkt/m.json"}}, MagicMock())
-        convert.assert_called_once_with("s3://abkt/xid/m.stl", OUTPUT, ".glb", "", VERSION)
+        convert.assert_called_once_with("s3://abkt/xid/m.stl", OUTPUT, ".glb", "", VERSION, ANY)
 
     def _convert(self, mod, version):
         calls = []
