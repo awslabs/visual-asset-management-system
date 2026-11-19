@@ -4,8 +4,8 @@
  */
 
 /**
- * The search page gives its provider views the reasons Create Asset, Delete Selected, permanent
- * delete and Unarchive Selected are unavailable to the signed-in role. Roles come from the shipped database-readonly and database-user templates
+ * The search page gives its provider views the reasons Create Asset, Delete Selected, permanent delete
+ * and Unarchive Selected are unavailable to the signed-in role. Roles come from the shipped database-readonly and database-user templates
  * (their allowed-routes listings are in templateRoleRoutes.testdata.ts) and the administrator.
  */
 
@@ -42,7 +42,6 @@ jest.mock("../../searchPlugin", () => ({
 
 const mockFetchAllowedApiRoutes = APIService.fetchAllowedApiRoutes as jest.Mock;
 const PERMANENT_DELETE_REASON = `Your role does not allow permanently deleting ${Synonyms.assets}.`;
-const UNARCHIVE_REASON = `Your role does not allow unarchiving ${Synonyms.assets}.`;
 
 async function reasonsFor(routes: any[]) {
     mockFetchAllowedApiRoutes.mockResolvedValue(allowedRoutesResponse(routes));
@@ -71,16 +70,16 @@ describe("search page asset actions by role", () => {
             create: `Your role does not allow creating ${Synonyms.assets}.`,
             delete: `Your role does not allow archiving or deleting ${Synonyms.assets}.`,
             permanentDelete: PERMANENT_DELETE_REASON,
-            unarchive: UNARCHIVE_REASON,
+            unarchive: `Your role does not allow unarchiving ${Synonyms.assets}.`,
         });
     });
 
-    it("a database-user role may create and archive but neither permanently delete nor unarchive, as its template says", async () => {
+    it("a database-user role may create and archive but neither permanently delete nor unarchive", async () => {
         expect(await reasonsFor(DATABASE_USER_ROUTES)).toEqual({
             create: undefined,
             delete: undefined,
             permanentDelete: PERMANENT_DELETE_REASON,
-            unarchive: UNARCHIVE_REASON,
+            unarchive: `Your role does not allow unarchiving ${Synonyms.assets}.`,
         });
     });
 
@@ -104,29 +103,12 @@ describe("search page asset actions by role", () => {
         });
     });
 
-    it("a role with the deleteAsset route may create, archive and permanently delete", async () => {
-        const routes = [
-            ...ADMIN_ROUTES,
-            {
-                path: "/database/{databaseId}/assets/{assetId}/deleteAsset",
-                methods: ["DELETE"],
-                category: "test",
-            },
-        ];
-        expect(await reasonsFor(routes)).toEqual({
-            create: undefined,
-            delete: undefined,
-            permanentDelete: undefined,
-            unarchive: UNARCHIVE_REASON,
-        });
-    });
-
     it("the administrator listing without the unarchive and deleteAsset routes may create and archive only", async () => {
         expect(await reasonsFor(ADMIN_ROUTES)).toEqual({
             create: undefined,
             delete: undefined,
             permanentDelete: PERMANENT_DELETE_REASON,
-            unarchive: UNARCHIVE_REASON,
+            unarchive: `Your role does not allow unarchiving ${Synonyms.assets}.`,
         });
     });
 
@@ -147,5 +129,22 @@ describe("search page asset actions by role", () => {
                 unarchive: PERMISSIONS_FAILED_REASON,
             })
         );
+    });
+
+    it("a role with the deleteAsset route may create, archive and permanently delete", async () => {
+        const routes = [
+            ...ADMIN_ROUTES,
+            {
+                path: "/database/{databaseId}/assets/{assetId}/deleteAsset",
+                methods: ["DELETE"],
+                category: "test",
+            },
+        ];
+        expect(await reasonsFor(routes)).toEqual({
+            create: undefined,
+            delete: undefined,
+            permanentDelete: undefined,
+            unarchive: `Your role does not allow unarchiving ${Synonyms.assets}.`,
+        });
     });
 });
