@@ -1867,6 +1867,9 @@ def audit(ctx: click.Context, database_id: Optional[str], asset_id: Optional[str
           text: Optional[str], json_output: bool):
     """Query the compliance audit trail.
 
+    This is the compliance evaluation trail (bindings, evaluations, quarantine, exceptions). To
+    search the VAMS audit logs (who did what to which entity), use 'vamscli audit search'.
+
     Without --database-id/--asset-id the global trail is listed, optionally narrowed to one
     --event-type (schema_bound_to_database, schema_bound_to_asset, compliance_check,
     evaluation_error, quarantine_released, exception_granted, exception_revoked,

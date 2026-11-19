@@ -399,6 +399,7 @@ describe("ConfigBuilder validation.ts mirrors the getConfig() rules for useGenAi
                 // Not enable(): that helper pins us-east-1, and the region set last wins.
                 restrictedPartition(c);
                 c.env.region = "eusc-de-east-1";
+                c.app.auditLogging.search.enabled = false; // refused in aws-eusc unless off
                 c.app.pipelines.useGenAiVideoSopBom.enabled = true;
                 c.app.pipelines.useGenAiVideoSopBom.bedrockModelId = BARE_ID;
             })();

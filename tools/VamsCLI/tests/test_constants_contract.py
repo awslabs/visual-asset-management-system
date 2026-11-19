@@ -130,6 +130,13 @@ class TestFeatureSwitchMirror:
         assert constants.FEATURE_ZIPDOWNLOADS == "ZIPDOWNLOADS"
         assert "ZIPDOWNLOADS" in declared, "VAMS_APP_FEATURES does not publish ZIPDOWNLOADS"
 
+    def test_audit_log_search_switch_is_published_and_mirrored(self):
+        """FEATURE_AUDITLOGSEARCH gates the audit commands; the deployment publishes it unless
+        app.auditLogging.search.enabled is false."""
+        declared = _enum_members(VAMS_APP_FEATURES_TS.read_text(encoding="utf-8"))
+        assert constants.FEATURE_AUDITLOGSEARCH == "AUDITLOGSEARCH"
+        assert "AUDITLOGSEARCH" in declared, "VAMS_APP_FEATURES does not publish AUDITLOGSEARCH"
+
     def test_constants_py_re_exports_the_addon_names(self):
         """Existing `from vamscli.constants import FEATURE_PHYSNA_ADDON` imports keep working."""
         for name, value in vars(addon_constants).items():

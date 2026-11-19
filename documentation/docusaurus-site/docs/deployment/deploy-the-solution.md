@@ -116,6 +116,10 @@ If you prefer to edit by hand, template files are provided as starting points:
 | AWS GovCloud                 | `infra/config/config.template.govcloud.json`    |
 | AWS European Sovereign Cloud | `infra/config/config.template.eusovereign.json` |
 
+:::note[Audit Log Search is off in the EU Sovereign Cloud template]
+Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud (`aws-eusc`), so audit log search is off there by default and `getConfig()` rejects `true` in `aws-eusc`. Audit recording is unaffected. The EU Sovereign Cloud template sets `app.auditLogging.search.enabled` to `false`, because Audit Log Search runs on Amazon CloudWatch Logs Insights, which is not available in that partition. Setting it to `true` there fails synthesis. The recording of audit events is not affected: the audit log groups are written and can be read in Amazon CloudWatch Logs. See the [configuration reference](configuration-reference.md#audit-logging-appauditlogging).
+:::
+
 Copy the appropriate template to `config.json` and customize it:
 
 ```bash

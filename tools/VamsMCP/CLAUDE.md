@@ -114,6 +114,9 @@ tools/VamsMCP/
                              # maxItems-keyed pages (cascades, evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
                              # bodies, docstring contracts
+    test_audit_tools.py      # the opt-in `audit` set (vams_audit_groups, _search, _results, _stop): the set
+                             # is no part of `all`, gating on stdio and remote, annotations, descriptions,
+                             # the bodies and bounds, error data, the remote user's own token
     test_compliance_toolset.py
                              # the `compliance` tool set: its members, its own budget, the gates
                              # inside it, the outcome checks, and over the remote server the
@@ -432,7 +435,8 @@ asymmetry other callers rely on):
     ceiling), each tool set's descriptions together within 30,000 (`toolsets.MAX_DESCRIPTION_CHARS_PER_SET`,
     Rule 17; the full core surface other than the compliance tools, which only `all` over stdio lists,
     within 32,000), and the 25 compliance tools (`COMPLIANCE_TOOLS`, the `compliance` tool set) together
-    within 18,700. Before
+    within 18,700. The four audit tools (the opt-in `audit` set) keep a total of their own, within 4,000
+    (`MAX_AUDIT_TOTAL_CHARS`), outside the core total. Before
     adding text, cut text. Many older
     contract tests pin phrases in docstrings; keep the phrase, shorten around it. A release that
     changes tools, descriptions or `SERVER_INSTRUCTIONS` runs the scenarios of
@@ -441,7 +445,8 @@ asymmetry other callers rely on):
 12. **Every tool carries a title and the annotation of its gate.** Decorate with
     `@mcp.tool(title="...", annotations=<CONST>)` then `@tool_result`, using the constants in
     `vams_mcp/annotations.py`: `READ` in the read block, `WRITE` (or `COMPUTE`) under
-    `enable_writes`, `DESTRUCTIVE` (or `DESTRUCTIVE_COMPUTE`) under `enable_destructive`. The
+    `enable_writes`, `DESTRUCTIVE` (or `DESTRUCTIVE_COMPUTE`) under `enable_destructive`. The one exception is
+    `vams_audit_stop` (read block, `STOP_OWN_SEARCH`: not read-only, not destructive, idempotent). The
     `*_COMPUTE` constants (`openWorldHint: true`) are for tools that start, resume, extend, stop or
     terminate billed compute — the same tools Rule 4 keeps out of `autoApprove`. The tier decides,
     not what the tool seems to do: `get_edh_workstation_connect` changes nothing but sits in the
@@ -535,8 +540,36 @@ asymmetry other callers rely on):
       differs across the supported `mcp` range (1.10.x serves the metadata at a path its own
       challenge does not name). The SDK still carries the protocol and its DNS rebinding check,
       which `transport_security_settings` configures for the resource's host and loopback only.
-17. **Every tool is in a tool set, and every set fits a remote client.** `toolsets.py` names the sets
-    (`consumer`, `operator`, `admin`, `compliance`, `edh`, `edh-admin`; plus `custom` for a fork's tools and
+17. **Every tool is in a tool set, and every set fits a remote client.** The `audit` set
+    (`toolsets.AUDIT_TOOLS`: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`,
+    `vams_audit_stop`) is OPT-IN on both transports: `Selection.includes` registers those tools only when
+    `audit` is named, so `all`, `consumer`, `operator` and `admin` never carry them (a test that wants
+    every tool selects `all,audit`; the `server_with_switches` fixture takes `toolsets=`). A search starts
+    a billable CloudWatch Logs Insights query and audit records may be sensitive, so every description says
+    so and none is in the README `autoApprove` sample. Audit search is core VAMS with a deployment switch
+    (`AUDITLOGSEARCH`, on by default, off in the EU Sovereign template): the set is the opt-in gate, and the
+    feature list is the second. `_audit_search_switched_off()` keeps a signed-in stdio server from registering
+    the four tools when its snapshot was read and lacks the switch (`vams_status` `gates.auditSearch` says so; a
+    remote server has no client at start), and each tool opens with `_require_audit_search()`, the pre-flight
+    that answers the CLI's `AUDIT_SEARCH_DISABLED_MESSAGE` as data on either transport (an unread snapshot is
+    let through). The fixtures take `AUDITLOGSEARCH` in `ALL_SWITCHES`; the fake deployment's `features` sets
+    the remote list. So: the three reads and `vams_audit_stop` sit in the read block, and the stop
+    tool (stops the caller's own search, removes no data) carries `STOP_OWN_SEARCH`, not `READ`. The tools
+    build the request with the CLI's `vamscli.utils.audit_search.build_filters` and call
+    `CLIENT.api.<method>` in the tool body (the coverage manifest reads that); a search waits at most one
+    long poll of about 20 seconds, less in remote mode inside the call's time budget
+    (`_audit_wait_seconds`), and rows are bounded (`AUDIT_DEFAULT_ROWS` 25, `AUDIT_MAX_ROWS` 200) with
+    `NextToken` and `truncated` to continue (`vams_audit_results`, Rule 8). No tool computes or returns a
+    count of records the caller may not see. `SERVER_INSTRUCTIONS` is NOT changed by the set: it is the same
+    text whatever is selected and names no audit tool (the descriptions carry the billable and sensitive
+    warnings, and Rule 11's agent scenarios stay unchanged); `test_the_instructions_do_not_change_with_the_audit_set`
+    pins this. The `contains` limits come from `vams_audit_groups` (`audit_search.get_contains_limits`,
+    shared with the CLI, cached per deployment for five minutes, defaults when the read fails). A
+    `contains` search cannot be read once it is stopped or exported, and row text is untrusted: the
+    descriptions say both.
+
+    `toolsets.py` names the sets
+    (`consumer`, `operator`, `admin`, `compliance`, `audit`, `edh`, `edh-admin`; plus `custom` for a fork's tools and
     `all`). The 25 compliance tools (`toolsets.COMPLIANCE_TOOLS`) are in `compliance` only, with the
     orientation reads, and each compliance write names a compliance read as its outcome check
     (`server._CORE_OUTCOME_CHECKS`); `tests/test_compliance_toolset.py` holds them there.
@@ -545,7 +578,7 @@ asymmetry other callers rely on):
     each set stays within `MAX_TOOLS_PER_SET` (100, the most Amazon Quick lists per connection) and
     `MAX_DESCRIPTION_CHARS_PER_SET` (30,000) with every gate and add-on on; `tests/test_toolsets.py`
     fails otherwise. When a set would pass a limit, split it rather than raise the limit. The stdio
-    default is `all` (every tool, as before tool sets); the remote default is `consumer`.
+    default is `all` (every tool, as before tool sets, except the opt-in `audit` tools); the remote default is `consumer`.
 
 ---
 

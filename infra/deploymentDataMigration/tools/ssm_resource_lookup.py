@@ -92,6 +92,7 @@ class ResourceParamKeys:
     VECTOR_EMBEDDINGS_STORAGE_TABLE = "dynamoTables/vectorEmbeddingsStorage"
     LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = "dynamoTables/largeObjectCopyJobsStorage"
     ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE = "dynamoTables/zipDownloadRequestsStorage"
+    AUDIT_LOG_QUERIES_STORAGE_TABLE = "dynamoTables/auditLogQueriesStorage"
     # Compliance tables
     COMPLIANCE_SCHEMA_STORAGE_TABLE = "dynamoTables/complianceSchemaStorage"
     COMPLIANCE_ASSET_STATE_STORAGE_TABLE = "dynamoTables/complianceAssetStateStorage"

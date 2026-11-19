@@ -11,6 +11,7 @@ import * as cloudTrail from "aws-cdk-lib/aws-cloudtrail";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { ApiBuilderNestedStack } from "./nestedStacks/apiLambda/apiBuilder-nestedStack";
 import { ApiBuilder2NestedStack } from "./nestedStacks/apiLambda/apiBuilder2-nestedStack";
+import { ApiBuilder3NestedStack } from "./nestedStacks/apiLambda/apiBuilder3-nestedStack";
 import { StorageResourcesBuilderNestedStack } from "./nestedStacks/storage/storageBuilder-nestedStack";
 import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedStack";
 import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
@@ -271,6 +272,28 @@ export class CoreVAMSStack extends cdk.Stack {
             apiBuilder2NestedStack.addStackDependency(resourceNamesNestedStack);
             apiBuilder2NestedStack.addStackDependency(apiBuilderNestedStack);
 
+            //Deploy Backend API framework - third stack (nested stack), only when audit log search is on
+            //(app.auditLogging.search.enabled, default true; false in the EU Sovereign template).
+            //Holds the audit log search Lambda and its /audit routes (kept out of ApiBuilder2 to leave
+            //that template headroom under the 1,000,000 byte limit). It needs only the storage tables
+            //and the resource-name parameters, not the other API stacks. With the switch off the stack,
+            //its Lambda, routes and IAM, and the handle table in the storage stack, are not built.
+            const auditSearchEnabled = Config.isAuditSearchEnabled(props.config);
+            let apiBuilder3NestedStack: ApiBuilder3NestedStack | undefined;
+            if (auditSearchEnabled) {
+                apiBuilder3NestedStack = new ApiBuilder3NestedStack(this, "ApiBuilder3", {
+                    config: props.config,
+                    registry: apiRouteRegistry,
+                    storageResources: storageResourcesNestedStack.storageResources,
+                    lambdaCommonBaseLayer: lambdaLayers.lambdaCommonBaseLayer,
+                    vpc: this.vpc,
+                    subnets: this.subnetsIsolated,
+                });
+                apiBuilder3NestedStack.addStackDependency(storageResourcesNestedStack);
+                apiBuilder3NestedStack.addStackDependency(resourceNamesNestedStack);
+                this.enabledFeatures.push(VAMS_APP_FEATURES.AUDITLOGSEARCH);
+            }
+
             //Deploy OpenSearch Serverless (nested stack)
             const searchBuilderNestedStack = new SearchBuilderNestedStack(
                 this,
@@ -360,7 +383,12 @@ export class CoreVAMSStack extends cdk.Stack {
             // The Lambdas that list API routes and permission object types (the constraint editor's
             // lists and the allowed-route checks) leave out the entries of an add-on this deployment
             // does not build. The value is a plain string, so it adds no cross-stack reference.
-            const addonFeaturesEnabled = addonBuilderNestedStack.enabledFeatures.join(",");
+            // The audit log search switch (a core feature gated like an add-on, so its /audit routes
+            // leave the listings when it is off) is carried in the same list.
+            const addonFeaturesEnabled = [
+                ...addonBuilderNestedStack.enabledFeatures,
+                ...(auditSearchEnabled ? [VAMS_APP_FEATURES.AUDITLOGSEARCH] : []),
+            ].join(",");
             for (const listingFunction of [
                 ...apiBuilderNestedStack.addonFeatureListingFunctions,
                 ...apiBuilder2NestedStack.addonFeatureListingFunctions,
@@ -431,6 +459,9 @@ export class CoreVAMSStack extends cdk.Stack {
             apiNestedStack.addStackDependency(authBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilderNestedStack);
             apiNestedStack.addStackDependency(apiBuilder2NestedStack);
+            if (apiBuilder3NestedStack) {
+                apiNestedStack.addStackDependency(apiBuilder3NestedStack);
+            }
             apiNestedStack.addStackDependency(searchBuilderNestedStack);
             apiNestedStack.addStackDependency(addonBuilderNestedStack);
             apiNestedStack.addStackDependency(customBuilderNestedStack);

@@ -113,6 +113,35 @@ export const API_ORIGIN_VERIFY_ROTATION_DAYS = 45;
 // into `apiGatewayRest.apiGatewayTimeoutTime`; it doubles as the validation floor below.
 export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 
+// Audit log search (`app.auditLogging.search.*`): defaults and ceilings of the limits the search Lambda
+// enforces. The Lambda reads the same ceilings (backend/backend/handlers/audit/auditLogService.py and
+// common/auditSearch/queryBuilder.py), so a value above a ceiling is refused here rather than being
+// held silently there. getConfig() validates the block; an absent block or key takes its default.
+export const AUDIT_SEARCH_DEFAULTS = {
+    maxQueryWindowDays: 31,
+    maxRows: 1000,
+    maxConcurrentQueries: 5,
+    maxConcurrentQueriesPerUser: 2,
+    queryDeadlineSeconds: 300,
+    longPollWaitSeconds: 20,
+    maxContainsTermLength: 64,
+    maxContainsTerms: 3,
+    handleRetentionMinutes: 60,
+};
+export const AUDIT_SEARCH_CEILINGS = {
+    maxQueryWindowDays: 366,
+    maxRows: 10000,
+    maxConcurrentQueries: 20,
+    queryDeadlineSeconds: 900,
+    // The long-poll wait is at most this and at most the API timeout minus AUDIT_SEARCH_POLL_HEADROOM_SECONDS.
+    longPollWaitSeconds: 25,
+    maxContainsTermLength: 128,
+    maxContainsTerms: 5,
+    handleRetentionMinutes: 1440,
+};
+export const AUDIT_SEARCH_MIN_HANDLE_RETENTION_MINUTES = 5;
+export const AUDIT_SEARCH_POLL_HEADROOM_SECONDS = 4;
+
 // GPUs each NVIDIA Cosmos 3 job reserves, and therefore the minimum its tier's instance types must
 // carry. The container shards the checkpoint's parameters across the devices the job holds, so the
 // reservation is what makes a multi-GPU instance's memory usable; a tier pointed at a smaller
@@ -123,6 +152,34 @@ export const API_GATEWAY_DEFAULT_TIMEOUT_SECONDS = 29;
 // COSMOS3_SUPER_GPU_COUNT is referenced only by the getConfig() instance-type checks below.
 export const COSMOS3_NANO_GPU_COUNT = 4;
 export const COSMOS3_SUPER_GPU_COUNT = 8;
+
+// What one Isaac Lab Batch job reserves, and so what every instance type in its compute environment
+// must offer. The isaacLabTraining construct passes these to the job definition, and
+// validateIsaacLabInstanceTypes() checks each configured instance type against them: AWS Batch accepts
+// a compute environment whose types cannot hold the job, then leaves the job RUNNABLE with no error.
+export const ISAAC_LAB_JOB_VCPUS = 8;
+export const ISAAC_LAB_JOB_MEMORY_MIB = 32768;
+export const ISAAC_LAB_JOB_GPUS = 1;
+
+// The instance types the Isaac Lab compute environment uses when app.pipelines.useIsaacLabTraining
+// names none. Every one carries one NVIDIA RT-core GPU with 24 GB or more of video memory (L4, A10G
+// or L40S; Isaac Sim needs RT cores and 16 GB), at least ISAAC_LAB_JOB_VCPUS vCPUs, and more
+// registered memory than ISAAC_LAB_JOB_MEMORY_MIB. g5.2xlarge and g6.2xlarge are left out: their
+// 32 GiB of installed memory registers below the 32,768 MiB the job asks for. The list is wide on
+// purpose, because AWS Batch can only find capacity among the types it is given.
+export const DEFAULT_ISAAC_LAB_INSTANCE_TYPES: readonly string[] = [
+    "g6.4xlarge",
+    "g6.8xlarge",
+    "g6.16xlarge",
+    "gr6.4xlarge",
+    "gr6.8xlarge",
+    "g6e.2xlarge",
+    "g6e.4xlarge",
+    "g6e.8xlarge",
+    "g5.4xlarge",
+    "g5.8xlarge",
+    "g5.16xlarge",
+];
 
 // Amazon Bedrock embedding model the vector index is built from when config.json names none, and the
 // vector width that model emits by default. Both reach infrastructure: the model id is handed to the
@@ -533,6 +590,8 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "g6.12xlarge": 4,
     "g6.24xlarge": 4,
     "g6.48xlarge": 8,
+    "gr6.4xlarge": 1,
+    "gr6.8xlarge": 1,
     "g6e.xlarge": 1,
     "g6e.2xlarge": 1,
     "g6e.4xlarge": 1,
@@ -550,6 +609,55 @@ export const GPU_COUNT_BY_INSTANCE_TYPE: Record<string, number> = {
     "p5.48xlarge": 8,
     "p5e.48xlarge": 8,
     "p5en.48xlarge": 8,
+};
+
+// vCPUs and installed memory (MiB) of the accelerated instance types whose GPU has RT cores and 16 GB
+// or more of video memory: g5 (A10G, 24 GB), g6 and gr6 (L4, 24 GB) and g6e (L40S, 48 GB). The names
+// that also appear in GPU_COUNT_BY_INSTANCE_TYPE carry their GPU count there. A type outside this
+// table is not rejected on size alone; see validateIsaacLabInstanceTypes().
+export const ISAAC_LAB_CAPABLE_INSTANCE_SPECS: Record<
+    string,
+    { vcpus: number; memoryMiB: number }
+> = {
+    "g5.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g5.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g5.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g5.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g5.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g5.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g5.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g5.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "g6.xlarge": { vcpus: 4, memoryMiB: 16384 },
+    "g6.2xlarge": { vcpus: 8, memoryMiB: 32768 },
+    "g6.4xlarge": { vcpus: 16, memoryMiB: 65536 },
+    "g6.8xlarge": { vcpus: 32, memoryMiB: 131072 },
+    "g6.16xlarge": { vcpus: 64, memoryMiB: 262144 },
+    "g6.12xlarge": { vcpus: 48, memoryMiB: 196608 },
+    "g6.24xlarge": { vcpus: 96, memoryMiB: 393216 },
+    "g6.48xlarge": { vcpus: 192, memoryMiB: 786432 },
+    "gr6.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "gr6.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.xlarge": { vcpus: 4, memoryMiB: 32768 },
+    "g6e.2xlarge": { vcpus: 8, memoryMiB: 65536 },
+    "g6e.4xlarge": { vcpus: 16, memoryMiB: 131072 },
+    "g6e.8xlarge": { vcpus: 32, memoryMiB: 262144 },
+    "g6e.16xlarge": { vcpus: 64, memoryMiB: 524288 },
+    "g6e.12xlarge": { vcpus: 48, memoryMiB: 393216 },
+    "g6e.24xlarge": { vcpus: 96, memoryMiB: 786432 },
+    "g6e.48xlarge": { vcpus: 192, memoryMiB: 1572864 },
+};
+
+// Instance families Isaac Sim cannot use, with the reason. GPUs without RT cores cannot run its
+// renderer (A100, H100, V100), and the T4 in g4dn reports about 15 GiB, under the 16 GB it needs.
+const ISAAC_LAB_UNSUPPORTED_FAMILIES: Record<string, string> = {
+    g4dn: "its NVIDIA T4 GPU reports about 15 GiB of video memory, under the 16 GB Isaac Sim needs",
+    p3: "its NVIDIA V100 GPU has no RT cores, which Isaac Sim needs",
+    p3dn: "its NVIDIA V100 GPU has no RT cores, which Isaac Sim needs",
+    p4d: "its NVIDIA A100 GPU has no RT cores, which Isaac Sim needs",
+    p4de: "its NVIDIA A100 GPU has no RT cores, which Isaac Sim needs",
+    p5: "its NVIDIA H100 GPU has no RT cores, which Isaac Sim needs",
+    p5e: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
+    p5en: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
 };
 
 /** Strings a CDK context value or environment variable may use to mean true. */
@@ -952,6 +1060,89 @@ function validateInstanceTypeGpuCount(
 }
 
 /**
+ * Memory (MiB) the Amazon ECS agent registers for an instance with the given installed memory, as a
+ * conservative estimate. The agent registers what the operating system reports, which is less than
+ * the installed amount (AWS documents 7,985 MiB for an 8 GiB m4.large, 97.5%), and the Batch AMI holds
+ * back a further 32 MiB. 97% less 32 MiB stays under both, so a type that clears the job's memory by
+ * this estimate clears it in practice. A 32 GiB type registers about 31.5 GiB and never fits a job
+ * that asks for 32,768 MiB.
+ */
+export function estimatedRegisteredMemoryMiB(installedMiB: number): number {
+    return Math.floor(installedMiB * 0.97) - 32;
+}
+
+/**
+ * Checks the instance types of the Isaac Lab compute environment against the job they must run.
+ *
+ * Throws for a type that the Isaac Lab job can never run on, because AWS Batch accepts the compute
+ * environment and then leaves the job RUNNABLE without an error:
+ *  - an empty list, or an entry that is not a string;
+ *  - a family with no RT-core GPU or too little video memory (g4dn, P-series);
+ *  - a type with a GPU count other than the job's one (a larger one idles the rest and bills for it);
+ *  - a type with fewer vCPUs than the job asks for, or too little registered memory.
+ * Warns, rather than throwing, for a type this table does not know, so a newly released family can be
+ * tried, and says that the deployer must confirm it.
+ */
+export function validateIsaacLabInstanceTypes(instanceTypes: unknown, configPath: string) {
+    if (
+        !Array.isArray(instanceTypes) ||
+        instanceTypes.length === 0 ||
+        instanceTypes.some((t) => typeof t !== "string" || t.trim() === "")
+    ) {
+        throw new Error(
+            `Configuration Error: ${configPath} must be a non-empty list of EC2 instance type names ` +
+                `(for example g6e.2xlarge). AWS Batch cannot run the Isaac Lab job without one.`
+        );
+    }
+    for (const instanceType of instanceTypes as string[]) {
+        const family = instanceType.split(".")[0];
+        const unsupportedReason = ISAAC_LAB_UNSUPPORTED_FAMILIES[family];
+        if (unsupportedReason) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which Isaac Lab cannot ` +
+                    `use: ${unsupportedReason}. Use a G5, G6, GR6 or G6e instance type with one GPU ` +
+                    `(for example g6e.2xlarge).`
+            );
+        }
+        const spec = ISAAC_LAB_CAPABLE_INSTANCE_SPECS[instanceType];
+        if (spec === undefined) {
+            console.warn(
+                `Configuration Warning: ${configPath} includes ${instanceType}, whose size and GPU VAMS ` +
+                    `cannot verify. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS} vCPUs, ` +
+                    `${ISAAC_LAB_JOB_MEMORY_MIB} MiB of registered memory, ${ISAAC_LAB_JOB_GPUS} GPU and an ` +
+                    `NVIDIA GPU with RT cores and 16 GB of video memory. Confirm the type offers them, ` +
+                    `because AWS Batch leaves the job RUNNABLE on a type that does not.`
+            );
+            continue;
+        }
+        const gpus = GPU_COUNT_BY_INSTANCE_TYPE[instanceType];
+        if (gpus !== ISAAC_LAB_JOB_GPUS) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${gpus} GPUs. ` +
+                    `The Isaac Lab job uses ${ISAAC_LAB_JOB_GPUS}, so a type with more leaves the others ` +
+                    `idle and billed. Use a single-GPU type (for example g6e.4xlarge).`
+            );
+        }
+        if (spec.vcpus < ISAAC_LAB_JOB_VCPUS) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${spec.vcpus} ` +
+                    `vCPUs. The Isaac Lab job needs ${ISAAC_LAB_JOB_VCPUS}, so AWS Batch can never place it ` +
+                    `there. Use a type with at least ${ISAAC_LAB_JOB_VCPUS} vCPUs.`
+            );
+        }
+        const registeredMiB = estimatedRegisteredMemoryMiB(spec.memoryMiB);
+        if (registeredMiB < ISAAC_LAB_JOB_MEMORY_MIB) {
+            throw new Error(
+                `Configuration Error: ${configPath} includes ${instanceType}, which has ${spec.memoryMiB} ` +
+                    `MiB of installed memory and registers about ${registeredMiB} MiB with Amazon ECS. The ` +
+                    `Isaac Lab job asks for ${ISAAC_LAB_JOB_MEMORY_MIB} MiB, so AWS Batch can never place ` +
+                    `it there. Use a type with more memory (for example g6e.2xlarge or g6.4xlarge).`
+            );
+        }
+    }
+}
+
+/**
  * The instance types that EVERY enabled model in a shared compute environment permits.
  *
  * Several Cosmos 3 model variants share one AWS Batch compute environment and one job queue. Batch has
@@ -1193,32 +1384,180 @@ export function validateZipDownloadsConfig(config: ConfigPublic): void {
 
 /**
  * Defaults and validates `app.auditLogging`: an absent block or `recordReads` key means `true`; any
- * value that is not a JSON boolean is a configuration error rather than being read as truthy.
- * Exported for the config tests.
+ * value that is not a JSON boolean is a configuration error rather than being read as truthy. The
+ * `search` block fills each absent key with its default (`enabled` is `true` when absent, `false` in aws-eusc:
+ * audit log search is deployed unless a deployment turns it off); a value that is not an integer in range, or
+ * an `enabled` that is not a boolean, is a configuration error. `enabled: true` in the `aws-eusc`
+ * partition is refused because Amazon CloudWatch Logs Insights is not available there. Exported for the config tests.
  */
 export function resolveAuditLoggingConfig(config: ConfigPublic): void {
-    const app = config.app as ConfigPublic["app"] & { auditLogging?: unknown };
+    const app = config.app as unknown as { auditLogging?: unknown };
     if (app.auditLogging === undefined || app.auditLogging === null) {
+        // `search` is filled with its defaults below.
         app.auditLogging = { recordReads: true };
-        return;
-    }
-    if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
+    } else if (typeof app.auditLogging !== "object" || Array.isArray(app.auditLogging)) {
         throw new Error(
             "Configuration Error: app.auditLogging must be an object, for example " +
                 '{"recordReads": true}.'
         );
     }
-    const block = app.auditLogging as { recordReads?: unknown };
+    const block = app.auditLogging as { recordReads?: unknown; search?: unknown };
     if (block.recordReads === undefined || block.recordReads === null) {
         block.recordReads = true;
-        return;
-    }
-    if (typeof block.recordReads !== "boolean") {
+    } else if (typeof block.recordReads !== "boolean") {
         throw new Error(
             "Configuration Error: app.auditLogging.recordReads must be true or false (a JSON " +
                 `boolean), not ${JSON.stringify(block.recordReads)}.`
         );
     }
+    resolveAuditSearchConfig(block, config);
+}
+
+function auditSearchInteger(
+    search: Record<string, unknown>,
+    key: keyof typeof AUDIT_SEARCH_DEFAULTS,
+    min: number,
+    max: number
+): number {
+    const value = search[key];
+    if (value === undefined || value === null) {
+        return AUDIT_SEARCH_DEFAULTS[key];
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+        throw new Error(
+            `Configuration Error: app.auditLogging.search.${key} must be an integer from ${min} to ` +
+                `${max}, not ${JSON.stringify(value)}.`
+        );
+    }
+    return value;
+}
+
+function resolveAuditSearchConfig(block: { search?: unknown }, config: ConfigPublic): void {
+    if (block.search === undefined || block.search === null) {
+        block.search = {};
+    } else if (typeof block.search !== "object" || Array.isArray(block.search)) {
+        throw new Error(
+            "Configuration Error: app.auditLogging.search must be an object of search limits, for " +
+                'example {"maxRows": 1000}.'
+        );
+    }
+    const search = block.search as Record<string, unknown>;
+    const known = new Set(Object.keys(AUDIT_SEARCH_DEFAULTS));
+    for (const key of Object.keys(search)) {
+        if (key !== "enabled" && !known.has(key)) {
+            throw new Error(
+                `Configuration Error: app.auditLogging.search.${key} is not a known setting. ` +
+                    `Known settings: enabled, ${Array.from(known).join(", ")}.`
+            );
+        }
+    }
+    // On/off switch for the search capability only (routes, Lambda, query table, web page, CLI and MCP
+    // tools). Recording of audit events is not affected. Absent = on (off in aws-eusc). The EU Sovereign Cloud has no
+    // CloudWatch Logs Insights, so a search deployment there cannot work and is refused.
+    // An absent key is on everywhere except aws-eusc, where it is off so that a configuration written
+    // before this key existed still synthesizes there; an explicit true in aws-eusc is refused.
+    let enabled = config.env?.partition !== "aws-eusc";
+    if (search.enabled !== undefined && search.enabled !== null) {
+        if (typeof search.enabled !== "boolean") {
+            throw new Error(
+                "Configuration Error: app.auditLogging.search.enabled must be true or false (a JSON " +
+                    `boolean), not ${JSON.stringify(search.enabled)}.`
+            );
+        }
+        enabled = search.enabled;
+    }
+    if (enabled && config.env?.partition === "aws-eusc") {
+        throw new Error(
+            "Configuration Error: app.auditLogging.search.enabled is true, but audit log search needs " +
+                "Amazon CloudWatch Logs Insights, which is not available in the 'aws-eusc' partition " +
+                "(AWS European Sovereign Cloud). Set app.auditLogging.search.enabled to false there; " +
+                "the recording of audit events is not affected."
+        );
+    }
+    const resolved = {
+        enabled,
+        maxQueryWindowDays: auditSearchInteger(
+            search,
+            "maxQueryWindowDays",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxQueryWindowDays
+        ),
+        maxRows: auditSearchInteger(search, "maxRows", 1, AUDIT_SEARCH_CEILINGS.maxRows),
+        maxConcurrentQueries: auditSearchInteger(
+            search,
+            "maxConcurrentQueries",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxConcurrentQueries
+        ),
+        maxConcurrentQueriesPerUser: 0,
+        queryDeadlineSeconds: auditSearchInteger(
+            search,
+            "queryDeadlineSeconds",
+            10,
+            AUDIT_SEARCH_CEILINGS.queryDeadlineSeconds
+        ),
+        longPollWaitSeconds: 0,
+        handleRetentionMinutes: 0,
+        maxContainsTermLength: auditSearchInteger(
+            search,
+            "maxContainsTermLength",
+            3,
+            AUDIT_SEARCH_CEILINGS.maxContainsTermLength
+        ),
+        maxContainsTerms: auditSearchInteger(
+            search,
+            "maxContainsTerms",
+            1,
+            AUDIT_SEARCH_CEILINGS.maxContainsTerms
+        ),
+    };
+    // The per-user cap can never exceed the VAMS-wide cap. A default per-user cap larger than a
+    // lowered VAMS-wide cap follows the VAMS-wide cap; an explicit one above it is an error.
+    const perUserExplicit = search.maxConcurrentQueriesPerUser;
+    resolved.maxConcurrentQueriesPerUser = auditSearchInteger(
+        search,
+        "maxConcurrentQueriesPerUser",
+        1,
+        resolved.maxConcurrentQueries
+    );
+    if (perUserExplicit === undefined || perUserExplicit === null) {
+        resolved.maxConcurrentQueriesPerUser = Math.min(
+            AUDIT_SEARCH_DEFAULTS.maxConcurrentQueriesPerUser,
+            resolved.maxConcurrentQueries
+        );
+    }
+    // The long poll holds one API request, so it stays below the API integration timeout.
+    const apiTimeout =
+        config.app.api?.apiGatewayRest?.apiGatewayTimeoutTime ??
+        API_GATEWAY_DEFAULT_TIMEOUT_SECONDS;
+    const longPollMax = Math.min(
+        AUDIT_SEARCH_CEILINGS.longPollWaitSeconds,
+        apiTimeout - AUDIT_SEARCH_POLL_HEADROOM_SECONDS
+    );
+    resolved.longPollWaitSeconds = auditSearchInteger(
+        search,
+        "longPollWaitSeconds",
+        0,
+        longPollMax
+    );
+    resolved.handleRetentionMinutes = auditSearchInteger(
+        search,
+        "handleRetentionMinutes",
+        AUDIT_SEARCH_MIN_HANDLE_RETENTION_MINUTES,
+        AUDIT_SEARCH_CEILINGS.handleRetentionMinutes
+    );
+    block.search = resolved;
+}
+
+/**
+ * Whether audit log search is deployed: `app.auditLogging.search.enabled`, which getConfig() always
+ * resolves. A config that skipped getConfig() (a unit-test harness) and has no value gets the same
+ * default getConfig() applies: on, except off in aws-eusc.
+ */
+export function isAuditSearchEnabled(config: ConfigPublic): boolean {
+    const value = (config.app as unknown as { auditLogging?: { search?: { enabled?: unknown } } })
+        .auditLogging?.search?.enabled;
+    return typeof value === "boolean" ? value : config.env?.partition !== "aws-eusc";
 }
 
 export function getConfig(app: cdk.App): Config {
@@ -1498,6 +1837,7 @@ export function getConfig(app: cdk.App): Config {
             useCodeBuild: false,
             autoRegisterWithVAMS: true,
             keepWarmInstance: false,
+            instanceTypes: [...DEFAULT_ISAAC_LAB_INSTANCE_TYPES],
         };
     }
 
@@ -1511,6 +1851,21 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.pipelines.useIsaacLabTraining.keepWarmInstance == undefined) {
         config.app.pipelines.useIsaacLabTraining.keepWarmInstance = false;
+    }
+
+    if (config.app.pipelines.useIsaacLabTraining.instanceTypes == undefined) {
+        config.app.pipelines.useIsaacLabTraining.instanceTypes = [
+            ...DEFAULT_ISAAC_LAB_INSTANCE_TYPES,
+        ];
+    }
+
+    // Every instance type must be able to run the job: Batch otherwise accepts the compute
+    // environment and leaves the job RUNNABLE without an error.
+    if (config.app.pipelines.useIsaacLabTraining.enabled) {
+        validateIsaacLabInstanceTypes(
+            config.app.pipelines.useIsaacLabTraining.instanceTypes,
+            "app.pipelines.useIsaacLabTraining.instanceTypes"
+        );
     }
 
     // Validate NVIDIA EULA acceptance when Isaac Lab Training is enabled
@@ -6176,6 +6531,7 @@ export interface ConfigPublic {
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
                 keepWarmInstance: boolean;
+                instanceTypes: string[];
             };
             usePreview3dThumbnail: {
                 enabled: boolean;
@@ -6459,6 +6815,21 @@ export interface ConfigPublic {
         auditLogging: {
             // Whether read actions (gets, lists, searches) write audit records. Absent = true.
             recordReads: boolean;
+            // Audit log search: an on/off switch and its limits. Absent block or key = the default.
+            search: {
+                // Search capability only (routes, Lambda, query table, web page, CLI, MCP); recording
+                // of audit events is not affected. Absent = true (false in aws-eusc). Refused as true in aws-eusc.
+                enabled: boolean;
+                maxQueryWindowDays: number; // days a search may span (default 31, ceiling 366)
+                maxRows: number; // rows a search returns (default 1000, ceiling 10000)
+                maxConcurrentQueries: number; // open searches VAMS-wide (default 5, ceiling 20)
+                maxConcurrentQueriesPerUser: number; // open searches per user (default 2, at most the VAMS-wide value)
+                queryDeadlineSeconds: number; // a search is stopped after this (default 300, ceiling 900)
+                longPollWaitSeconds: number; // server wait of one poll (default 20, ceiling min(25, API timeout - 4))
+                maxContainsTermLength: number; // characters of one contains term (default 64, ceiling 128)
+                maxContainsTerms: number; // contains terms per search (default 3, ceiling 5)
+                handleRetentionMinutes: number; // minutes a search handle (and its contains terms) lives after its last activity (default 60, 5 to 1440)
+            };
         };
         api: {
             apiType: string;
