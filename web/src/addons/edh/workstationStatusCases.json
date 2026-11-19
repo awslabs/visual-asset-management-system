@@ -229,8 +229,8 @@
                 "connectionUnavailableReason": "DESKTOP_ERROR",
                 "instanceType": "g5.16xlarge"
             },
-            "badge": "Creating",
-            "state": "CREATING",
+            "badge": "Starting",
+            "state": "STARTING",
             "startFailureMessage": null,
             "startFailureDetail": null,
             "connectionUnavailableMessage": "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect."

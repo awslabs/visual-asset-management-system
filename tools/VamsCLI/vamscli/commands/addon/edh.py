@@ -146,12 +146,16 @@ def is_start_stalled(record: Dict[str, Any]) -> bool:
 
 def state_label(record: Dict[str, Any]) -> str:
     """What the State column prints for a workstation: STARTING or STOPPING while the record's
-    `activity` says so, STALLED for a start the sweep found stalled, otherwise its state."""
+    `activity` says so, STALLED for a start the sweep found stalled, STARTING for a workstation that
+    has run held in CREATING while EDH reports it in error (DESKTOP_ERROR: a restart, not a launch),
+    otherwise its state."""
     activity = record.get('activity')
     if activity in ACTIVITY_LABELS:
         return ACTIVITY_LABELS[activity]
     if is_start_stalled(record):
         return STALLED_LABEL
+    if record.get('state') == 'CREATING' and record.get('connectionUnavailableReason') == DESKTOP_ERROR_CODE:
+        return ACTIVITY_LABELS['starting']
     return str(record.get('state') or 'N/A')
 
 

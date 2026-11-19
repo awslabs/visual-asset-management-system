@@ -45,7 +45,8 @@ interface WorkstationStatusBadgeProps {
     startFailure?: StartFailure | null;
     /**
      * Why the workstation cannot be connected to. `DESKTOP_ERROR` (EDH reports a workstation that has
-     * run in error) keeps the state's label, never moving, and titles the badge with its sentence.
+     * run in error) keeps the state's label (Starting for a restart held in CREATING), never moving,
+     * and titles the badge with its sentence.
      */
     connectionUnavailableReason?: ConnectionUnavailableReason | null;
 }
@@ -276,9 +277,11 @@ const WorkstationStatusBadge: React.FC<WorkstationStatusBadgeProps> = ({
     const isStopping = activity === "stopping";
     // EDH reports the workstation in error: it is not moving until EDH recovers it or the user stops it.
     const desktopError = !isStalled && connectionUnavailableReason === "DESKTOP_ERROR";
+    // A desktop that has run, held in CREATING while EDH reports it in error, is a restart, not a launch.
+    const restartInError = desktopError && state === "CREATING";
     const config = isStalled
         ? startStalledStyle
-        : isStarting
+        : isStarting || restartInError
         ? { ...statusConfig.CREATING, label: "Starting" }
         : isStopping
         ? { ...statusConfig.STOPPED, label: "Stopping" }
