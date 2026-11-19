@@ -59,6 +59,21 @@ def test_without_a_kept_key_every_companion_is_deleted(versioned_bucket):
 
 
 @pytest.mark.unit
+def test_a_same_named_file_in_a_subfolder_keeps_its_preview(versioned_bucket):
+    """The companions of `asset-1/model.glb` are its own: `asset-1/lod1/model.glb` is another file,
+    and its preview stays current."""
+    uf, s3 = versioned_bucket
+    nested = "asset-1/lod1/model.glb.previewFile.gif"
+    s3.put_object(Bucket=BUCKET, Key="asset-1/lod1/model.glb", Body=b"x")
+    s3.put_object(Bucket=BUCKET, Key=nested, Body=b"x")
+    assert uf.find_existing_preview_files(BUCKET, BASE) == [
+        f"{BASE}.previewFile.gif", f"{BASE}.previewFile.png"]
+    uf.delete_existing_preview_files(BUCKET, BASE)
+    s3.head_object(Bucket=BUCKET, Key=nested)  # still current
+    assert uf.find_existing_preview_files(BUCKET, "asset-1/lod1/model.glb") == [nested]
+
+
+@pytest.mark.unit
 def test_the_external_completion_keeps_the_key_its_copy_overwrites():
     """The one caller passes the companion's final key, so a same-extension replacement deletes
     nothing of its own key and a companion of another extension is still removed."""
