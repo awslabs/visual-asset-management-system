@@ -24,7 +24,7 @@ from vams_mcp import server
 from vams_mcp.addon_tools import edh
 from vams_mcp.config import Config
 
-ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS]
+ALL_SWITCHES = ["AUTHPROVIDER_COGNITO", addon_constants.FEATURE_EDH_WORKSTATIONS, "AUDITLOGSEARCH"]
 
 # --- Budgets (Mandatory Rule 11) --------------------------------------------------------------------
 
@@ -49,6 +49,10 @@ COMPLIANCE_TOOLS = {
     "create_compliance_cascade", "approve_compliance_cascade", "reject_compliance_cascade",
     "delete_compliance_schema",
 }
+# The audit log search tools (`vams_mcp/server.py` "Audit log search"): opt-in (the `audit` tool set, not
+# part of `all`), core tools with a total of their own, so they take no room from the other core tools.
+MAX_AUDIT_TOTAL_CHARS = 4000
+AUDIT_TOOLS = {"vams_audit_groups", "vams_audit_search", "vams_audit_results", "vams_audit_stop"}
 # The only tools allowed past MAX_DESCRIPTION_CHARS, each with its own ceiling and the reason. Keep
 # this list short: a long description is read on every session by every connected agent.
 DESCRIPTION_EXCEPTIONS = {
@@ -120,7 +124,9 @@ def _tiers_by_name():
 @pytest.fixture
 async def every_tool(server_with_switches):
     """Every tool a client lists with both gates on and the EDH add-on deployed, by name."""
-    with server_with_switches(ALL_SWITCHES, enable_writes=True, enable_destructive=True) as reloaded:
+    # "all,audit": the audit tools are opt-in and not part of `all`.
+    with server_with_switches(ALL_SWITCHES, enable_writes=True, enable_destructive=True,
+                              toolsets="all,audit") as reloaded:
         yield {tool.name: tool for tool in await reloaded.mcp.list_tools()}
 
 
@@ -182,7 +188,7 @@ async def test_the_exceptions_are_still_needed_and_still_exist(every_tool):
 
 
 async def test_the_core_descriptions_stay_within_the_total_budget(every_tool):
-    core = _core_names() - COMPLIANCE_TOOLS
+    core = _core_names() - COMPLIANCE_TOOLS - AUDIT_TOOLS
     assert len(core) > 90
     total = sum(len(every_tool[name].description or "") for name in core)
     assert total <= MAX_CORE_TOTAL_CHARS, total
@@ -204,6 +210,11 @@ async def test_every_core_description_opens_with_when_to_use_the_tool(every_tool
 # --- Titles and annotations (Rule 12) ---------------------------------------------------------------
 
 
+async def test_the_audit_tools_keep_a_budget_of_their_own(every_tool):
+    total = sum(len(every_tool[name].description or "") for name in AUDIT_TOOLS)
+    assert 0 < total <= MAX_AUDIT_TOTAL_CHARS, total
+
+
 async def test_every_tool_has_a_title(every_tool):
     assert [name for name, tool in every_tool.items() if not (_wire(tool).get("title") or "").strip()] == []
 
@@ -220,6 +231,10 @@ async def test_every_annotation_matches_the_gate_block_it_is_registered_in(every
             "write": dict(readOnlyHint=False, destructiveHint=False),
             "destructive": dict(readOnlyHint=False, destructiveHint=True),
         }[tier]
+        if name == "vams_audit_stop":
+            # Registered with the reads (the `audit` set is its only gate), but it stops the caller's own
+            # search, so it is not read-only; it removes no data.
+            expected = dict(readOnlyHint=False, destructiveHint=False)
         expected["openWorldHint"] = name in COMPUTE_TOOLS
         actual = {key: hints.get(key) for key in expected}
         if actual != expected:
@@ -402,6 +417,9 @@ def test_the_server_starts_without_a_sign_in(signed_out, monkeypatch):
 NOT_AUTO_APPROVED_READS = {
     "generate_download_url", "generate_download_urls_bulk",
     "get_api_key", "get_user_api_key", "list_api_keys", "list_user_api_keys", "list_subscriptions",
+    # Opt-in audit tools: a search starts a billable query and audit records may be sensitive, so the
+    # client asks before each call.
+    "vams_audit_groups", "vams_audit_search", "vams_audit_results", "vams_audit_stop",
     # Bills an Amazon Bedrock embedding on every call (Mandatory Rule 4, the billed-read case).
     "search_nlp",
 }
