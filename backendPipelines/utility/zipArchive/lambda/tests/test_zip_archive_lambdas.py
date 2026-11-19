@@ -218,59 +218,95 @@ with patch("boto3.client", return_value=MagicMock()):
     pipeline_end = importlib.import_module("pipelineEnd")
 
 
-class TestPipelineEndAfterAHeartbeatTimeout:
-    """The heartbeat clock starts at submit, so it also runs out for a job that never started. The
-    external token then names where the job got to, which the backend maps to a user message."""
+NOW_MS = 1_800_000_000_000
+BOUND_MS = 39600 * 1000
 
-    def _end(self, jobs, error="States.HeartbeatTimeout"):
+
+class TestPipelineEndAfterTheTokenWaitTimesOut:
+    """Step Functions ends the ZipArchiveBatchJob token wait with States.Timeout, no cause, both when
+    its 30-minute heartbeat runs out and at its 11-hour bound. pipelineEnd looks the run's job up and
+    names the end, which the backend maps to a user message, and ends a job still queued or running."""
+
+    def _end(self, jobs, error="States.Timeout"):
         sfn, batch = MagicMock(), MagicMock()
         batch.list_jobs.return_value = {"jobSummaryList": jobs}
         event = {"externalSfnTaskToken": "tok", "jobName": "ZipArchiveJob_1",
-                 "error": {"Error": error}}
+                 "error": {"Error": error, "Cause": ""}}
         with patch.object(pipeline_end, "sfn", sfn), patch.object(pipeline_end, "batch", batch), \
-                patch.object(pipeline_end, "BATCH_JOB_QUEUE", "queue"):
+                patch.object(pipeline_end, "BATCH_JOB_QUEUES", ["queue-arn"]), \
+                patch.object(pipeline_end, "STATE_TIMEOUT_SECONDS", 39600), \
+                patch.object(pipeline_end.time, "time", return_value=NOW_MS / 1000):
             pipeline_end.lambda_handler(event, None)
         return sfn.send_task_failure.call_args.kwargs["error"], batch
 
-    @pytest.mark.parametrize("status", ["SUBMITTED", "PENDING", "RUNNABLE", "STARTING"])
-    def test_a_job_that_has_not_started_is_cancelled_and_reported_as_queued(self, status):
-        error, batch = self._end([{"jobId": "j1", "status": status, "createdAt": 1}])
-        assert error == "Pipeline Failure: ZipArchiveJobQueued"
-        assert batch.terminate_job.call_args.kwargs["jobId"] == "j1"
+    @staticmethod
+    def _ran(status, age_ms):
+        return {"jobId": "j1", "status": status, "createdAt": NOW_MS - age_ms,
+                "startedAt": NOW_MS - age_ms + 60_000}
 
-    def test_a_job_still_in_the_queue_is_cancelled_and_reported_as_queued(self):
-        error, batch = self._end([{"jobId": "j1", "status": "RUNNABLE", "createdAt": 1}])
+    @pytest.mark.parametrize("status", ["SUBMITTED", "PENDING", "RUNNABLE", "STARTING"])
+    def test_a_job_that_has_not_started_is_ended_and_reported_as_queued(self, status):
+        error, batch = self._end([{"jobId": "j1", "status": status, "createdAt": NOW_MS - 1_800_000}])
         assert error == "Pipeline Failure: ZipArchiveJobQueued"
         assert batch.terminate_job.call_args.kwargs["jobId"] == "j1"
         assert batch.list_jobs.call_args.kwargs == {
-            "jobQueue": "queue", "filters": [{"name": "JOB_NAME", "values": ["ZipArchiveJob_1"]}]}
+            "jobQueue": "queue-arn", "filters": [{"name": "JOB_NAME", "values": ["ZipArchiveJob_1"]}]}
 
     def test_a_job_that_failed_before_starting_is_reported_as_not_started(self):
-        error, batch = self._end([{"jobId": "j1", "status": "FAILED", "createdAt": 1,
+        error, batch = self._end([{"jobId": "j1", "status": "FAILED", "createdAt": NOW_MS - 1_800_000,
                                    "statusReason": "CannotPullContainerError"}])
         assert error == "Pipeline Failure: ZipArchiveJobNotStarted"
         batch.terminate_job.assert_not_called()
 
-    def test_a_job_that_ran_keeps_the_heartbeat_timeout(self):
-        error, batch = self._end([{"jobId": "j1", "status": "RUNNING", "createdAt": 1,
-                                   "startedAt": 2}])
-        assert error == "Pipeline Failure: States.HeartbeatTimeout"
+    def test_a_running_job_that_lost_its_heartbeat_inside_the_bound_is_ended_and_reported_lost(self):
+        error, batch = self._end([self._ran("RUNNING", 3 * 3600 * 1000)])
+        assert error == "Pipeline Failure: ZipArchiveHeartbeatLost"
+        assert batch.terminate_job.call_args.kwargs["jobId"] == "j1"
+
+    def test_a_job_killed_without_a_sigterm_inside_the_bound_is_reported_lost(self):
+        error, batch = self._end([self._ran("FAILED", 3 * 3600 * 1000)])
+        assert error == "Pipeline Failure: ZipArchiveHeartbeatLost"
         batch.terminate_job.assert_not_called()
 
-    def test_the_newest_job_of_the_name_decides(self):
-        error, _ = self._end([{"jobId": "old", "status": "FAILED", "createdAt": 1},
-                              {"jobId": "new", "status": "RUNNING", "createdAt": 5, "startedAt": 6}])
-        assert error == "Pipeline Failure: States.HeartbeatTimeout"
+    def test_a_running_job_at_the_bound_is_ended_and_keeps_the_timeout(self):
+        error, batch = self._end([self._ran("RUNNING", BOUND_MS)])
+        assert error == "Pipeline Failure: States.Timeout"
+        assert batch.terminate_job.call_args.kwargs["jobId"] == "j1"
 
-    def test_a_failed_lookup_keeps_the_heartbeat_timeout(self):
+    def test_a_job_submitted_just_after_the_state_started_its_clock_reached_the_bound(self):
+        error, _ = self._end([self._ran("RUNNING", BOUND_MS - 30_000)])
+        assert error == "Pipeline Failure: States.Timeout"
+
+    def test_an_ended_job_at_the_bound_keeps_the_timeout_and_is_not_ended_again(self):
+        error, batch = self._end([self._ran("FAILED", BOUND_MS + 5_000)])
+        assert error == "Pipeline Failure: States.Timeout"
+        batch.terminate_job.assert_not_called()
+
+    def test_the_catch_matcher_name_is_looked_up_the_same_way(self):
+        error, batch = self._end([{"jobId": "j1", "status": "RUNNABLE", "createdAt": NOW_MS - 1_800_000}],
+                                 error="States.HeartbeatTimeout")
+        assert error == "Pipeline Failure: ZipArchiveJobQueued"
+        batch.terminate_job.assert_called_once()
+
+    def test_the_newest_job_of_the_name_decides(self):
+        error, _ = self._end([{"jobId": "old", "status": "FAILED", "createdAt": NOW_MS - 2_000_000},
+                              {"jobId": "new", "status": "RUNNABLE", "createdAt": NOW_MS - 1_800_000}])
+        assert error == "Pipeline Failure: ZipArchiveJobQueued"
+
+    def test_no_job_found_keeps_the_timeout(self):
+        error, batch = self._end([])
+        assert error == "Pipeline Failure: States.Timeout"
+        batch.terminate_job.assert_not_called()
+
+    def test_a_failed_lookup_keeps_the_timeout(self):
         sfn, batch = MagicMock(), MagicMock()
         batch.list_jobs.side_effect = RuntimeError("throttled")
         event = {"externalSfnTaskToken": "tok", "jobName": "ZipArchiveJob_1",
-                 "error": {"Error": "States.HeartbeatTimeout"}}
+                 "error": {"Error": "States.Timeout", "Cause": ""}}
         with patch.object(pipeline_end, "sfn", sfn), patch.object(pipeline_end, "batch", batch), \
-                patch.object(pipeline_end, "BATCH_JOB_QUEUE", "queue"):
+                patch.object(pipeline_end, "BATCH_JOB_QUEUES", ["queue-arn"]):
             pipeline_end.lambda_handler(event, None)
-        assert sfn.send_task_failure.call_args.kwargs["error"] == "Pipeline Failure: States.HeartbeatTimeout"
+        assert sfn.send_task_failure.call_args.kwargs["error"] == "Pipeline Failure: States.Timeout"
 
     def test_other_errors_are_reported_as_they_are_without_a_lookup(self):
         error, batch = self._end([], error="States.TaskFailed")

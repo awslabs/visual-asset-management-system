@@ -92,18 +92,21 @@ class TestEachRunStatus:
                             "for error cause.")
         assert _row(env)["errorMessage"] == "The archive job was stopped"
 
-    def test_a_hard_kill_ends_on_the_heartbeat_timeout(self, env):
-        _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout: See AWS cloudwatch logs "
+    def test_a_hard_kill_ends_on_the_lost_heartbeat(self, env):
+        # Step Functions ends the token wait with States.Timeout; pipelineEnd finds the job ran inside
+        # the bound and reports the lost heartbeat under its own name.
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveHeartbeatLost: See AWS cloudwatch logs "
                             "for error cause.")
         assert _row(env)["status"] == "FAILED"
         assert _row(env)["errorMessage"] == env.zd.MSG_JOB_LOST == "The archive job stopped responding"
         assert env.s3.aborted == [(h.AUX, env.prefix + "x.zip", "u1")]
         assert env.sweeps == [REQUEST_ID]
 
-    def test_a_recorded_stop_reason_wins_over_the_heartbeat_timeout(self, env):
+    def test_a_lost_heartbeat_wins_over_the_stop_pipelineEnd_caused(self, env):
+        # pipelineEnd ends a hung container, which records that stop on SIGTERM.
         _row(env)["stopReason"] = "The archive job was stopped"
-        _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout")
-        assert _row(env)["errorMessage"] == "The archive job was stopped"
+        _end(env, "FAILED", "Pipeline Failure: ZipArchiveHeartbeatLost")
+        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_LOST
 
     def test_a_heartbeat_timeout_while_queued_says_the_job_waited(self, env):
         # pipelineEnd reports a job still waiting in the AWS Batch queue under its own name.
@@ -116,22 +119,30 @@ class TestEachRunStatus:
         _end(env, "FAILED", "Pipeline Failure: ZipArchiveJobNotStarted")
         assert _row(env)["errorMessage"] == env.zd.MSG_JOB_NOT_STARTED == "The archive job failed before it started"
 
+    @pytest.mark.parametrize("name,message", [
+        ("ZipArchiveJobQueued", "The archive job waited too long to start; create it again later"),
+        ("ZipArchiveJobNotStarted", "The archive job failed before it started"),
+        ("ZipArchiveHeartbeatLost", "The archive job stopped responding"),
+    ])
+    def test_the_names_pipelineEnd_reports_are_read_before_the_timeout(self, env, name, message):
+        """The token wait ended with States.Timeout either way; pipelineEnd's name for where the
+        job got to decides, also when the container recorded a stop."""
+        _row(env)["stopReason"] = "The archive job was stopped"
+        _end(env, "FAILED", f"Pipeline Failure: {name}: See AWS cloudwatch logs for error cause.")
+        assert _row(env)["errorMessage"] == message
+
     def test_the_job_states_own_timeout_reads_timed_out(self, env):
         # pipelineEnd reports the 11-hour state bound as a failure, not as a TIMED_OUT run.
         _end(env, "FAILED", "Pipeline Failure: States.Timeout: See AWS cloudwatch logs for error cause.")
         assert _row(env)["errorMessage"] == env.zd.MSG_JOB_TIMED_OUT == "The archive job timed out"
 
-    def test_the_job_states_own_timeout_wins_over_the_stop_batch_caused(self, env):
-        # AWS Batch ends the attempt at the same 11-hour bound; the container records that stop.
+    def test_the_job_states_own_timeout_wins_over_the_stop_pipelineEnd_caused(self, env):
+        # pipelineEnd ends a job still running at the 11-hour bound; the container records that stop.
         _row(env)["stopReason"] = "The archive job was stopped"
         _end(env, "FAILED", "Pipeline Failure: States.Timeout")
         assert _row(env)["errorMessage"] == env.zd.MSG_JOB_TIMED_OUT
 
-    def test_a_heartbeat_timeout_is_not_read_as_the_state_timeout(self, env):
-        _end(env, "FAILED", "Pipeline Failure: States.HeartbeatTimeout")
-        assert _row(env)["errorMessage"] == env.zd.MSG_JOB_LOST
-
-    @pytest.mark.parametrize("error", ["ZipArchiveContainerStopped", "States.HeartbeatTimeout"])
+    @pytest.mark.parametrize("error", ["ZipArchiveContainerStopped", "ZipArchiveHeartbeatLost"])
     def test_an_executions_abort_still_wins_over_the_containers_stop(self, env, error):
         """D24 kept: an abort from the Executions page records ABORTED on the run before its Batch job
         is terminated, so the container's answer never changes the run's status."""
@@ -319,3 +330,22 @@ def test_a_former_terminal_callback_payload_is_ignored(env):
     assert _row(env)["status"] == "RUNNING"
     assert env.s3.aborted == []
     assert not hasattr(env.svc, "handle_callback")
+
+
+def test_the_finalizer_reads_the_names_the_zip_pipelineEnd_reports(env):
+    """The zipArchive pipelineEnd and the finalizer are separate packages; the names they share must
+    stay the same, or a run reads the generic failure. Read from pipelineEnd's source, not imported."""
+    import ast
+    import pathlib
+
+    source = pathlib.Path(__file__).resolve().parents[4] / (
+        "backendPipelines/utility/zipArchive/lambda/pipelineEnd.py")
+    names = {
+        node.targets[0].id: node.value.value
+        for node in ast.parse(source.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        and isinstance(node.targets[0], ast.Name)
+    }
+    for name in ("STATE_TIMEOUT_ERROR", "JOB_QUEUED_ERROR", "JOB_NOT_STARTED_ERROR",
+                 "HEARTBEAT_LOST_ERROR"):
+        assert names[name] == getattr(env.zd, name), name

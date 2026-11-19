@@ -200,12 +200,15 @@ test.describe("Download as Zip", () => {
             // entry), not the side navigation.
             await expect(page.getByRole("link", { name: "My Download Queue" })).toHaveCount(0);
             await openProfileMenu(page);
-            // On its own page the entry is the menu's checked current-page item (#1232), not a link.
+            // On its own page the entry stays a menu item link, marked as the current page in its
+            // accessible name and by a "Current page" tag.
             const current = page
-                .getByRole("menuitemcheckbox", { name: "My Download Queue" })
+                .getByRole("menuitem", { name: "My Download Queue, current page" })
                 .filter({ visible: true });
             await expect(current).toBeVisible();
-            await expect(current).toHaveAttribute("aria-checked", "true");
+            await expect(current).toHaveAttribute("href", /#\/zipdownloads/);
+            await expect(current).toContainText("Current page");
+            await expect(page.getByRole("menuitemcheckbox")).toHaveCount(0);
             await page.keyboard.press("Escape");
             // The search and the refresh button sit together in the table's filter row.
             const search = page.getByRole("searchbox", { name: "Search download jobs" });

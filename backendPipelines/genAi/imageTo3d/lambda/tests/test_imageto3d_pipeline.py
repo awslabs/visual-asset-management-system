@@ -916,8 +916,8 @@ class TestPipelineEnd:
         assert failure.call_args.kwargs["cause"] == mod.STATE_TIMEOUT_CAUSE
 
     def test_a_batch_state_timeout_ends_the_runs_job_on_every_queue(self):
-        # Step Functions does not cancel the .sync job on a state timeout; pipelineEnd ends it so a
-        # queued GPU job does not start after the run has failed.
+        # Step Functions ends the .sync job at the state's bound; pipelineEnd ends it too, as a
+        # backup, so a queued GPU job does not start after the run has failed.
         mod = self._load()
         event = {"jobName": "ImageTo3dJob_x", "externalSfnTaskToken": "tok-123",
                  "error": {"Error": "States.Timeout"}}

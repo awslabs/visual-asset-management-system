@@ -7,7 +7,7 @@
  * Asserts that a pipeline's pipelineEnd function can end the run's AWS Batch job after a Batch state's
  * own bound fires (`grantBatchStateTimeoutCleanup`): BATCH_JOB_QUEUES names every job queue in the
  * template, and its role holds `batch:ListJobs` on `*` and `batch:TerminateJob` on `job/*`, nothing
- * wider.
+ * wider, and no other statement on `*`.
  */
 
 import { Template } from "aws-cdk-lib/assertions";
@@ -44,4 +44,11 @@ export const expectBatchStateTimeoutCleanup = (template: Template): void => {
     expect(list.Resource).toBe("*");
     const terminate = batchStatements.find((s) => actionsOf(s).includes("batch:TerminateJob"));
     expect(JSON.stringify(terminate.Resource)).toMatch(/:job\/\*"/);
+
+    // The IAM5 suppression for ListJobs on "*" applies to the whole function, so it would also
+    // hide a later "*" statement on this role: the only one there is batch:ListJobs.
+    const resourcesOf = (statement: any): any[] =>
+        Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource];
+    const wildcardStatements = statements.filter((s) => resourcesOf(s).includes("*"));
+    expect(wildcardStatements.map((s) => actionsOf(s))).toEqual([["batch:ListJobs"]]);
 };

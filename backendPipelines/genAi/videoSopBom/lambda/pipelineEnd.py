@@ -67,8 +67,8 @@ STATE_TIMEOUT_ERROR = "States.Timeout"
 STATE_TIMEOUT_CAUSE = ("the job did not finish within the pipeline's time limit, which counts the time "
                        "it waited in the AWS Batch queue (for example behind the Fargate vCPU quota) as "
                        "well as its run")
-# Step Functions cancels a .sync Batch job when the execution is stopped, not when the Batch state's
-# own bound fires, so after that timeout the run's job, still queued or running, is ended here. The
+# Step Functions ends a .sync Batch job when the Batch state's own bound fires; after that timeout the
+# run's job, still queued or running, is ended here as well, as a backup. The
 # queue is the one the state submits to (BATCH_JOB_QUEUES); the job name is unique to the run.
 BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
 LIVE_BATCH_JOB_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"})

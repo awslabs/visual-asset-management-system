@@ -531,13 +531,19 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
 
     useEffect(() => {
         if (!canBindComplianceSchema) return;
+        // The schemas offered depend on the database, so there is nothing to offer before one is
+        // chosen (on `/upload/:databaseId`, before its record has loaded).
+        if (!assetDetailState?.databaseId) {
+            setSchemaOptions([]);
+            setSchemasError(null);
+            setLoadingSchemas(false);
+            return;
+        }
         let cancelled = false;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
             setSchemasError(null);
-            const [success, result] = await fetchComplianceSchemas(
-                assetDetailState?.databaseId || undefined
-            );
+            const [success, result] = await fetchComplianceSchemas(assetDetailState.databaseId);
             if (cancelled) return;
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
@@ -770,7 +776,12 @@ export const AssetPrimaryInfo = ({ setValid, showErrors }: AssetPrimaryInfoProps
                                 { label: `Inherit from ${Synonyms.database}`, value: "" },
                                 ...schemaOptions,
                             ]}
-                            placeholder={`Inherit from ${Synonyms.database}`}
+                            placeholder={
+                                assetDetailState.databaseId
+                                    ? `Inherit from ${Synonyms.database}`
+                                    : `Choose a ${Synonyms.database} first`
+                            }
+                            disabled={!assetDetailState.databaseId}
                             loadingText="Loading schemas"
                             statusType={loadingSchemas ? "loading" : "finished"}
                             filteringType="auto"
