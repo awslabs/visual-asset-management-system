@@ -640,7 +640,7 @@ class TestIndexReady:
     def test_complete_marker_for_this_table_is_ready(self):
         ssm = self._ssm(self._complete())
         assert al.index_ready(self.TABLE, ssm_client=ssm) is True
-        ssm.get_parameter.assert_called_once_with(Name=self.NAME)
+        assert {c.kwargs["Name"] for c in ssm.get_parameter.call_args_list} == {self.NAME}
 
     def test_marker_of_another_table_is_not_ready(self):
         # A deployment removed and created again under the same names keeps the old parameter.

@@ -52,7 +52,7 @@ import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
-logger = safeLogger(service_name="AssetLocations")
+logger = safeLogger()
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
@@ -191,7 +191,7 @@ INDEX_READY_MARKER_VERSION = 1
 INDEX_READY_STATUS_COMPLETE = "complete"
 INDEX_READY_CACHE_TTL_SECONDS = 300
 
-_SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 3, 'mode': 'adaptive'})
+_SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 
 #######################
