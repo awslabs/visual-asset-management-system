@@ -84,6 +84,23 @@ class TestEvaluationBundle:
     def test_evaluation_requires_a_template_for_its_mode(self):
         assert _load("evaluation", "pipeline.json")["systemConfig"]["requireTemplate"] is True
 
+    def test_evaluation_timeout_leaves_room_for_the_gpu_wait_after_the_playback_limit(self):
+        # The workflow's taskTimeout counts the time the job waits in RUNNABLE for a GPU instance
+        # (observed up to about 50 minutes) and the image pull, while the container's own playback
+        # watchdog can run up to EVALUATION_TIME_LIMIT_CAP_SECONDS once the job starts. A taskTimeout
+        # close to that cap ends a slow-to-start evaluation in a bare States.Timeout before the
+        # watchdog's readable failure. Keep at least an hour and a half of margin.
+        import re
+
+        main_path = os.path.normpath(os.path.join(_SCHEMA_ROOT, "..", "container", "__main__.py"))
+        with open(main_path, encoding="utf-8") as handle:
+            cap = int(re.search(r"^EVALUATION_TIME_LIMIT_CAP_SECONDS = (\d+)", handle.read(), re.M).group(1))
+        task_timeout = int(_load("evaluation", "pipeline.json")["executionConfig"]["taskTimeout"])
+        training_timeout = int(_load("training", "pipeline.json")["executionConfig"]["taskTimeout"])
+        assert task_timeout >= cap + 5400
+        # The shared Batch job definition timeout (8 hours) is the backstop for both bundles.
+        assert task_timeout <= training_timeout
+
     def test_shipped_evaluation_template_selects_evaluate_mode(self):
         template = _template("evaluation")
         config_body = json.loads(_body_with_declared_defaults(template))

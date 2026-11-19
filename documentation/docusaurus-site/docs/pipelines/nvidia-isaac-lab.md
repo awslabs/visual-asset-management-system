@@ -17,7 +17,7 @@ Read the AWS blog post [GPU-Accelerated Robotic Simulation Training with NVIDIA 
 | **Compute**            | AWS Batch with single-GPU instances (G6, GR6, G6E, G5 families)                                                                   |
 | **Storage**            | Amazon Elastic File System (Amazon EFS) for checkpoints                                                                           |
 | **Training timeout**   | 8 hours for the workflow step, including the wait for a GPU instance and the image pull. The AWS Batch job limit is also 8 hours. |
-| **Evaluation timeout** | 2 hours for the workflow step, including the wait for a GPU instance                                                              |
+| **Evaluation timeout** | 4 hours for the workflow step, including the wait for a GPU instance; playback stops after at most 110 minutes                    |
 
 ## Architecture
 

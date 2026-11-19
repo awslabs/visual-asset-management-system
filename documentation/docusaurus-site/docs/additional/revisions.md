@@ -49,6 +49,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Behaviour changes:**
 
 -   **Isaac Lab default engine** — Runs that do not name an engine now run on Newton: saved configurations, built-in templates, edited template bodies without the field, JSON input files and Isaac Sim connector launches. Results differ from earlier PhysX runs, and a checkpoint trained before the upgrade was trained on PhysX, so evaluating it on Newton is a transfer test. Set `physics` to `isaacsim_physx` to reproduce an earlier run. A task that lists no physics presets, such as a custom environment ported from Isaac Lab 2.x, runs on its registered physics and ignores the setting (the run records `task-default`). Custom environments must be built for Python 3.12. `rsl_rl` checkpoints from Isaac Lab 2.x do not load; retrain on 3.0. Isaac Lab 3.0 task ids carry no `-v0` suffix; only the four ids named above are mapped. NVIDIA tests Isaac Sim 6.2 on driver 595.58.03 or newer, and the pipeline runs on the ECS GPU AMI driver (580.178.04 when validated). (issue #1669)
+-   **Isaac Lab evaluation time limit** — An evaluation workflow step may now take up to 4 hours, up from 2, including the wait for a GPU instance; playback itself stops after at most 110 minutes (#1669).
 
 **Key fixes:**
 

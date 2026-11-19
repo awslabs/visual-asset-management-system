@@ -363,7 +363,7 @@ export class IsaacLabTrainingConstruct extends Construct {
             // clocks start before the attempt (they include the RUNNABLE wait and the image pull), so
             // the workflow times out first and its error handler terminates the registered job; this
             // value is the backstop. Evaluation shares this job definition and is bounded by its own
-            // bundle's taskTimeout (7200 s). Keep it no lower than the training taskTimeout.
+            // bundle's taskTimeout (14400 s). Keep it no lower than the training taskTimeout.
             timeout: cdk.Duration.hours(8),
         });
 

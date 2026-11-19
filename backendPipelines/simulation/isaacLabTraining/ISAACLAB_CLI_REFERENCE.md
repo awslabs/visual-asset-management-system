@@ -223,6 +223,8 @@ NVIDIA tests Isaac Sim 6.2 on driver 595.58.03 or newer on Linux. The pipeline r
 
 **Solution**: Evaluation on Newton records with `--viz newton_gl`. If frames are still empty, evaluate with `isaacsim_physx`.
 
+A PhysX clip starts with a few dark frames while the renderer warms up; the rest of the clip shows the scene. The first PhysX evaluation on a new instance also takes several minutes longer while Kit builds its shader cache.
+
 ### Checkpoint Does Not Load
 
 **Cause**: The checkpoint was written by another RL library, or by a much older Isaac Lab release.
