@@ -10,6 +10,7 @@
 
 import { createLoadingManager, isolatedUrlModifier } from "./assetDependencyResolver";
 import { checkUsdzSize, isUsdzBytes } from "./usdDependencies";
+import { isOcctNoGeometryError, loadOCCTFile } from "./occtLoader";
 
 export interface LoaderResult {
     object: any; // THREE.Object3D or THREE.Group
@@ -446,8 +447,6 @@ export async function loadFile(
 
         // Try to load with OCCT loader
         try {
-            const { loadOCCTFile } = await import("./occtLoader");
-
             // Create blob URL from arrayBuffer for OCCT loader
             const blob = new Blob([arrayBuffer]);
             const blobUrl = URL.createObjectURL(blob);
@@ -470,6 +469,11 @@ export async function loadFile(
                         `CAD format viewing is blocked by the Content Security Policy. The OpenCascade loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures set to true in the deployment configuration.\n\n` +
                         `Please contact your administrator to enable CAD format support for this viewer.`
                 );
+            }
+            // A file with no drawable geometry already says what to do; the viewer recognizes it
+            // only without a prefix (#1734).
+            if (isOcctNoGeometryError(error?.message ?? "")) {
+                throw error;
             }
             throw new Error(`Failed to load CAD file: ${error.message || error}`);
         }
