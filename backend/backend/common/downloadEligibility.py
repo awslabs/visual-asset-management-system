@@ -38,6 +38,7 @@ from typing import Callable, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
+from common.assetLocations import is_folder_location, object_key_for
 from common.s3 import list_all_objects, validateUnallowedFileExtensionAndContentType
 from common.s3MetadataKeys import (
     VAMS_STATUS_METADATA_KEY,
@@ -180,7 +181,9 @@ def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
 
     Accepted shapes: a leading-slash asset-relative path (CLI), the full S3 key under the asset
     prefix (web viewers pass listFiles keys), ``/`` (whole-asset prefix), or no key (the base key
-    verbatim, whatever its shape).
+    verbatim, whatever its shape). A base key that names one object (no trailing ``/``) is a
+    single-file asset: its file name, its own key, ``/`` and no key resolve to that object, and
+    every other key is outside the asset.
 
     Raises:
         VAMSGeneralErrorResponse: the key is a bucket-root key outside the asset's prefix, or the
@@ -189,7 +192,12 @@ def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
     asset_base_prefix = asset_base_key.rstrip('/')
     prefix = asset_base_prefix + '/'
 
-    if raw_key:
+    if asset_base_key and not is_folder_location(asset_base_key):
+        # A single-file asset: no key, '/', its file name or its own key name its one object
+        final_key = asset_base_key if raw_key in (None, '', '/') else object_key_for(asset_base_key, raw_key)
+        if final_key is None:
+            raise VAMSGeneralErrorResponse(MSG_KEY_OUTSIDE_ASSET)
+    elif raw_key:
         if raw_key == asset_base_key or raw_key.startswith(prefix):
             # The asset's own base key, or already carries the base path: use it as-is
             final_key = raw_key

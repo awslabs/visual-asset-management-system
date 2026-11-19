@@ -13355,7 +13355,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset."
+                    description: "Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's only file."
             required:
                 - databaseId
                 - assetName

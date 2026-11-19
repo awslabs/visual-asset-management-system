@@ -32,6 +32,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.assetProvenance import asset_edit_provenance
+from common.assetLocations import contains, is_folder_location, relative_path_in
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -610,7 +611,10 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         if 'Contents' in page:
             for obj in page.get('Contents', []):
-                files.append(obj['Key'])
+                # The prefix also matches keys that only share its characters; a single-file
+                # location holds its own key alone
+                if contains(prefix, obj['Key']):
+                    files.append(obj['Key'])
 
     def _archive_one(key):
         try:
@@ -622,7 +626,7 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
             if (asset_file_version_history_table and database_id and asset_id
                     and not key.endswith('/')):
                 marker_version_id = response.get('VersionId')
-                relative_path = key[len(prefix):] if key.startswith(prefix) else key
+                relative_path = relative_path_in(prefix, key)
                 try:
                     asset_file_version_history_table.put_item(
                         Item=build_asset_archive_history_record(
@@ -744,10 +748,15 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 if not delete_marker.get('IsLatest'):
                     continue
                 key = delete_marker['Key']
-                relative_path = normalize_history_file_path(
-                    key[len(prefix):] if key.startswith(prefix) else key
-                )
-                if delete_marker['VersionId'] in archive_markers.get(relative_path, set()):
+                if not contains(prefix, key):
+                    continue
+                relative_path = normalize_history_file_path(relative_path_in(prefix, key))
+                recorded = archive_markers.get(relative_path, set())
+                if not is_folder_location(prefix):
+                    # A single-file location's own object is also recorded as '/', its path
+                    # relative to the location key itself
+                    recorded = recorded | archive_markers.get('/', set())
+                if delete_marker['VersionId'] in recorded:
                     markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
 
         def _remove_marker(marker):
@@ -1793,8 +1802,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
@@ -1806,8 +1815,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
         
         # 2. Delete from asset table (both active and archived locations)

@@ -71,6 +71,7 @@ from common.apiRoutes import (
     API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     API_ZIP_DOWNLOADS_GLOBAL,
 )
+from common.assetLocations import is_folder_location
 from common.constants import UNALLOWED_FILE_EXTENSION_LIST, UNALLOWED_MIME_LIST
 from common.downloadEligibility import (
     MSG_FILE_NOT_FOUND,
@@ -959,6 +960,10 @@ def create_job(event, database_id, asset_id):
                                                      database_id=database_id, asset_id=asset_id)
         bucket = _bucket_details(asset.get("bucketId"))["bucketName"]
         base_key = asset_location.get("Key")
+        if not is_folder_location(base_key):
+            # A location that names one object is a single-file asset, downloaded directly
+            raise ZipRefusal("An asset that holds a single file cannot be downloaded as a zip. "
+                             "Download the file instead.")
         if _cap_reached(user_id):
             return general_error(status_code=429, body={"message": zd.MSG_CAP_REACHED}, event=event)
         pinned, asset_version_id = [], None

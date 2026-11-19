@@ -28,6 +28,8 @@ _MODULE_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "backend", "common", "downloadEligibility.py"
 )
 
+# A base key without a trailing slash names one object: a single-file asset (bucketExistingKey on an
+# object). With the slash it is a folder.
 UNSLASHED_BASE = "assets/pfx"
 SLASHED_BASE = "assets/pfx/"
 ESCAPE_KEY = "assets/pfxOTHER/secret.txt"
@@ -172,15 +174,31 @@ class TestDistributableAsset:
 
 @pytest.mark.unit
 class TestResolveAssetFileKey:
-    @pytest.mark.parametrize("base", [UNSLASHED_BASE, SLASHED_BASE])
     @pytest.mark.parametrize("raw_key,expected", [
         ('/dir/f.glb', 'assets/pfx/dir/f.glb'),
         ('dir/f.glb', 'assets/pfx/dir/f.glb'),
         ('assets/pfx/dir/f.glb', 'assets/pfx/dir/f.glb'),
         ('/', 'assets/pfx/'),
     ])
-    def test_accepted_shapes(self, base, raw_key, expected):
-        assert de.resolve_asset_file_key(base, raw_key) == expected
+    def test_accepted_shapes(self, raw_key, expected):
+        assert de.resolve_asset_file_key(SLASHED_BASE, raw_key) == expected
+
+    @pytest.mark.parametrize("raw_key", ['/pfx', 'pfx', 'assets/pfx', '/assets/pfx', '/', None, ''])
+    def test_a_single_file_asset_resolves_its_one_object(self, raw_key):
+        assert de.resolve_asset_file_key(UNSLASHED_BASE, raw_key) == UNSLASHED_BASE
+
+    @pytest.mark.parametrize("raw_key", ['/dir/f.glb', 'dir/f.glb', 'assets/pfx/dir/f.glb', '/pfx.bak',
+                                         'assets/pfx.bak', '/pfx/', '/assets/pfxOTHER/x', ESCAPE_KEY])
+    def test_a_single_file_asset_refuses_every_other_key(self, raw_key):
+        with pytest.raises(VAMSGeneralErrorResponse) as e:
+            de.resolve_asset_file_key(UNSLASHED_BASE, raw_key)
+        assert str(e.value) == _msg("Requested file is not part of this asset")
+
+    def test_a_single_file_asset_download_heads_its_one_object(self):
+        client = _s3()
+        final_key, version_id = _check(client, '/pfx', base=UNSLASHED_BASE)
+        assert (final_key, version_id) == (UNSLASHED_BASE, None)
+        client.head_object.assert_called_once_with(Bucket='bucket', Key=UNSLASHED_BASE)
 
     @pytest.mark.parametrize("base", [UNSLASHED_BASE, SLASHED_BASE])
     @pytest.mark.parametrize("raw_key", [None, ''])
@@ -195,7 +213,7 @@ class TestResolveAssetFileKey:
 
     def test_leading_slash_sibling_shape_stays_inside_the_asset(self):
         """'/assets/pfxOTHER/x' is asset-relative, so it is joined under the base, not refused."""
-        assert de.resolve_asset_file_key(UNSLASHED_BASE, '/assets/pfxOTHER/x') == \
+        assert de.resolve_asset_file_key(SLASHED_BASE, '/assets/pfxOTHER/x') == \
             'assets/pfx/assets/pfxOTHER/x'
 
     def test_over_long_resolved_key_refused(self):
@@ -443,7 +461,7 @@ class TestCheckFileEligibilityPin:
         client = _s3()
         resolve_file = MagicMock(return_value='v-pinned')
         final_key, version_id = _check(
-            client, 'assets/pfx/dir/f.glb', base=UNSLASHED_BASE, asset_version_id='2',
+            client, 'assets/pfx/dir/f.glb', base=SLASHED_BASE, asset_version_id='2',
             resolve_file_version=resolve_file, resolve_alias=MagicMock())
         assert (final_key, version_id) == ('assets/pfx/dir/f.glb', 'v-pinned')
         resolve_file.assert_called_once_with('db1', 'asset1', '2', 'dir/f.glb')

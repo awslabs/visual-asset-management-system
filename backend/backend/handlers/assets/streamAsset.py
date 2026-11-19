@@ -13,6 +13,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import is_folder_location, object_key_for
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -131,7 +132,17 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         
     Returns:
         The properly resolved S3 key without duplication
+
+    Raises:
+        VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
     """
+    # A single-file location holds that one object and nothing under or beside it
+    if asset_base_key and not is_folder_location(asset_base_key):
+        object_key = object_key_for(asset_base_key, file_path)
+        if object_key is None:
+            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
+        return object_key
+
     # Normalize the asset base key to ensure it ends with '/'
     if asset_base_key and not asset_base_key.endswith('/'):
         asset_base_key = asset_base_key + '/'
