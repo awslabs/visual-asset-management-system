@@ -254,7 +254,7 @@ trimesh loads the whole mesh into memory to export it, so the practical ceiling 
 
 ### Input Size Limits
 
-The function refuses an input that is too large before it downloads it, and the failed step reports the file, its size, the limit for its format, and the resource that sets the limit, for example `huge.ply is 900.0 MB, over the 179.1 MB limit for .ply inputs. The limit is set by the function memory.`
+The function refuses an input that is too large before it downloads it, and the failed step reports the file, its size, the limit for its format and the output format, and the resource that sets the limit, for example `huge.ply is 900.0 MB, over the 109.2 MB limit for converting .ply to .usdc. The limit is set by the function memory. Reduce the model's size and run the conversion again. A conversion to another format may accept it.`
 
 The limit comes from the running function, not from a fixed number. It is the smaller of two figures:
 
@@ -279,7 +279,22 @@ The limit comes from the running function, not from a fixed number. It is the sm
 | `.fbx`          | 27               | 165.8 MB                          |
 | `.step`, `.stp` | 70               | 64.0 MB                           |
 
-A conversion to COLLADA holds the model as Python objects as well, so it uses a larger factor for every input format (for example 50 for `.glb` and 82 for `.usdc`). The factors of the formats added with USD, DAE, 3MF, and OFF were measured on a model of 0.33 to 1.3 million triangles and rounded up by at least 15 percent. A 3MF package and a binary USD layer are compressed on disk, which is why their factors are high.
+The factors above apply to conversions to STL, OBJ, PLY, GLTF, GLB, OFF, and 3MF. A conversion to USD holds the scene as USD data beside the model, and one to COLLADA holds it as Python objects as well, so those outputs need more memory per input byte and have factors of their own wherever they need more than 10 percent above the input's factor. With them the peak at every limit stays at about 70 to 85 percent of the function memory. Limits at 5,308 MB function memory:
+
+| Input format (factor and limit) | To `.usdc`    | To `.usda`    | To `.usdz`    | To `.dae`     |
+| ------------------------------- | ------------- | ------------- | ------------- | ------------- |
+| `.stl`                          | 22 (203.5 MB) | 21 (213.2 MB) | 21 (213.2 MB) | 26 (172.2 MB) |
+| `.obj`                          | 13 (344.4 MB) | 13 (344.4 MB) | 13 (344.4 MB) | 13 (344.4 MB) |
+| `.ply`                          | 41 (109.2 MB) | 41 (109.2 MB) | 41 (109.2 MB) | 43 (104.1 MB) |
+| `.glb`, `.gltf`, `.fbx`         | 42 (106.6 MB) | 41 (109.2 MB) | 42 (106.6 MB) | 52 (86.1 MB)  |
+| `.off`                          | 24 (186.5 MB) | 24 (186.5 MB) | 24 (186.5 MB) | 29 (154.4 MB) |
+| `.usda`                         | 15 (298.5 MB) | 17 (263.4 MB) | 15 (298.5 MB) | 27 (165.8 MB) |
+| `.usdc`                         | 54 (82.9 MB)  | 54 (82.9 MB)  | 46 (97.3 MB)  | 90 (49.7 MB)  |
+| `.usdz`                         | 54 (82.9 MB)  | 54 (82.9 MB)  | 54 (82.9 MB)  | 88 (50.9 MB)  |
+| `.3mf`                          | 106 (42.2 MB) | 106 (42.2 MB) | 106 (42.2 MB) | 149 (30.0 MB) |
+| `.step`, `.stp`                 | 109 (41.1 MB) | 107 (41.8 MB) | 109 (41.1 MB) | 135 (33.2 MB) |
+
+The conversions between STL, OBJ, PLY, GLTF, GLB, and XYZ keep the limits they had before USD and COLLADA output were added. The factors of the formats added with USD, DAE, 3MF, and OFF were measured on a model of 0.33 to 1.3 million triangles and rounded up by at least 15 percent. A 3MF package and a binary USD layer are compressed on disk, which is why their factors are high.
 
 A larger function memory raises these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
 

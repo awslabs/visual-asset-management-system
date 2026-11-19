@@ -435,8 +435,12 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `tests/test_3dbasic_output_prefix.py`). `usd_io.dependency_graph` (convert-linked) follows composition
     arcs, value clips and asset-typed attributes only, never layer or prim metadata such as a component's
     `assetInfo` identifier.
--   `size_check.DAE_OUTPUT_EXPANSION_FACTORS` apply instead of `MEMORY_EXPANSION_FACTORS` when the output is COLLADA,
-    whose exporter holds the model twice. A format added to the handler needs both measured.
+-   `size_check.OUTPUT_EXPANSION_FACTORS` (by output, then input) applies instead of `MEMORY_EXPANSION_FACTORS`
+    where an output needs clearly more memory per input byte (USD and COLLADA). Each entry is the pair's
+    measured peak per input byte times 1.26, the margin the input factors keep. Measure in the built image (no
+    SciPy), and keep the peak at the limit under about 85 percent of the function memory: a 330 MB STL admitted
+    for USDA peaked at 5,307 of 5,308 MB before the table existed. The refusal names the output format. A format
+    added to the handler needs its input factor and the pairs that need more.
 -   Tests that convert real files (`test_3dbasic_new_formats.py`, `test_3dbasic_units_axes.py`,
     `test_3dbasic_usd_and_guards.py`) need real trimesh and usd-core, so `tests/conftest.py` imports them before the
     modules that stub `trimesh` in `sys.modules` are collected.
