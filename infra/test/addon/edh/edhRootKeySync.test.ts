@@ -514,7 +514,9 @@ const lockedPackages = (lockFile: string): Array<[string, string]> =>
     [
         ...fs
             .readFileSync(lockFile, "utf8")
-            .matchAll(/^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\nsource = \{ (?!virtual)/gm),
+            .matchAll(
+                /^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\nsource = \{ (?!virtual)/gm
+            ),
     ].map((m) => [m[1].toLowerCase().replace(/[-_.]+/g, "-"), m[2]]);
 /** The `bundling: { ... }` block of a layer construct's source, whitespace collapsed. */
 const bundlingBlock = (file: string): string => {
@@ -633,8 +635,8 @@ describe("R3-1, R3-2: the sync's own cryptography layer", () => {
         // Control: the parser reads the base lock.
         expect(base.length).toBeGreaterThan(10);
         const baseNames = new Set(base.map(([name]) => name));
-        const shared = lockedPackages(path.join(SYNC_LAYER_PROJECT, "uv.lock")).filter(
-            ([name]) => baseNames.has(name)
+        const shared = lockedPackages(path.join(SYNC_LAYER_PROJECT, "uv.lock")).filter(([name]) =>
+            baseNames.has(name)
         );
         expect(shared).toEqual([]);
     });

@@ -128,27 +128,27 @@ VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such a
 
 ### Managing Python Dependencies
 
-The backend and Lambda layer projects manage their Python dependencies with [Poetry](https://python-poetry.org/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `poetry.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. The Lambda layer bundling process does not read the committed file: it runs `poetry export` inside the build container, installs that export, and writes it over the layer directory's `requirements.txt`, so a layer ships what its `poetry.lock` resolves to. Poetry-managed projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+The backend and Lambda layer projects lock their Python dependencies with [uv](https://docs.astral.sh/uv/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `uv.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. uv is a developer and CI tool only: the Lambda layer bundling process installs the layer directory's committed `requirements.txt` with pip inside the build container and never resolves dependencies, so a layer ships exactly what its committed export names. A layer directory without a `requirements.txt` fails the build with a message. The uv-locked projects are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendAddons/edh/rootKeySync/lambdaLayer/`. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/` still uses a Poetry lock and a committed Poetry export.
+
+Each `pyproject.toml` names the uv version it was locked with (`required-version`); run that version, for example `uvx --from uv==<version> uv lock`. Each also sets `exclude-newer = "7 days"`, so a re-lock only takes releases that are at least seven days old.
 
 To change a dependency version, edit the constraint in `pyproject.toml` (only needed when the existing constraint excludes the target version), re-resolve the lock, and re-export the requirements file:
 
 ```bash
-# Re-resolve the lock without installing
-poetry update --lock <package>
+# Re-resolve the lock
+uv lock --upgrade-package <package>
 
-# Lambda layers and pipeline layers (single requirements.txt)
-poetry export --without-hashes -f requirements.txt -o requirements.txt
+# Lambda layers (single requirements.txt)
+uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 
 # backend/ exports two files (main vs. dev)
-poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
-poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
+uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
 ```
 
-Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together. Do not edit a Poetry-exported requirements file directly — the next export silently overwrites manual changes. Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
+Commit `pyproject.toml`, `uv.lock`, and the exported requirements file(s) together. Do not edit an exported requirements file directly — the next export silently overwrites manual changes. Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version, because the handler Lambdas load their packages from the base layer while the backend tests install `backend/requirements-dev.txt`. Update a shared package in both projects together; `backend/tests/test_base_layer_dependency_parity.py` fails when the two locks differ.
-
-The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into the same `/opt/python` directory, so a package both layers carry at different versions ends up mixed from two releases. That layer declares no AWS SDK package (the base layer provides `boto3`, `botocore` and `s3transfer`) and locks every other package it shares with the base layer at the base layer's version. When you move such a package (for example `requests`, `urllib3`, `certifi` or `charset-normalizer`) in the base layer, re-lock the Kubernetes layer in the same change; `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails until you do.
 
 ## Infrastructure Setup
 
@@ -281,7 +281,7 @@ Do not run lint or prettier commands from individual subdirectories. The root-le
 
 Docker is required for CDK deployment because:
 
-1. **Lambda Layers** -- Poetry-based Python dependency bundling runs inside Docker containers
+1. **Lambda Layers** -- Python dependency bundling (`pip install` of each layer's committed `requirements.txt`) runs inside Docker containers
 2. **Pipeline Containers** -- Processing pipelines (3D conversion, Gaussian splatting, point cloud) build container images
 3. **Cross-platform Builds** -- Docker handles architecture differences (ARM64 vs x86_64)
 
