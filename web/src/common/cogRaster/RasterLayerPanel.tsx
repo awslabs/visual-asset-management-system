@@ -68,11 +68,11 @@ const LayerRow: React.FC<{
     >
         <SpaceBetween size="xs">
             <SpaceBetween direction="horizontal" size="xs">
-                {/* A hidden row's label takes the secondary text colour, a theme token that keeps at
+                {/* A hidden row's label takes the inactive text colour, a theme token that differs from a shown label in both themes and keeps at
                     least 4.5:1 contrast in the light and dark themes (an opacity would not). */}
                 <Box
                     variant="strong"
-                    color={entry.visible ? "inherit" : "text-body-secondary"}
+                    color={entry.visible ? "inherit" : "text-status-inactive"}
                     data-testid="raster-layer-label"
                 >
                     {entry.label}

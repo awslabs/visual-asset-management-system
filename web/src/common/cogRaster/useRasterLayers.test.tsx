@@ -239,7 +239,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         expect(screen.getByTestId("raster-layer-row")).toHaveAttribute("data-hidden", "true");
         const toggle = screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' });
         expect(toggle).not.toBeChecked();
-        // No opacity on the label: its colour comes from the secondary text token.
+        // No opacity on the label: its colour comes from the inactive text token.
         const label = screen.getByTestId("raster-layer-label");
         expect(label.closest("[style*='opacity']")).toBeNull();
         expect(screen.getByRole("button", { name: "Zoom to s.tif.cog.tif" })).toBeDisabled();
