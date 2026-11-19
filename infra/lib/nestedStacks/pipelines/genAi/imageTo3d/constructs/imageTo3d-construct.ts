@@ -38,6 +38,11 @@ import {
 } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
+import {
     StateTimeoutBatchSubmitJob,
     grantBatchStateTimeoutCleanup,
 } from "../../../constructs/stateTimeoutBatchSubmitJob";
@@ -996,6 +1001,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
 
             const batchJob = new StateTimeoutBatchSubmitJob(this, `ImageTo3dBatchJob-${modelKey}`, {
                 stateTimeout: IMAGE_TO_3D_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.imageTo3d),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: jobDefinition.attrJobDefinitionArn,
                 jobQueueArn: queueForModel(modelKey),
@@ -1059,6 +1065,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             tracingEnabled: true,
         });
 
+        suppressBatchJobTaggingNag(pipelineStateMachine);
         // Step Functions cancels the submitted Batch job when the execution stops, which needs
         // TerminateJob. Without it an abort leaves the GPU job running to its attempt limit and the
         // execution reports stopped while the compute is still billing. DescribeJobs is granted

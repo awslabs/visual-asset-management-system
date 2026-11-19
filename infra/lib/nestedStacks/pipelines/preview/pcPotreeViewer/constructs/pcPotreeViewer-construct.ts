@@ -37,6 +37,7 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import { pipelineJobTags, VAMS_PIPELINE_TAG_VALUES } from "../../../constructs/pipelineJobTags";
 
 export interface PcPotreeViewerConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -408,6 +409,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             "PotreeConverterBatchJob",
             {
                 stateTimeout: PC_POTREE_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.pcPotreeViewer),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: latestRevisionJobDefinitionArn(potreeBatchPipeline),
                 jobQueueArn: potreeBatchPipeline.batchJobQueue.jobQueueArn,
@@ -431,6 +433,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             "PdalConverterBatchJob",
             {
                 stateTimeout: PC_POTREE_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.pcPotreeViewer),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: latestRevisionJobDefinitionArn(pdalBatchPipeline),
                 jobQueueArn: pdalBatchPipeline.batchJobQueue.jobQueueArn,

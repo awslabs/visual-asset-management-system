@@ -65,6 +65,12 @@ Test: `infra/test/launchTemplateUserDataTokens.test.ts`.
     A correct fix to the script can therefore deploy, verify clean in the launch template, and reach no
     instance at all. Confirm a change landed by decoding the user data of the template the INSTANCE
     booted (`aws:ec2launchtemplate:id` on the instance), not the one the compute environment names.
+    An L2 `ec2.LaunchTemplate` passed to an L2 `batch.ManagedEc2EcsComputeEnvironment` (Isaac Lab
+    training) renders only the template id and no version, which is the same staleness: pin it with
+    `addPropertyOverride("ComputeResources.LaunchTemplate.Version", launchTemplate.latestVersionNumber)`
+    on the environment's `CfnComputeEnvironment`. The L2 environment names no service role, uses
+    `BEST_FIT_PROGRESSIVE` and renders `replaceComputeEnvironment: false`, so the version change is an
+    in-place update.
 
              **Do not name a `serviceRole` on the environment.** Omitting it uses the Batch service-linked role
              (`AWSServiceRoleForBatch`), which Batch creates on demand for a managed environment, and which is
@@ -163,6 +169,18 @@ A deploy that changes a container image replaces its job definition: Batch regis
 ### A Batch State Bounds Its Own Queue Wait (`StateTimeoutBatchSubmitJob`)
 
 An attempt's clock starts when the job leaves the queue, and `tasks.BatchSubmitJob` renders `taskTimeout` as the SubmitJob attempt-duration override while forcing the state's `TimeoutSeconds` to undefined. A Batch state built with it is bounded only by the state machine timeout, and an execution-level `States.Timeout` skips every Catch, so `pipelineEnd` never reports and the run waits out the parent's `taskTimeout`. A `.sync` Batch state therefore uses `StateTimeoutBatchSubmitJob` (`constructs/stateTimeoutBatchSubmitJob.ts`), whose `stateTimeout` renders as the state's `TimeoutSeconds` and is caught like any other error (`taskTimeout` there is still the attempt override). Nest the chain: attempt duration ≤ the state bound; the state bound plus 15 minutes (the two 5-minute Lambda states around it) ≤ the state machine timeout; the state machine timeout < the `vamsSchema` `taskTimeout`, which starts before the execution does. A `WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform) bounds the wait with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Step Functions cancels a `.sync` job when the execution is aborted, not when a state times out, and a job a Lambda submitted under a token wait has no owner after the wait times out, so the state's pipelineEnd ends the run's job itself: `grantBatchStateTimeoutCleanup` gives it `BATCH_JOB_QUEUES` (every queue the state submits to), `batch:ListJobs` and `batch:TerminateJob` on `job/*`, and its handler's `end_batch_job_after_state_timeout` terminates the unfinished job with the run's job name on `States.Timeout`. Image to 3D, Video SOP/BOM, the 3D thumbnail tiers and Potree use it; the NVIDIA, splat toolbox and metadata labeling constructs predate it. Tests: `infra/test/pipelines/batchStateTimeoutChain.test.ts`, `backendPipelines/tests/test_pipeline_end_ends_timed_out_batch_job.py`.
+
+### Every Job a Pipeline Starts Carries the Pipeline Job Tags
+
+Every AWS Batch job and Amazon ECS task a VAMS pipeline starts carries `vams:stackname` (the deployment's `config.env.coreStackName`) and `vams:pipeline` (one value per pipeline construct, `VAMS_PIPELINE_TAG_VALUES` in `constructs/pipelineJobTags.ts`). A later release scopes each pipeline role's `batch:TerminateJob` / `ecs:StopTask` to these tags with `aws:ResourceTag`, so a job submitted without them is one that release cannot reach. Nothing restricts a permission yet. Keep every value stable and a valid Kubernetes label value.
+
+-   **A Step Functions Batch state** is a `TaggedBatchSubmitJob` (or `StateTimeoutBatchSubmitJob`, which extends it) with `jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.<pipeline>)`, never a plain `tasks.BatchSubmitJob`. aws-cdk-lib renders `tags` as the SubmitJob `Tags` but grants only `batch:SubmitJob`, and AWS Batch evaluates `batch:TagResource` when a submit carries tags, so the subclass registers that grant on the state machine role: `job/*` (a job id is generated at submit), with `aws:RequestTag` and `aws:TagKeys` conditions that allow only the two tags with this pipeline's values.
+-   **A Lambda that submits a Batch job itself** gets `configureLambdaBatchJobTagging(fn, tags)` in its construct: the tags as the `PIPELINE_JOB_TAGS` JSON environment variable, the same scoped grant, and its cdk-nag reason. The handler reads `PIPELINE_JOB_TAGS` at import and sets `submit_params["tags"]` when it is non-empty (`backendPipelines/CLAUDE.md` "Tagging the Jobs a Pipeline Submits").
+-   **An ECS RunTask state** keeps `propagatedTagSource: ecs.PropagatedTagSource.TASK_DEFINITION`, and the construct calls `tagEcsTaskDefinition(taskDefinition, tags)`. The tags reach each task by propagation, which sends no tags in the RunTask request, so no `ecs:TagResource` grant is needed. Do not also send them in RunTask: a task's tag keys must be unique.
+-   **A Kubernetes Job** (RapidPipeline EKS) gets `pipelineJobLabels(...)` as the `PIPELINE_JOB_LABELS` JSON environment variable of the function that builds the manifest, which spreads it into the Job's and the pod template's labels (`vams/pipeline`; a label key's name part cannot contain `:`).
+-   AWS Batch and Amazon ECS tag on create in the commercial, GovCloud and EU Sovereign partitions alike; the grant renders through `ServiceHelper.Partition()`.
+
+Test: `infra/test/pipelines/pipelineJobTags.test.ts` reads every pipeline source (a disabled pipeline counts) and fails on a plain `tasks.BatchSubmitJob`, an ECS RunTask without a tagged, propagating task definition, a Lambda `submit_job` without `PIPELINE_JOB_TAGS` or without its construct's `configureLambdaBatchJobTagging`, and a Kubernetes Job without the label. Operator documentation: `documentation/docusaurus-site/docs/pipelines/overview.md` "Job Tags".
 
 ### Container Dockerfiles: a Non-Root `USER` Reads What It COPYs
 

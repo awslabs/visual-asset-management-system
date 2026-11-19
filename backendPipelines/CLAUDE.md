@@ -1206,6 +1206,20 @@ EventBridge's delivery; a handler that returns an error body has succeeded as fa
 so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
 and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
 
+## Tagging the Jobs a Pipeline Submits
+
+A Lambda that submits an AWS Batch job itself (`executeBatchJob.py` in coordinate transform, the CAD STEP agent's `fargate` runtime, Isaac Lab and zipArchive) reads the pipeline's job tags (`vams:stackname`, `vams:pipeline`) from `PIPELINE_JOB_TAGS`, a JSON object its construct sets with `configureLambdaBatchJobTagging` (which also grants the scoped `batch:TagResource` that tagging on submit needs), and passes them on every submit:
+
+```python
+PIPELINE_JOB_TAGS = json.loads(os.environ.get("PIPELINE_JOB_TAGS") or "{}")
+...
+if PIPELINE_JOB_TAGS:
+    submit_params["tags"] = PIPELINE_JOB_TAGS
+response = batch.submit_job(**submit_params)
+```
+
+The Lambda that builds a Kubernetes Job (RapidPipeline EKS `consolidated_handler.py`) spreads `PIPELINE_JOB_LABELS` (`vams/pipeline`) into the Job's and the pod template's `labels`, next to the labels it finds its own job by. A later release scopes each pipeline role's terminate and stop permissions to these tags, so a new submit site carries them too: `infra/test/pipelines/pipelineJobTags.test.ts` fails on a `submit_job(` without `PIPELINE_JOB_TAGS` and on a `create_namespaced_job(` without the label. The CDK side is `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Every Job a Pipeline Starts Carries the Pipeline Job Tags".
+
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 
 Every `boto3.client(...)` and `boto3.resource(...)` in this tree takes the shared retry configuration:

@@ -40,6 +40,11 @@ import {
 import { CadStepAgentCodeBuildConstruct } from "./cadStepAgentCodeBuild-construct";
 import { CadStepAgentAgentCoreConstruct } from "./cadStepAgentAgentCore-construct";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import path = require("path");
 
 export interface CadStepAgentConstructProps extends cdk.StackProps {
@@ -474,6 +479,10 @@ export class CadStepAgentConstruct extends Construct {
                 props.vpc,
                 props.pipelineSubnets,
                 props.kmsKey
+            );
+            configureLambdaBatchJobTagging(
+                runAgentFunction,
+                pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.cadStepAgent)
             );
             runtimeStateName = "CadStepAgentBatchJob";
 

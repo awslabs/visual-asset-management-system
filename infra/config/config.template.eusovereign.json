@@ -144,7 +144,7 @@
                     "modelId": "",
                     "apiKeySecretArn": ""
                 },
-                "allowInternetResearch": true,
+                "allowInternetResearch": false,
                 "bedrockGuardrail": {
                     "guardrailId": "",
                     "guardrailVersion": ""

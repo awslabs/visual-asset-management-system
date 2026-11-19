@@ -36,6 +36,11 @@ import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security"
 import { layerBundlingCommand } from "../../../../../helper/lambda";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface Metadata3dLabelingConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -368,7 +373,8 @@ export class Metadata3dLabelingConstruct extends NestedStack {
             .next(pipeLineEndTask);
 
         // batch job Blender Renderer
-        const blenderRendererBatchJob = new tasks.BatchSubmitJob(this, "BlenderRendererBatchJob", {
+        const blenderRendererBatchJob = new TaggedBatchSubmitJob(this, "BlenderRendererBatchJob", {
+            jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.metadata3dLabeling),
             jobName: sfn.JsonPath.stringAt("$.jobName"),
             jobDefinitionArn: blenderRendererBatchPipeline.batchJobDefinition.jobDefinitionArn,
             jobQueueArn: blenderRendererBatchPipeline.batchJobQueue.jobQueueArn,

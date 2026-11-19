@@ -28,6 +28,9 @@ events_client = boto3.client("events", config=retry_config)
 
 BATCH_JOB_QUEUE = os.environ["BATCH_JOB_QUEUE"]
 BATCH_JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
+# The pipeline's job tags (vams:stackname, vams:pipeline) as a JSON object, set by its CDK construct.
+# AWS Batch puts them on the job, so a later release can scope job permissions to them.
+PIPELINE_JOB_TAGS = json.loads(os.environ.get("PIPELINE_JOB_TAGS") or "{}")
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 # This pipeline's vended container log group (the group its Fargate job definition writes to through
 # the awslogs driver); the job's log source is registered only when configured.
@@ -141,6 +144,9 @@ def lambda_handler(event, context):
             ],
         },
     }
+
+    if PIPELINE_JOB_TAGS:
+        submit_params["tags"] = PIPELINE_JOB_TAGS
 
     logger.info(f"Submitting Batch job: {job_name}")
     response = batch.submit_job(**submit_params)
