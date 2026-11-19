@@ -46,6 +46,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Search map popup position** — A click on a file's footprint in the Search Map view opens its popup at the click, not at the centre of the footprint's box (away from the click for a large or L-shaped footprint, and at longitude 0 for a footprint split at longitude 180). Of overlapping footprints, the smallest under the click opens. (issue #1683)
 -   **Isaac Lab GPU instance pool** — The compute environment launches only GPU instance types that can run the job: one RT-core GPU, at least 8 vCPUs and more registered memory than the 32 GiB the job asks for. The default list is wider, with 11 single-GPU G5, G6, GR6 and G6E types. CPU-only instance classes are no longer added, and `keepWarmInstance` keeps one instance the job can run on. The new `app.pipelines.useIsaacLabTraining.instanceTypes` option sets the list, and deployment fails at synthesis for a type that cannot run the job. (issue #1308)
 -   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593)
 -   **Search Map view framing** — The Map view is a flat map and frames every located result, including a footprint split at longitude 180 and results on several continents, instead of showing an empty area. (issue #1680)
