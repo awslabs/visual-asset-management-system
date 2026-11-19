@@ -172,6 +172,73 @@ class TestApiKeyCreateUnderVerbose:
             assert json.loads(result.stdout)["apiKey"] == API_KEY
 
 
+AUDIT_TERM = "zqxechoterm1700"
+AUDIT_USER = "zqxechouser1700"
+
+
+class _AuditDeployment(requests.adapters.BaseAdapter):
+    """A transport answering the audit search routes. The started search carries a warning that
+    holds a presigned URL, so one `--verbose` run sends an audit filter and a signature through
+    the echo."""
+
+    def __init__(self):
+        super().__init__()
+        self.sent = []
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        self.sent.append(request)
+        response = requests.Response()
+        response.status_code = 200
+        if request.method == "GET" and request.path_url.endswith("/audit/log-groups"):
+            body = {"logGroups": [], "actions": [], "entityTypes": [], "outcomes": [],
+                    "limits": {"maxContainsTerms": 3, "maxContainsTermLength": 64}}
+        elif request.method == "POST" and request.path_url.endswith("/audit/queries"):
+            body = {"queryId": "11111111-2222-3333-4444-555555555555", "status": "Running",
+                    "warnings": [f"stand-in warning naming {PRESIGNED}"]}
+        else:
+            response.status_code = 404
+            body = {"message": "Not Found"}
+        response.headers["Content-Type"] = "application/json"
+        response.raw = io.BytesIO(json.dumps(body).encode("utf-8"))
+        response.url = request.url
+        response.request = request
+        return response
+
+    def close(self):
+        pass
+
+
+class TestAuditSearchUnderVerbose:
+    """`--verbose audit search` on a real APIClient: the echo masks the audit filter values (the
+    audit log masking) and a presigned-URL signature (the console mask) in the same run."""
+
+    def test_the_echo_masks_a_filter_value_and_a_signature(self, cli_runner,
+                                                           generic_command_mocks):
+        transport = _AuditDeployment()
+
+        def client(*args, **kwargs):
+            api_client = _real_client()
+            api_client.session.mount("https://", transport)
+            return api_client
+
+        with generic_command_mocks("audit") as mocks:
+            mocks["patches"]["cmd_api"].side_effect = client
+            result = cli_runner.invoke(cli, ["--verbose", "audit", "search",
+                                             "--contains", AUDIT_TERM, "--user", AUDIT_USER,
+                                             "--no-wait"])
+
+        assert result.exit_code == 0, result.output
+        echo = result.stderr
+        for value in (AUDIT_TERM, AUDIT_USER, SIGNATURE):
+            assert value not in echo
+        # Controls: the request and response bodies reached the echo, masked rather than dropped.
+        assert "[1 terms omitted]" in echo and "masked: 1 values" in echo
+        assert "X-Amz-Signature=" + REDACTED in echo
+        # The masking is display-only: the search sent from the session carried the real filters.
+        sent = json.loads(next(r.body for r in transport.sent if r.method == "POST"))
+        assert sent["contains"] == [AUDIT_TERM] and sent["users"] == [AUDIT_USER]
+
+
 class TestTracebacks:
     """The verbose and `--debug` tracebacks of an unexpected error pass through the console mask."""
 
