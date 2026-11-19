@@ -3,8 +3,8 @@
 
 """What goes into the 3D Basic Conversion image (#506, #510).
 
-- ``requirements.txt`` is the export of ``poetry.lock`` (backend ``CLAUDE.md``, "Updating Python
-  Dependencies"): the Dockerfile installs the requirements file, so a hand edit that disagrees with the
+- ``requirements.txt`` is the hashed export of ``poetry.lock`` (backend ``CLAUDE.md``, "Updating Python
+  Dependencies"; ``pip install --require-hashes``): the Dockerfile installs the requirements file, so a hand edit that disagrees with the
   lock ships one version and is silently reverted by the next export. Both files are compared package
   by package.
 - Pillow is installed. trimesh decodes and encodes texture images through it; without it textures are
@@ -25,7 +25,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The modules lambda.py imports from the build context. A runtime module the ignore file excluded would
 # fail at container RUNTIME, not at the image build.
-_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "common/logger.py", "requirements.txt")
+_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "common/logger.py", "requirements.txt")
 
 
 def _read(name):
@@ -86,8 +86,28 @@ class TestRequirementsAreTheLockExport:
         assert "pillow" in _requirements()
         assert re.search(r"(?m)^pillow\s*=", _read("pyproject.toml"))
 
-    def test_trimesh_stays_on_the_4x_line(self):
-        assert _requirements()["trimesh"].split(".")[0] == "4"
+    def test_trimesh_is_on_the_5x_line(self):
+        assert int(_requirements()["trimesh"].split(".")[0]) >= 5
+
+    def test_every_requirement_carries_hashes_and_the_install_requires_them(self):
+        # `pip install --require-hashes` refuses a package without a hash and any file whose hash is
+        # not listed, so the image holds exactly the locked packages.
+        blocks = re.split(r"(?m)^(?=[A-Za-z0-9])", _read("requirements.txt"))
+        entries = [block for block in blocks if block.strip()]
+        assert entries
+        for entry in entries:
+            assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), entry.splitlines()[0]
+        install = [line for line in _read("Dockerfile").splitlines()
+                   if line.startswith("RUN pip install")]
+        assert len(install) == 1 and all(flag in install[0] for flag in ("--require-hashes", "--no-deps", "--only-binary=:all:")), install
+
+    def test_the_pyproject_floor_matches_the_lock(self):
+        # The direct dependencies' floors are the locked releases, so a re-lock cannot drift below.
+        with open(os.path.join(_LAMBDA_DIR, "pyproject.toml"), "rb") as handle:
+            declared = tomllib.load(handle)["tool"]["poetry"]["dependencies"]
+        pins = _requirements()
+        for name in ("trimesh", "aws-lambda-powertools", "pillow"):
+            assert declared[name].lstrip("^") == pins[name], name
 
 
 @pytest.mark.unit
