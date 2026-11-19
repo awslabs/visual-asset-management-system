@@ -237,6 +237,22 @@ COMPLIANCE: FrozenSet[str] = COMPLIANCE_TOOLS | frozenset(
     }
 )
 
+# Audit log search, for the people who investigate who did what. Opt-in on both transports: the set is
+# never part of `consumer`, `operator` or `admin`, and `all` does not register it either, because a
+# search starts a billable CloudWatch Logs Insights query and audit records may be sensitive. The four
+# tools need no write or destructive gate: three are reads, and `vams_audit_stop` stops only the
+# caller's own search (it removes no data). Audit search is core VAMS with no feature switch, so the set
+# is the only gate; the API's authorizer and per-log-group permission decide what a caller may see.
+AUDIT_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "vams_audit_groups",
+        "vams_audit_search",
+        "vams_audit_results",
+        "vams_audit_stop",
+    }
+)
+AUDIT: FrozenSet[str] = AUDIT_TOOLS | frozenset({"vams_status"})
+
 # EDH Workstations add-on, for the people who use workstations and container jobs.
 EDH: FrozenSet[str] = frozenset(
     {
@@ -300,6 +316,7 @@ TOOLSETS = {
     "operator": OPERATOR,
     "admin": ADMIN,
     "compliance": COMPLIANCE,
+    "audit": AUDIT,
     "edh": EDH,
     "edh-admin": EDH_ADMIN,
 }
@@ -340,6 +357,9 @@ class Selection:
         )
 
     def includes(self, tool_name: str) -> bool:
+        if tool_name in AUDIT_TOOLS:
+            # Opt-in: `all` does not carry the audit tools, only the `audit` set names them.
+            return "audit" in self.names
         if self.everything or tool_name in self.tools:
             return True
         # A tool in no named set is a fork's own tool (custom_tools.py).
