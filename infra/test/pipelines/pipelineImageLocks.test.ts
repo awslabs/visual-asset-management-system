@@ -58,7 +58,10 @@ function instructions(text: string): string[] {
 function lockEntries(text: string): { name: string; hashes: number }[] {
     const entries: { name: string; hashes: number }[] = [];
     for (const line of text.split(/\r?\n/)) {
-        const pin = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==\S+/.exec(line);
+        // A pin by version, or by direct URL (`name @ https://...`), which the lock hashes the same way.
+        const pin =
+            /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==\S+/.exec(line) ??
+            /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])? @ https:\/\/\S+/.exec(line);
         if (pin) entries.push({ name: normalize(pin[1]), hashes: 0 });
         else if (/^\s+--hash=sha256:[0-9a-f]{64}/.test(line) && entries.length) {
             entries[entries.length - 1].hashes += 1;
@@ -162,5 +165,146 @@ describe("the PDAL build environment", () => {
                 ),
             ]).toEqual([dependency, true]);
         }
+    });
+});
+
+/** Every `pip install` / `uv pip install` / `uv sync` instruction of a Dockerfile. */
+function installSteps(steps: string[]): string[] {
+    return steps.filter((s) => /\b(pip3?\s+install|uv\s+pip\s+install|uv\s+sync)\b/.test(s));
+}
+
+/**
+ * Images whose one Python install is a runtime-stage `pip install`, now from a hashed lock. Their bases
+ * are large vendor or Alpine images whose OS packages the image does not manage, so the OS-update rule
+ * above is not asserted for them.
+ */
+const PIP_LOCKED_RUNTIME_INSTALLS: { label: string; dir: string; dockerfile: string }[] = [
+    {
+        label: "Isaac Lab training",
+        dir: "simulation/isaacLabTraining/container",
+        dockerfile: "Dockerfile",
+    },
+    {
+        label: "pcPotreeViewer Potree",
+        dir: "preview/pcPotreeViewer/container",
+        dockerfile: "Dockerfile_Potree",
+    },
+];
+
+describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfile }) => {
+    const root = path.join(PIPELINES_DIR, dir);
+    const steps = instructions(fs.readFileSync(path.join(root, dockerfile), "utf-8"));
+    const lock = fs.readFileSync(path.join(root, "requirements.lock"), "utf-8");
+    const entries = lockEntries(lock);
+
+    it("installs its Python packages from the hashed lock only, as wheels", () => {
+        const installs = installSteps(steps);
+        expect(installs.length).toBeGreaterThan(0);
+        for (const step of installs) {
+            expect(step).toMatch(/--require-hashes/);
+            expect(step).toMatch(/--only-binary :all:/);
+            expect(step).toMatch(/-r \S*requirements\.lock\b/);
+        }
+    });
+
+    it("locks every direct dependency of requirements.txt, with a hash on every pin", () => {
+        expect(lock).toMatch(/^#\s+uv pip compile requirements\.txt --generate-hashes /m);
+        expect(entries.length).toBeGreaterThan(0);
+        expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
+        const locked = new Set(entries.map((e) => e.name));
+        const direct = directDependencies(
+            fs.readFileSync(path.join(root, "requirements.txt"), "utf-8")
+        );
+        expect(direct.length).toBeGreaterThan(0);
+        expect(direct.filter((name) => !locked.has(name))).toEqual([]);
+    });
+});
+
+describe("the Cosmos images", () => {
+    const COSMOS = [
+        "genAi/nvidia/cosmos/3/container",
+        "genAi/nvidia/cosmos/predict/containerv2.5",
+        "genAi/nvidia/cosmos/reason/container",
+        "genAi/nvidia/cosmos/transfer/container",
+    ];
+
+    it.each(COSMOS)("%s installs from its upstream uv.lock, or from a hashed lock", (dir) => {
+        // `uv sync --locked` installs exactly the upstream lock at the pinned commit, every file checked
+        // against its recorded SHA-256, and fails rather than re-resolving when the lock is stale.
+        const steps = instructions(
+            fs.readFileSync(path.join(PIPELINES_DIR, dir, "Dockerfile"), "utf-8")
+        );
+        const installs = installSteps(steps);
+        expect(installs.some((s) => /\buv sync\b/.test(s))).toBe(true);
+        for (const step of installs) {
+            if (/\buv sync\b/.test(step)) expect(step).toMatch(/--locked/);
+            else expect(step).toMatch(/--require-hashes .*-r \S+\.lock\b/);
+        }
+    });
+
+    it("Cosmos Transfer's NCCL upgrade comes from its hashed lock", () => {
+        const root = path.join(PIPELINES_DIR, "genAi/nvidia/cosmos/transfer/container");
+        const lock = fs.readFileSync(path.join(root, "requirements-nccl.lock"), "utf-8");
+        expect(lock).toMatch(/^#\s+uv pip compile requirements-nccl\.txt --generate-hashes /m);
+        const entries = lockEntries(lock);
+        expect(entries.map((e) => e.name)).toEqual(["nvidia-nccl-cu12"]);
+        expect(entries[0].hashes).toBeGreaterThan(0);
+    });
+});
+
+describe("the GR00T image", () => {
+    const root = path.join(PIPELINES_DIR, "genAi/nvidia/gr00t/container");
+    const steps = instructions(fs.readFileSync(path.join(root, "Dockerfile"), "utf-8"));
+    const lock = fs.readFileSync(path.join(root, "requirements.lock"), "utf-8");
+    const buildLock = fs.readFileSync(path.join(root, "requirements-build.lock"), "utf-8");
+    const versions = (text: string) =>
+        new Map(
+            [...text.matchAll(/^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)/gm)].map((m) => [
+                normalize(m[1]),
+                m[2],
+            ])
+        );
+
+    it("installs the build tools, then the lock with no build isolation, then Isaac-GR00T without dependencies", () => {
+        const installs = installSteps(steps);
+        expect(installs).toEqual([
+            expect.stringMatching(
+                /--require-hashes --only-binary :all: -r \S*requirements-build\.lock$/
+            ),
+            expect.stringMatching(
+                /--require-hashes --no-build-isolation -r \S*requirements\.lock$/
+            ),
+            expect.stringMatching(/--no-deps --no-build-isolation -e \.$/),
+        ]);
+    });
+
+    it("locks Isaac-GR00T's base dependencies and the image's own, a hash on every pin", () => {
+        expect(lock).toMatch(
+            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements\.txt --generate-hashes /m
+        );
+        const entries = lockEntries(lock);
+        expect(entries.length).toBeGreaterThan(100);
+        expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
+        const locked = new Set(entries.map((e) => e.name));
+        for (const name of [
+            "torch",
+            "tensorflow",
+            "transformers",
+            "flash-attn",
+            "gpustat",
+            "setuptools-scm",
+        ]) {
+            expect([name, locked.has(name)]).toEqual([name, true]);
+        }
+    });
+
+    it("builds with the same tool versions the main lock holds", () => {
+        const main = versions(lock);
+        const build = versions(buildLock);
+        expect(build.size).toBeGreaterThan(0);
+        for (const [name, version] of build) {
+            if (main.has(name)) expect([name, version]).toEqual([name, main.get(name)]);
+        }
+        expect(lockEntries(buildLock).filter((e) => e.hashes === 0)).toEqual([]);
     });
 });

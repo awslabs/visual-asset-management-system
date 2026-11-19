@@ -2,7 +2,9 @@
 # Based on the NVIDIA Isaac-GR00T sample Dockerfile
 # https://github.com/NVIDIA/Isaac-GR00T
 
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+# Base pinned by digest: the tag records which release the digest resolves to, and a re-pointed tag
+# cannot change what a rebuild of this commit pulls. Move the tag and the digest together.
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04@sha256:622e78a1d02c0f90ed900e3985d6c975d8e2dc9ee5e61643aed587dcf9129f42
 
 ARG STABLE_COMMIT=db107f03d165060998df166292578f1d7fb3c79a
 
@@ -37,7 +39,7 @@ RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1 &
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
 
 # Install UV package manager
-COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:f64ad69940b634e75d2e4d799eb5238066c5eeda49f76e782d4873c3d014ea33 /uv /usr/local/bin/uv
 
 ENV UV_SYSTEM_PYTHON=1
 ENV PYTHONPATH=/workspace
@@ -55,11 +57,15 @@ RUN git clone ${GR00T_REPO} /workspace && \
 
 WORKDIR /workspace
 
-# Install dependencies
-RUN uv pip install --upgrade pip setuptools wheel
-RUN uv pip install --no-cache -e .[base]
-RUN pip install --no-build-isolation flash-attn==2.7.1.post4
-RUN uv pip install --no-cache gpustat
+# Install dependencies: every file at the version and hash in requirements.lock (Isaac-GR00T's pyproject.toml
+# with the `base` extra, plus requirements.txt; its header holds the command). Four packages publish no
+# wheel (antlr4-python3-runtime, fvcore, gpustat, iopath), so they build from their hashed source against
+# the build tools of requirements-build.lock, installed first: `--no-build-isolation` keeps the build from
+# fetching unhashed tools. Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
+COPY requirements-build.lock requirements.lock /tmp/gr00t/
+RUN uv pip install --no-cache --require-hashes --only-binary :all: -r /tmp/gr00t/requirements-build.lock
+RUN uv pip install --no-cache --require-hashes --no-build-isolation -r /tmp/gr00t/requirements.lock
+RUN uv pip install --no-cache --no-deps --no-build-isolation -e .
 
 # Copy VAMS container code
 RUN mkdir -p /opt/ml/code

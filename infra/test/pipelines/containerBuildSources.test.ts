@@ -363,26 +363,117 @@ const NON_ROOT_IMAGES: {
 const FLOATING_TAG =
     /^FROM\s+(?:--\S+\s+)*([^\s:@$]+(?:\/[^\s:@]+)*):([A-Za-z0-9._-]+)(?:\s+(?:AS|as)\s+\S+)?\s*$/;
 
-describe("base images are not pulled from a floating tag", () => {
-    const ALL_DOCKERFILES = [COORD_DOCKERFILE, ...NON_ROOT_IMAGES.map((i) => i.file)];
+/** Every Dockerfile under backendPipelines (`Dockerfile`, `Dockerfile.<name>`, `Dockerfile_<name>`). */
+function pipelineDockerfiles(dir: string = PIPELINES_DIR): string[] {
+    const out: string[] = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            if (["node_modules", "__pycache__", ".venv", ".git"].includes(entry.name)) continue;
+            out.push(...pipelineDockerfiles(full));
+        } else if (/^Dockerfile([._].+)?$/.test(entry.name) && full !== SPLAT_SYNCED_DOCKERFILE) {
+            out.push(full);
+        }
+    }
+    return out;
+}
 
-    it("examines every Dockerfile it names", () => {
-        // Control: a typo'd path would otherwise make the rule below pass over an empty set.
-        expect(ALL_DOCKERFILES.length).toBeGreaterThanOrEqual(12);
-        for (const f of ALL_DOCKERFILES) expect(fs.existsSync(f)).toBe(true);
+/**
+ * Not a tracked file: `SplatToolboxConstruct` copies it from the pinned upstream on every synth and it is
+ * gitignored, so it exists only in a tree that has been synthesized. `dockerfilePinAudit.ts` audits its pins
+ * (`splatDockerfilePinAudit.test.ts`).
+ */
+const SPLAT_SYNCED_DOCKERFILE = path.join(
+    PIPELINES_DIR,
+    "3dRecon",
+    "splatToolbox",
+    "container",
+    "Dockerfile"
+);
+
+/**
+ * Pipeline Dockerfiles the digest rule does not check, each with the reason. A new Dockerfile is checked
+ * from the day it is added; it can only be left out by naming it here.
+ */
+const DIGEST_RULE_EXEMPTIONS: { file: string; reason: string }[] = [
+    {
+        file: path.join(PIPELINES_DIR, "conversion", "3dBasic", "lambdaContainer", "Dockerfile"),
+        reason:
+            "The 3D Basic conversion image is reworked under #517, which owns that directory; the " +
+            "container hardening leaves it as it is.",
+    },
+];
+
+/** An image an instruction copies from (`COPY --from=<image>`), as opposed to a named build stage. */
+const COPY_FROM_IMAGE = /^COPY\s+(?:--\S+\s+)*--from=(\S*[/:]\S*)\s/;
+
+/** The default of `ARG <name>=<value>` in a Dockerfile, or undefined. */
+function argDefault(text: string, name: string): string | undefined {
+    const m = new RegExp(`^ARG\\s+${name}=("?)(\\S+?)\\1\\s*$`, "m").exec(text);
+    return m ? m[2] : undefined;
+}
+
+/** The image references in one Dockerfile that are not pinned by digest. */
+function unpinnedReferences(text: string): string[] {
+    const offenders: string[] = [];
+    for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        const floating = FLOATING_TAG.exec(line);
+        if (floating) offenders.push(`${floating[1]}:${floating[2]}`);
+        const copied = COPY_FROM_IMAGE.exec(line);
+        if (copied && !/@sha256:[0-9a-f]{64}$/.test(copied[1])) offenders.push(copied[1]);
+        // An ARG-supplied base: its default must carry a digest, given inline or by another ARG.
+        const fromArg = /^FROM\s+(?:--\S+\s+)*\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/.exec(line);
+        if (fromArg) {
+            const value = argDefault(text, fromArg[1]) ?? "";
+            const viaArg = /@\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(value);
+            const digest = viaArg ? argDefault(text, viaArg[1]) ?? "" : value.split("@")[1] ?? "";
+            if (!/^sha256:[0-9a-f]{64}$/.test(digest))
+                offenders.push(`\${${fromArg[1]}} = ${value || "(no default)"}`);
+        }
+    }
+    return offenders;
+}
+
+describe("base images are not pulled from a floating tag", () => {
+    const exempt = new Set(DIGEST_RULE_EXEMPTIONS.map((e) => e.file));
+    const FOUND = pipelineDockerfiles();
+    const ALL_DOCKERFILES = FOUND.filter((f) => !exempt.has(f));
+
+    it("examines every pipeline Dockerfile but the named exemptions", () => {
+        // Controls: the walk finds the tree's Dockerfiles, including every one the other rules here name,
+        // and every exemption still names a file (a stale entry would hide nothing and mean nothing).
+        expect(FOUND.length).toBeGreaterThanOrEqual(25);
+        for (const f of [COORD_DOCKERFILE, ...NON_ROOT_IMAGES.map((i) => i.file)]) {
+            expect(ALL_DOCKERFILES).toContain(f);
+        }
+        for (const e of DIGEST_RULE_EXEMPTIONS) {
+            expect(FOUND).toContain(e.file);
+            expect(e.reason.length).toBeGreaterThan(20);
+        }
     });
 
     it.each(ALL_DOCKERFILES)("%s pins each base image by digest", (file) => {
-        const text = fs.readFileSync(file, "utf-8");
-        const offenders: string[] = [];
-        for (const line of text.split(/\r?\n/)) {
-            if (!/^FROM\s/i.test(line)) continue;
-            const m = FLOATING_TAG.exec(line.trim());
-            if (!m) continue; // already carries @sha256, or is a named build stage
-            const [, image, tag] = m;
-            offenders.push(`${image}:${tag}`);
-        }
-        expect(offenders).toEqual([]);
+        expect(unpinnedReferences(fs.readFileSync(file, "utf-8"))).toEqual([]);
+    });
+
+    it("the detector recognises an unpinned copy source and an ARG-supplied base", () => {
+        expect(
+            unpinnedReferences("COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /usr/local/bin/\n")
+        ).toEqual(["ghcr.io/astral-sh/uv:0.8.12"]);
+        expect(
+            unpinnedReferences(
+                `COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:${"c".repeat(64)} /uv /bin/\n`
+            )
+        ).toEqual([]);
+        expect(unpinnedReferences("COPY --from=builder /opt/venv /opt/venv\n")).toEqual([]);
+        const viaArg = `ARG D=sha256:${"d".repeat(
+            64
+        )}\nARG BASE_IMAGE=nvcr.io/x/y:1@\${D}\nFROM \${BASE_IMAGE}\n`;
+        expect(unpinnedReferences(viaArg)).toEqual([]);
+        expect(unpinnedReferences("ARG BASE_IMAGE=nvcr.io/x/y:1\nFROM ${BASE_IMAGE}\n")).toEqual([
+            "${BASE_IMAGE} = nvcr.io/x/y:1",
+        ]);
     });
 
     it("the detector recognises a floating reference", () => {

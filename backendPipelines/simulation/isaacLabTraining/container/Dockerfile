@@ -21,9 +21,11 @@ ENV PYTHONUNBUFFERED=1
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
-# Install additional dependencies using Isaac Sim's Python
-COPY requirements.txt /tmp/requirements.txt
-RUN /isaac-sim/kit/python/bin/python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+# Install additional dependencies using Isaac Sim's Python: every package at the version and hash in the
+# lock (generated from requirements.txt for Isaac Sim's Python 3.11; its header holds the command).
+COPY requirements.lock /tmp/requirements.lock
+RUN /isaac-sim/kit/python/bin/python3 -m pip install --no-cache-dir --require-hashes --only-binary :all: \
+    -r /tmp/requirements.lock
 
 # Create directories (issue #327: /mnt/efs/checkpoints is mounted via EFS access point, owned by 10000:10000)
 RUN mkdir -p /app /tmp/assets
