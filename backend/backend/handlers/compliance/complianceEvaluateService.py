@@ -600,9 +600,9 @@ def sweep_schema(event, schema_name, starting_token=None):
             # The page is read again by the next call, which skips what this one evaluated.
             return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE,
                                                    None, cursor), schemaName=schema_name)
-        cursor = response.get("LastEvaluatedKey")
-        if cursor is None:
+        if "LastEvaluatedKey" not in response:
             return walk.answer(event, None, schemaName=schema_name)
+        cursor = response["LastEvaluatedKey"]
     return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE, None, cursor),
                        schemaName=schema_name)
 
@@ -704,9 +704,9 @@ def evaluate_database(event, database_id, starting_token=None):
             return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE,
                                                    None, cursor),
                                databaseId=database_id, database=True)
-        cursor = response.get("LastEvaluatedKey")
-        if cursor is None:
+        if "LastEvaluatedKey" not in response:
             return walk.answer(event, None, databaseId=database_id, database=True)
+        cursor = response["LastEvaluatedKey"]
     return walk.answer(event, _sweep_token(position.started_at, SWEEP_PHASE_EVALUATE, None, cursor),
                        databaseId=database_id, database=True)
 
