@@ -172,11 +172,11 @@ The archive was refused because the named file is archived, a deleted version, i
 
 ### A Job Fails With "The archive job timed out"
 
-The archive job reached its 11-hour bound. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
+The archive job reached its 11-hour bound, and VAMS ended its AWS Batch job. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
 
 ### A Job Fails With "The archive job was stopped" or "The archive job stopped responding"
 
-The Zip Archive container ended before the archive was written. "The archive job was stopped" means its AWS Batch job was terminated outside VAMS. "The archive job stopped responding" means the container stopped without warning, for example because it ran out of memory or its host was lost. Create the job again. If it recurs for the same selection, raise `computeMemoryGiB`.
+The Zip Archive container ended before the archive was written. "The archive job was stopped" means its AWS Batch job was terminated outside VAMS. "The archive job stopped responding" means the container stopped sending heartbeats for 30 minutes before the 11-hour bound, for example because it ran out of memory or its host was lost; a container still running then is ended. Create the job again. If it recurs for the same selection, raise `computeMemoryGiB`.
 
 ### A Job Fails With "The archive job waited too long to start" or "The archive job failed before it started"
 

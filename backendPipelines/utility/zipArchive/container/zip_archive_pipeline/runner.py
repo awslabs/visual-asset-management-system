@@ -52,8 +52,9 @@ PROGRESS_EVERY_SECONDS = 30
 # Heartbeat interval of both task tokens: the VAMS workflow's (externalSfnTaskToken) and the zipArchive
 # state machine's own (TASK_TOKEN). The ZipArchiveBatchJob state's heartbeat timeout
 # (infra zipArchive-construct.ts ZIP_ARCHIVE_BATCH_HEARTBEAT) is several intervals longer, so a
-# container killed without a SIGTERM (out of memory, host loss) ends its run with
-# States.HeartbeatTimeout instead of holding the job until the 11-hour task timeout (#1125 D26).
+# container killed without a SIGTERM (out of memory, host loss) ends its run within that timeout
+# instead of holding the job until the 11-hour task timeout (#1125 D26). Step Functions records the
+# expiry as States.Timeout; the zipArchive pipelineEnd reports it as ZipArchiveHeartbeatLost.
 HEARTBEAT_SECONDS = 120
 # The error the container answers its own task token with when it is stopped (SIGTERM) and no VAMS
 # stopper recorded the stop: a Batch terminate outside VAMS. The run then ends FAILED and the API's

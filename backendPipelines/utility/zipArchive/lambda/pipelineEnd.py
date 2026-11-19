@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 import boto3
 import json
 from customLogging.logger import safeLogger
@@ -26,57 +27,87 @@ batch = boto3.client(
     config=retry_config
 )
 
-# The pipeline's AWS Batch job queue, where the run's job is looked up after a heartbeat timeout.
-BATCH_JOB_QUEUE = os.environ.get("BATCH_JOB_QUEUE", "")
+# The pipeline's AWS Batch job queues (comma-separated), where the run's job is looked up by its
+# job name after the ZipArchiveBatchJob token wait times out. The name is the run's execution name,
+# unique to the run, and the state submits one job, so one ListJobs page holds it.
+BATCH_JOB_QUEUES = [queue for queue in os.environ.get("BATCH_JOB_QUEUES", "").split(",") if queue]
 
-# The ZipArchiveBatchJob heartbeat clock starts at submit, so it also expires for a job that is still
-# waiting in the queue or that failed before its container ran. These names, reported in place of
-# the heartbeat timeout, are the ones the backend's zip finalizer (common/zipDownloads.py) maps to a
-# user message; a job that did run keeps the heartbeat timeout.
+# The token wait ends with States.Timeout both when its 30-minute heartbeat runs out and when its
+# 11-hour bound is reached: Step Functions records a heartbeat expiry as States.Timeout, with no
+# cause. Nothing else ends the job executeBatchJob submitted under WAIT_FOR_TASK_TOKEN, so the run's
+# job is looked up and, while it is still queued or running, ended here; else it would start or go
+# on after its run had failed. Where the job got to names the end, and the backend's zip finalizer
+# (common/zipDownloads.py) maps each name to a user message:
+# - still waiting to start (the heartbeat clock starts at submit): JOB_QUEUED_ERROR;
+# - failed before its container ran (an image that cannot be pulled): JOB_NOT_STARTED_ERROR;
+# - ran up to the state's bound: STATE_TIMEOUT_ERROR, unchanged;
+# - ran and stopped sending heartbeats inside the bound (killed without a SIGTERM): HEARTBEAT_LOST_ERROR.
+STATE_TIMEOUT_ERROR = "States.Timeout"
+# The Catch matcher name of a heartbeat expiry; looked up the same way should a run ever carry it.
 HEARTBEAT_TIMEOUT_ERROR = "States.HeartbeatTimeout"
+TOKEN_WAIT_TIMEOUT_ERRORS = frozenset({STATE_TIMEOUT_ERROR, HEARTBEAT_TIMEOUT_ERROR})
 JOB_QUEUED_ERROR = "ZipArchiveJobQueued"
 JOB_NOT_STARTED_ERROR = "ZipArchiveJobNotStarted"
+HEARTBEAT_LOST_ERROR = "ZipArchiveHeartbeatLost"
+# The ZipArchiveBatchJob state's own bound (zipArchive-construct.ts ZIP_ARCHIVE_BATCH_TIMEOUT). The
+# job is submitted a few seconds after the state's clock starts, so a job this close to the bound when
+# its run ends reached it.
+STATE_TIMEOUT_SECONDS = int(os.environ.get("STATE_TIMEOUT_SECONDS", "39600"))
+STATE_TIMEOUT_MARGIN_SECONDS = 120
 # STARTING is still before the container runs (the image is being pulled), so it ends the same way.
 PRE_START_STATUSES = frozenset({"SUBMITTED", "PENDING", "RUNNABLE", "STARTING"})
+LIVE_STATUSES = PRE_START_STATUSES | {"RUNNING"}
 
 
 def run_batch_job(job_name):
-    """The newest AWS Batch job of this run's name on the pipeline's queue, or None."""
-    if not BATCH_JOB_QUEUE or not job_name:
+    """The newest AWS Batch job of this run's name on the pipeline's queues, or None."""
+    if not job_name:
         return None
-    response = batch.list_jobs(
-        jobQueue=BATCH_JOB_QUEUE,
-        filters=[{"name": "JOB_NAME", "values": [job_name]}],
-    )
-    jobs = response.get("jobSummaryList") or []
+    jobs = []
+    for queue in BATCH_JOB_QUEUES:
+        response = batch.list_jobs(
+            jobQueue=queue,
+            filters=[{"name": "JOB_NAME", "values": [job_name]}],
+        )
+        jobs.extend(response.get("jobSummaryList") or [])
     return max(jobs, key=lambda job: job.get("createdAt", 0)) if jobs else None
 
 
-def heartbeat_timeout_error(job_name):
-    """The error to report for a heartbeat timeout, from where the run's Batch job got to.
+def end_job(job, reason):
+    try:
+        batch.terminate_job(jobId=job["jobId"], reason=reason)
+    except Exception as e:
+        logger.warning(f"Could not end the archive job {job.get('jobId')}: {e}")
 
-    A job still waiting to start is cancelled, so it does not start after its run has ended."""
+
+def token_wait_timeout_error(job_name, now_ms=None):
+    """The error to report for a timed-out token wait, from where the run's Batch job got to.
+
+    A job still queued or running is ended, so it does not start or go on after its run has ended.
+    Without the job (a failed lookup, or none found) the timeout is reported as it is."""
     try:
         job = run_batch_job(job_name)
     except Exception as e:
-        logger.warning(f"Could not look up the archive job after its heartbeat timeout: {e}")
-        return HEARTBEAT_TIMEOUT_ERROR
+        logger.warning(f"Could not look up the archive job after its token wait timed out: {e}")
+        return STATE_TIMEOUT_ERROR
     if not job:
-        return HEARTBEAT_TIMEOUT_ERROR
+        return STATE_TIMEOUT_ERROR
     status = job.get("status")
     if status in PRE_START_STATUSES:
-        try:
-            batch.terminate_job(
-                jobId=job["jobId"],
-                reason="The archive job did not start before its run ended",
-            )
-        except Exception as e:
-            logger.warning(f"Could not cancel the queued archive job {job.get('jobId')}: {e}")
+        end_job(job, "The archive job did not start before its run ended")
         return JOB_QUEUED_ERROR
     if status == "FAILED" and not job.get("startedAt"):
         logger.error(f"The archive job failed before it started: {job.get('statusReason', '')}")
         return JOB_NOT_STARTED_ERROR
-    return HEARTBEAT_TIMEOUT_ERROR
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    age_seconds = (now_ms - (job.get("createdAt") or 0)) / 1000
+    if age_seconds >= STATE_TIMEOUT_SECONDS - STATE_TIMEOUT_MARGIN_SECONDS:
+        if status in LIVE_STATUSES:
+            end_job(job, "The archive job's time limit was reached")
+        return STATE_TIMEOUT_ERROR
+    if status in LIVE_STATUSES:
+        end_job(job, "The archive job stopped responding")
+    return HEARTBEAT_LOST_ERROR
 
 
 def lambda_handler(event, context):
@@ -104,8 +135,8 @@ def lambda_handler(event, context):
             logger.info("Sent external task token: success")
         else:
             error_name = event["error"].get("Error", "Unknown")
-            if error_name == HEARTBEAT_TIMEOUT_ERROR:
-                error_name = heartbeat_timeout_error(event.get("jobName"))
+            if error_name in TOKEN_WAIT_TIMEOUT_ERRORS:
+                error_name = token_wait_timeout_error(event.get("jobName"))
             try:
                 sfn.send_task_failure(
                     taskToken=externalSfnTaskToken,

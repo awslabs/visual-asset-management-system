@@ -16,6 +16,7 @@ import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
 import { MaterialLibraryItem } from "./ThreeJSMaterialLibrary";
 import Alert from "@cloudscape-design/components/alert";
 import { isCadSupportError } from "./utils/fileLoaders";
+import { isOcctNoGeometryError } from "./utils/occtLoader";
 import { AssetDependencyResolver, isAbortError } from "./utils/assetDependencyResolver";
 import { loadWithDependencies, USD_NO_GEOMETRY_MESSAGE } from "./utils/dependencyLoading";
 import { applySceneEnvironment, applySceneLighting, SceneEnvironment } from "./utils/sceneLighting";
@@ -1352,11 +1353,13 @@ const ThreeJSViewerComponent: React.FC<ViewerPluginProps> = ({
                 >
                     {error}
                     {/* A CAD setup message is about the deployment or browser, not the file, a
-                        USD scene with nothing to draw is a supported format, and the API's refusal
-                        names its own reason (D170). */}
+                        USD scene or a CAD file with nothing to draw is a supported format whose
+                        message names what to do, and the API's refusal names its own reason
+                        (D170). */}
                     {!errorIsRefusal &&
                         !isCadSupportError(error) &&
-                        error !== USD_NO_GEOMETRY_MESSAGE && (
+                        error !== USD_NO_GEOMETRY_MESSAGE &&
+                        !isOcctNoGeometryError(error) && (
                             <>
                                 <br />
                                 <br />
