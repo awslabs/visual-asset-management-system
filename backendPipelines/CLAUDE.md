@@ -409,6 +409,18 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
     environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
     the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.
+-   COLLADA and USD scenes are sized from the file before their loader expands them
+    (`lambdaContainer/expansion_bounds.py`, container-only). `model_formats.check_collada_scene` counts the
+    nodes, vertices and triangles `trimesh` places for `instance_node` and nested `node` elements, from the
+    hardened XML parse and a memoised count over the node graph, and refuses a scene over the bound or one
+    that places a node inside itself. `usd_io.read_usd` counts the prims `Usd.Stage.Open` composes from the
+    layers' prim specs and arcs (references, payloads, inherits, specializes, sublayers, variants; an
+    instanceable prim counts once, its shared content once per prototype) before it opens the stage, and
+    refuses a scene over the bound or one whose prim composes itself. Both use
+    `expansion_bounds.CONVERSION_MAX_SCENE_NODES` (200,000), below the shared `scene_limits.MAX_SCENE_NODES`
+    that the vendored file keeps for the thumbnail; the conversion passes it as `SceneLimit(max_nodes=...)`.
+    `read_usd` also takes a `deadline` (a share, `model_formats.USD_READ_TIME_SHARE`, of the job's
+    `tool_timeout_seconds`) checked for every prim of the walk. A refusal names placements or nodes, not memory.
 -   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
     `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the `step` Poetry
     group, `poetry export --only step`). `lambda.py` refuses a STEP run before any S3 call when the variable is

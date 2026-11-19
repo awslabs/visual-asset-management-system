@@ -19,11 +19,13 @@ import re
 import struct
 import subprocess
 import tempfile
+import time
 import zipfile
 
 import numpy as np
 
 import archive_guard
+import expansion_bounds
 import units_axes
 import usd_io
 import vertex_normals
@@ -137,6 +139,42 @@ def _check_3mf(path, work_dir):
                         check_xml_safe(handle)
                 except ValueError as e:
                     raise ValueError(f"{name} is not a 3MF package this pipeline reads: {member}: {e}")
+
+
+def check_collada_scene(path, name, max_triangles=None, max_nodes=None):
+    """Refuse a COLLADA file before ``trimesh`` reads it when its scene places more nodes than the
+    conversion bound (``expansion_bounds.CONVERSION_MAX_SCENE_NODES`` unless ``max_nodes`` is given),
+    places more triangles or vertices through instancing than the triangle budget allows beyond what
+    the file stores once, or places a node inside itself. ``trimesh`` builds a graph entry and a copy of
+    the vertices for every placement of every ``instance_node``, so the placements are counted from the
+    document in one linear pass first, as ``check_fbx_scene`` does for FBX."""
+    import scene_limits
+    limit = scene_limits.SceneLimit(
+        "COLLADA scene", max_triangles,
+        expansion_bounds.CONVERSION_MAX_SCENE_NODES if max_nodes is None else max_nodes)
+    try:
+        size = expansion_bounds.collada_scene_size(path, limit.max_nodes)
+    except expansion_bounds.ExpansionCycle:
+        raise ValueError(f"{name}: a node in the COLLADA scene places itself through instance_node, so the "
+                         f"scene cannot be converted.")
+    except ValueError as e:
+        raise ValueError(f"{name} could not be read as COLLADA: {e}")
+    if not limit.expect(size.nodes):
+        raise ValueError(f"{name}: the COLLADA scene expands to more than {limit.max_nodes:,} placements, "
+                         f"more than this function converts.")
+    allowed_triangles = max(limit.max_triangles, size.stored_triangles)
+    if size.triangles > allowed_triangles:
+        raise ValueError(f"{name}: the COLLADA scene places more than {allowed_triangles:,} triangles through "
+                         f"instancing, more than this function converts.")
+    allowed_vertices = max(scene_limits.VERTICES_PER_TRIANGLE * limit.max_triangles, size.stored_vertices)
+    if size.vertices > allowed_vertices:
+        raise ValueError(f"{name}: the COLLADA scene places more than {allowed_vertices:,} vertices through "
+                         f"instancing, more than this function converts.")
+    return size
+
+
+# The share of the worker's time a USD scene may spend being read; the rest is for writing the output.
+USD_READ_TIME_SHARE = 0.75
 
 
 def fbx_meters_per_unit(path, scan_bytes=64 * 1024 ** 2):
@@ -282,11 +320,13 @@ def load_model(job, trimesh):
     path = job["input_file"]
     extension = os.path.splitext(job["input_name"])[1].lower()
     if extension in USD_EXTENSIONS:
-        scene, meters, up = usd_io.read_usd(path, job["input_dir"])
+        budget = float(job.get("tool_timeout_seconds") or 600) * USD_READ_TIME_SHARE
+        scene, meters, up = usd_io.read_usd(path, job["input_dir"], deadline=time.monotonic() + budget)
         return scene, meters, up
     declared_meters = declared_up = None
     if extension == '.dae':
         declared_meters, declared_up = _check_dae(path)
+        check_collada_scene(path, os.path.basename(path))
     elif extension == '.3mf':
         _check_3mf(path, os.path.dirname(path))
     resolver = referenced_files.ConfinedResolver(
