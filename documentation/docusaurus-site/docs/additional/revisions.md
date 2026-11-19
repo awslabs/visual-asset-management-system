@@ -250,6 +250,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **CAD STEP agent runs on the default model** — Every GenAI CAD STEP agent run failed at its first model call with the default `global.anthropic.claude-sonnet-5-5`, which refuses a `temperature`. The agent sends none, so each model uses its own default. (issue #1711)
 -   **API stack template under the CloudFormation limit** — A deployment with, for example, a customer managed key, every Lambda function in the VPC and Download as Zip failed on the `ApiBuilder2` nested stack, whose template was over 1,000,000 bytes. The shared CDK Nag suppressions are written only on the IAM roles and policies they apply to, so the template is about a third smaller; no resource is replaced. (issue #1647)
 -   **File page Preview toggle** — The Preview toggle requests the preview file without the source file's version ID, so a generated preview shows instead of failing with "File not found in S3". When an older version of the file is viewed, a notice on the Preview tab says the preview belongs to the latest version. (issue #1656)
 -   **File page Preview option** — The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. (issue #1673)
