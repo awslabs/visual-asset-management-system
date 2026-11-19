@@ -75,7 +75,10 @@ RUN uv sync --locked --extra=cu128 --python 3.10
 # This must match the CUDA version provided by the compat libraries. The version and its hashes come from
 # requirements-nccl.lock, generated from requirements-nccl.txt (its header holds the command).
 COPY requirements-nccl.lock /tmp/requirements-nccl.lock
-RUN uv pip install --python .venv/bin/python --require-hashes --only-binary :all: -r /tmp/requirements-nccl.lock
+# --no-config: the project's [tool.uv] override-dependencies (numpy>=2.0.0) are for its own sync; under
+# --require-hashes uv would refuse them as unpinned requirements of this install.
+RUN uv pip install --no-config --python .venv/bin/python --require-hashes --only-binary :all: \
+    -r /tmp/requirements-nccl.lock
 
 # Install python3-dev for Python.h headers (needed by Triton JIT compilation of cuda_utils.c)
 # Must be installed AFTER uv sync to avoid conflicts with uv's standalone Python

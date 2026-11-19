@@ -60,9 +60,10 @@ RUN git clone ${COSMOS_FRAMEWORK_REPO} /opt/cosmos-framework && \
     git rev-parse HEAD > /opt/cosmos-framework/VAMS_UPSTREAM_COMMIT && \
     git log -1 --format="cosmos-framework %H %ai %s"
 
-# Install Python dependencies using uv, from the framework's own uv.lock at the pinned commit (`--locked`:
-# the build fails rather than re-resolving if the lock and pyproject.toml disagree, and uv checks every
-# file against the SHA-256 the lock records). The extras carry the runtime libraries
+# Install Python dependencies using uv, exactly as the framework's own uv.lock at the pinned commit lists
+# them, every file checked against the SHA-256 the lock records. `--frozen` rather than `--locked`: this uv
+# release orders the lock's `conflicts` table differently from the one that wrote it and so calls the lock
+# stale, although re-locking resolves the same 573 packages (checked 2026-11-19). The extras carry the runtime libraries
 # the inference entrypoint imports (iopath, fvcore, and friends); the
 # `cu128-train` group pins the CUDA 12.8 torch stack (torch, flash-attn, natten,
 # transformer-engine) from the NVIDIA cosmos and PyTorch indexes.
@@ -71,7 +72,7 @@ WORKDIR /opt/cosmos-framework
 # second layer just to change ownership. Also pre-create the cache dirs the runtime user may write to
 # (uv cache; HF/torch/pip fallbacks when HF_HOME is not pointed at EFS). inference.py runs
 # python/torchrun with cwd=/opt/cosmos-framework, so the tree must be writable for __pycache__.
-RUN uv sync --locked --all-extras --group cu128-train && \
+RUN uv sync --frozen --all-extras --group cu128-train && \
     mkdir -p /home/vams/.cache/uv /home/vams/.cache/huggingface /home/vams/.cache/torch \
              /home/vams/.cache/pip /home/vams/.local/share/uv && \
     chown -R vams:vams /home/vams /opt/cosmos-framework

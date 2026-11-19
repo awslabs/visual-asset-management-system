@@ -229,15 +229,15 @@ describe("the Cosmos images", () => {
     ];
 
     it.each(COSMOS)("%s installs from its upstream uv.lock, or from a hashed lock", (dir) => {
-        // `uv sync --locked` installs exactly the upstream lock at the pinned commit, every file checked
-        // against its recorded SHA-256, and fails rather than re-resolving when the lock is stale.
+        // `uv sync --locked` or `--frozen` installs exactly the upstream lock at the pinned commit, every file
+        // checked against its recorded SHA-256, with no resolution of its own.
         const steps = instructions(
             fs.readFileSync(path.join(PIPELINES_DIR, dir, "Dockerfile"), "utf-8")
         );
         const installs = installSteps(steps);
         expect(installs.some((s) => /\buv sync\b/.test(s))).toBe(true);
         for (const step of installs) {
-            if (/\buv sync\b/.test(step)) expect(step).toMatch(/--locked/);
+            if (/\buv sync\b/.test(step)) expect(step).toMatch(/--(locked|frozen)\b/);
             else expect(step).toMatch(/--require-hashes .*-r \S+\.lock\b/);
         }
     });
