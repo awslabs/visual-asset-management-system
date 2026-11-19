@@ -999,6 +999,72 @@ function bedrockProfilePrefixRules(
     ];
 }
 
+// ----- Audit log search limits (config.ts resolveAuditSearchConfig: an absent key takes its default, a
+// present one must be an integer in range) -----
+const AUDIT_SEARCH_LIMITS: ReadonlyArray<readonly [string, number, number]> = [
+    ["maxQueryWindowDays", 1, 366],
+    ["maxRows", 1, 10000],
+    ["maxConcurrentQueries", 1, 20],
+    ["queryDeadlineSeconds", 10, 900],
+    ["maxContainsTermLength", 3, 128],
+    ["maxContainsTerms", 1, 5],
+    ["handleRetentionMinutes", 5, 1440],
+];
+
+function auditSearchValue(c: ConfigShape, key: string): unknown {
+    return g(c, `app.auditLogging.search.${key}`);
+}
+
+function outOfRange(value: unknown, min: number, max: number): boolean {
+    if (value === undefined || value === null) return false;
+    return typeof value !== "number" || !Number.isInteger(value) || value < min || value > max;
+}
+
+function auditSearchLongPollMax(c: ConfigShape): number {
+    const apiTimeout = g(c, "app.api.apiGatewayRest.apiGatewayTimeoutTime");
+    return Math.min(25, (typeof apiTimeout === "number" ? apiTimeout : 29) - 4);
+}
+
+const AUDIT_SEARCH_RULES: Rule[] = [
+    ...AUDIT_SEARCH_LIMITS.map(
+        ([key, min, max]): Rule => ({
+            id: `audit-search-${key}-in-range`,
+            severity: "error",
+            fieldPaths: [`app.auditLogging.search.${key}`],
+            appliesWhen: (c) => outOfRange(auditSearchValue(c, key), min, max),
+            message: `app.auditLogging.search.${key} must be an integer from ${min} to ${max}. Leave it out for the default.`,
+        })
+    ),
+    {
+        id: "audit-search-per-user-cap-within-vams-wide",
+        severity: "error",
+        fieldPaths: [
+            "app.auditLogging.search.maxConcurrentQueriesPerUser",
+            "app.auditLogging.search.maxConcurrentQueries",
+        ],
+        appliesWhen: (c) => {
+            const wide = auditSearchValue(c, "maxConcurrentQueries");
+            const perUser = auditSearchValue(c, "maxConcurrentQueriesPerUser");
+            const wideValue = typeof wide === "number" ? wide : 5;
+            return outOfRange(perUser, 1, wideValue);
+        },
+        message:
+            "app.auditLogging.search.maxConcurrentQueriesPerUser must be an integer from 1 to the VAMS-wide maxConcurrentQueries. Leave it out for the default.",
+    },
+    {
+        id: "audit-search-long-poll-within-api-timeout",
+        severity: "error",
+        fieldPaths: [
+            "app.auditLogging.search.longPollWaitSeconds",
+            "app.api.apiGatewayRest.apiGatewayTimeoutTime",
+        ],
+        appliesWhen: (c) =>
+            outOfRange(auditSearchValue(c, "longPollWaitSeconds"), 0, auditSearchLongPollMax(c)),
+        message:
+            "app.auditLogging.search.longPollWaitSeconds must be an integer from 0 to 25 and at most the API Gateway timeout minus 4 seconds. Leave it out for the default.",
+    },
+];
+
 const CORE_RULES: Rule[] = [
     // ----- Restricted-partition flag agreement
     // (config.ts: "app.govCloud.enabled is the restricted-partition switch") -----
@@ -1054,6 +1120,28 @@ const CORE_RULES: Rule[] = [
         },
         message:
             "app.auditLogging.recordReads must be true or false (a JSON boolean). Leave it out to record reads.",
+    },
+    ...AUDIT_SEARCH_RULES,
+    {
+        id: "audit-search-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.auditLogging.search.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.auditLogging.search.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.auditLogging.search.enabled must be true or false (a JSON boolean). Leave it out to deploy Audit Log Search.",
+    },
+    {
+        id: "audit-search-not-in-eusc",
+        severity: "error",
+        fieldPaths: ["env.region", "app.auditLogging.search.enabled"],
+        appliesWhen: (c) =>
+            partitionForRegionName(g(c, "env.region")) === "aws-eusc" &&
+            g(c, "app.auditLogging.search.enabled") === true,
+        message:
+            "Audit Log Search needs Amazon CloudWatch Logs Insights, which is not available in the AWS European Sovereign Cloud (aws-eusc). Set app.auditLogging.search.enabled to false there; the recording of audit events is not affected.",
     },
     {
         id: "govcloud-no-deadline-cloud",

@@ -276,7 +276,9 @@ describe("route checks", () => {
 describe("featuresEnabledRestriction", () => {
     it("drops an entry whose feature switch is off, and does not check its route", () => {
         expect(texts(entriesFor("side"))).not.toContain("Add-on switched");
-        const checks = webRouteChecksFor(["side"]).map((route) => route.route__path);
+        const checks = webRouteChecksFor(["side"], ["AUDITLOGSEARCH"]).map(
+            (route) => route.route__path
+        );
         expect(checks).not.toContain("/addon-switched");
         expect(checks).toContain("/addon-main");
     });
@@ -330,5 +332,40 @@ describe("My Download Queue (Download as Zip)", () => {
             ["ZIPDOWNLOADS"]
         );
         expect(hrefsIn(both)).toContain("#/zipdownloads/");
+    });
+});
+
+describe("Audit Log Search", () => {
+    const href = "#/auth/audit-log-search/";
+
+    it("is an Admin - Auth link under the AUDITLOGSEARCH switch, and absent without it", () => {
+        expect(hrefsIn(entriesFor("side"))).not.toContain(href);
+        expect(webRouteChecksFor(["side"]).map((r) => r.route__path)).not.toContain(
+            "/auth/audit-log-search"
+        );
+        const adminAuth = entriesFor("side", ["AUDITLOGSEARCH"]).find(
+            (entry) => entry.text === "Admin - Auth"
+        );
+        expect(hrefsIn([adminAuth])).toContain(href);
+        const link = (adminAuth?.items ?? []).find((item) => item.href === href);
+        expect(link?.text).toBe("Audit Log Search");
+    });
+
+    it("appears only when the API's web-route decision allows the route", () => {
+        expect(
+            hrefsIn(allowedEntriesFor("side", ["/databases"], ["AUDITLOGSEARCH"]))
+        ).not.toContain(href);
+        expect(
+            hrefsIn(allowedEntriesFor("side", ["/auth/audit-log-search"], ["AUDITLOGSEARCH"]))
+        ).toContain(href);
+        // The switch grants nothing: a route the API allows is still hidden while the switch is off.
+        expect(hrefsIn(allowedEntriesFor("side", ["/auth/audit-log-search"]))).not.toContain(href);
+    });
+
+    it("is checked as a web route like every other page, once", () => {
+        const checks = webRouteChecksFor(["side"], ["AUDITLOGSEARCH"]).map(
+            (route) => route.route__path
+        );
+        expect(checks.filter((path) => path === "/auth/audit-log-search")).toHaveLength(1);
     });
 });

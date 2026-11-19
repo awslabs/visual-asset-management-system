@@ -491,6 +491,18 @@ const COMMERCIAL: ConfigShape = {
         },
         auditLogging: {
             recordReads: true,
+            search: {
+                enabled: true,
+                maxQueryWindowDays: 31,
+                maxRows: 1000,
+                maxConcurrentQueries: 5,
+                maxConcurrentQueriesPerUser: 2,
+                queryDeadlineSeconds: 300,
+                longPollWaitSeconds: 20,
+                maxContainsTermLength: 64,
+                maxContainsTerms: 3,
+                handleRetentionMinutes: 60,
+            },
         },
         webUi: {
             optionalBannerHtmlMessage: "",
@@ -606,6 +618,9 @@ function buildEuSovereign(): ConfigShape {
     cfg.app.pipelines.useGenAiCadStepAgent.useCodeBuild = false;
     // The in-account CodeBuild container build is supported in the aws and aws-us-gov partitions.
     cfg.app.pipelines.useImageTo3d.useCodeBuild = false;
+    // Audit log search needs Amazon CloudWatch Logs Insights, which the EU Sovereign Cloud lacks.
+    // The recording of audit events is not affected.
+    cfg.app.auditLogging.search.enabled = false;
     return cfg;
 }
 

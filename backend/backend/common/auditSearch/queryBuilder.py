@@ -16,6 +16,7 @@ filter again to each parsed, redacted row.
 """
 
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -193,6 +194,8 @@ def _text_values(raw: Any, name: str, max_length: int, normalize: bool) -> Tuple
 
 
 MAX_EPOCH_SECONDS = 4102444800   # 2100-01-01T00:00:00Z
+# CloudWatch Logs keeps events for at most 3653 days (10 years), so a start before that can never match.
+MAX_LOOKBACK_DAYS = 3653
 
 
 def _checked_epoch(seconds: int, name: str) -> int:
@@ -254,6 +257,8 @@ def validate_filters(raw: Any, allowed_group_keys: Iterable[str], limits: Option
         raise AuditSearchValidationError("window:order")
     if end - start > limits.max_window_days * 86400:
         raise AuditSearchValidationError("window:tooLong")
+    if start < int(time.time()) - MAX_LOOKBACK_DAYS * 86400:
+        raise AuditSearchValidationError("window:tooOld")
 
     outcomes = _values(raw.get("outcomes"), "outcomes")
     if any(not isinstance(value, str) or value not in OUTCOMES for value in outcomes):

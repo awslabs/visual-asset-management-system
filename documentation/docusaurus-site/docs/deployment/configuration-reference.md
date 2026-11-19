@@ -213,6 +213,32 @@ Managed rule groups can match legitimate traffic (for example, large multipart u
 | `app.auditLogging.recordReads` | boolean | `true`  | Writes an audit record for every successful read: gets, lists and searches. A read record holds the request (route, IDs, filters, page size) and the number of items returned, never the content. Set `false` to stop these records and cut audit log volume; writes, denials, failed reads, downloads and exports are recorded either way. When the `auditLogging` block or the key is absent, reads are recorded; a value that is not `true` or `false` fails synthesis with a configuration error. |
 
 :::info[Implemented by]
+Audit log search is switched by `app.auditLogging.search.enabled` and bounded by the other keys under `app.auditLogging.search`. An absent block or key takes the default; a value that is not an integer in range, or an `enabled` that is not `true` or `false`, fails synthesis.
+
+| Key                               | Default                                             | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.auditLogging.search.enabled` | `true` (`false` in the EU Sovereign Cloud template) | Deploys the search capability. It switches the five `/audit` API routes and their AWS Lambda function, the search-handle DynamoDB table, the **Audit Log Search** web page, the `vamscli audit` commands and the MCP `audit` tools. It does **not** switch the recording of audit events: the nine audit log groups, the writers and `app.auditLogging.recordReads` behave the same either way, and so do the `auditLog` permission object type and the admin role's seeded constraint (they are inert while the routes are not deployed, so turning search on later needs no role migration). |
+
+> **AWS European Sovereign Cloud:** Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud (`aws-eusc`), so audit log search is off there by default and `getConfig()` rejects `true` in `aws-eusc`. Audit recording is unaffected.
+
+**Set it to `false`** when the deployment is in the AWS European Sovereign Cloud (partition `aws-eusc`), or when you do not want the feature or its cost. Searches run on Amazon CloudWatch Logs Insights, which is not available in `aws-eusc`; `true` there fails synthesis with an error that says so, and an absent key means `false` there. Logs Insights is billed per GB of log data scanned, and only when someone runs a search. The Lambda function and the table cost very little. Turning it off removes the function, the routes and the nested API stack. The handle table has a `RETAIN` removal policy, so the stack lets go of it and the table stays in the account with its short-lived handle rows (TTL `expiresAt`, 60 minutes after last use by default); delete it by hand when you want it gone. Turning the switch on again creates a new, auto-named table. The setting reaches the web app and the CLI as the `AUDITLOGSEARCH` feature switch, so the page, the navigation item and the commands are hidden while it is off.
+
+The search limits:
+
+| Key                                                   | Default | Limit                           | Meaning                                                                         |
+| ----------------------------------------------------- | ------- | ------------------------------- | ------------------------------------------------------------------------------- |
+| `app.auditLogging.search.maxQueryWindowDays`          | `31`    | 1 to 366                        | Longest time range one search may cover.                                        |
+| `app.auditLogging.search.maxRows`                     | `1000`  | 1 to 10000                      | Most rows one search returns.                                                   |
+| `app.auditLogging.search.maxConcurrentQueries`        | `5`     | 1 to 20                         | Open searches across VAMS.                                                      |
+| `app.auditLogging.search.maxConcurrentQueriesPerUser` | `2`     | 1 to the VAMS-wide value        | Open searches per user.                                                         |
+| `app.auditLogging.search.queryDeadlineSeconds`        | `300`   | 10 to 900                       | A search still running after this is stopped.                                   |
+| `app.auditLogging.search.longPollWaitSeconds`         | `20`    | 0 to 25 and API timeout minus 4 | How long one status request waits.                                              |
+| `app.auditLogging.search.maxContainsTermLength`       | `64`    | 3 to 128                        | Characters in one free-text term.                                               |
+| `app.auditLogging.search.maxContainsTerms`            | `3`     | 1 to 5                          | Free-text terms per search, combined with AND.                                  |
+| `app.auditLogging.search.handleRetentionMinutes`      | `60`    | 5 to 1440                       | How long a search handle, with its free-text terms, is kept after its last use. |
+
+The limits reach the `auditLogService` Lambda function as `AUDIT_SEARCH_*` environment variables. Each search keeps one handle row in an encrypted DynamoDB table. The row, and the free-text terms in it, expire `handleRetentionMinutes` after the last start, poll, page, export or stop (never before a running search reaches its deadline). A row past its expiry is treated as not found before DynamoDB deletes it. The terms are also removed as soon as a search is stopped, ends without results, or its export is complete. See [Audit Log Search API](../api/audit.md).
+
 `getConfig()` (`infra/config/config.ts`, `resolveAuditLoggingConfig`) defaults and validates the value, and `globalLambdaEnvironmentsAndPermissions()` (`infra/lib/helper/security.ts`) passes it to every VAMS Lambda function as the `AUDIT_RECORD_READS` environment variable, which `backend/backend/customLogging/auditLogging.py` reads. Changing it updates Lambda environment variables only; no other resource changes. See [Audit Logging](../developer/audit-logging.md#reads-switch).
 :::
 
@@ -1592,12 +1618,15 @@ Some features require a VPC and `app.useGlobalVpc.enabled` must be `true` when t
 
 The AWS European Sovereign Cloud (Region `eusc-de-east-1`, partition `aws-eusc`) is a separate, isolated partition. For now, deploy to it using the GovCloud guardrails: set `app.govCloud.enabled = true` so the same constraints are enforced (VPC required, no Amazon CloudFront, no Amazon Location Service). The European Sovereign Cloud Region currently exposes two Availability Zones, so a provisioned Amazon OpenSearch Service domain must set `availabilityZoneCount` to `2`. Amazon OpenSearch Serverless is not offered in the partition at all, so `openSearch.useServerless.enabled` must be `false` and search runs on a provisioned domain.
 
+Amazon CloudWatch Logs Insights is not currently supported in the AWS European Sovereign Cloud, so the template sets `app.auditLogging.search.enabled` to `false` (Audit Log Search is off by default there) and `getConfig()` rejects `true` in `aws-eusc`. Audit recording is unaffected.
+
 Key differences from the commercial template (see [`config.template.eusovereign.json`](https://github.com/awslabs/visual-asset-management-system/blob/main/infra/config/config.template.eusovereign.json)):
 
 ```json
 {
     "env": { "region": "eusc-de-east-1" },
     "app": {
+        "auditLogging": { "search": { "enabled": false } },
         "useWaf": true,
         "useKmsCmkEncryption": { "enabled": true },
         "govCloud": { "enabled": true, "il6Compliant": false },
