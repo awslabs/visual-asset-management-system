@@ -194,6 +194,77 @@ def _console_view(body: Any) -> Any:
     return redact_sensitive(body, _scrub=_scrub_credential_shapes)
 
 
+# Keys of a search request body whose values name who or what is being investigated.
+_AUDIT_REQUEST_MASKED_KEYS = ('users', 'entityIds', 'apiKeyIds')
+
+
+class LogMaskedOption(click.Option):
+    """A Click option whose typed value never reaches the CLI log file or the `--verbose` echo.
+
+    Use it (`@click.option(..., cls=LogMaskedOption)`) for an option that carries what the user is
+    looking for or who they are looking at, such as the audit search filters. `log_command_start`
+    replaces the value of every such option of the running command with a marker that holds the
+    number of values and their total length, never the value itself. Nothing else about the option
+    changes.
+    """
+    log_masked = True
+
+
+def mask_for_log(value: Any) -> Any:
+    """The log form of a masked option value: a marker with counts and length, never the value.
+    An empty value (option not given) is returned unchanged."""
+    if value is None or value == () or value == [] or value == '':
+        return value
+    if isinstance(value, (list, tuple, set)):
+        total = sum(len(str(item)) for item in value)
+        return f"[masked: {len(value)} values, {total} characters]"
+    return f"[masked: {len(str(value))} characters]"
+
+
+def _log_masked_names() -> set:
+    """Parameter names of the running command that are marked as LogMaskedOption."""
+    try:
+        ctx = click.get_current_context(silent=True)
+        if ctx is None or ctx.command is None:
+            return set()
+        return {p.name for p in ctx.command.params if getattr(p, 'log_masked', False)}
+    except Exception:
+        return set()
+
+
+def _summarize_audit_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep audit search content out of the log file: a search's `contains` terms (the value being
+    looked for), the rows a read returned and an export's text are replaced by counts and lengths.
+
+    The audit log search API does the same in its own records (count, length and a hash only), and
+    the CLI log file outlives the command and may be read by other local users. The shapes are
+    recognised by their keys, so no other payload is touched. Returns ``obj`` itself when it is not
+    an audit payload; otherwise a shallow copy.
+    """
+    if 'recordId' in obj and 'groupKey' in obj and 'timestamp' in obj:
+        # One audit row (`audit show`): its identity and kind only, not its users, parameters or changes.
+        return {key: obj.get(key) for key in ('recordId', 'timestamp', 'groupKey', 'action', 'outcome')}
+    # A search request (`build_filters` always sends `includeProbes`, and `contains` only when given).
+    is_request = 'startTime' in obj and 'endTime' in obj and ('includeProbes' in obj or 'contains' in obj)
+    is_page = 'queryId' in obj and ('Items' in obj or 'content' in obj)
+    if not (is_request or is_page):
+        return obj
+    summary = dict(obj)
+    if is_request:
+        if isinstance(summary.get('contains'), (list, tuple)):
+            summary['contains'] = f"[{len(summary['contains'])} terms omitted]"
+        # The typed identity filters say who is being investigated: counts only, as in the options.
+        for key in _AUDIT_REQUEST_MASKED_KEYS:
+            if isinstance(summary.get(key), (list, tuple)):
+                summary[key] = mask_for_log(summary[key])
+    if is_page:
+        if isinstance(summary.get('Items'), list):
+            summary['Items'] = f"[{len(summary['Items'])} rows omitted]"
+        if isinstance(summary.get('content'), str):
+            summary['content'] = f"[{len(summary['content'])} characters omitted]"
+    return summary
+
+
 def redact_sensitive(obj: Any, _depth: int = 0, _scrub=None) -> Any:
     """
     Return a copy of ``obj`` with credential values replaced by ``REDACTED``.
@@ -208,6 +279,7 @@ def redact_sensitive(obj: Any, _depth: int = 0, _scrub=None) -> Any:
         if _depth > _MAX_REDACT_DEPTH:
             return '***DEPTH_LIMIT***'
         if isinstance(obj, dict):
+            obj = _summarize_audit_payload(obj)
             return {
                 k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1, _scrub))
                 for k, v in obj.items()
@@ -420,6 +492,10 @@ def log_command_start(command_name: str, args: Dict[str, Any] = None):
     # option names: the shared predicate masks a credential option (`password`, `new_password`,
     # `token_override`) and leaves a pagination cursor such as `starting_token` readable.
     safe_args = redact_mapping_for_log(args) if args else {}
+    # Options marked LogMaskedOption (the audit search filters) keep only a count and a length.
+    for name in _log_masked_names():
+        if name in safe_args:
+            safe_args[name] = mask_for_log((args or {}).get(name))
 
     logger.info(f"Command started: {command_name}")
     if safe_args:

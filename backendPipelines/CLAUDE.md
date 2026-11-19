@@ -365,6 +365,89 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     Amazon S3. `tests/golden/run_golden.sh` builds the image and runs it (the `conversion-3dbasic-golden` job in
     `ci.yml` does the same); `GOLDEN_DUMP_DIR` writes the outputs, so two images compare byte for byte. A format
     added to `SUPPORTED_INPUT_FORMATS` or `SUPPORTED_OUTPUT_FORMATS` needs its fixture or column there.
+-   Formats beyond what trimesh reads and writes by itself are in `model_formats.py` (load and export, called by
+    `convert_model`) and `usd_io.py` (OpenUSD on `usd-core`, imported only when a USD file is read or written, so the
+    worker's other runs do not pay for it). Every XML document (a DAE file, the parts of a 3MF) goes through
+    `xml_guard`'s hardened parser (`model_formats.check_xml_safe`, a streaming parse that builds no tree) and a 3MF
+    package through `archive_guard.check_archive` before a loader reads them. A USD file's layer references are walked
+    by `usd_io.confine_dependencies` before the stage opens (relative, inside the input's directory, among the fetched
+    files, at most `MAX_LAYERS` layers and `MAX_DEPTH` deep); a layer that fails the walk fails the run, a texture
+    that fails it is left out and logged. A scene read from USD is bounded with `SceneLimit` and fails, rather than
+    truncates, when it expands past it. The OpenUSD validators (`UsdValidation`, since `ComplianceChecker` is not in
+    the `usd-core` wheel) run over every written USD file in `tests/test_3dbasic_usd_and_guards.py`; a new USD
+    attribute type that the validators reject is a test failure, as `varname` as `token` was.
+-   Units and up axis are `units_axes.py` (pure functions, no model library): `Options.from_config` reads the four
+    optional input-configuration keys (`sourceUnits`, `targetUnits`, `sourceUpAxis`, `targetUpAxis`; a missing or
+    empty value is the default), `validate_request` refuses an illegal combination before the download, and `plan`
+    returns the scale, rotation and what the output declares (`worker` applies it with `apply_transform` and writes
+    it into the USD stage, the DAE `<unit>` and `<up_axis>`, or the 3MF `unit` attribute). glTF is metres and Y up and
+    3MF is Z up whatever is asked. The values and defaults are the template enums; `tests/test_vams_schema_bundle.py`
+    reads them out of `units_axes.py` and compares. The default options must not change an existing conversion.
+-   The references of USD layers and packages, COLLADA documents and FBX files are read by
+    `reference_collectors.py`, vendored definition by definition from the thumbnail's `dependencies.py`
+    (`tests/test_3dbasic_reference_collectors.py` compares each with its canonical source; a fix goes into both).
+    They run in the worker child as a `mode: scan` job: `referenced_files.fetch_referenced_files` takes a `scan`
+    callable, and `lambda.py` passes one that batches every queued file of a scanned format into one child run, so
+    no USD or XML parse happens in the process that holds the credentials. For those formats nothing is required:
+    a reference that cannot be used is recorded in `FetchReport.skipped_entries` with its kind, and the worker
+    (`usd_io.confine_dependencies`) removes every asset path of a loose layer that is not a fetched local file
+    with `UsdUtils.ModifyAssetPaths` before the stage opens, which is what makes skipping safe. A `.usdz` cannot
+    be edited, so an unsafe layer path in one still fails. REFERENCE_HANDLING and MISSING_REFERENCES are parsed
+    by `units_axes.Options` with the unit options; `validate_request` refuses package without `.usdz`,
+    convert-linked without a USD layer input and `.usdc`/`.usda` output, and either with a unit or axis
+    change. `incomplete_result.py` writes `conversion-incomplete.json` (the shape and caps of
+    `preview-incomplete.json`) to the manifest's `outputs.results` prefix and builds the completion message
+    and the MISSING_REFERENCES fail refusal.
+-   FBX is read by the Assimp command-line tool (`/opt/assimp/bin/assimp`), which the Dockerfile's
+    `assimp-builder` stage compiles on the same base image digest from a shallow clone of the release tag,
+    failing unless `git rev-parse HEAD` is the pinned `ASSIMP_COMMIT` (Assimp publishes no prebuilt Linux tool
+    and no source archive of its own; GitHub's generated tag archives are not byte-stable, so pin a commit,
+    never an archive hash; `ASSIMP_REPO` is the mirror override; the tool also needs the assbin and assxml
+    exporters to link). Before it runs, `model_formats.check_fbx_scene` sizes the scene with `fbx_scene.py`
+    (vendored byte for byte from the thumbnail's `format_handlers/fbx_scene.py`, drift-tested in
+    `tests/test_3dbasic_vendored_guards.py`) against `SceneLimit` and `MAX_FBX_NESTING_DEPTH`.
+    `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
+    environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
+    the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.
+-   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
+    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the `step` Poetry
+    group, `poetry export --only step`). `lambda.py` refuses a STEP run before any S3 call when the variable is
+    not `true`. `step_limits.py` is the thumbnail CAD handler's placement count, vendored with a drift test in
+    `tests/test_3dbasic_step_input.py`. cascadio writes metres and keeps Z up. `run_golden.sh` with
+    `GOLDEN_STEP=1` builds and tests the STEP image and asserts the default image holds no Open CASCADE files.
+-   `model_formats.prune_for_output` removes curves (kept for glTF/GLB only) and points beside triangles (for
+    the triangle-only outputs) before an export: a STEP file's edges and annotations load that way.
+-   The image has no SciPy, and trimesh falls back to O(vertices x faces) loops for some work without it,
+    above all `Trimesh.vertex_normals`. Outputs that always write normals (USD, COLLADA) take them from
+    `vertex_normals.angle_weighted_vertex_normals` (NumPy, the same weighting); do not read
+    `mesh.vertex_normals` on the conversion path, and do not fill the normal cache for OBJ/PLY/glTF, whose
+    exporters write normals only when cached. `tests/test_3dbasic_no_scipy.py` converts a 163,842-vertex mesh
+    to every output in a child with SciPy blocked, under a time bound; this suite's CI environment is built
+    from `requirements.txt` and has no SciPy either.
+-   A loose USD output's companions are written beside the layer, and every reference a loose layer holds is
+    written with the path the file will have once the write-back inserts the run's output path extension
+    (the manifest's `outputTarget.fileBaseExecutionPathExtension`) before each file's own name
+    (`usd_io.placed_reference`, used by `write_usd` and `convert_linked` as they write). Never reopen a
+    written layer to fix its paths afterwards: a large layer loaded a second time under the worker's
+    address-space limit crashes the run (rule 7). `normalize_output_path_extension` and
+    `apply_output_path_extension` in `usd_io.py` are vendored from
+    `backend/backend/common/workflows/outputPathExtension.py` (drift test in
+    `tests/test_3dbasic_output_prefix.py`). `usd_io.dependency_graph` (convert-linked) follows composition
+    arcs, value clips and asset-typed attributes only, never layer or prim metadata such as a component's
+    `assetInfo` identifier.
+-   `size_check.OUTPUT_EXPANSION_FACTORS` (by output, then input) applies instead of `MEMORY_EXPANSION_FACTORS`
+    where an output needs clearly more memory per input byte (USD and COLLADA). Each entry is the pair's
+    measured peak per input byte times 1.26, the margin the input factors keep. Measure in the built image (no
+    SciPy), and keep the peak at the limit under about 85 percent of the function memory: a 330 MB STL admitted
+    for USDA peaked at 5,307 of 5,308 MB before the table existed. The function runs at 10,240 MB
+    (`CONVERSION_MEMORY_SIZE_MB` in `conversion3dBasicFunctions.ts`, not the shared `LAMBDA_MEMORY_SIZE`); the
+    factors are per input byte, so they hold at any memory, but check a changed memory size with the
+    worker's own limits (`RLIMIT_AS` = memory + 2 GiB) and keep `CONVERSION_EPHEMERAL_STORAGE` above every
+    memory limit (the disk check divides free `/tmp` by 4.5). The refusal names the output format. A format
+    added to the handler needs its input factor and the pairs that need more.
+-   Tests that convert real files (`test_3dbasic_new_formats.py`, `test_3dbasic_units_axes.py`,
+    `test_3dbasic_usd_and_guards.py`) need real trimesh and usd-core, so `tests/conftest.py` imports them before the
+    modules that stub `trimesh` in `sys.modules` are collected.
 
 VAMS reads a Lambda step's log group only for lines that contain the workflow execution id, so a line
 that names no run path (a referenced-file warning, for one) is missing from the run's log in VAMS. The
@@ -1586,6 +1669,8 @@ directory from the pipeline's own `subprocess.run` call, parses the Dockerfile's
 when the working directory is group-writable without the sticky bit, or when the Dockerfile's
 `ISAAC_LAB_VERSION` differs from the Isaac Lab release the modelled write paths were read from. Copy
 it for a new container that runs an upstream tool as a non-root user.
+
+What an upstream tool writes is a second thing to read from its source rather than from memory (#1315). Isaac Lab's three RL libraries lay a run out differently (`rsl_rl`: `model_<n>.pt` in the run folder; `rl_games`: `nn/*.pth`; `skrl`: `checkpoints/agent_<n>.pt` and `best_agent.pt`), and a pipeline that globbed one library's files finished green with an empty `checkpoints/` folder for the others. The layouts live in one table per side: `CHECKPOINT_PATTERNS` in `simulation/isaacLabTraining/container/utils/training/checkpoints.py` (what the container uploads) and `CHECKPOINT_RANKING` in `lambda/openPipeline.py` (which file an evaluation without a `checkpointPath` picks, per library). A lambda test asserts the two agree, and `container/tests/test_checkpoint_layouts.py` builds a log tree per library. An Isaac Lab release bump (the base image tag, `ISAAC_LAB_VERSION`) means re-reading `scripts/reinforcement_learning/<library>/{train,play}.py` at that tag and editing those two tables, not the upload code. The EFS access point mounted at `/mnt/efs/checkpoints` is not written by training today (`train.py` takes no log-root argument and writes under `<cwd>/logs`); only the upload's search roots mention it.
 
 ## Adding a New Processing Pipeline
 

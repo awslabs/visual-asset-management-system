@@ -53,7 +53,7 @@ export function buildMyNewFunction(
 
 ---
 
-## New API Route Wiring (in apiBuilder2-nestedStack.ts)
+## New API Route Wiring (in apiBuilder2-nestedStack.ts; apiBuilder3-nestedStack.ts when the size guard says apiBuilder2 is full)
 
 ```typescript
 // Build the function

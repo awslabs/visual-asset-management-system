@@ -37,6 +37,7 @@ import { extractLocationData } from "./utils/locationUtils";
 import { hasLocationOnlyMetadata, isFileHitSource } from "./utils/recordType";
 import { colorForKey } from "./utils/polygonColor";
 import { FIT_BOUNDS_OPTIONS, locationDataBounds } from "./utils/mapBounds";
+import { footprintFallbackAnchor, pickFootprint } from "./utils/mapPick";
 import {
     MAP_MARKER_SIZE_PX,
     MAP_PIN_PATH,
@@ -248,6 +249,8 @@ const extractMetadata = (
 
 function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const [selectedItem, setSelectedItem] = useState<LocationDataWithDetails | null>(null);
+    // Where the user clicked on a footprint, which is where its popup opens.
+    const [clickAnchor, setClickAnchor] = useState<[number, number] | null>(null);
     const mapRef = useRef<MapRef>(null);
     const config = appCache.getItem("config");
     const navigate = useNavigate();
@@ -325,38 +328,14 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // Reset selected items when location data changes (page change or new search)
     useEffect(() => {
         setSelectedItem(null);
+        setClickAnchor(null);
     }, [locationData]);
 
-    // Compute the popup anchor (lon, lat) for a GeoJSON-shaped result. Uses
-    // the centroid of the bounding box of all coordinates in the geometry —
-    // simple and robust across Polygon, MultiPolygon, LineString and
-    // GeometryCollection without pulling in a turf-style dependency.
+    // The popup anchor (lon, lat) for a GeoJSON-shaped result: where the user clicked on its footprint, or,
+    // when it was opened some other way, the centre of the box of its largest part (utils/mapPick.ts).
     const computeGeoJsonPopupAnchor = (item: LocationDataWithDetails): [number, number] | null => {
         if (item.type !== "geojson" || !item.geoJson) return null;
-        const lons: number[] = [];
-        const lats: number[] = [];
-        const collect = (coords: any) => {
-            if (!Array.isArray(coords)) return;
-            if (typeof coords[0] === "number" && typeof coords[1] === "number") {
-                lons.push(coords[0]);
-                lats.push(coords[1]);
-                return;
-            }
-            for (const c of coords) collect(c);
-        };
-        const geom = item.geoJson?.type === "Feature" ? item.geoJson.geometry : item.geoJson;
-        if (geom?.coordinates) collect(geom.coordinates);
-        if (geom?.geometries) {
-            for (const sub of geom.geometries) {
-                if (sub?.coordinates) collect(sub.coordinates);
-            }
-        }
-        if (lons.length === 0) return null;
-        const minLon = Math.min(...lons);
-        const maxLon = Math.max(...lons);
-        const minLat = Math.min(...lats);
-        const maxLat = Math.max(...lats);
-        return [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+        return clickAnchor ?? footprintFallbackAnchor(item.geoJson);
     };
 
     // Build the list of fill-layer IDs we want to be click-interactive so
@@ -377,18 +356,15 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // layer handlers, which react-map-gl/maplibre doesn't expose for Layer)
     // keeps polygon hit-testing consistent with native MapLibre events.
     const handleMapClick = (event: any) => {
-        const features = event?.features as Array<any> | undefined;
-        if (!features || features.length === 0) return;
-        for (const feature of features) {
-            const layerId: string | undefined = feature?.layer?.id;
-            if (!layerId || !layerId.startsWith("geojson-fill-")) continue;
-            const itemId = layerId.replace("geojson-fill-", "");
-            const item = locationData.find((it) => it.id === itemId);
-            if (item) {
-                setSelectedItem(item);
-                return;
-            }
-        }
+        // Of the footprints under the click, the smallest is opened (the topmost when equal), and its
+        // popup opens at the click.
+        const item = pickFootprint(event?.features, locationData);
+        if (!item) return;
+        setSelectedItem(item);
+        const at = event?.lngLat;
+        setClickAnchor(
+            at && Number.isFinite(at.lng) && Number.isFinite(at.lat) ? [at.lng, at.lat] : null
+        );
     };
 
     // Pointer-cursor affordance over polygon fills so users discover the
@@ -541,6 +517,9 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Map */}
             <Map
                 ref={mapRef}
+                // Flat map: the basemap style selects the globe, whose fit-to-bounds frames the wrong
+                // place for results spread over the world or either side of longitude 180.
+                projection="mercator"
                 initialViewState={initialViewState}
                 style={{ height: "70vh", width: "100%" }}
                 mapStyle={mapStyleUrl}
@@ -602,6 +581,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                             anchor="bottom"
                             onClick={(e) => {
                                 e.originalEvent.stopPropagation();
+                                setClickAnchor(null);
                                 setSelectedItem(item);
                             }}
                         >
@@ -629,8 +609,8 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                     ))}
 
                 {/* Popup for the selected item — shown for both point markers and
-                    polygon (GeoJSON) results. Polygon clicks anchor the popup at
-                    the centroid of the shape's bounding box. */}
+                    polygon (GeoJSON) results. A polygon click anchors the popup at
+                    the click. */}
                 {selectedItem &&
                     (() => {
                         let popupLat: number | undefined;
@@ -656,7 +636,10 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                 longitude={popupLon}
                                 padding={POPUP_PADDING}
                                 offset={popupOffsetsFor(selectedItem.type)}
-                                onClose={() => setSelectedItem(null)}
+                                onClose={() => {
+                                    setSelectedItem(null);
+                                    setClickAnchor(null);
+                                }}
                                 closeButton={true}
                                 closeOnClick={false}
                                 maxWidth="400px"
