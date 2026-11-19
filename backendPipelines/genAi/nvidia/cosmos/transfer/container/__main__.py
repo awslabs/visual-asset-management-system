@@ -193,11 +193,14 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     logger.info(f"Uploaded {local_path.stat().st_size} bytes to S3")
 
 
-def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
+def compute_relative_subdir(input_s3_path: str, asset_id: str, relative_path: str = "") -> str:
     """
-    Extract relative path between assetId and filename in S3 key.
+    The input's subdirectory within its asset: the folder of its manifest ``relativePath`` when the
+    definition names one, else the key segments between the asset ID and the filename.
 
     Example:
+        relative_path: /test/pump.mp4 -> "test/"
+    Example (no relative_path):
         input_s3_path: s3://bucket/xd130a6d6.../test/pump.mp4
         asset_id: xd130a6d6...
         -> "test/"
@@ -205,10 +208,14 @@ def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
     Args:
         input_s3_path: Full S3 URI of input file
         asset_id: Asset ID
+        relative_path: The input's manifest relativePath ("" when the definition names none)
 
     Returns:
         Relative subdirectory path (with trailing slash, or empty string)
     """
+    relative = (relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] + "/" if "/" in relative else ""
     _, key = parse_s3_uri(input_s3_path)
     parts = key.split("/")
 
@@ -443,7 +450,8 @@ def main():
         output_base = output_base.rstrip("/") + "/"
 
         # Preserve relative path and input filename from the input file
-        relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id)
+        relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id,
+                                                  definition.get("inputRelativePath") or "")
         input_filename_stem = Path(parse_s3_uri(input_s3_asset_file_path)[1]).stem
 
         output_filename = f"{input_filename_stem}_CosmosTransfer_{control_type}_{timestamp}.mp4"

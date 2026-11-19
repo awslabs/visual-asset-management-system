@@ -271,7 +271,13 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
         raise RuntimeError(f"S3 upload failed: {result.stderr}")
 
 
-def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
+def compute_relative_subdir(input_s3_path: str, asset_id: str, relative_path: str = "") -> str:
+    """The input's subdirectory within its asset, with a trailing slash ("" at the asset root): the
+    folder of its manifest ``relativePath`` when the definition names one, else the key segments after
+    the asset ID (a launch without a manifest entry)."""
+    relative = (relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] + "/" if "/" in relative else ""
     _, key = parse_s3_uri(input_s3_path)
     parts = key.split("/")
     try:
@@ -505,7 +511,8 @@ def main():
         output_base = output_base.rstrip("/") + "/"
         relative_subdir = ""
         if needs_input and input_s3_asset_file_path:
-            relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id)
+            relative_subdir = compute_relative_subdir(input_s3_asset_file_path, asset_id,
+                                                      definition.get("inputRelativePath") or "")
             stem = Path(parse_s3_uri(input_s3_asset_file_path)[1]).stem
             output_basename = f"{stem}_Cosmos3_{variant}_{timestamp}"
         else:
