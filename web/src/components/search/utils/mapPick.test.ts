@@ -59,12 +59,33 @@ describe("footprintArea", () => {
         expect(area).toBeGreaterThan(0.45 * boxArea(0, 2, 0, 2));
     });
 
-    it("leaves out holes and counts an L shape's area", () => {
+    it("subtracts holes and counts an L shape's area", () => {
         const withHole = {
             type: "Polygon",
             coordinates: [ring(0, 4, 0, 4)[0], ring(1, 3, 1, 3)[0]],
         };
-        expect(footprintArea(withHole)).toBeCloseTo(boxArea(0, 4, 0, 4), 12);
+        expect(footprintArea(withHole)).toBeCloseTo(boxArea(0, 4, 0, 4) - boxArea(1, 3, 1, 3), 12);
+        // Each part of a MultiPolygon subtracts its own holes.
+        const multi = {
+            type: "MultiPolygon",
+            coordinates: [withHole.coordinates, ring(10, 11, 0, 1)],
+        };
+        expect(footprintArea(multi)).toBeCloseTo(
+            boxArea(0, 4, 0, 4) - boxArea(1, 3, 1, 3) + boxArea(10, 11, 0, 1),
+            12
+        );
+        expect(
+            footprintArea({
+                type: "GeometryCollection",
+                geometries: [withHole, polygon(10, 11, 0, 1)],
+            })
+        ).toBeCloseTo(footprintArea(multi), 12);
+        // A hole larger than its shell does not make a negative area.
+        const badHole = {
+            type: "Polygon",
+            coordinates: [ring(0, 1, 0, 1)[0], ring(0, 4, 0, 4)[0]],
+        };
+        expect(footprintArea(badHole)).toBe(0);
         const ell = {
             type: "Polygon",
             coordinates: [
@@ -110,6 +131,19 @@ describe("footprintArea", () => {
 });
 
 describe("pickFootprint", () => {
+    it("compares a donut by its area without the hole", () => {
+        const donut = {
+            type: "Polygon",
+            coordinates: [ring(0, 4, 0, 4)[0], ring(0.5, 3.5, 0.5, 3.5)[0]],
+        };
+        // The map reports a donut only for a click on its ring, never in its hole. Its area is 16 - 9 = 7
+        // square degrees (about), so a smaller box under the ring part wins and a larger one does not.
+        const small = [item("donut", donut), item("small", polygon(0, 2, 0, 0.4))];
+        expect(pickFootprint([feature("donut"), feature("small")], small)?.id).toBe("small");
+        const big = [item("donut", donut), item("big", polygon(0, 4, 0, 4))];
+        expect(pickFootprint([feature("big"), feature("donut")], big)?.id).toBe("donut");
+    });
+
     const big = item("big", polygon(-123, -121, 36, 38));
     const small = item("small", polygon(-122.9, -122.8, 37.1, 37.2));
     const sameA = item("sameA", polygon(-123, -122, 37, 38));
