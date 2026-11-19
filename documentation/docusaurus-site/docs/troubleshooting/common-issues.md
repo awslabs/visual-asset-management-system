@@ -310,6 +310,20 @@ Safari does not fully support the cross-origin isolation requirements needed by 
 
 Use a Chromium-based browser (Google Chrome, Microsoft Edge) or Mozilla Firefox for WASM-dependent viewers. Non-WASM viewers and standard mesh formats work in all supported browsers.
 
+### Three.js Viewer Cannot Build Geometry from a CAD File
+
+The Three.js Viewer reads `.stp`, `.step`, `.iges`, `.igs` and `.brep` files with OpenCascade, which turns each part into a triangle mesh. Some files open but give parts with no triangles.
+
+**Symptoms:**
+
+-   Opening a STEP, IGES or BREP file shows "The viewer could not build any geometry from this `<format>` file" and nothing is drawn
+-   Some parts of a CAD file are missing while the others show
+
+**Resolution:**
+
+-   The viewer leaves out the parts that have no geometry and draws the rest. When no part has geometry, it shows the message instead of an empty scene ([#1734](https://github.com/awslabs/visual-asset-management-system/issues/1734)).
+-   Convert the file to GLB and open the converted file. For STEP, the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) does this when `app.pipelines.useConversion3dBasic.enableStepInput` is `true`. For IGES and BREP, export GLB from a CAD application.
+
 ### BabylonJS Gaussian Splat Viewer Reports SPZ Format Version 4
 
 The BabylonJS Gaussian Splat viewer opens SPZ versions 2 and 3. Babylon.js reads SPZ version 4 only through the `@adobe/spz` WebAssembly module, which the VAMS Content Security Policy does not allow to load.
