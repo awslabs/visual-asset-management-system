@@ -11,7 +11,7 @@ All notable changes to this project will be documented in this file. See [standa
 ### Features
 
 -   **Pipelines** A deployment can register an existing pipeline bundle with a different execution config (callback mode, timeouts or Lambda name) through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without shipping a second bundle. A registration without the property is unchanged. Changing a value that the generated state machines encode redeploys every workflow that uses the pipeline, including custom workflows, and running executions finish on the definition they started with. (issue #1732)
--   **Pipelines** The 3D Basic Conversion image has an AWS Batch target and one shared conversion entry. A `.usda` write refuses a mesh with an array of 2 GB of text or more, which the text writer would silently drop, and suggests `.usdc`; a `.usdc` or `.usdz` write refuses a mesh whose single array a crate cannot read back; a PLY over 4 GiB is refused before download; a USD crate that cannot be decompressed reports that the file could not be read. The Batch tier itself stays off until its deployment change ships. (issue #1732)
+-   **Pipelines** The 3D Basic Conversion image has an AWS Batch target and one shared conversion entry. A `.usda` write, convert-linked layers included, refuses a mesh with an array of 2 GB of text or more, which the text writer would silently drop, and suggests `.usdc`; a `.usdc` or `.usdz` write refuses a mesh whose single array a crate cannot read back; a PLY over 4 GiB is refused before download; a USD crate that cannot be decompressed reports that the file could not be read. The Batch tier itself stays off until its deployment change ships. (issue #1732)
 
 ### Bug Fixes
 

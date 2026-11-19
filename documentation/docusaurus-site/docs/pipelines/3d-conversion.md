@@ -300,6 +300,12 @@ The function runs at 10,240 MB, the Lambda maximum, rather than the 5,308 MB of 
 
 Texture images are budgeted apart from these figures, by their decoded size. An image's memory follows its pixels, not its file size: a 12,000 x 12,000 PNG of one colour is under 1 MB on disk and needs 576 MB decoded. After the input and the files that carry geometry (GLTF buffers, OBJ material libraries) are counted at the factors above, the memory that remains is divided by 5, the peak memory measured per decoded RGBA byte of texture, and that many decoded bytes of texture images are fetched, so four 4096 x 4096 textures or one 12,000 x 12,000 texture fit even at 5,308 MB of function memory, and at 10,240 MB about twice as much does. A texture over what remains is skipped and the model converts without it. The run still succeeds, and its completion message says the model is incomplete and names each file left out and why, for example `Converted BoomBox.gltf, but 1 referenced file could not be included because of the function's size limits, so the converted model is incomplete: ...`. A GLTF buffer that does not fit fails the run.
 
+Some file formats have limits of their own, which no function memory raises. The run fails with a message naming the format's limit:
+
+-   A PLY input over 4 GiB is refused before it is downloaded, because 4 GiB is the largest PLY file the reader can address.
+-   A `.usda` output refuses a mesh with an array whose text would reach 2 GB (the text writer would drop the array without an error). The text size is not known before the file is written, so it is estimated from the array's length: a mesh of 50 million vertices or more is refused even when its numbers are short. Convert it to `.usdc` instead.
+-   A `.usdc` or `.usdz` output refuses a mesh with an array over about 2 GB of data (`0x7E000000` bytes), the largest block the binary format compresses.
+
 ### Run time
 
 Each conversion starts a new worker process, which starts an interpreter and imports Trimesh. A small model takes about 0.4 seconds longer than when the parsers ran inside the function process (median 0.6 seconds against 0.2 seconds measured on a warm function). The worker is not forked from the function process, because a forked worker would inherit the function's AWS credentials from memory.
