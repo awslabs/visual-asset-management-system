@@ -37,7 +37,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
-import { pipelineJobTags, VAMS_PIPELINE_TAG_VALUES } from "../../../constructs/pipelineJobTags";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface PcPotreeViewerConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -503,6 +507,9 @@ export class PcPotreeViewerConstruct extends NestedStack {
                 tracingEnabled: true,
             }
         );
+
+        // The job-tagging grant's wildcard resources (pipelineJobTags.ts).
+        suppressBatchJobTaggingNag(pipelineStateMachine);
 
         // Stopping the state machine cancels whichever .sync Batch task is running (PDAL or Potree),
         // which requires terminating the job; the BatchSubmitJob tasks grant only batch:SubmitJob.

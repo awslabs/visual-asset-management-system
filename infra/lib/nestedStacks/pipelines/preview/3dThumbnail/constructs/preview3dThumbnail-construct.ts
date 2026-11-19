@@ -37,7 +37,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
-import { pipelineJobTags, VAMS_PIPELINE_TAG_VALUES } from "../../../constructs/pipelineJobTags";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -470,6 +474,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 tracingEnabled: true,
             }
         );
+
+        // The job-tagging grant's wildcard resources (pipelineJobTags.ts).
+        suppressBatchJobTaggingNag(pipelineStateMachine);
 
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource

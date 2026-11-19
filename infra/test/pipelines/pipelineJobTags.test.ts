@@ -75,7 +75,9 @@ function sourcesUnder(dir: string, keep: (name: string) => boolean): string[] {
 const codeOf = (file: string): string =>
     fs
         .readFileSync(file, "utf-8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
+        // Block comments that open a line only: an ARN string such as `job/*` holds "/*" too, and
+        // stripping from there would drop real code up to the next "*/".
+        .replace(/^\s*\/\*[\s\S]*?\*\//gm, "")
         .replace(/^\s*\/\/.*$/gm, "")
         .replace(/^\s*#.*$/gm, "");
 
@@ -98,6 +100,23 @@ describe("every pipeline job submit carries the pipeline job tags", () => {
             .filter((file) => /new\s+tasks\.BatchSubmitJob\s*\(/.test(codeOf(file)))
             .map(relative);
         expect(offenders).toEqual([]);
+    });
+
+    test("every construct with a tagged Batch state suppresses the tagging grant's wildcards", () => {
+        // cdk-nag fails synth only for the pipelines a config enables, so the source scan covers the rest.
+        const definitions = ["pipelineJobTags.ts", "stateTimeoutBatchSubmitJob.ts"].map((name) =>
+            path.join("constructs", name)
+        );
+        const users = cdkSources
+            .filter((file) => !definitions.some((d) => file.endsWith(d)))
+            .filter((file) =>
+                /new\s+(TaggedBatchSubmitJob|StateTimeoutBatchSubmitJob)\s*\(/.test(codeOf(file))
+            );
+        expect(users.length).toBeGreaterThan(0);
+        const missing = users
+            .filter((file) => !codeOf(file).includes("suppressBatchJobTaggingNag("))
+            .map(relative);
+        expect(missing).toEqual([]);
     });
 
     test("every ECS RunTask state propagates tags from a tagged task definition", () => {
