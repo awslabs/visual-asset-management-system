@@ -47,6 +47,9 @@ CONSUMER: FrozenSet[str] = frozenset(
         "export_asset",
         "search_assets",
         "search_files",
+        # Natural-language search: a read, so a consumer's. Each call is a billed Amazon Bedrock
+        # embedding; it stays out of every autoApprove sample (Rule 4).
+        "search_nlp",
         "get_search_fields",
         "find_and_summarize",
         "list_asset_files",

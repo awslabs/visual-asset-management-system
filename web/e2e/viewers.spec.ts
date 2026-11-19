@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, Locator, Page, Request, Response } from "@playwright/test";
+import { test, expect, ConsoleMessage, Locator, Page, Request, Response } from "@playwright/test";
 import {
     apiContext,
     type AssetFileRef,
@@ -62,7 +62,8 @@ const cases = [
     // `referenceChecks: true` = the Three.js viewer loads the files a model references from the
     // asset; the case also asserts that no request to the web app's origin failed (an unresolved
     // texture used to be requested from the site root, which answers 403) and that no Content
-    // Security Policy violation was reported. USD opens in Three.js with or without
+    // Security Policy violation was reported. A referenced file the asset lacks is the viewer's
+    // documented notice, not a failure (see RESOURCE_400). USD opens in Three.js with or without
     // ALLOWUNSAFEEVAL: a viewer is chosen only when Needle is listed too.
     { ext: ".glb", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
     { ext: ".usdz", viewer: "Three.js", select: /Three\.js/i, referenceChecks: true },
@@ -93,6 +94,146 @@ const cases = [
     // Referer, which would put the credential into the web access logs.
     { ext: ".mcap", viewer: "Robotics", requiresFeature: "ALLOWUNSAFEEVAL", signedUrlChecks: true },
 ];
+
+/**
+ * The Three.js viewer's documented answer to a USD file with nothing it can draw (a layer file whose
+ * content sits in sublayers, variants or payloads): it shows `USD_NO_GEOMETRY_MESSAGE` in place of the
+ * scene and logs the same error. The first file of an extension the lookup finds can be such a layer
+ * (`/assemblies/arm.usda` of a scene, seen in the 2026-11-18 regression), so a USD case accepts that
+ * outcome, and only that line, when the page shows the message (#1634). Any other console error still
+ * fails the case.
+ */
+const USD_EMPTY_SCENE = /This USD scene opened, but the viewer found nothing in it to display/;
+const USD_EXTENSIONS = new Set([".usd", ".usda", ".usdc", ".usdz"]);
+
+/**
+ * The Three.js viewer's documented answer to a model that references files its asset does not hold
+ * (#1625): it asks the download route for each one, the API refuses a missing file with 400 ("File
+ * not found in S3"), Chromium logs one "Failed to load resource" line per refusal, and the viewer
+ * names the files in its notice ("4 referenced files were not loaded", one "<path> (not found in
+ * this asset)" line each, ten by name and then "and N more"). The `/assemblies/arm.usda` layer of
+ * the 2026-11-18 regression references four `../parts/*.usda` files its asset lacks (D136). A case
+ * accepts those lines only as many times as the API refused a presign, only for a refused presign's
+ * URL, and only when every refused key is a file the notice accounts for. Any other console error
+ * still fails the case.
+ */
+const RESOURCE_400 = /^Failed to load resource: the server responded with a status of 400\b/;
+const PRESIGN_ROUTE = /\/database\/[^/]+\/assets\/[^/]+\/download$/;
+const NOT_FOUND_LINE = /^(.+) \(not found in this asset\)$/;
+/** How many files the notice lists by name (`NOTICE_LISTED_FILES` in ThreeJSViewerComponent). */
+const NOTICE_LISTED_FILES = 10;
+
+interface RefusalVerdict {
+    /** How many "Failed to load resource ... 400" console lines the case may drop. */
+    lines: number;
+    /** Why refusals were seen but not accepted; shown with the failing errors. */
+    problem?: string;
+    note?: string;
+}
+
+/**
+ * Records the presigns the download route refused with 400 (with the key each asked for) and the
+ * console lines Chromium logged for them, from before the viewer opens. `verdict` then reads the
+ * viewer's referenced-files notice and says how many of those lines are the documented outcome.
+ */
+function trackRefusedReferences(page: Page) {
+    const refused: { url: string; key: string }[] = [];
+    const loggedAt: string[] = [];
+    const onResponse = (response: Response) => {
+        const request = response.request();
+        if (response.status() !== 400 || request.method() !== "POST") return;
+        let path: string;
+        try {
+            path = new URL(response.url()).pathname;
+        } catch {
+            return;
+        }
+        if (!PRESIGN_ROUTE.test(path)) return;
+        let key = "";
+        try {
+            key = String(request.postDataJSON()?.key ?? "");
+        } catch {
+            // Not a JSON body: the key stays empty, which no notice line accounts for.
+        }
+        refused.push({ url: response.url(), key: key.replace(/^\/+/, "") });
+    };
+    const onConsole = (message: ConsoleMessage) => {
+        if (message.type() === "error" && RESOURCE_400.test(message.text())) {
+            loggedAt.push(message.location().url);
+        }
+    };
+    page.on("response", onResponse);
+    page.on("console", onConsole);
+    return {
+        async verdict(): Promise<RefusalVerdict> {
+            page.off("response", onResponse);
+            page.off("console", onConsole);
+            if (refused.length === 0) return { lines: 0 };
+            const keys = [...new Set(refused.map((r) => r.key))];
+            const named = keys.map((key) => key || "(no key)").join(", ");
+            const notice = page.getByTestId("threejs-unloaded-references");
+            const shown = await notice
+                .waitFor({ state: "visible", timeout: 5_000 })
+                .then(() => true)
+                .catch(() => false);
+            if (!shown) {
+                return {
+                    lines: 0,
+                    problem: `the API refused presigns for ${named}, and the viewer showed no referenced-files notice`,
+                };
+            }
+            const header = /(\d+) referenced files? (?:was|were) not loaded/.exec(
+                await notice.innerText()
+            );
+            const total = header ? Number(header[1]) : 0;
+            const listed = (await notice.getByRole("listitem").allInnerTexts()).map((l) =>
+                l.trim()
+            );
+            const notFound = listed.flatMap((line) => {
+                const match = NOT_FOUND_LINE.exec(line);
+                return match ? [match[1].replace(/^\/+/, "")] : [];
+            });
+            const accounted = (key: string) =>
+                key !== "" && notFound.some((path) => key === path || key.endsWith(`/${path}`));
+            const unlisted = keys.filter((key) => !accounted(key));
+            // Files past the first NOTICE_LISTED_FILES appear only as "and N more".
+            const unnamed = Math.max(0, total - listed.length);
+            if (
+                !header ||
+                listed.length !== Math.min(total, NOTICE_LISTED_FILES) ||
+                unlisted.length > unnamed
+            ) {
+                return {
+                    lines: 0,
+                    problem:
+                        `the API refused presigns for ${named}, which the referenced-files notice ` +
+                        `does not account for (header: ${header?.[0] ?? "none"}; listed: ` +
+                        `${listed.join("; ") || "none"})`,
+                };
+            }
+            const urls = new Set(refused.map((r) => r.url));
+            const lines = Math.min(loggedAt.filter((url) => urls.has(url)).length, refused.length);
+            return {
+                lines,
+                note:
+                    `the asset lacks ${keys.length} referenced file(s) (${named}); the API refused ` +
+                    `${refused.length} presign(s) and the viewer's notice lists them as not found`,
+            };
+        },
+    };
+}
+
+/** `errors` without the first `n` "Failed to load resource ... 400" console lines. */
+function withoutRefusalLines(errors: string[], n: number): string[] {
+    let left = n;
+    return errors.filter((line) => {
+        if (left > 0 && RESOURCE_400.test(line.replace(/^console: /, ""))) {
+            left -= 1;
+            return false;
+        }
+        return true;
+    });
+}
 
 // `maxBytes` keeps the scan off very large files, whose download alone can outlast a case's waits.
 const SCAN = { maxDatabases: 8, maxAssetsPerDatabase: 20, maxBytes: 50 * 1024 * 1024 };
@@ -246,6 +387,7 @@ for (const c of cases) {
         const errors = watchConsoleErrors(page);
         const signedUrls = c.signedUrlChecks ? trackSignedUrls(page) : null;
         const references = c.referenceChecks ? await trackReferenceRequests(page) : null;
+        const refusals = c.referenceChecks ? trackRefusedReferences(page) : null;
         await openViewerFile(page, subject!);
 
         // Wait for the ViewFile shell (the file heading) to render. A plain substring match, not a
@@ -297,8 +439,39 @@ for (const c of cases) {
         // Let the loader pull the file + render a frame, then check for runtime errors.
         await page.waitForTimeout(6000);
 
-        // No uncaught page errors or viewer-init console errors.
-        expect(errors, `viewer errors for ${fileName}:\n${errors.join("\n")}`).toEqual([]);
+        // No uncaught page errors or viewer-init console errors. A USD scene with nothing to draw is
+        // the viewer's documented, handled outcome when it shows its message (see USD_EMPTY_SCENE),
+        // and so are the API's refusals of referenced files the notice lists (see RESOURCE_400).
+        const emptyUsdScene =
+            c.viewer === "Three.js" &&
+            USD_EXTENSIONS.has(c.ext) &&
+            (await page
+                .getByText(USD_EMPTY_SCENE)
+                .first()
+                .isVisible()
+                .catch(() => false));
+        if (emptyUsdScene) {
+            test.info().annotations.push({
+                type: "note",
+                description: `${fileName} holds nothing the Three.js viewer can draw; the viewer showed its documented message`,
+            });
+        }
+        const withoutEmptyScene = emptyUsdScene
+            ? errors.filter((line) => !USD_EMPTY_SCENE.test(line))
+            : errors;
+        const refused: RefusalVerdict = refusals ? await refusals.verdict() : { lines: 0 };
+        if (refused.note) {
+            test.info().annotations.push({
+                type: "note",
+                description: `${fileName}: ${refused.note}`,
+            });
+        }
+        const counted = withoutRefusalLines(withoutEmptyScene, refused.lines);
+        expect(
+            counted,
+            `viewer errors for ${fileName}:\n${counted.join("\n")}` +
+                (refused.problem ? `\n(${refused.problem})` : "")
+        ).toEqual([]);
 
         if (references) {
             const { appOriginFailures, cspViolations } = await references.summary();

@@ -13,7 +13,7 @@
  * route returns 502 `Runtime.ImportModuleError` on first invocation. Nothing in CDK, TypeScript, or a
  * synth test relates the handler string to the Python tree.
  *
- * Scope is every `.ts` file under `lib/` — the 17 files in `lib/lambdaBuilder/` plus the builders that
+ * Scope is every `.ts` file under `lib/` — the 18 files in `lib/lambdaBuilder/` plus the builders that
  * live beside their nested stack (Garnet, Physna) and the one construct that builds a handler Lambda
  * inline (the Cognito pre-token-generation trigger).
  */

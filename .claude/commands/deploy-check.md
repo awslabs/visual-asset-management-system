@@ -130,6 +130,26 @@ Perform these static checks without running commands:
 
 **Config template consistency**: Verify any config fields present in the configuration file from check 1 also exist in all three templates (`config.template.commercial.json`, `config.template.govcloud.json`, `config.template.eusovereign.json`).
 
+#### 9. Vector Search and Amazon Bedrock Prerequisites
+
+Read `infra/config/config.json`. An absent `app.vectorSearch` or `app.vectorSearch.enabled` resolves to enabled only when `app.pipelines.useSystemGenAiMetadata.enabled` and `.autoRegisterAutoTriggerOnFileUpload` are `true`, `.autoRegisterWithVAMS` is not `false`, and `app.govCloud.enabled` is not `true`; otherwise it resolves to disabled with a warning. Report which way it resolves. When `app.vectorSearch.enabled` is `true`, set or resolved, verify:
+
+-   `app.pipelines.useSystemGenAiMetadata.enabled`, `.autoRegisterWithVAMS`, and `.autoRegisterAutoTriggerOnFileUpload` are all `true` (configuration validation throws otherwise)
+-   `app.pipelines.useSystemGenAiMetadata.bedrockModels.embeddingModelId` is non-empty and `bedrockModels.embeddingDimensions` is a positive integer the model supports; `app.vectorSearch.indexingConcurrency` is an integer from 2 to 1000 (checked while the SYSTEM GenAI metadata pipeline is on and registered)
+-   When `app.pipelines.useSystemGenAiMetadata.useGenAiAnalysis` is `true` (the default), `bedrockModels.analysisModelId` is non-empty and its prefix matches the partition (`global.` only in `aws`; `us-gov.` only in `aws-us-gov`; `us.` is accepted in both — in `aws-us-gov` configuration validation emits a warning to verify the profile exists there, not a failure)
+-   `app.pipelines.useSystemGenAiMetadata.bedrockGuardrail` has both `guardrailIdentifier` and `guardrailVersion` set, or both empty; `bedrockGuardrail.create.enabled` is not `true` while `guardrailIdentifier` is set; `create.promptAttackInputStrength` is `LOW`/`MEDIUM`/`HIGH` and `create.piiFilter` is `off`/`anonymize`/`block`. A guardrail is created (`create.enabled`) or named (`guardrailIdentifier`) whenever the pipeline calls Amazon Bedrock (`useGenAiAnalysis` or vector search on); configuration validation refuses the configuration otherwise, in every partition, also with vector search off
+-   The Region is in the `aws` or `aws-us-gov` partition: configuration validation refuses vector search in every other partition (`VECTOR_SEARCH_PARTITIONS`; DynamoDB vector search is not offered in `aws-eusc`)
+-   `app.pipelines.useSystemGenAiMetadata.useFargateRenderer` is `false` unless `app.useGlobalVpc.enabled` is `true`
+
+Model access is account state that `cdk synth` cannot see. When AWS credentials for the target account are available, check both models:
+
+```bash
+aws bedrock get-foundation-model-availability --model-id <bedrockModels.analysisModelId-without-profile-prefix> --region <region>
+aws bedrock get-foundation-model-availability --model-id <bedrockModels.embeddingModelId> --region <region>
+```
+
+Report `agreementAvailability.status`, `authorizationStatus`, and `entitlementAvailability`. An Anthropic analysis model whose use-case form has not been submitted reports it as not entitled; the first uploads would then fail with `BedrockAccessDenied` (attributes still written). Report PASS only when both models are available or the feature is disabled.
+
 ### Report Format
 
 Present results as a markdown checklist:

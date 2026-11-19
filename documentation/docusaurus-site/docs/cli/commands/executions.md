@@ -61,7 +61,9 @@ Runs of system workflows (workflows shipped with the deployment) are hidden unle
 `--include-system`; the text output then says `System workflow runs hidden`. Filtering to one system
 workflow (`-w` with `--workflow-database-id`) shows its runs unless you pass `--no-include-system`;
 `-w` on its own is not that filter, so a system workflow's runs stay hidden and the text output names
-`--workflow-database-id`. Under `--json-output` each row carries `isSystem`, and `includeSystem`
+`--workflow-database-id`. Filtering to a system trigger value, such as `--trigger-type System-Reindex` for the vector-search reindexer's runs or `--trigger-type System-ZipDownload` for the Download as Zip runs,
+or to one execution group (`--group-id`, for example
+`vec-<runId>-<chunk>`) likewise shows them unless you pass `--no-include-system`. Under `--json-output` each row carries `isSystem`, and `includeSystem`
 reports which applied.
 
 | Option                                     | Description                                                                                            |
@@ -70,7 +72,7 @@ reports which applied.
 | `--workflow-database-id`                   | Filter by workflow database ID                                                                         |
 | `--status`                                 | Filter by execution status (e.g. `RUNNING`, `SUCCEEDED`, `FAILED`, `SKIPPED`)                          |
 | `--exclude-status`                         | Leave out these statuses, one or comma-separated (e.g. `SKIPPED`); applied by the service              |
-| `--trigger-type`                           | Filter by trigger type (`Manual` / `File-Upload`)                                                      |
+| `--trigger-type`                           | Filter by trigger type (`Manual` / `File-Upload` / `System-Reindex`)                                   |
 | `--group-id`                               | Filter by `executionGroupId`                                                                           |
 | `--triggered-by`                           | Filter by the user ID that triggered the execution                                                     |
 | `--include-system` / `--no-include-system` | Include runs of system workflows (hidden by default), or leave them out even for one system workflow   |

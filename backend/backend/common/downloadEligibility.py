@@ -10,6 +10,9 @@ presigned GET URL, so every surface that serves asset file content applies them 
   and has a storage location (`get_distributable_asset_context`);
 - a caller-supplied key resolves inside the asset's own prefix and within the S3 key limit
   (`resolve_asset_file_key`);
+- for a single-file download the compliance quarantine block may run on the resolved key instead of
+  on the whole asset, before any S3 call, so a quarantined asset still serves a preview companion
+  (`check_file_eligibility`'s ``check_key_quarantine``);
 - an asset-version pin (`assetVersionId` or its alias) resolves to the per-file S3 version recorded
   in that version's snapshot (`resolve_pinned_version_id`);
 - a single file exists, is not a delete marker (410), and passes the extension and content-type
@@ -340,11 +343,14 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
                            max_workers: int = DEFAULT_MAX_PARALLEL_S3_WORKERS,
                            list_objects: Callable = None,
                            is_allowed: Callable[[str, str], bool] = None,
-                           object_exists: Callable[[str, str], bool] = None) -> Tuple[str, Optional[str]]:
+                           object_exists: Callable[[str, str], bool] = None,
+                           check_key_quarantine: Optional[Callable[[str, bool], None]] = None
+                           ) -> Tuple[str, Optional[str]]:
     """Run every per-file check for one requested key and return what to sign.
 
-    Order (each step refuses before the next runs): key containment and length, asset-version
-    pin resolution, then for a prefix (key ending in ``/``) the blocklist over every object and
+    Order (each step refuses before the next runs): key containment and length, the per-key
+    quarantine block when one is passed, asset-version pin resolution, then for a prefix (key
+    ending in ``/``) the blocklist over every object and
     the prefix's own existence, or for a single file one HeadObject of the requested version
     covering existence, delete marker and blocklist.
 
@@ -356,6 +362,12 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
         max_workers / list_objects / is_allowed: see ``validate_prefix_content_types``
         object_exists: ``(bucket, key) -> bool`` for the prefix's existence check; defaults to
             ``s3_object_exists`` on ``s3_client``
+        check_key_quarantine: ``(final_key, version_pinned) -> None``, the compliance quarantine
+            block applied to the one resolved key instead of to the whole asset (a single-file
+            download whose key may be a preview companion); ``version_pinned`` is true when a per-file
+            version or an asset-version pin was requested. It raises ``QuarantineBlockedResponse``
+            for a refused key and runs before any S3 call. A caller that passes it has not applied the
+            block in ``get_distributable_asset_context``.
 
     Returns:
         ``(final_key, version_id)`` - the S3 key and version to sign
@@ -370,6 +382,9 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
             return s3_object_exists(s3_client, bucket, key)
 
     final_key = resolve_asset_file_key(asset_base_key, raw_key)
+
+    if check_key_quarantine is not None:
+        check_key_quarantine(final_key, bool(version_id or asset_version_id or asset_version_alias))
 
     # Resolve the version first: an asset-version pin (whole set) resolves the per-file S3
     # version from the snapshot; otherwise version_id is the per-file version passed in, or

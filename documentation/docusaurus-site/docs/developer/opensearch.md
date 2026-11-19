@@ -1,6 +1,6 @@
 # OpenSearch
 
-VAMS uses Amazon OpenSearch to power asset and file search. Search is optional: enable at most one of Amazon OpenSearch Serverless (`app.openSearch.useServerless`) or a provisioned Amazon OpenSearch Service domain (`app.openSearch.useProvisioned`), or disable both to deploy without search. This page describes what developers and operators need to know for each mode: setup, how indexes and reindexing work, network access, and limits.
+VAMS uses Amazon OpenSearch to power asset and file search. Search is optional: enable at most one of Amazon OpenSearch Serverless (`app.openSearch.useServerless`) or a provisioned Amazon OpenSearch Service domain (`app.openSearch.useProvisioned`), or disable both to deploy without search. Natural-language (vector) search is a separate capability that does not use OpenSearch; see [Relationship to vector search](#relationship-to-vector-search). This page describes what developers and operators need to know for each mode: setup, how indexes and reindexing work, network access, and limits.
 
 For the full list of configuration options, see the [Configuration reference](../deployment/configuration-reference.md#amazon-opensearch-service-appopensearch). For network topology, see [Network architecture](../architecture/networking.md#opensearch-serverless-interface-endpoint).
 
@@ -176,6 +176,16 @@ To avoid the deferred flow entirely, set `app.useGlobalVpc.addVpcEndpoints = tru
 -   **NextGen requires standby replicas** (`enableStandbyReplicas = true`) and is unavailable in GovCloud / EU Sovereign Cloud (use `nextGen = false` there).
 -   **Reconfiguration is a re-deployment:** changing generation, `allowPublic`, or the collection group reshapes the collection. Disable Serverless and deploy, then re-enable with the new settings and deploy, then reindex.
 
+### Switching between Serverless and provisioned
+
+An existing deployment moves from OpenSearch Serverless to a provisioned domain, or from a provisioned domain to Serverless, in two deployments, never in one:
+
+1. **Deploy with OpenSearch off.** Set both `app.openSearch.useServerless.enabled` and `app.openSearch.useProvisioned.enabled` to `false` and deploy. The deployment removes the collection or domain, the OpenSearch asset and file indexers, and the OpenSearch reindexer. The DynamoDB tables, the Amazon S3 buckets, the Amazon Cognito users, the vector index and the Amazon Location Service resources stay. Until the second deployment, keyword search is off (`NOOPENSEARCH`), and natural-language search keeps working without its OpenSearch-only filters, which it reports as ignored (`opensearch:fields_ignored`).
+2. **Deploy with the other option on.** Set `useServerless.enabled` or `useProvisioned.enabled` to `true` and deploy. A provisioned domain needs the global VPC (`app.useGlobalVpc.enabled` set to `true`); `app.useGlobalVpc.useForAllLambdas` can stay `false`, in which case only the search and indexing functions join the VPC. Creating a provisioned domain adds about 15 minutes to the deployment.
+3. **Fill the new indexes.** The new collection or domain starts empty, so keyword search finds nothing until it is filled. Run the [Reindex utility](utilities/reindex.md) in `lambda` mode with the function named by the `OpenSearchReindexerFunctionNameOutput` stack output and `--operation both`, after a `--dry-run` to see the counts, or set `app.openSearch.reindexOnCdkDeploy` to `true` for one later deployment. The reindex starts no Amazon Bedrock analysis, and the vector index is not changed.
+
+The index parameters `/<name>-<baseStackName>/aos/endPoint`, `/aos/assetIndexName` and `/aos/fileIndexName` stay in AWS Systems Manager Parameter Store while OpenSearch is off, the endpoint still naming the removed collection or domain, and the second deployment overwrites them ([#1485](https://github.com/awslabs/visual-asset-management-system/issues/1485)).
+
 ## Provisioned
 
 A provisioned Amazon OpenSearch Service domain offers dedicated capacity and custom instance sizing. Enable it with `app.openSearch.useProvisioned.enabled = true`. A provisioned domain always runs inside the VPC, so it requires `app.useGlobalVpc.enabled = true`.
@@ -206,6 +216,10 @@ The shard count and the replica count are **fixed at index creation**. Changing 
 -   **Fragile in-place updates:** domain configuration changes (instance type, EBS size, engine version) trigger blue/green updates that can take 30+ minutes and occasionally exceed the CloudFormation custom-resource timeout. A major engine-version upgrade may require deploying with OpenSearch disabled, then re-enabling.
 -   **Service-linked role:** a provisioned domain in a VPC requires the `AWSServiceRoleForAmazonOpenSearchService` service-linked role. VAMS creates it idempotently during deployment (created if missing, left unchanged if present), so the _"you must enable a service-linked role"_ error needs no manual retry. The role is account-wide and is not removed on stack teardown.
 
+## Relationship to vector search
+
+Keyword search and natural-language search are independent engines behind one search page and one `/search` route family. Keyword search (`POST /search`, `POST /search/simple`) queries the OpenSearch asset and file indexes. Natural-language search (`POST /search/nlp`) embeds the query with Amazon Bedrock and queries a DynamoDB vector index; it does not need OpenSearch and is gated by the `VECTORSEARCH` feature switch rather than by `NOOPENSEARCH`. When both are enabled, the natural-language route sends the vector hits' document ids to the OpenSearch file index, or for an asset answer their assets' ids to the asset index, 100 per query to apply the keyword search's `filters`, `metadataQuery`, `geoSearch`, and `tags` there, merges each file hit's `_source` (`MD_`, `AB_`, preview key) into the response, and gives each asset hit its asset's location; an OpenSearch error during that step degrades to the `opensearch:enrichment_failed` warning when the request carries none of those constraints, and fails the request with `503` when it carries one. The vector index has its own indexer and reindexer in the search stack and is not touched by the OpenSearch reindex utility. See [Vector search](../concepts/vector-search.md).
+
 ## Disabling OpenSearch
 
-Set both `useServerless.enabled` and `useProvisioned.enabled` to `false` to deploy without search. The `NOOPENSEARCH` feature flag is set, and search features are unavailable in the UI; asset and file browsing and management remain functional.
+Set both `useServerless.enabled` and `useProvisioned.enabled` to `false` to deploy without keyword search. The `NOOPENSEARCH` feature flag is set, and keyword search, metadata filtering, and map view are unavailable in the UI; asset and file browsing and management remain functional, and natural-language search remains available when `app.vectorSearch.enabled` is `true`.

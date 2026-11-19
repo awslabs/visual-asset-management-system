@@ -42,6 +42,10 @@ jest.mock("../components/ConfigEditor", () => {
     return { __esModule: true, default: Stub };
 });
 
+/** A tag chip, found by the placeholder its name starts with (#1592: the name starts with the chip's text). */
+const tagChip = (tagKey: string) =>
+    screen.getByRole("button", { name: new RegExp(`^\\{\\{${tagKey}\\}\\} `) });
+
 const createWrapper = () => {
     const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -453,18 +457,18 @@ describe("TemplateForm — Tags and Config Body step", () => {
         await openTagsStep(user);
 
         await addTag(user, 0, "PROMPT", "string");
-        await user.click(screen.getByRole("button", { name: "Insert {{PROMPT}}" }));
+        await user.click(tagChip("PROMPT"));
         expect(editorValue()).toBe('"{{PROMPT}}"');
 
         await addTag(user, 1, "STEPS", "integer");
-        await user.click(screen.getByRole("button", { name: "Insert {{STEPS}}" }));
+        await user.click(tagChip("STEPS"));
         expect(editorValue()).toBe('"{{PROMPT}}"{{STEPS}}');
 
-        // The chip says which form it inserts.
-        expect(screen.getByRole("button", { name: "Insert {{PROMPT}}" })).toHaveTextContent(
-            "quoted"
-        );
-        expect(screen.getByRole("button", { name: "Insert {{STEPS}}" })).toHaveTextContent("bare");
+        // The chip says which form it inserts, and its name starts with the text it shows (#1592).
+        expect(tagChip("PROMPT")).toHaveTextContent("{{PROMPT}} string · quoted");
+        expect(tagChip("PROMPT")).toHaveAccessibleName("{{PROMPT}} string · quoted: insert");
+        expect(tagChip("STEPS")).toHaveTextContent("{{STEPS}} integer · bare");
+        expect(tagChip("STEPS")).toHaveAccessibleName("{{STEPS}} integer · bare: insert");
     });
 
     it("inserts a bare placeholder for every tag type in a yaml body", async () => {
@@ -476,7 +480,9 @@ describe("TemplateForm — Tags and Config Body step", () => {
         await user.selectOptions(screen.getByLabelText(/Config Format/), "yaml");
 
         await addTag(user, 0, "PROMPT", "string");
-        await user.click(screen.getByRole("button", { name: "Insert {{PROMPT}}" }));
+        // A yaml chip shows no insert form, and its name starts with the text it shows (#1592).
+        expect(tagChip("PROMPT")).toHaveAccessibleName("{{PROMPT}} string: insert");
+        await user.click(tagChip("PROMPT"));
         expect(editorValue()).toBe("{{PROMPT}}");
     });
 
@@ -490,7 +496,7 @@ describe("TemplateForm — Tags and Config Body step", () => {
         await addTag(user, 0, "PROMPT", "string");
         expect(screen.getByTestId("unreferenced-tags-warning")).toHaveTextContent("{{PROMPT}}");
 
-        await user.click(screen.getByRole("button", { name: "Insert {{PROMPT}}" }));
+        await user.click(tagChip("PROMPT"));
         expect(screen.queryByTestId("unreferenced-tags-warning")).not.toBeInTheDocument();
     });
 
@@ -581,13 +587,20 @@ describe("TemplateForm — Tags and Config Body step", () => {
         });
 
         // Basic is invalid (no name), so nothing ahead is reachable from the stepper.
-        expect(screen.queryByRole("button", { name: /Go to step/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /: go to step \d$/ })).not.toBeInTheDocument();
         await user.type(screen.getByPlaceholderText("Template name"), "T");
-        // Every later step is now reachable, since no step between has a failing gate.
-        await user.click(screen.getByRole("button", { name: "Go to step Tags and Config Body" }));
+        // Every later step is now reachable, since no step between has a failing gate. Each shows its
+        // number badge and is named starting with that number and its label (#1592).
+        expect(
+            screen.getByRole("button", { name: "2 Pipeline overrides: go to step 2" })
+        ).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "4 Review: go to step 4" })).toBeInTheDocument();
+        await user.click(
+            screen.getByRole("button", { name: "3 Tags and Config Body: go to step 3" })
+        );
         expect(screen.getByTestId("config-editor")).toBeInTheDocument();
         // And the way back is one click.
-        await user.click(screen.getByRole("button", { name: "Go to step Basic" }));
+        await user.click(screen.getByRole("button", { name: "Basic: go to step 1" }));
         expect(screen.getByDisplayValue("T")).toBeInTheDocument();
     });
 });
@@ -658,8 +671,8 @@ describe("TemplateForm — edit route hydration", () => {
         expect(
             screen.getAllByLabelText(/tag key/i).map((el) => (el as HTMLInputElement).value)
         ).toEqual(["PROMPT", "STEPS"]);
-        expect(screen.getByRole("button", { name: "Insert {{PROMPT}}" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Insert {{STEPS}}" })).toBeInTheDocument();
+        expect(tagChip("PROMPT")).toBeInTheDocument();
+        expect(tagChip("STEPS")).toBeInTheDocument();
         expect(screen.queryByTestId("unreferenced-tags-warning")).not.toBeInTheDocument();
 
         // Review: the tag table and the options.

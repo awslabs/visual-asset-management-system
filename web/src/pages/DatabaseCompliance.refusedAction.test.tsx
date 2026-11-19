@@ -89,7 +89,7 @@ describe("DatabaseCompliance after a refused action (D162)", () => {
         render(<DatabaseCompliancePage />);
         await screen.findByText("excepted-asset");
         await userEvent.click(
-            screen.getByRole("button", { name: "Revoke the exception of excepted-asset" })
+            screen.getByRole("button", { name: "Revoke exception of excepted-asset" })
         );
         const dialog = (await screen.findByText("Revoke compliance exception")).closest(
             '[role="dialog"]'
@@ -110,7 +110,7 @@ describe("DatabaseCompliance after a refused action (D162)", () => {
             expect(within(rowOf("excepted-asset")).getByText("Quarantined")).toBeInTheDocument()
         );
         expect(
-            screen.queryByRole("button", { name: "Revoke the exception of excepted-asset" })
+            screen.queryByRole("button", { name: "Revoke exception of excepted-asset" })
         ).toBeNull();
     });
 

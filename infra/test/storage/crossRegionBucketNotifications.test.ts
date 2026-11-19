@@ -465,7 +465,7 @@ function countByType(resources: Resource[]): Record<string, number> {
 }
 
 /**
- * A Config built from the commercial template the way templateSynth's buildConfig does, for the
+ * A Config built from the commercial template the way templateSynth's buildTemplateConfig does, for the
  * unit tests that construct the stack directly rather than through a full-app synth.
  */
 function loadConfigForUnitTest(mutate: (c: any) => void): Config.Config {

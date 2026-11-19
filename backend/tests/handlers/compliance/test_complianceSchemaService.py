@@ -39,6 +39,7 @@ def _run(event, tokens=(USER,), api=True, obj=True, **table_kwargs):
     with patch(f"{MOD}.request_to_claims", claims_for(*tokens)), \
             patch(f"{MOD}.CasbinEnforcer", return_value=enforcer(api=api, obj=obj)), \
             patch(f"{MOD}.may_run_workflow", return_value=True), \
+            patch(f"{MOD}._rule_uses_system_record", return_value=False), \
             patch(f"{MOD}.schema_table", schema_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{MOD}.database_table", database_table), \
@@ -176,6 +177,7 @@ class TestAuthorization:
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
                 patch(f"{MOD}.CasbinEnforcer", return_value=instance), \
                 patch(f"{MOD}.may_run_workflow", return_value=True), \
+                patch(f"{MOD}._rule_uses_system_record", return_value=False), \
                 patch(f"{MOD}.schema_table", schema_table), \
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{MOD}.database_table", database_table), \
@@ -517,6 +519,7 @@ class TestDeleteSchema:
         with patch(f"{MOD}.request_to_claims", claims_for(USER)), \
                 patch(f"{MOD}.CasbinEnforcer", return_value=enforcer()), \
                 patch(f"{MOD}.may_run_workflow", return_value=True), \
+                patch(f"{MOD}._rule_uses_system_record", return_value=False), \
                 patch(f"{MOD}.schema_table", schema_table), \
                 patch(f"{MOD}.asset_state_table", state_table), \
                 patch(f"{MOD}.database_table", database_table), \

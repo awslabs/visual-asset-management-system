@@ -30,6 +30,7 @@ IDENTITY_TEST_REL = "backendPipelines/tests/test_manifest_helper_byte_identity.p
 
 RESULTS_PATH_VARIABLE = "outputS3AssetResultsPath"
 RESULTS_SECTION = f"## Reporting a Post-Write-Back Failure (`results/{EXECUTION_STATUS_RESULTS_FILENAME}`)"
+EMBEDDING_SECTION = "## Publishing an Embedding for Vector Search (`vector.embedding.ready`)"
 
 
 def _read(path):
@@ -56,6 +57,14 @@ class TestSteeringFile:
         assert "common.s3PathPatterns.EXECUTION_STATUS_RESULTS_FILENAME" in text
         assert "test_processOutput_execution_status_file.py" in text
         assert "test_processOutput_metadata_write_back_message.py" in text
+
+    def test_the_embedding_event_contract_section_states_the_contract(self):
+        text = _read(STEERING)
+        assert EMBEDDING_SECTION in text
+        for term in ("vector.embedding.ready", "documentS3Location", "embeddingModelId",
+                     "embeddingDimensions", "orchestrationEventPrefix", "events:PutEvents",
+                     "segmentKey", "segmentKind", "segmentCount", "SEGMENT_KEY_MAX_BYTES"):
+            assert term in text, term
 
     def test_the_byte_identity_test_it_names_exists(self):
         assert IDENTITY_TEST_REL in _read(STEERING)

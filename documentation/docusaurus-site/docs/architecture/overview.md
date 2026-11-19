@@ -139,7 +139,7 @@ graph TD
     Auth["AuthBuilder<br/>(Cognito / OAuth)"]
     APIBuilder["ApiBuilder<br/>(Primary API Route Wiring)"]
     APIBuilder2["ApiBuilder2<br/>(Secondary API Route Wiring)"]
-    Search["SearchBuilder<br/>(OpenSearch)"]
+    Search["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
     Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync, EDH Workstations)"]
     API["RestApi<br/>(SpecRestApi + Authorizer)"]
@@ -162,8 +162,10 @@ graph TD
     APIBuilder --> APIBuilder2
     Storage --> Search
     Names --> Search
+    APIBuilder2 --> Search
     Storage --> Pipelines
     APIBuilder2 --> Pipelines
+    Pipelines -.->|vectorSearch.enabled| Search
     Storage --> Addons
     Names --> Addons
     APIBuilder -.-> Addons
@@ -180,7 +182,7 @@ graph TD
 ```
 
 :::tip[Stack Dependencies]
-Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none, except LocationService, which declares its dependency on StaticWeb when the static web stack is built. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
+Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the arrows from the root mark the stacks that declare none, except LocationService, which declares its dependency on StaticWeb when the static web stack is built. The dashed arrows are declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there, and SearchBuilder after PipelineBuilder only when `vectorSearch.enabled` is `true`. `SearchBuilder` depends on `ApiBuilder2`, whose `executeWorkflow` function name the vector indexing construct's system-workflow launcher invokes, and, when `vectorSearch.enabled` is `true`, on `PipelineBuilder` as well, so the vector reindex custom resource runs after the system pipelines it launches exist. CustomFeatureEnabledConfig declares no stack dependency; it reads the feature table and AWS KMS key from `storageResources`, so AWS CloudFormation orders it after StorageResourcesBuilder through those references. See [Nested Stack Dependency Chain](details.md#nested-stack-dependency-chain) for the stacks that are built only under certain configurations.
 :::
 
 ## Next Steps

@@ -994,8 +994,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
     `filterStartDate`. A caller `filterEndDate` adds the upper bound and is echoed back when set.
     A `warnings` entry means the MAX_EXECUTIONS_INSPECTED cap withheld rows from this page.
     Runs of system workflows are left out unless `includeSystem=true`, or unless the listing is scoped
-    to one system workflow (see _resolve_include_system); the applied value is echoed as
-    `includeSystem`.
+    to one system workflow, a system trigger value or an execution group (see _resolve_include_system);
+    the applied value is echoed as `includeSystem`.
     """
     include_system_valid, include_system_explicit = _parse_include_system(query_params)
     if not include_system_valid:
@@ -1487,7 +1487,8 @@ def get_executions(event, database_id, asset_id, workflow_database_id, workflow_
                                        or extra_filters["workflowDatabaseId"])
         include_system = _resolve_include_system(
             include_system_explicit, casbin_enforcer,
-            scoped_workflow_database_id or '', scoped_workflow_id or '')
+            scoped_workflow_database_id or '', scoped_workflow_id or '',
+            trigger_type=extra_filters["triggerType"], group_id=extra_filters["groupId"])
         if not include_system:
             extra_filters["excludeSystem"] = True
         # The walk excluded on the STORED status; a row this request's reconcile moved into an
@@ -2291,14 +2292,11 @@ def abort_execution(event, execution_id):
             main_item['executionStopDate'] = now
         main_item['lastSfnSyncCheckDate'] = now
         # Stopping the state machine skips its error handler, so the abort publishes the completion
-        # event itself once the ABORTED status lands.
-        if _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
-                                        only_if_not_terminal=True):
-            emit_workflow_execution_completed(
-                execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
-                ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
-                completed_at=main_item['executionStopDate'],
-                execution_group_id=main_item.get('executionGroupId', ''))
+        # event itself once the ABORTED status lands, after the locks are released below.
+        aborted_here = _persist_reconciled_main_row(main_table, main_item, ABORT_MAIN_ROW_ATTRIBUTES,
+                                                    only_if_not_terminal=True)
+    else:
+        aborted_here = False
 
     # The run is terminal, so a launch under a locking restriction may now take the same assets, files or
     # file versions. A no-op under `none`; best-effort (an unreleased row expires through the table's TTL).
@@ -2311,6 +2309,15 @@ def abort_execution(event, execution_id):
             workflow_execution_id=execution_id,
             workflow_database_id=main_item.get('workflowDatabaseId', ''),
             workflow_id=main_item.get('workflowId', ''))
+
+    # Announced once the locks are free, so a consumer that relaunches on the event (the compliance
+    # callback's waiting pipeline rules) is not refused again by the run it was told had ended.
+    if aborted_here:
+        emit_workflow_execution_completed(
+            execution_id, main_item.get('workflowDatabaseId', ''), main_item.get('workflowId', ''),
+            ABORTED_STATUS, started_at=main_item.get('executionStartDate', ''),
+            completed_at=main_item['executionStopDate'],
+            execution_group_id=main_item.get('executionGroupId', ''))
 
     logger.info(f"Aborted execution {execution_id}")
     # AUDIT LOG: execution aborted — it stops a run mid-flight, so who stopped it is audit-worthy.
@@ -5993,7 +6000,8 @@ def _parse_include_system(query_params):
     return False, None
 
 
-def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, workflow_id):
+def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, workflow_id,
+                            trigger_type="", group_id=""):
     """Whether this listing returns system runs.
 
     An explicit includeSystem wins. Otherwise system runs are hidden, except when the listing is scoped
@@ -6003,10 +6011,20 @@ def _resolve_include_system(explicit, casbin_enforcer, workflow_database_id, wor
     per-row workflow GET anyway), and the definition read is the one the per-row authorization memoizes
     for the same enforcer. Any failure falls back to hiding system runs, which never hides a user run.
 
+    For the same reason a listing narrowed to a system trigger value (``trigger_type``, matching
+    sp.is_system_trigger: the runs a system feature launched, each of a system workflow) or to one
+    execution group (``group_id``: runs launched together, which a caller names to see that batch, a
+    system feature's batch included) shows system runs by default; with them hidden such a listing of a
+    system batch could only ever be empty. Core names no trigger value or group for this.
+
     Presentation only: this decides which rows a page includes, never whether a caller may see a row —
     every row still passes the same per-row visibility check."""
     if explicit is not None:
         return explicit
+    if sp.is_system_trigger(trigger_type):
+        return True
+    if (group_id or "").strip():
+        return True
     if not workflow_database_id or not workflow_id or casbin_enforcer is None:
         return False
     try:
@@ -6237,7 +6255,8 @@ def get_global_executions(event, query_params):
     _authz_decision_cache.clear()
     _arm_authz_entity_budget()
     page_enforcer = CasbinEnforcer(claims_and_roles) if claims_and_roles.get("tokens") else None
-    # System runs are hidden unless asked for, or unless the listing is scoped to one system workflow
+    # System runs are hidden unless asked for, or unless the listing is scoped to one system workflow,
+    # a system trigger value or an execution group
     # (_resolve_include_system). Hidden server-side as one more FilterExpression term on the walked
     # index — `attribute_not_exists(isSystem) OR isSystem <> true`, so a legacy row with no flag and any
     # row whose flag is not exactly true stay listed — and again by the Python safety net. A row the
@@ -6247,7 +6266,8 @@ def get_global_executions(event, query_params):
     # continuation semantics and the token format are unchanged.
     include_system = _resolve_include_system(
         include_system_explicit, page_enforcer,
-        filters["workflowDatabaseId"], filters["workflowId"])
+        filters["workflowDatabaseId"], filters["workflowId"],
+        trigger_type=filters["triggerType"], group_id=filters["groupId"])
     if not include_system:
         filters["excludeSystem"] = True
         system_cond = Attr("isSystem").not_exists() | Attr("isSystem").ne(True)
