@@ -25,7 +25,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The modules lambda.py imports from the build context. A runtime module the ignore file excluded would
 # fail at container RUNTIME, not at the image build.
-_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
+_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "fbx_scene.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
 
 
 def _read(name):
@@ -125,12 +125,21 @@ class TestBaseImage:
             froms[1]), froms[1]
         assert froms[0].split()[2] == froms[1].split()[2]
 
-    def test_the_assimp_source_is_pinned_and_hash_checked_before_it_is_unpacked(self):
+    def test_the_assimp_source_is_a_tag_clone_checked_against_a_pinned_commit(self):
+        # GitHub generates a tag's source archive, so its bytes can change; the commit cannot. The
+        # build clones the tag (from ASSIMP_REPO, which a mirror can override) and fails unless the
+        # clone is the pinned commit, before anything is configured or compiled.
         dockerfile = _read("Dockerfile")
         assert re.search(r"(?m)^ARG ASSIMP_VERSION=6\.0\.6$", dockerfile)
-        assert re.search(r"(?m)^ARG ASSIMP_SHA256=[0-9a-f]{64}$", dockerfile)
-        fetch = dockerfile[dockerfile.index('curl -fsSL -o /tmp/assimp.tar.gz'):]
-        assert fetch.index("sha256sum -c") < fetch.index("tar -xzf")
+        assert re.search(r"(?m)^ARG ASSIMP_TAG=v6\.0\.6$", dockerfile)
+        assert re.search(r"(?m)^ARG ASSIMP_COMMIT=[0-9a-f]{40}$", dockerfile)
+        assert re.search(r"(?m)^ARG ASSIMP_REPO=https://github\.com/assimp/assimp\.git$", dockerfile)
+        assert "tar.gz" not in dockerfile and "ASSIMP_SHA256" not in dockerfile
+        build = dockerfile[dockerfile.index('git -c advice.detachedHead=false clone'):]
+        check = 'test "$(git -C /tmp/assimp rev-parse HEAD)" = "${ASSIMP_COMMIT}"'
+        assert check in build
+        assert build.index(check) < build.index("cmake -S")
+        assert '--depth 1 --branch "${ASSIMP_TAG}" "${ASSIMP_REPO}"' in build
 
     def test_the_step_packages_install_only_when_the_build_argument_is_true(self):
         dockerfile = _read("Dockerfile")

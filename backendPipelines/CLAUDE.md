@@ -399,8 +399,13 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `preview-incomplete.json`) to the manifest's `outputs.results` prefix and builds the completion message
     and the MISSING_REFERENCES fail refusal.
 -   FBX is read by the Assimp command-line tool (`/opt/assimp/bin/assimp`), which the Dockerfile's
-    `assimp-builder` stage compiles from the pinned, hash-checked release source on the same base image digest
-    (Assimp publishes no prebuilt Linux tool; the tool also needs the assbin and assxml exporters to link).
+    `assimp-builder` stage compiles on the same base image digest from a shallow clone of the release tag,
+    failing unless `git rev-parse HEAD` is the pinned `ASSIMP_COMMIT` (Assimp publishes no prebuilt Linux tool
+    and no source archive of its own; GitHub's generated tag archives are not byte-stable, so pin a commit,
+    never an archive hash; `ASSIMP_REPO` is the mirror override; the tool also needs the assbin and assxml
+    exporters to link). Before it runs, `model_formats.check_fbx_scene` sizes the scene with `fbx_scene.py`
+    (vendored byte for byte from the thumbnail's `format_handlers/fbx_scene.py`, drift-tested in
+    `tests/test_3dbasic_vendored_guards.py`) against `SceneLimit` and `MAX_FBX_NESTING_DEPTH`.
     `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
     environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
     the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.

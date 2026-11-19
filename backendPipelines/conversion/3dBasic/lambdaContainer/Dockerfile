@@ -16,17 +16,19 @@
 FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12@sha256:a53086fc3118c5457097083ba3d1ccf1d8fdfcba9e7a90fbfc5d2b06c625215b AS assimp-builder
 
 # FBX input is read by the Assimp command-line tool. Assimp publishes no prebuilt Linux command-line
-# binary (its linux-x64 release archive holds only the shared library), so the tool is built from the
-# pinned release's source, with only the FBX importer and the glTF exporter, and statically linked to
-# Assimp (the tool also links the assbin and assxml exporters its dump command needs). The archive's SHA-256 is checked before it is unpacked; ASSIMP_URL points the build at a
-# mirror (a build host without GitHub access) and the hash is still checked.
+# binary (its linux-x64 release archive holds only the shared library) and no source archive of its own
+# (GitHub generates the tag archives, so their bytes and hash can change), so the tool is built from a
+# shallow git clone of the release tag, and the build fails unless the clone's commit is the pinned
+# ASSIMP_COMMIT. Only the FBX importer and the glTF exporter are built (the tool also links the assbin
+# and assxml exporters its dump command needs), statically linked to Assimp. ASSIMP_REPO points the
+# build at a mirror (a build host without GitHub access); the commit is still checked.
 ARG ASSIMP_VERSION=6.0.6
-ARG ASSIMP_URL=https://github.com/assimp/assimp/archive/refs/tags/v6.0.6.tar.gz
-ARG ASSIMP_SHA256=5f7ed412b76575621df0525a762b31da5874afff352b3a890c6308db4ac7204c
-RUN dnf install -y gcc-c++ cmake make tar gzip && dnf clean all
-RUN curl -fsSL -o /tmp/assimp.tar.gz "${ASSIMP_URL}" \
-    && echo "${ASSIMP_SHA256}  /tmp/assimp.tar.gz" | sha256sum -c - \
-    && mkdir -p /tmp/assimp && tar -xzf /tmp/assimp.tar.gz -C /tmp/assimp --strip-components=1 \
+ARG ASSIMP_REPO=https://github.com/assimp/assimp.git
+ARG ASSIMP_TAG=v6.0.6
+ARG ASSIMP_COMMIT=a79ff6bbce54d3e01186a918dc6374ed55317426
+RUN dnf install -y gcc-c++ cmake make git && dnf clean all
+RUN git -c advice.detachedHead=false clone --quiet --depth 1 --branch "${ASSIMP_TAG}" "${ASSIMP_REPO}" /tmp/assimp \
+    && test "$(git -C /tmp/assimp rev-parse HEAD)" = "${ASSIMP_COMMIT}" \
     && cmake -S /tmp/assimp -B /tmp/assimp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
        -DASSIMP_BUILD_TESTS=OFF -DASSIMP_BUILD_ASSIMP_TOOLS=ON -DASSIMP_BUILD_SAMPLES=OFF \
        -DASSIMP_INSTALL=OFF -DASSIMP_WARNINGS_AS_ERRORS=OFF -DASSIMP_BUILD_ZLIB=ON \

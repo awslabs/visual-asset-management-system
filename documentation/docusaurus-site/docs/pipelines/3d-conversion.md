@@ -40,7 +40,7 @@ A USD file may name other files: sublayers, references, payloads, and textures. 
 
 ### FBX
 
-An FBX file is read by the Assimp command-line tool, version 6.0.6, which the image builds from Assimp's hash-checked release source with only the FBX importer and the glTF exporter. The tool runs in the isolated worker process, with its memory, file-size, and time limits, and converts the file to GLB, which is then loaded like any GLB: textures the FBX names are read only if they were fetched from the asset. Assimp applies the file's up axis; its unit (`UnitScaleFactor`, centimetres per unit) is read from the file and handled as described in [Units and up axis](#units-and-up-axis).
+An FBX file is read by the Assimp command-line tool, version 6.0.6, which the image builds from a git clone of Assimp's `v6.0.6` release tag, checked against the pinned commit `a79ff6bbce54d3e01186a918dc6374ed55317426`, with only the FBX importer and the glTF exporter. Before the tool reads a file, the pipeline counts from the file how many models the scene places, how many triangles and vertices its instances place, and how deeply its records nest, with the 3D Preview Thumbnail's check: a file that places more than 1,000,000 models, more than 30,000,000 triangles (or 90,000,000 vertices) beyond what it stores once, or nests deeper than 256 levels is refused with a message saying which bound it passed, because Assimp expands every placement before it returns. The tool runs in the isolated worker process, with its memory, file-size, and time limits, and converts the file to GLB, which is then loaded like any GLB: textures the FBX names are read only if they were fetched from the asset. Assimp applies the file's up axis; its unit (`UnitScaleFactor`, centimetres per unit) is read from the file and handled as described in [Units and up axis](#units-and-up-axis).
 
 ### STEP (opt-in)
 
@@ -215,7 +215,7 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 -   **Pillow** -- texture image decoding and encoding for Trimesh
 -   **usd-core** -- OpenUSD, for reading and writing USD, USDA, USDC, and USDZ
 -   **pycollada**, **lxml**, and **networkx** -- the packages Trimesh needs to read and write COLLADA and 3MF
--   **Assimp 6.0.6** command-line tool -- FBX input, built in a separate build stage from the release source, whose SHA-256 is checked (the `ASSIMP_URL` build argument points the build at a mirror for a build host without GitHub access; the hash is still checked)
+-   **Assimp 6.0.6** command-line tool -- FBX input, built in a separate build stage from a shallow git clone of the `v6.0.6` tag; the build fails unless the clone is the pinned commit (`ASSIMP_COMMIT`). The `ASSIMP_REPO` build argument points the build at a mirror for a build host without GitHub access, and the commit is still checked
 -   **cascadio 0.1.1** -- STEP input, only in the image built with `enableStepInput`
 -   **boto3** -- AWS SDK for Amazon S3 operations, from the base image
 
