@@ -28,6 +28,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
+
 pytest.importorskip("aws_lambda_powertools")
 
 from botocore.exceptions import ClientError  # noqa: E402
@@ -168,7 +171,7 @@ def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL, asset_f
     # or s3.meta.client depending on the line, so both point at the same in-memory storage.
     with patch.object(mod, "logger", logger), patch.object(mod, "s3_client", storage), \
             patch.object(mod, "s3", SimpleNamespace(meta=SimpleNamespace(client=storage))), \
-            patch.object(mod, "trimesh", _TRIMESH):
+            patch.object(mod, "run_worker", in_process_worker(_TRIMESH)):
         response = mod.lambda_handler({"body": json.dumps(_body(execution_id))}, MagicMock())
     assert storage.uploaded == ["runs/r1/files/box.glb"]
     raw_lines = buffer.getvalue()[start:].splitlines()

@@ -14,6 +14,9 @@ import sys
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from inprocess_worker import in_process_worker  # noqa: E402
 from botocore.exceptions import ClientError
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -68,13 +71,13 @@ class TestTheHandlerConvertsTheVersion:
         calls = []
 
         def _download(bucket, key, path, **kwargs):
-            calls.append((key, kwargs))
+            calls.append((key, {k: v for k, v in kwargs.items() if k != "expected_size"}))
             open(path, "wb").close()
             return path
 
         with patch.object(mod, "download", MagicMock(side_effect=_download)), \
                 patch.object(mod, "uploadV2", MagicMock(side_effect=lambda bucket, key, path: key)), \
-                patch.object(mod, "trimesh", _exporting_trimesh()):
+                patch.object(mod, "run_worker", in_process_worker(_exporting_trimesh())):
             mod.convert_input_output("s3://abkt/xid/model.stl", OUTPUT, ".glb", "", version)
         return calls
 

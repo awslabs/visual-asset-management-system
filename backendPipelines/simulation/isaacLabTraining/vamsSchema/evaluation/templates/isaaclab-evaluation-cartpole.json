@@ -5,7 +5,7 @@
     "configFormat": "json",
     "configBody": "{\"trainingConfig\":{\"mode\":\"evaluate\",\"task\":\"{{TASK}}\",\"numEnvs\":{{NUM_ENVS}},\"numEpisodes\":{{NUM_EPISODES}},\"stepsPerEpisode\":{{STEPS_PER_EPISODE}},\"recordVideo\":{{RECORD_VIDEO}},\"rlLibrary\":\"{{RL_LIBRARY}}\",\"checkpointPath\":\"{{CHECKPOINT_PATH}}\"}}",
     "allowCustomEdit": true,
-    "inputInstructions": "Run this against an asset holding a trained policy (.pt). The \"Isaac Lab task\" field must match the task the policy was trained on, and \"RL library\" must match the library that trained it. \"Parallel environments\", \"Episodes\" and \"Steps per episode\" size the rollout. Set \"Record rollout video\" to write a video of the rollout to the asset. Leave \"Checkpoint path\" blank to use the .pt file found on the asset, or set it to a path within the asset to select one.",
+    "inputInstructions": "Run this against an asset holding a trained policy (.pt or .pth). The \"Isaac Lab task\" field must match the task the policy was trained on, and \"RL library\" must match the library that trained it. \"Parallel environments\", \"Episodes\" and \"Steps per episode\" size the rollout. Set \"Record rollout video\" to write a video of the rollout to the asset. Leave \"Checkpoint path\" blank to use the checkpoint of the chosen library found on the asset, or set it to a path within the asset to select one.",
     "tagSchema": [
         {
             "tagKey": "TASK",
