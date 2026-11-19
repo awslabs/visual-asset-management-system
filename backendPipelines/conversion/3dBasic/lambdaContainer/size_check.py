@@ -52,6 +52,12 @@ MEMORY_EXPANSION_FACTORS = {
     # A 3MF is a zip of XML, so its bytes on disk are a fraction of what is parsed.
     '.3mf': 106,
     '.off': 20,
+    # An FBX is converted to GLB by Assimp first and the GLB loaded; Assimp's own peak is in its
+    # process, under the same address-space limit.
+    '.fbx': 27,
+    # A STEP file is text describing exact geometry; its tessellation is far larger than the text.
+    '.step': 40,
+    '.stp': 40,
 }
 # The COLLADA exporter holds the whole model as Python objects as well, so a conversion to `.dae`
 # needs more per input byte than to any other format. Used in place of the factor above when the
@@ -70,6 +76,9 @@ DAE_OUTPUT_EXPANSION_FACTORS = {
     '.dae': 18,
     '.3mf': 114,
     '.off': 27,
+    '.fbx': 50,
+    '.step': 60,
+    '.stp': 60,
 }
 # Each factor is the largest peak resident memory above the interpreter and trimesh baseline, per byte
 # of input, over the output formats this pipeline writes (the COLLADA output separately), measured on

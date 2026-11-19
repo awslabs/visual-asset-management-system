@@ -16,6 +16,8 @@ does not declare); ``export_model`` applies a ``units_axes.Plan`` and writes the
 
 import os
 import re
+import struct
+import subprocess
 import tempfile
 import zipfile
 
@@ -27,6 +29,19 @@ import usd_io
 import xml_guard
 
 USD_EXTENSIONS = ('.usd', '.usda', '.usdc', '.usdz')
+STEP_EXTENSIONS = ('.step', '.stp')
+
+# The Assimp command-line tool the image builds (Dockerfile, assimp-builder stage) with the FBX importer
+# and the glTF exporter only.
+ASSIMP_BIN = "/opt/assimp/bin/assimp"
+# Seconds kept from the worker's own time limit for loading and writing after Assimp.
+ASSIMP_TIME_RESERVE_SECONDS = 30
+# The most of Assimp's output kept for an error message.
+ASSIMP_OUTPUT_CHARS = 2000
+# An FBX file's own unit is the centimetre; ``UnitScaleFactor`` is centimetres per unit.
+FBX_METERS_PER_SCALE_UNIT = 0.01
+_FBX_ASCII_UNIT = re.compile(
+    rb'"UnitScaleFactor"\s*,\s*"double"\s*,\s*"Number"\s*,\s*"[^"]*"\s*,\s*([-+0-9.eE]+)')
 # The part of a COLLADA file that declares its unit and up axis is its <asset> element, at the top.
 _DAE_HEAD_BYTES = 256 * 1024
 _UNIT_PATTERN = re.compile(rb"<unit\b[^>]*\bmeter\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
@@ -108,6 +123,114 @@ def _check_3mf(path, work_dir):
                     raise ValueError(f"{name} is not a 3MF package this pipeline reads: {member}: {e}")
 
 
+def fbx_meters_per_unit(path, scan_bytes=64 * 1024 ** 2):
+    """Metres per unit an FBX file declares (``GlobalSettings`` ``UnitScaleFactor``, in centimetres),
+    read from its ASCII or binary property record; the FBX default of one centimetre when it names
+    none or a value that is not a positive number."""
+    with open(path, "rb") as handle:
+        data = handle.read(scan_bytes)
+    factor = None
+    match = _FBX_ASCII_UNIT.search(data)
+    if match:
+        try:
+            factor = float(match.group(1))
+        except ValueError:
+            factor = None
+    else:
+        at = data.find(b"UnitScaleFactor")
+        number = data.find(b"Number", at) if at >= 0 else -1
+        position = number + len(b"Number") if number >= 0 and number - at < 64 else -1
+        # Binary properties: string fields are b'S' + uint32 length + bytes, a double is b'D' + 8 bytes.
+        for _ in range(4):
+            if position < 0 or position >= len(data):
+                break
+            code = data[position:position + 1]
+            if code == b"S" and position + 5 <= len(data):
+                (length,) = struct.unpack("<I", data[position + 1:position + 5])
+                position += 5 + length
+            elif code == b"D" and position + 9 <= len(data):
+                (factor,) = struct.unpack("<d", data[position + 1:position + 9])
+                break
+            else:
+                break
+    if factor is None or not (0 < factor < 1e9):
+        factor = 1.0
+    return factor * FBX_METERS_PER_SCALE_UNIT
+
+
+def _load_fbx(job, trimesh, resolver):
+    """Convert the FBX to GLB with the Assimp tool, in the input's directory, then load the GLB as the
+    staged model. Assimp runs in this worker's process group, under its address-space and file-size
+    limits and with its scrubbed environment; it applies the file's up axis (the GLB is Y up) and not
+    its unit, which is read from the file here. Texture images the GLB names are read through
+    ``resolver``, so only the files fetched with the input can reach the model."""
+    path = job["input_file"]
+    name = os.path.basename(path)
+    if not os.path.isfile(ASSIMP_BIN):
+        raise RuntimeError("The Assimp tool is not in this image, so FBX cannot be read.")
+    intermediate = os.path.join(tempfile.mkdtemp(prefix="fbx_", dir=os.path.dirname(job["input_dir"].rstrip("/"))),
+                                os.path.splitext(name)[0] + ".glb")
+    timeout = max(int(job.get("tool_timeout_seconds") or 600) - ASSIMP_TIME_RESERVE_SECONDS, 10)
+    try:
+        completed = subprocess.run(  # nosec B603 - fixed binary, no shell, paths from the job
+            [ASSIMP_BIN, "export", path, intermediate, "-fglb2"], cwd=os.path.dirname(path),
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"})
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"{name} could not be read as FBX within {timeout} seconds.")
+    if completed.returncode != 0 or not os.path.isfile(intermediate):
+        detail = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")[-ASSIMP_OUTPUT_CHARS:]
+        lines = [line for line in detail.splitlines() if "rror" in line or "fail" in line.lower()]
+        raise ValueError(f"{name} could not be read as FBX: " + ("; ".join(lines[-3:]) or "the importer failed")[:500])
+    loaded = trimesh.load(intermediate, file_type="glb", resolver=resolver)
+    os.remove(intermediate)
+    return loaded, fbx_meters_per_unit(path), 'y'
+
+
+# STEP tessellation: the linear deflection relative to each edge's length and the angular deflection
+# in radians, passed to cascadio (Open CASCADE). cascadio writes metres and keeps the file's Z up.
+STEP_LINEAR_DEFLECTION = 0.01
+STEP_ANGULAR_DEFLECTION = 0.5
+
+
+def step_input_enabled(environ=None):
+    """Whether this image was built with STEP input (app.pipelines.useConversion3dBasic.enableStepInput,
+    passed by CDK as the ENABLE_STEP_INPUT build argument and environment variable)."""
+    environ = os.environ if environ is None else environ
+    return str(environ.get("ENABLE_STEP_INPUT", "")).strip().lower() == "true"
+
+
+def _load_step(job, trimesh):
+    """Tessellate a STEP file with cascadio to a GLB and load it: ``(model, 1.0, 'z')``. The assembly's
+    placements are counted from the text first and a file past the scene bound is refused."""
+    import scene_limits
+    import step_limits
+    path = job["input_file"]
+    name = os.path.basename(path)
+    try:
+        import cascadio
+    except ImportError:
+        raise ValueError(f"{name} is a STEP file, and this deployment does not read STEP: set "
+                         f"app.pipelines.useConversion3dBasic.enableStepInput to true and deploy again.")
+    limit = scene_limits.SceneLimit("STEP assembly")
+    if not limit.expect(step_limits.assembly_occurrences(path, limit.max_nodes)):
+        raise ValueError(f"{name}: the STEP assembly places more than {limit.max_nodes:,} components, more "
+                         f"than this function converts.")
+    intermediate = os.path.join(tempfile.mkdtemp(prefix="step_", dir=os.path.dirname(job["input_dir"].rstrip("/"))),
+                                os.path.splitext(name)[0] + ".glb")
+    try:
+        status = cascadio.step_to_glb(path, intermediate, tol_linear=STEP_LINEAR_DEFLECTION,
+                                      tol_angular=STEP_ANGULAR_DEFLECTION, tol_relative=True,
+                                      use_parallel=False)
+    except Exception as e:  # noqa: BLE001 - an unreadable STEP is the author's to fix
+        raise ValueError(f"{name} could not be read as STEP: {str(e)[:300]}")
+    if status != 0 or not os.path.isfile(intermediate) or os.path.getsize(intermediate) == 0:
+        raise ValueError(f"{name} could not be read as STEP: Open CASCADE wrote no model.")
+    loaded = trimesh.load(intermediate, file_type="glb")
+    os.remove(intermediate)
+    return loaded, 1.0, 'z'
+
+
 def load_model(job, trimesh):
     """``(loaded, declared_meters_per_unit, declared_up_axis)`` for the staged input."""
     import referenced_files
@@ -123,6 +246,12 @@ def load_model(job, trimesh):
         _check_3mf(path, os.path.dirname(path))
     resolver = referenced_files.ConfinedResolver(
         job["input_dir"], job["input_relative_path"], job["by_reference"])
+    if extension in STEP_EXTENSIONS:
+        loaded, meters, up = _load_step(job, trimesh)
+        return _faceless_mesh_as_points(loaded, trimesh), meters, up
+    if extension == '.fbx':
+        loaded, meters, up = _load_fbx(job, trimesh, resolver)
+        return _faceless_mesh_as_points(loaded, trimesh), meters, up
     loaded = trimesh.load(path, resolver=resolver)
     if extension == '.3mf':
         declared_meters = units_axes.meters_per_unit_from_name(

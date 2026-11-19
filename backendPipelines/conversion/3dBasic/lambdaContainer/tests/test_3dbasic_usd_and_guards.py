@@ -467,3 +467,39 @@ class TestReferenceHandling:
         assert any(n.endswith("red.png") for n in names)
         source = _validator_names(str(directory / "root.usda"))
         assert _validator_names(str(out / "root.usdz")) <= source | {"PackageEncapsulationValidator"}
+
+
+@pytest.mark.unit
+class TestFbxUnit:
+    def test_the_ascii_unit_scale_factor_is_centimetres_per_unit(self, tmp_path):
+        import fbx_fixture
+        path = tmp_path / "a.fbx"
+        path.write_bytes(fbx_fixture.box_fbx(unit_scale_cm=100.0))
+        assert model_formats.fbx_meters_per_unit(str(path)) == pytest.approx(1.0)
+
+    def test_a_binary_property_record_is_read(self, tmp_path):
+        import struct
+
+        def field(text):
+            return b"S" + struct.pack("<I", len(text)) + text
+        record = field(b"UnitScaleFactor") + field(b"double") + field(b"Number") + field(b"") + b"D" + struct.pack("<d", 2.54)
+        path = tmp_path / "b.fbx"
+        path.write_bytes(b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00" * 20 + record)
+        assert model_formats.fbx_meters_per_unit(str(path)) == pytest.approx(0.0254)
+
+    def test_no_or_a_bad_unit_is_the_fbx_default_centimetre(self, tmp_path):
+        path = tmp_path / "c.fbx"
+        path.write_bytes(b"; FBX 7.4.0 project file\n")
+        assert model_formats.fbx_meters_per_unit(str(path)) == pytest.approx(0.01)
+        path.write_bytes(b'P: "UnitScaleFactor", "double", "Number", "",-5\n')
+        assert model_formats.fbx_meters_per_unit(str(path)) == pytest.approx(0.01)
+
+    def test_without_the_assimp_tool_an_fbx_fails_saying_so(self, tmp_path, monkeypatch):
+        import fbx_fixture
+        monkeypatch.setattr(model_formats, "ASSIMP_BIN", str(tmp_path / "missing"))
+        (tmp_path / "input").mkdir()
+        (tmp_path / "input" / "a.fbx").write_bytes(fbx_fixture.box_fbx())
+        job = {"input_file": str(tmp_path / "input" / "a.fbx"), "input_dir": str(tmp_path / "input"),
+               "input_relative_path": "a.fbx", "by_reference": {}, "input_name": "a.fbx"}
+        with pytest.raises(RuntimeError, match="Assimp tool is not in this image"):
+            model_formats.load_model(job, trimesh)

@@ -282,8 +282,9 @@ class TestFormatsWithoutALoaderAreRejected:
         # A positive control for the rejections above: the narrowed sets have not closed the pipeline
         # to the formats it can actually convert.
         mod = _load()
-        assert len(mod.SUPPORTED_INPUT_FORMATS) == 13, mod.SUPPORTED_INPUT_FORMATS
-        for extension in sorted(mod.SUPPORTED_INPUT_FORMATS):
+        assert len(mod.SUPPORTED_INPUT_FORMATS) == 16, mod.SUPPORTED_INPUT_FORMATS
+        # STEP is refused unless the image was built with it (test_3dbasic_step_input.py).
+        for extension in sorted(mod.SUPPORTED_INPUT_FORMATS - mod.STEP_INPUT_FORMATS):
             conversion = _Conversion()
             _run_conversion(mod, conversion, input_key=f"xid/model{extension}",
                             output_filetype=".glb", relative_subdir="")
@@ -300,7 +301,7 @@ class TestAFormatItLoadsButCannotWriteIsInputOnly:
         mod = _load()
         assert len(mod.SUPPORTED_OUTPUT_FORMATS) == 11, mod.SUPPORTED_OUTPUT_FORMATS
         # `.usd` is an input only: the USD outputs name their encoding (.usdc, .usda, .usdz).
-        assert mod.SUPPORTED_INPUT_FORMATS - mod.SUPPORTED_OUTPUT_FORMATS == {".xyz", ".usd"}
+        assert mod.SUPPORTED_INPUT_FORMATS - mod.SUPPORTED_OUTPUT_FORMATS == {".xyz", ".usd", ".fbx", ".step", ".stp"}
 
     def test_xyz_is_rejected_as_an_output_before_anything_is_downloaded(self):
         mod = _load()

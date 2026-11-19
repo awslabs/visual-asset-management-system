@@ -280,7 +280,12 @@ def relative_subdir_from_manifest_path(relative_path):
 # registers an exception wrapper in place of each loader. The registered inputFileFilters in
 # vamsSchema/pipeline.json declare this same set to VAMS.
 SUPPORTED_INPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz', '.usd', '.usda', '.usdc', '.usdz',
-                           '.dae', '.3mf', '.off'}
+                           '.dae', '.3mf', '.off', '.fbx', '.step', '.stp'}
+
+# STEP input is opt-in (app.pipelines.useConversion3dBasic.enableStepInput): the image built without it
+# holds no Open CASCADE code, and a STEP run is refused before anything is downloaded.
+STEP_INPUT_FORMATS = {'.step', '.stp'}
+STEP_CONFIG_KEY = "app.pipelines.useConversion3dBasic.enableStepInput"
 
 # The formats it can produce as output. Loading a format is not the same as writing it: `.xyz` is a
 # point-cloud text format trimesh reads into a PointCloud, and its xyz exporter accepts a PointCloud
@@ -790,6 +795,12 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         raise ValueError(f"Input format {input_s3_asset_extension} not supported by Trimesh pipeline")
     if output_filetype not in SUPPORTED_OUTPUT_FORMATS:
         raise ValueError(f"Output format {output_filetype} not supported by Trimesh pipeline")
+    if input_s3_asset_extension in STEP_INPUT_FORMATS and \
+            os.environ.get("ENABLE_STEP_INPUT", "").strip().lower() != "true":
+        raise ValueError(
+            f"STEP input is not enabled in this deployment, so {os.path.basename(input_key)} was not converted. "
+            f"An administrator can set {STEP_CONFIG_KEY} to true in the deployment configuration and deploy "
+            f"again; STEP is read with Open CASCADE, which the default image does not include.")
     # The unit and up-axis options are checked here, before anything is downloaded, so an illegal
     # combination (a target glTF cannot have, a target with no known source) fails naming the option.
     options = options if isinstance(options, units_axes.Options) else units_axes.Options.from_config(options)
@@ -886,6 +897,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "options": {key: getattr(options, field) for key, (field, _) in units_axes.OPTION_KEYS.items()},
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
+            "tool_timeout_seconds": int(worker_timeout_seconds()),
             "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
         }, work_dir) or {}
         removed = ((worker_result.get("report") or {}).get("removed")) or []

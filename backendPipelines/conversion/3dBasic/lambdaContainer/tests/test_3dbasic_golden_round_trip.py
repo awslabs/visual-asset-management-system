@@ -45,7 +45,16 @@ OUTPUT_BUCKET = "golden-outputs"
 FILES_PREFIX = "pipelines/golden/JOB/output/E1/files/"
 
 # The formats this container accepts, and the ones it writes (its SUPPORTED_*_FORMATS).
-INPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb", ".xyz", ".usd", ".usda", ".usdc", ".usdz", ".dae", ".3mf", ".off"]
+INPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb", ".xyz", ".usd", ".usda", ".usdc", ".usdz", ".dae", ".3mf", ".off",
+          ".fbx", ".step", ".stp"]
+# GOLDEN_STEP=1 when the image under test was built with ENABLE_STEP_INPUT=true; without it every STEP
+# cell must be refused before the download, naming the configuration key.
+STEP_IMAGE = os.environ.get("GOLDEN_STEP") == "1"
+STEP_FORMATS = {".step", ".stp"}
+# The committed 40 x 40 x 10 mm Open CASCADE plate of the CAD STEP agent's evaluation fixtures.
+_STEP_PLATE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "genAi", "cadStepAgent", "evaluation",
+    "fixtures", "plate-40x40x10.step"))
 OUTPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb", ".usda", ".usdc", ".usdz", ".off", ".dae", ".3mf"]
 # Formats that can carry a texture image in this pipeline's output.
 TEXTURED_OUTPUTS = {".obj", ".gltf", ".glb", ".usda", ".usdc", ".usdz"}
@@ -89,6 +98,21 @@ def _usd_bytes(geometry, extension):
     return files
 
 
+def _fbx_box():
+    import sys
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    import fbx_fixture
+    return fbx_fixture.box_fbx(texture="tex/wood.png")
+
+
+def _png_bytes():
+    buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (30, 120, 200)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _fixture_files():
     """``{input extension: ({name: bytes}, source geometry)}``; the first name is the input file."""
     cube, sphere = _textured_cube(), _sphere()
@@ -113,6 +137,12 @@ def _fixture_files():
         ".dae": ({"part.dae": sphere.export(file_type="dae")}, sphere, False),
         ".3mf": ({"part.3mf": sphere.export(file_type="3mf")}, sphere, False),
         ".off": ({"part.off": sphere.export(file_type="off").encode("utf-8")}, sphere, False),
+        # A 2 x 3 x 4 box in ASCII FBX with a texture beside it; FBX's unit is the centimetre, so a glTF
+        # output (metres) is 0.02 x 0.03 x 0.04.
+        ".fbx": ({"part.fbx": _fbx_box(), "tex/wood.png": _png_bytes()},
+                 trimesh.creation.box(extents=(2.0, 3.0, 4.0)), True),
+        ".step": ({"part.step": open(_STEP_PLATE, "rb").read()}, trimesh.creation.box(extents=(0.04, 0.04, 0.01)), False),
+        ".stp": ({"part.stp": open(_STEP_PLATE, "rb").read()}, trimesh.creation.box(extents=(0.04, 0.04, 0.01)), False),
     }
 
 
@@ -178,6 +208,15 @@ def _expected_extents(input_extension, output_extension, extents):
     source converted to glTF is millimetres to metres and Z up to Y up, a Y-up source written as 3MF
     is rotated to Z up (3MF is always Z up)."""
     extents = np.array(extents, dtype=float)
+    if input_extension in STEP_FORMATS:
+        # metres, Z up: glTF is rotated to Y up; 3MF keeps Z up and declares metres.
+        if output_extension in (".glb", ".gltf"):
+            return np.array([extents[0], extents[2], extents[1]])
+        return extents
+    if input_extension == ".fbx" and output_extension in (".glb", ".gltf"):
+        return extents * 0.01
+    if input_extension == ".fbx" and output_extension == ".3mf":
+        return np.array([extents[0], extents[2], extents[1]])
     if input_extension == ".3mf" and output_extension in (".glb", ".gltf"):
         return np.array([extents[0], extents[2], extents[1]]) * 0.001
     if output_extension == ".3mf" and input_extension in _Y_UP_DECLARED:
@@ -239,6 +278,11 @@ def test_every_input_converts_to_every_output(s3, input_extension, output_extens
     cell = f"{input_extension.lstrip('.')}_{output_extension.lstrip('.')}"
     response, written = _convert(s3, cell, input_extension, output_extension)
 
+    if input_extension in STEP_FORMATS and not STEP_IMAGE:
+        assert isinstance(response, dict) and "enableStepInput" in response.get("errorMessage", ""), response
+        assert not written
+        return
+
     if input_extension == ".xyz" and output_extension in TRIANGLE_ONLY_OUTPUTS:
         assert isinstance(response, dict) and "contains no triangles" in response.get("errorMessage", ""), response
         assert not written
@@ -252,6 +296,9 @@ def test_every_input_converts_to_every_output(s3, input_extension, output_extens
     if input_extension == ".xyz":
         # A point cloud keeps its points.
         assert got["vertices"] == expected["vertices"]
+    elif input_extension in STEP_FORMATS:
+        # Tessellated: a plate with rounded nothing still has at least the box's 12 triangles.
+        assert got["triangles"] >= 12
     else:
         assert got["triangles"] == expected["triangles"]
     # STL stores 32-bit floats and glTF accessors are 32-bit too.

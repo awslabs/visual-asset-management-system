@@ -156,9 +156,9 @@ def _pipeline_allow():
         return json.load(handle)["systemConfig"]["inputFileFilters"]["allow"]
 
 
-# Formats this container reads and writes with its own code (usd_io.py, on usd-core) rather than
-# through a trimesh loader or exporter.
-_HANDLED_WITHOUT_TRIMESH = ("usd", "usda", "usdc", "usdz")
+# Formats this container reads and writes with its own code rather than through a trimesh loader or
+# exporter: USD (usd_io.py, on usd-core), FBX (the Assimp tool) and STEP (cascadio, opt-in).
+_HANDLED_WITHOUT_TRIMESH = ("usd", "usda", "usdc", "usdz", "fbx", "step", "stp")
 
 
 def _format_key(pattern):

@@ -26,8 +26,9 @@ _FORMATS_WITHOUT_A_LOADER = (".xaml", ".3dxml")
 
 # `.xyz` loads as a PointCloud but cannot be written: trimesh's xyz exporter takes a PointCloud only
 # and raises even for one. `.usd` is the generic USD extension: the outputs name their encoding
-# (.usdc, .usda, .usdz), so it is read but never written.
-_LOADS_BUT_DOES_NOT_EXPORT = (".xyz", ".usd")
+# (.usdc, .usda, .usdz), so it is read but never written. FBX is read through Assimp and STEP through
+# cascadio (opt-in); neither is written.
+_LOADS_BUT_DOES_NOT_EXPORT = (".xyz", ".usd", ".fbx", ".step", ".stp")
 
 # The seven templates the bundle ships: the five original ids (extended in place) and two grouped ones.
 _TEMPLATE_IDS = {"convert-to-glb", "convert-to-gltf", "convert-to-obj", "convert-to-ply", "convert-to-stl",
@@ -105,7 +106,7 @@ class Test3dBasicBundle:
         # the one format the two sets differ by and it stays selectable in the execute form.
         pipeline_allow = _load("pipeline.json")["systemConfig"]["inputFileFilters"]["allow"]
         inputs, outputs = _input_formats(), _output_formats()
-        assert len(_LOADS_BUT_DOES_NOT_EXPORT) == 2, _LOADS_BUT_DOES_NOT_EXPORT
+        assert len(_LOADS_BUT_DOES_NOT_EXPORT) == 5, _LOADS_BUT_DOES_NOT_EXPORT
         assert outputs < inputs, (sorted(outputs), sorted(inputs))
         assert inputs - outputs == set(_LOADS_BUT_DOES_NOT_EXPORT), sorted(inputs - outputs)
         for extension in _LOADS_BUT_DOES_NOT_EXPORT:
