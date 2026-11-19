@@ -244,7 +244,19 @@ set to true in the deployment configuration.
 Please contact your administrator to enable CAD format support for this viewer.
 ```
 
-`loadFile()` shows this message when the OCCT loader fails with an `EvalError` or with the browser's Content Security Policy violation text, in place of that text; every other OCCT failure is reported as `Failed to load CAD file: <message>`.
+`loadFile()` shows this message when the OCCT loader fails with an `EvalError` or with the browser's Content Security Policy violation text, in place of that text; every other OCCT failure is reported as `Failed to load CAD file: <message>`, except the no-geometry message below.
+
+**User-Facing Error (when the file opens but has no drawable geometry):**
+
+```
+The viewer could not build any geometry from this [FORMAT] file. Convert it to a format
+such as GLB, for example with the 3D Basic Conversion pipeline, to view it.
+```
+
+For IGES and BREP files the second sentence reads `Convert it to a format such as GLB with a CAD application to view it.`, because the 3D Basic Conversion pipeline reads STEP (when `enableStepInput` is on) but not IGES or BREP.
+
+`loadFile()` passes this message through without the `Failed to load CAD file:` prefix, and the viewer shows it without the "supported 3D format" hint.
+`occtLoader.ts` leaves out each mesh that occt-import-js returns without triangles and draws the rest. When no mesh is left, it shows this message instead of a blank canvas (#1734). A file OCCT cannot read at all still reports `The [FORMAT] file could not be read. It may be damaged, incomplete or not a valid [FORMAT] file.`
 
 **Console Logs:**
 

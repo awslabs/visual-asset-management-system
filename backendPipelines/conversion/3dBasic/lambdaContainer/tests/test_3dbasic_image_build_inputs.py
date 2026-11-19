@@ -25,7 +25,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The modules lambda.py imports from the build context. A runtime module the ignore file excluded would
 # fail at container RUNTIME, not at the image build.
-_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "common/logger.py", "requirements.txt")
+_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "fbx_scene.py", "vertex_normals.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
 
 
 def _read(name):
@@ -98,7 +98,7 @@ class TestRequirementsAreTheLockExport:
         for entry in entries:
             assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), entry.splitlines()[0]
         install = [line for line in _read("Dockerfile").splitlines()
-                   if line.startswith("RUN pip install")]
+                   if line.startswith("RUN pip install") and "requirements.txt" in line]
         assert len(install) == 1 and all(flag in install[0] for flag in ("--require-hashes", "--no-deps", "--only-binary=:all:")), install
 
     def test_the_pyproject_floor_matches_the_lock(self):
@@ -113,11 +113,42 @@ class TestRequirementsAreTheLockExport:
 @pytest.mark.unit
 class TestBaseImage:
     def test_the_base_image_is_pinned_by_digest_for_amd64(self):
+        # Two stages: the Assimp builder and the function image, both from the same pinned digest, so
+        # the binary the builder compiles links against the libraries the function runs with.
         froms = [line for line in _read("Dockerfile").splitlines() if line.startswith("FROM")]
-        assert len(froms) == 1, froms
+        assert len(froms) == 2, froms
+        assert re.match(
+            r"^FROM --platform=linux/amd64 public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64} AS assimp-builder$",
+            froms[0]), froms[0]
         assert re.match(
             r"^FROM --platform=linux/amd64 public\.ecr\.aws/lambda/python:3\.12@sha256:[0-9a-f]{64}$",
-            froms[0]), froms[0]
+            froms[1]), froms[1]
+        assert froms[0].split()[2] == froms[1].split()[2]
+
+    def test_the_assimp_source_is_a_tag_clone_checked_against_a_pinned_commit(self):
+        # GitHub generates a tag's source archive, so its bytes can change; the commit cannot. The
+        # build clones the tag (from ASSIMP_REPO, which a mirror can override) and fails unless the
+        # clone is the pinned commit, before anything is configured or compiled.
+        dockerfile = _read("Dockerfile")
+        assert re.search(r"(?m)^ARG ASSIMP_VERSION=6\.0\.6$", dockerfile)
+        assert re.search(r"(?m)^ARG ASSIMP_TAG=v6\.0\.6$", dockerfile)
+        assert re.search(r"(?m)^ARG ASSIMP_COMMIT=[0-9a-f]{40}$", dockerfile)
+        assert re.search(r"(?m)^ARG ASSIMP_REPO=https://github\.com/assimp/assimp\.git$", dockerfile)
+        assert "tar.gz" not in dockerfile and "ASSIMP_SHA256" not in dockerfile
+        build = dockerfile[dockerfile.index('git -c advice.detachedHead=false clone'):]
+        check = 'test "$(git -C /tmp/assimp rev-parse HEAD)" = "${ASSIMP_COMMIT}"'
+        assert check in build
+        assert build.index(check) < build.index("cmake -S")
+        assert '--depth 1 --branch "${ASSIMP_TAG}" "${ASSIMP_REPO}"' in build
+
+    def test_the_step_packages_install_only_when_the_build_argument_is_true(self):
+        dockerfile = _read("Dockerfile")
+        assert re.search(r"(?m)^ARG ENABLE_STEP_INPUT=false$", dockerfile)
+        step = [line for line in dockerfile.splitlines() if "requirements-step.txt" in line and "pip install" in line]
+        assert len(step) == 1 and "--require-hashes" in step[0] and "--only-binary=:all:" in step[0], step
+        assert 'if [ "${ENABLE_STEP_INPUT}" = "true" ]' in dockerfile
+        assert "cascadio" not in _read("requirements.txt")
+        assert "cascadio==" in _read("requirements-step.txt")
 
 
 @pytest.mark.unit

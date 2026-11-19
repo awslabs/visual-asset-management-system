@@ -299,6 +299,25 @@ describe("ThreeJSViewerComponent cleanup", () => {
         view.unmount();
     });
 
+    it("explains a CAD file with no drawable geometry and releases the renderer (#1734)", async () => {
+        mockedLoadFile.mockRejectedValue(
+            new Error(
+                "The viewer could not build any geometry from this STEP file. Convert it to a " +
+                    "format such as GLB, for example with the 3D Basic Conversion pipeline, to view it."
+            )
+        );
+
+        const view = renderViewer("models/rgbmatrix.step");
+
+        expect(
+            await screen.findByText(/could not build any geometry from this STEP file/)
+        ).toBeTruthy();
+        expect(screen.queryByText(/Please ensure the file is a supported 3D format/)).toBeNull();
+
+        view.unmount();
+        expectReleased(renderers[0], environments[0]);
+    });
+
     it("explains a USD scene with nothing to draw instead of showing a blank canvas", async () => {
         mockedLoadFile.mockResolvedValue({ object: new FakeObject3D() });
 
