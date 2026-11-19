@@ -17,6 +17,7 @@ from vams_mcp import server
 from vams_mcp.addon_tools import edh
 from vams_mcp.client import VamsClient
 from vams_mcp.config import Config
+from vamscli.utils.addon import edh_exceptions
 
 README_TEXT = (Path(server.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
 
@@ -187,6 +188,16 @@ def test_the_workstation_reads_pass_a_stalled_launch_through(client, tools, tool
     body = {"Items": [LAUNCH_STALLED]} if tool.startswith("list") else dict(LAUNCH_STALLED)
     getattr(client.api, method).return_value = body
     assert tools[tool](*args) == body
+
+
+def test_a_confirmed_stop_of_a_stalled_launch_returns_the_refusal_that_names_delete(client, tools):
+    """The API refuses the stop (409); the agent gets the CLI client's error with the service's text."""
+    message = ("Workstation stop refused (409): EDH has not placed this new workstation, so it cannot be "
+               "stopped; delete it instead")
+    client.api.stop_edh_workstation.side_effect = edh_exceptions.EdhOperationError(message)
+    assert tools["stop_edh_workstation"]("s-1", confirm=True) == {
+        "error": message, "error_type": "EdhOperationError"}
+    client.api.stop_edh_workstation.assert_called_once_with("s-1")
 
 
 def test_the_readme_names_the_stalled_launch():

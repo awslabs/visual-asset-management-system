@@ -10063,7 +10063,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id."
+                    description: "The launch has not received a session id (`Workstation has no EDH session`), or it is a new launch recorded `LAUNCH_STALLED` that EDH, read before the stop, still has not placed (`EDH has not placed this new workstation, so it cannot be stopped; delete it instead`); nothing reaches EDH's stop and the record is unchanged."
                     content:
                         application/json:
                             schema:

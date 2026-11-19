@@ -442,7 +442,8 @@ def register(
             """Stop one of the authenticated user's ACTIVE EDH workstations, or a CREATING one whose
             `lastError` is START_STALLED (a start EDH accepted and has not finished after 30 minutes;
             start it again once it reads STOPPED). LAUNCH_STALLED (a new launch EDH has not placed after
-            3 hours) never ran: delete it with delete_edh_workstation, or wait. Stopping closes the
+            3 hours) never ran, so its stop is refused (`EdhOperationError`, HTTP 409, naming Delete):
+            delete it with delete_edh_workstation, or wait. Stopping closes the
             desktop's open applications and interrupts its compute; the disk is kept, and
             start_edh_workstation starts it again.
             Confirm with the user first, then call with `confirm=True`: without it the tool returns

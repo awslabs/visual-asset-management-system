@@ -1034,7 +1034,8 @@ start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
 when read) but no `errorCode`.
 A CREATING row with a `sessionId`, `activity` null and `lastError`
 `LAUNCH_STALLED` is a new launch EDH has not placed 3 hours after it was
-accepted. It never ran, so it is not a start to stop: delete it with
+accepted. It never ran, so it is not a start to stop: `stop_edh_workstation`
+returns an `EdhOperationError` (HTTP 409) that says to delete it. Delete it with
 `delete_edh_workstation`, or wait, since EDH may still place it. Its
 `startFailure` carries `observedAt` only.
 They also name the image the workstation was launched from: `imageName` (the EDH

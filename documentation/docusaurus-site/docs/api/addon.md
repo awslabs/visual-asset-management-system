@@ -279,7 +279,7 @@ Deletes the desktop in EDH (a desktop EDH already removed is tolerated), marks t
 
 ### POST `/addon/edh/workstations/{sessionId}/stop`
 
-Stops the desktop and marks the record `STOPPED`; with session bootstrap enabled, revokes every session key of the desktop and overwrites the secret's value, keeping the secret. A stop EDH does not answer is followed by a read of the desktop's state: a desktop EDH reports `stopping` or `stopped` is recorded as above, and any other outcome answers `502` and leaves the keys in place.
+Stops the desktop and marks the record `STOPPED`; with session bootstrap enabled, revokes every session key of the desktop and overwrites the secret's value, keeping the secret. A new launch recorded `LAUNCH_STALLED` is first checked against EDH's state read: one EDH has placed since is stopped as any other, and one it still has not placed is refused with `409`, since the desktop never ran; delete it instead. A stop EDH does not answer is followed by a read of the desktop's state: a desktop EDH reports `stopping` or `stopped` is recorded as above, and any other outcome answers `502` and leaves the keys in place.
 
 #### Path parameters
 
@@ -295,6 +295,7 @@ Stops the desktop and marks the record `STOPPED`; with session bootstrap enabled
 | `400` | `{ "message": "sessionId is invalid. Must follow the regexp ^[-_a-zA-Z0-9]{3,63}$" }` — the path value is malformed.                                                                                                                                                     |
 | `404` | `{ "message": "Workstation not found" }`                                                                                                                                                                                                                                 |
 | `409` | `{ "message": "Workstation has no EDH session" }` — the launch has not received a session id.                                                                                                                                                                            |
+| `409` | `{ "message": "EDH has not placed this new workstation, so it cannot be stopped; delete it instead" }` — the record is a new launch recorded `LAUNCH_STALLED`, and EDH's state read made before the stop still has not placed it; nothing reaches EDH's stop.            |
 | `502` | `{ "message": "EDH did not confirm the request in time; it may still be in progress. Refresh before trying again.", "outcomeUnknown": true }` — EDH did not answer the stop, and the read after it shows the desktop neither stopping nor stopped, or could not be made. |
 
 #### Authorization

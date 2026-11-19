@@ -932,8 +932,8 @@ def stop(ctx: click.Context, session_id: str, yes: bool, json_output: bool):
     launch that has no EDH session yet is refused (HTTP 409). A start EDH accepted and has not
     finished after 30 minutes (`list` State STALLED, Last Error START_STALLED) is stopped the same
     way; start it again once it reads STOPPED. A new launch EDH has not placed after 3 hours (Last
-    Error LAUNCH_STALLED) never ran, so stopping it is no way out: delete it with `edh workstation
-    delete SESSION_ID --confirm`, or wait.
+    Error LAUNCH_STALLED) never ran, so its stop is refused (HTTP 409): delete it with `edh
+    workstation delete SESSION_ID --confirm`, or wait.
 
     Examples:
         vamscli edh workstation stop SESSION_ID

@@ -676,7 +676,8 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     has not finished after 30 minutes; the list, get, admin-instances, start and stop
     descriptions name the code, and stop's says it accepts that row. A CREATING row with
     `lastError` `LAUNCH_STALLED` is a new launch EDH has not placed after 3 hours; the list, get,
-    stop and delete descriptions name it and its way out, `delete_edh_workstation` (or waiting).
+    stop and delete descriptions name it and its way out, `delete_edh_workstation` (or waiting), and
+    stop's says the API refuses its stop (`EdhOperationError`, 409, naming Delete).
 -   Image name: every workstation record and admin instance item also carries `imageName`,
     `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`
     (`false` only when a newer AVAILABLE build of the recipe exists; each null when not known). The

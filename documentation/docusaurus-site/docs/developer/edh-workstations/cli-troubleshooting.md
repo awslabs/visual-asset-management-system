@@ -239,6 +239,7 @@ EDH accepted the start of the stopped workstation but has not reported the deskt
 **Symptoms:**
 
 -   `edh workstation list` shows `STALLED` in the `State` column and `LAUNCH_STALLED` under `Last Error` for a workstation you launched and never started
+-   `edh workstation stop SESSION_ID --yes` fails with `Workstation stop refused (409): EDH has not placed this new workstation, so it cannot be stopped; delete it instead`
 -   `edh workstation get SESSION_ID` shows `State: STALLED`, `Activity: none`, `EDH State: pending` (or `placing`) and:
 
     ```text
@@ -249,7 +250,7 @@ EDH accepted the start of the stopped workstation but has not reported the deskt
 
 **Cause:**
 
-EDH accepted the launch and assigned it a session, but 3 hours later it still lists the desktop `pending` or `placing`: it has not placed the new desktop on an instance. A first boot can install a GPU driver and take well over an hour, so the bound is 3 hours rather than the 30 minutes of a stalled start. The reconciler's sweep records the stall; it does not stop, delete or orphan the workstation, because EDH may still place it, in which case the workstation moves on by itself and the code is cleared. The desktop never ran, so this is not a start: stopping it and starting it again does not help. EDH reported no AWS error, so there is no `AWS:` line.
+EDH accepted the launch and assigned it a session, but 3 hours later it still lists the desktop `pending` or `placing`: it has not placed the new desktop on an instance. A first boot can install a GPU driver and take well over an hour, so the bound is 3 hours rather than the 30 minutes of a stalled start. The reconciler's sweep records the stall; it does not stop, delete or orphan the workstation, because EDH may still place it, in which case the workstation moves on by itself and the code is cleared. The desktop never ran, so this is not a start: the API refuses its stop, and starting it again is not possible. EDH reported no AWS error, so there is no `AWS:` line.
 
 **Resolution:**
 
