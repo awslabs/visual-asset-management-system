@@ -305,10 +305,12 @@ Permanent deletion is irreversible. The file and all its versions are removed fr
 To permanently delete a file:
 
 1. Select the file in the directory tree.
-2. Select the **Delete** action.
-3. In the confirmation dialog, choose **Permanent Delete**.
-4. Type the confirmation text if prompted.
+2. Select **Delete File** in the **File Operations** menu. The dialog that opens archives the file unless you change it.
+3. Turn on **Permanently delete file instead of archiving**. The option is shown only when your role may permanently delete files.
+4. Type `delete` in the **Confirmation** field and select **Delete**.
 5. The file is permanently removed from the asset.
+
+An archived file offers **Permanently Delete File** instead, which opens the same dialog already set to permanent deletion. It is unavailable, with the reason, when your role may not permanently delete files.
 
 ### File Previews and Preview Management
 

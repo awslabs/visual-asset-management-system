@@ -81,9 +81,9 @@ class TestGeometryCounts:
 
 @pytest.mark.unit
 class TestCheckExportable:
-    def test_the_mesh_only_targets_are_stl(self):
+    def test_the_mesh_only_targets_are_the_formats_that_store_triangles_only(self):
         mod = _load()
-        assert mod.MESH_ONLY_OUTPUT_FORMATS == {".stl"}
+        assert mod.MESH_ONLY_OUTPUT_FORMATS == {".stl", ".dae", ".3mf", ".off"}
         assert mod.MESH_ONLY_OUTPUT_FORMATS <= mod.SUPPORTED_OUTPUT_FORMATS
 
     @pytest.mark.parametrize("loaded", [_points(), _scene(_points())])
@@ -91,7 +91,7 @@ class TestCheckExportable:
         with pytest.raises(ValueError, match=r"cloud\.xyz contains no triangles .* \.stl stores triangle"):
             _load().check_exportable(loaded, ".stl", "cloud.xyz")
 
-    @pytest.mark.parametrize("target", [".ply", ".obj", ".glb", ".gltf"])
+    @pytest.mark.parametrize("target", [".ply", ".obj", ".glb", ".gltf", ".usda", ".usdc", ".usdz"])
     def test_a_point_cloud_to_a_point_capable_target_is_allowed(self, target):
         _load().check_exportable(_points(), target, "cloud.xyz")
 
