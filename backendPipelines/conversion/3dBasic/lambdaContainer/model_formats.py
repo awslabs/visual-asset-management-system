@@ -158,6 +158,34 @@ def fbx_meters_per_unit(path, scan_bytes=64 * 1024 ** 2):
     return factor * FBX_METERS_PER_SCALE_UNIT
 
 
+def check_fbx_scene(path, name, max_triangles=None, max_nodes=None):
+    """Refuse an FBX file before Assimp reads it when its scene places more models than the
+    ``SceneLimit`` node bound, places more triangles or vertices through instancing than the triangle
+    budget allows beyond what the file stores once, or nests deeper than
+    ``fbx_scene.MAX_FBX_NESTING_DEPTH``. Assimp builds a node for every placement and copies the
+    geometry of every instance before it returns, so a few kilobytes can describe billions of
+    placements; the count is read from the file in one linear pass (the 3D thumbnail's check)."""
+    import fbx_scene
+    import scene_limits
+    limit = scene_limits.SceneLimit("FBX scene", max_triangles, max_nodes)
+    try:
+        size = fbx_scene.scene_size(path, limit.max_nodes)
+    except ValueError as e:
+        raise ValueError(f"{name} could not be read as FBX: {e}")
+    if not limit.expect(size.models):
+        raise ValueError(f"{name}: the FBX scene places more than {limit.max_nodes:,} models, more than "
+                         f"this function converts.")
+    allowed_triangles = max(limit.max_triangles, size.stored_triangles)
+    if size.triangles > allowed_triangles:
+        raise ValueError(f"{name}: the FBX scene places more than {allowed_triangles:,} triangles through "
+                         f"instancing, more than this function converts.")
+    allowed_vertices = max(scene_limits.VERTICES_PER_TRIANGLE * limit.max_triangles, size.stored_vertices)
+    if size.vertices > allowed_vertices:
+        raise ValueError(f"{name}: the FBX scene places more than {allowed_vertices:,} vertices through "
+                         f"instancing, more than this function converts.")
+    return size
+
+
 def _load_fbx(job, trimesh, resolver):
     """Convert the FBX to GLB with the Assimp tool, in the input's directory, then load the GLB as the
     staged model. Assimp runs in this worker's process group, under its address-space and file-size
@@ -166,6 +194,7 @@ def _load_fbx(job, trimesh, resolver):
     ``resolver``, so only the files fetched with the input can reach the model."""
     path = job["input_file"]
     name = os.path.basename(path)
+    check_fbx_scene(path, name)
     if not os.path.isfile(ASSIMP_BIN):
         raise RuntimeError("The Assimp tool is not in this image, so FBX cannot be read.")
     intermediate = os.path.join(tempfile.mkdtemp(prefix="fbx_", dir=os.path.dirname(job["input_dir"].rstrip("/"))),
