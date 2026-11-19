@@ -128,7 +128,9 @@ def validate_request(input_extension, output_extension, options):
             raise ValueError(
                 f"3MF does not support {options.target_units}. Choose mm, cm, m, in or ft as TARGET_UNITS.")
         if options.target_up_axis == 'y':
-            raise ValueError("3MF is always Z up, so TARGET_UP_AXIS cannot be y. Leave it on keep or choose z.")
+            raise ValueError(
+                "3MF is always Z up: the 3MF core specification defines its coordinate system with Z as the "
+                "vertical axis, so TARGET_UP_AXIS cannot be y. Leave it on keep or choose z.")
     if not has_declared_convention(input_extension):
         if options.target_units != 'keep' and options.source_units == 'auto':
             raise ValueError(

@@ -128,8 +128,18 @@ def load_model(job, trimesh):
         declared_meters = units_axes.meters_per_unit_from_name(
             (getattr(loaded, "metadata", None) or {}).get("units")) or units_axes.UNITS['mm']
         declared_up = 'z'
+    loaded = _faceless_mesh_as_points(loaded, trimesh)
     meters, up = units_axes.declared_for(extension, declared_meters, declared_up)
     return loaded, meters, up
+
+
+def _faceless_mesh_as_points(loaded, trimesh):
+    """A mesh with vertices and no faces (a vertex-only OFF file loads as one) is a point cloud:
+    trimesh's exporters write such a mesh as an empty model without raising, so it is converted to a
+    ``PointCloud`` that the point-capable targets keep."""
+    if isinstance(loaded, trimesh.Trimesh) and len(loaded.faces) == 0 and len(loaded.vertices) > 0:
+        return trimesh.PointCloud(loaded.vertices)
+    return loaded
 
 
 def apply_plan(loaded, plan):

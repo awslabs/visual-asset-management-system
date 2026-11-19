@@ -25,14 +25,14 @@ A model in any format marked **Input and output** can be converted to any other 
 
 XYZ is an input-only format. Trimesh reads an XYZ file as a point cloud, and its XYZ exporter cannot write one back, so a run that names `.xyz` as its target is rejected before the input file is downloaded. The same holds for the generic `.usd` extension, which is only read.
 
-STL, DAE, 3MF, and OFF store triangle meshes only. A point cloud -- an XYZ file, or a PLY file that has vertices and no faces -- converts to PLY, OBJ, GLB, GLTF, or USD, which keep the points; a run that converts a point cloud to STL, DAE, 3MF, or OFF fails with a message saying so. An input that contains no geometry at all is refused for every target.
+STL, DAE, 3MF, and OFF store triangle meshes only. An OFF file with vertices and no faces is read as a point cloud. A point cloud -- an XYZ file, or a PLY file that has vertices and no faces -- converts to PLY, OBJ, GLB, GLTF, or USD, which keep the points; a run that converts a point cloud to STL, DAE, 3MF, or OFF fails with a message saying so. An input that contains no geometry at all is refused for every target.
 :::
 
 ### USD
 
 A USD file is read as a stage: meshes (with their world transforms, texture coordinates, and the base color or base color texture of a UsdPreviewSurface material) and points become the converted model's geometry. Hidden prims and prims with a purpose other than default or render (guides and proxies) are left out, and a scene that expands past the function's limits through instancing fails instead of being cut short.
 
-A USD output writes one `UsdGeom` mesh per placement under an Xform, with normals and a `st` texture coordinate primvar, a UsdPreviewSurface material, and an explicit `metersPerUnit`, `upAxis`, and `defaultPrim`. A `.usdz` output is one file that holds its textures; a `.usdc` or `.usda` output with a texture writes it to a `textures` folder beside the file. The written USD passes the OpenUSD validators with no errors.
+A USD output writes one `UsdGeom` mesh per placement under an Xform, with normals and a `st` texture coordinate primvar, a UsdPreviewSurface material, and an explicit `metersPerUnit`, `upAxis`, and `defaultPrim`. A `.usdz` output is one file that holds its textures; a `.usdc` or `.usda` output with a texture writes it to a `textures` folder beside the file. The written USD is checked in the project's tests with the OpenUSD validators of the `usd-core` wheel (`pxr.UsdValidation`, all 30 registered validators; `UsdUtils.ComplianceChecker` is not part of that wheel) and reports no errors, and the USDZ packaging is checked with `UsdUtils.CreateNewARKitUsdzPackage`. No ARKit-specific conformance check beyond those runs.
 
 A USD file may name other files: sublayers, references, payloads, and textures. Each name must be a path relative to the file that names it that stays inside the input's own asset. A layer that is absolute, carries a URI scheme such as `http://` or `s3://`, leaves the asset through `..`, or is not among the files fetched with the input fails the run naming it. A texture that cannot be followed is left out, the run log records a warning, and the geometry converts without it.
 
@@ -57,7 +57,7 @@ CAD exports are usually in millimetres and Z up, while glTF and USD tools expect
 
 With the defaults, no number in the geometry changes, and every conversion that existed before these options gives the same output. The GLB and GLTF templates have no target options.
 
-What a file declares: USD (`metersPerUnit` and `upAxis`, or USD's own default of 0.01 and Y), COLLADA (the `unit` and `up_axis` of its asset, or its defaults of one metre and Y), 3MF (its `unit` attribute, millimetres by default, and always Z up), and glTF and GLB (always metres and Y up). STL, OBJ, PLY, OFF, and XYZ declare nothing.
+What a file declares: USD (`metersPerUnit` and `upAxis`, or USD's own default of 0.01 and Y), COLLADA (the `unit` and `up_axis` of its asset, or its defaults of one metre and Y), 3MF (its `unit` attribute, millimetres by default, and always Z up). 3MF is Z up because the 3MF core specification defines its coordinate system that way, so a Y-up source written as 3MF is rotated and `Target up axis` `y` is refused for it, and glTF and GLB (always metres and Y up). STL, OBJ, PLY, OFF, and XYZ declare nothing.
 
 | Output             | What the result declares                                                                                                                                                                          |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

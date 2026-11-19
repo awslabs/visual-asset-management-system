@@ -298,3 +298,58 @@ class TestXmlAndArchiveGuards:
         (tmp_path / "a.dae").write_bytes(trimesh.creation.box().export(file_type="dae"))
         loaded, meters, up = model_formats.load_model(self._job(tmp_path, "a.dae"), trimesh)
         assert meters == 1.0 and up == "y"
+
+
+@pytest.mark.unit
+class TestVertexOnlyOff:
+    """An OFF file with vertices and no faces loads as a faceless mesh; it is a point cloud. It keeps
+    its points in the point-capable targets and is refused where triangles are required. OFF output is
+    refused for it: a point-cloud OFF does not round trip as one (it reloads as a faceless mesh that
+    trimesh's own exporters write empty)."""
+
+    def _cloud(self, tmp_path):
+        rng = np.random.default_rng(1)
+        text = "OFF\n30 0 0\n" + "\n".join(" ".join(repr(float(v)) for v in row) for row in rng.random((30, 3))) + "\n"
+        path = tmp_path / "src" / "cloud.off"
+        path.parent.mkdir()
+        path.write_text(text)
+        return str(path)
+
+    @pytest.mark.parametrize("target", [".ply", ".glb", ".gltf", ".obj", ".usda", ".usdc", ".usdz"])
+    def test_the_points_are_kept(self, tmp_path, target):
+        out = helpers.convert(tmp_path, self._cloud(tmp_path), target, run_dir="r" + target)
+        if target in (".usda", ".usdc", ".usdz"):
+            scene = usd_io.read_usd(out, os.path.dirname(out))[0]
+            assert sum(len(g.vertices) for g in scene.geometry.values()) == 30
+        else:
+            loaded = trimesh.load(out)
+            parts = list(loaded.geometry.values()) if hasattr(loaded, "geometry") else [loaded]
+            assert sum(len(p.vertices) for p in parts) == 30
+
+    @pytest.mark.parametrize("target", [".stl", ".off", ".dae", ".3mf"])
+    def test_a_triangle_only_target_is_refused(self, tmp_path, target):
+        with pytest.raises(ValueError, match="contains no triangles"):
+            helpers.convert(tmp_path, self._cloud(tmp_path), target, run_dir="r" + target)
+
+
+@pytest.mark.unit
+class TestUsdzPackaging:
+    def test_the_arkit_package_rules_pass_for_the_written_usdz(self, tmp_path):
+        from pxr import UsdUtils
+        if not hasattr(UsdUtils, "CreateNewARKitUsdzPackage"):
+            pytest.skip("usd-core has no CreateNewARKitUsdzPackage")
+        export = tmp_path / "export"
+        export.mkdir()
+        layer = str(export / "scene.usdc")
+        usd_io.write_usd(_scene_with_everything(), layer, 1.0, "y", ".usdc")
+        arkit = str(tmp_path / "arkit.usdz")
+        assert UsdUtils.CreateNewARKitUsdzPackage(Sdf.AssetPath(layer), arkit)
+        with zipfile.ZipFile(arkit) as archive:
+            assert any(name.endswith(".png") for name in archive.namelist())
+
+    def test_the_usdz_output_is_a_single_file_holding_its_textures(self, tmp_path):
+        out = helpers.convert(tmp_path, helpers.write_usd_fixture(str(tmp_path), "m.usdc", helpers.textured_cube()), ".usdz")
+        assert os.listdir(os.path.dirname(out)) == [os.path.basename(out)]
+        with zipfile.ZipFile(out) as archive:
+            assert any(name.endswith(".png") for name in archive.namelist())
+            assert archive.testzip() is None
