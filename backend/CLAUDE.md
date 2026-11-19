@@ -189,11 +189,15 @@ backend/
 │   │   │                                           #   with one BatchGetItem, D133; deleted_at() /
 │   │   │                                           #   last_deleted_at(): the id's last delete, D136)
 │   │   ├── compliance/quarantineGuard.py           # quarantine-blocks-download guard shared by the five
-│   │   │                                           #   asset download Lambdas (zipDownloadService too);
+│   │   │                                           #   asset download Lambdas (zipDownloadService too),
+│   │   │                                           #   assetFiles (a copy to another asset) and
+│   │   │                                           #   executeWorkflow (a caller's input files; not a
+│   │   │                                           #   SYSTEM_USER cross-call, so pipeline rules run);
 │   │   │                                           #   resolves the asset-state
 │   │   │                                           #   table only when COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true;
 │   │   │                                           #   refuses with QuarantineBlockedResponse (400, body
-│   │   │                                           #   exactly QUARANTINE_BLOCK_MESSAGE, no "VAMS General
+│   │   │                                           #   exactly its message: QUARANTINE_BLOCK_MESSAGE, or the
+│   │   │                                           #   copy / workflow-input message, no "VAMS General
 │   │   │                                           #   Error: " prefix, D169); each handler catches it
 │   │   │                                           #   ahead of VAMSGeneralErrorResponse and answers with
 │   │   │                                           #   quarantine_refusal(): one INFO line (database,
@@ -955,7 +959,7 @@ Each criterion value is written into its line's `obj_rule` as source escapes, on
 
 ### Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)
 
-Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `complianceSchemaName`, `complianceState`, `cascadeId`, `auditLogGroup`, `object__type`, `route__path`, plus any field the add-on or fork constants lane registers. The compliance handlers annotate `complianceSchema` objects with `complianceSchemaName`, `complianceEvaluation` objects with `databaseId` + `complianceState`, `complianceCascade` objects with `cascadeId`, and `complianceBinding` objects with `databaseId`. A schema bind or unbind checks `complianceBinding` `PUT`/`DELETE` on the database (an asset binding uses the asset's database), the schema, and a `GET` of the target `database`/`asset` row; it never checks a write on the target, because a binding writes compliance records only.
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `complianceSchemaName`, `complianceState`, `cascadeId`, `auditLogGroup`, `object__type`, `route__path`, plus any field the add-on or fork constants lane registers. The compliance handlers annotate `complianceSchema` objects with `complianceSchemaName`, `complianceEvaluation` objects with `databaseId` + `complianceState` (a real state only on the quarantine list, release and exception routes and the single-asset state GET; every other evaluation route passes `""`, and the docs say so), `complianceCascade` objects with `cascadeId`, and `complianceBinding` objects with `databaseId`. A schema bind or unbind checks `complianceBinding` `PUT`/`DELETE` on the database (an asset binding uses the asset's database), the schema, and a `GET` of the target `database`/`asset` row; it never checks a write on the target, because a binding writes compliance records only.
 
 ### Authorization Decisions and Permission-Check Endpoints
 
