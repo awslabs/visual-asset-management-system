@@ -253,10 +253,10 @@ class TestWorkingDirectoryIsRemoved:
 
 @pytest.mark.unit
 class TestFormatsWithoutALoaderAreRejected:
-    """`.dae` needs pycollada and `.xaml` / `.3dxml` need lxml and networkx, none of which
-    poetry.lock resolves for this container; trimesh has no `.xaml` / `.3dxml` exporter at all."""
+    """`.xaml` and `.3dxml` have no loader here (trimesh has no exporter for them at all); `.dae` and
+    `.3mf` are accepted since pycollada, lxml and networkx are installed."""
 
-    UNAVAILABLE = [".dae", ".xaml", ".3dxml"]
+    UNAVAILABLE = [".xaml", ".3dxml"]
 
     @pytest.mark.parametrize("extension", UNAVAILABLE)
     def test_it_is_rejected_as_an_input_before_anything_is_downloaded(self, extension):
@@ -282,7 +282,7 @@ class TestFormatsWithoutALoaderAreRejected:
         # A positive control for the rejections above: the narrowed sets have not closed the pipeline
         # to the formats it can actually convert.
         mod = _load()
-        assert len(mod.SUPPORTED_INPUT_FORMATS) == 6, mod.SUPPORTED_INPUT_FORMATS
+        assert len(mod.SUPPORTED_INPUT_FORMATS) == 13, mod.SUPPORTED_INPUT_FORMATS
         for extension in sorted(mod.SUPPORTED_INPUT_FORMATS):
             conversion = _Conversion()
             _run_conversion(mod, conversion, input_key=f"xid/model{extension}",
@@ -296,10 +296,11 @@ class TestAFormatItLoadsButCannotWriteIsInputOnly:
     a PointCloud only and raises even for one -- so nothing this pipeline loads can be written as
     `.xyz`, while `.xyz` itself remains a working input. The two sets are what keep those apart."""
 
-    def test_the_output_set_is_the_input_set_minus_xyz(self):
+    def test_the_output_set_is_the_input_set_minus_xyz_and_the_generic_usd_extension(self):
         mod = _load()
-        assert len(mod.SUPPORTED_OUTPUT_FORMATS) == 5, mod.SUPPORTED_OUTPUT_FORMATS
-        assert mod.SUPPORTED_INPUT_FORMATS - mod.SUPPORTED_OUTPUT_FORMATS == {".xyz"}
+        assert len(mod.SUPPORTED_OUTPUT_FORMATS) == 11, mod.SUPPORTED_OUTPUT_FORMATS
+        # `.usd` is an input only: the USD outputs name their encoding (.usdc, .usda, .usdz).
+        assert mod.SUPPORTED_INPUT_FORMATS - mod.SUPPORTED_OUTPUT_FORMATS == {".xyz", ".usd"}
 
     def test_xyz_is_rejected_as_an_output_before_anything_is_downloaded(self):
         mod = _load()

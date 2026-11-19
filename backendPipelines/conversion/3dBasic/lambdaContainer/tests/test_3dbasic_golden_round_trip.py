@@ -45,10 +45,14 @@ OUTPUT_BUCKET = "golden-outputs"
 FILES_PREFIX = "pipelines/golden/JOB/output/E1/files/"
 
 # The formats this container accepts, and the ones it writes (its SUPPORTED_*_FORMATS).
-INPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb", ".xyz"]
-OUTPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb"]
+INPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb", ".xyz", ".usd", ".usda", ".usdc", ".usdz", ".dae", ".3mf", ".off"]
+OUTPUTS = [".stl", ".obj", ".ply", ".gltf", ".glb", ".usda", ".usdc", ".usdz", ".off", ".dae", ".3mf"]
 # Formats that can carry a texture image in this pipeline's output.
-TEXTURED_OUTPUTS = {".obj", ".gltf", ".glb"}
+TEXTURED_OUTPUTS = {".obj", ".gltf", ".glb", ".usda", ".usdc", ".usdz"}
+# The targets that store triangles only: a point cloud to one of them is refused.
+TRIANGLE_ONLY_OUTPUTS = {".stl", ".off", ".dae", ".3mf"}
+# Formats this suite reads with the container's own USD code rather than trimesh.
+USD_FORMATS = {".usd", ".usda", ".usdc", ".usdz"}
 
 
 def _textured_cube():
@@ -61,6 +65,28 @@ def _textured_cube():
 
 def _sphere():
     return trimesh.creation.icosphere(subdivisions=2, radius=1.5)
+
+
+def _usd_bytes(geometry, extension):
+    """A geometry written as USD by the container's own writer (needs usd-core on the test host)."""
+    import sys
+    import tempfile
+    lambda_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if lambda_dir not in sys.path:
+        sys.path.insert(0, lambda_dir)
+    import usd_io
+    work = tempfile.mkdtemp()
+    export_dir = os.path.join(work, "export")
+    os.makedirs(export_dir)
+    path = os.path.join(export_dir, "part" + extension)
+    usd_io.write_usd(trimesh.Scene(geometry), path, 1.0, "y", extension)
+    files = {}
+    for root, _, names in os.walk(export_dir):
+        for name in names:
+            full = os.path.join(root, name)
+            with open(full, "rb") as handle:
+                files[os.path.relpath(full, export_dir).replace(os.sep, "/")] = handle.read()
+    return files
 
 
 def _fixture_files():
@@ -78,6 +104,13 @@ def _fixture_files():
         ".glb": ({"part.glb": cube.export(file_type="glb")}, cube, True),
         ".xyz": ({"part.xyz": "\n".join(" ".join(repr(float(v)) for v in row)
                                        for row in sphere.vertices).encode("utf-8")}, sphere, False),
+        ".usd": ((lambda files: {"part.usd": files.pop("part.usda"), **files})(_usd_bytes(cube, ".usda")), cube, True),
+        ".usda": (_usd_bytes(cube, ".usda"), cube, True),
+        ".usdc": (_usd_bytes(cube, ".usdc"), cube, True),
+        ".usdz": (_usd_bytes(cube, ".usdz"), cube, True),
+        ".dae": ({"part.dae": sphere.export(file_type="dae")}, sphere, False),
+        ".3mf": ({"part.3mf": sphere.export(file_type="3mf")}, sphere, False),
+        ".off": ({"part.off": sphere.export(file_type="off").encode("utf-8")}, sphere, False),
     }
 
 
@@ -158,6 +191,20 @@ def _load_output(written, output_extension):
     assert len(models) == 1, f"expected one {output_extension} model, wrote {sorted(written)}"
     name = models[0]
     folder = name.rsplit("/", 1)[0] + "/" if "/" in name else ""
+    if output_extension in USD_FORMATS:
+        import sys
+        import tempfile
+        lambda_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if lambda_dir not in sys.path:
+            sys.path.insert(0, lambda_dir)
+        import usd_io
+        work = tempfile.mkdtemp()
+        for written_name, data in written.items():
+            target = os.path.join(work, written_name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as handle:
+                handle.write(data)
+        return usd_io.read_usd(os.path.join(work, name), os.path.join(work, folder.rstrip("/")))[0]
     companions = {n[len(folder):]: d for n, d in written.items() if n.startswith(folder) and n != name}
     return trimesh.load(io.BytesIO(written[name]), file_type=output_extension.lstrip("."), resolver=companions)
 
@@ -173,7 +220,7 @@ def test_every_input_converts_to_every_output(s3, input_extension, output_extens
     cell = f"{input_extension.lstrip('.')}_{output_extension.lstrip('.')}"
     response, written = _convert(s3, cell, input_extension, output_extension)
 
-    if input_extension == ".xyz" and output_extension == ".stl":
+    if input_extension == ".xyz" and output_extension in TRIANGLE_ONLY_OUTPUTS:
         assert isinstance(response, dict) and "contains no triangles" in response.get("errorMessage", ""), response
         assert not written
         return

@@ -34,7 +34,7 @@ import traceback
 # with vertices and no faces) has none, and trimesh writes it to STL as a header and a zero triangle
 # count -- an 84-byte file -- without raising, so the run would report success for an empty model.
 # OBJ, PLY, GLB and GLTF all store the points.
-MESH_ONLY_OUTPUT_FORMATS = {'.stl'}
+MESH_ONLY_OUTPUT_FORMATS = {'.stl', '.dae', '.3mf', '.off'}
 
 # Exceptions the child reports to the parent by type, so the parent re-raises the same kind and the
 # run's error text is the one the model's author can act on.
@@ -64,7 +64,7 @@ def check_exportable(loaded, output_filetype, input_name):
     if output_filetype in MESH_ONLY_OUTPUT_FORMATS and triangles == 0:
         raise ValueError(
             f"{input_name} contains no triangles (it is a point cloud), and {output_filetype} stores "
-            f"triangle meshes only. Convert it to .ply, .obj, .glb or .gltf, which store points.")
+            f"triangle meshes only. Convert it to .ply, .obj, .glb, .gltf or .usdc, which store points.")
 
 
 def rename_materials(loaded):
@@ -100,24 +100,23 @@ def convert_model(job, trimesh=None):
     ``job`` holds ``input_file`` (the staged input), ``input_dir`` and ``input_relative_path`` (where
     it was staged), ``by_reference`` (each reference as the model spells it, mapped to the local file
     that was fetched for it), ``output_file``, ``output_filetype`` (with its leading dot) and
-    ``input_name``. ``trimesh`` is the module to use; it is imported here when not given.
+    ``input_name``, and optionally ``options`` (the unit and up-axis options of the input configuration).
+    ``trimesh`` is the module to use; it is imported here when not given.
     """
     if trimesh is None:
         import trimesh
-    import referenced_files
+    import model_formats
+    import units_axes
 
     # The loader is given a resolver that serves only the fetched files, so no reference reaches
     # anything else on the local disk.
-    resolver = referenced_files.ConfinedResolver(
-        job["input_dir"], job["input_relative_path"], job["by_reference"])
-    mesh = trimesh.load(job["input_file"], resolver=resolver)
-    check_exportable(mesh, job["output_filetype"], job["input_name"])
+    loaded, declared_meters, declared_up = model_formats.load_model(job, trimesh)
+    check_exportable(loaded, job["output_filetype"], job["input_name"])
+    options = units_axes.Options.from_config(job.get("options"))
+    plan = units_axes.plan(options, job["output_filetype"], declared_meters, declared_up)
     if job["output_filetype"] in MATERIAL_NAMED_FILE_FORMATS:
-        rename_materials(mesh)
-    # NOTE: output_filetype carries a leading dot, e.g. ".stl", but trimesh's exporter registry is keyed
-    # without it ("stl"). Passing the dotted form raises ValueError("%s exporter not available!",
-    # ".stl") and fails every conversion, so strip it here.
-    mesh.export(job["output_file"], file_type=job["output_filetype"].lstrip('.'))
+        rename_materials(loaded)
+    model_formats.export_model(loaded, plan, job)
 
 
 class LimitError(RuntimeError):

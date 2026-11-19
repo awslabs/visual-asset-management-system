@@ -1,0 +1,56 @@
+{
+    "templateId": "convert-to-interchange",
+    "templateName": "Convert to DAE, 3MF or OFF",
+    "description": "Convert a 3D mesh to COLLADA (.dae), 3MF (.3mf) or OFF (.off). Point clouds cannot be converted. DAE and 3MF record a unit, DAE also its up axis (3MF is always Z up); OFF is unitless and the changes are applied to the vertices.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\"{{OUTPUT_FORMAT}}\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"targetUnits\":\"{{TARGET_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"targetUpAxis\":\"{{TARGET_UP_AXIS}}\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Converts a 3D mesh to COLLADA (.dae), 3MF (.3mf) or OFF (.off). Select the source model as the input file; the converted file is written back to the asset.\n\nA point cloud (an XYZ file, or a PLY with no faces) has no triangles and is refused; convert it to PLY, OBJ, GLB, GLTF or USD instead. 3MF supports the units mm, cm, m, in and ft only (a source in km or yd is written in metres) and is always Z up, so a Y-up source is rotated. DAE keeps one mesh per placement and drops textures; use USD or GLB when textures matter.\n\nWith the defaults (auto and keep) the geometry is written as read. To change the unit or axis, set the target. The source unit or axis must then be known: declared by the file or set in Source units and Source up axis.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
+    "tagSchema": [
+        {
+            "tagKey": "OUTPUT_FORMAT",
+            "type": "enum",
+            "required": false,
+            "default": ".dae",
+            "enumValues": [".dae", ".3mf", ".off"],
+            "label": "Output format",
+            "description": ".dae is COLLADA, .3mf is the 3D-printing format, .off is the plain Object File Format. Defaults to .dae."
+        },
+        {
+            "tagKey": "SOURCE_UNITS",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "mm", "cm", "m", "km", "in", "ft", "yd"],
+            "label": "Source units",
+            "description": "Unit of the numbers in the source file. auto uses the unit the file declares and applies no scaling to a file that declares none."
+        },
+        {
+            "tagKey": "TARGET_UNITS",
+            "type": "enum",
+            "required": false,
+            "default": "keep",
+            "enumValues": ["keep", "mm", "cm", "m", "km", "in", "ft", "yd"],
+            "label": "Target units",
+            "description": "Unit to scale the geometry to, recorded in DAE and 3MF files. keep leaves the scale unchanged. Any other value needs a known source unit. 3MF does not support km or yd."
+        },
+        {
+            "tagKey": "SOURCE_UP_AXIS",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "y", "z"],
+            "label": "Source up axis",
+            "description": "Which axis points up in the source file. auto uses the axis the file declares and assumes none for a file that declares none."
+        },
+        {
+            "tagKey": "TARGET_UP_AXIS",
+            "type": "enum",
+            "required": false,
+            "default": "keep",
+            "enumValues": ["keep", "y", "z"],
+            "label": "Target up axis",
+            "description": "Which axis points up in the result. keep leaves the orientation unchanged. y or z rotates the geometry and needs a known source up axis. 3MF is always Z up."
+        }
+    ]
+}

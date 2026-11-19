@@ -1,0 +1,56 @@
+{
+    "templateId": "convert-to-usd",
+    "templateName": "Convert to USD",
+    "description": "Convert a 3D model to OpenUSD: binary (.usdc), text (.usda) or a single-file package with textures (.usdz). The file always declares its unit (metersPerUnit) and up axis.",
+    "configFormat": "json",
+    "configBody": "{\"outputType\":\"{{OUTPUT_FORMAT}}\",\"sourceUnits\":\"{{SOURCE_UNITS}}\",\"targetUnits\":\"{{TARGET_UNITS}}\",\"sourceUpAxis\":\"{{SOURCE_UP_AXIS}}\",\"targetUpAxis\":\"{{TARGET_UP_AXIS}}\"}",
+    "allowCustomEdit": false,
+    "inputInstructions": "Converts a 3D model to OpenUSD. Select the source model as the input file; the converted file is written back to the asset.\n\nOutput format: .usdc is binary and compact, .usda is readable text, .usdz is one file that carries its textures. A .usdc or .usda result with textures is written with its textures in a textures folder beside it.\n\nThe result always declares metersPerUnit and upAxis. With the defaults (auto and keep) the file's own declaration is kept. A source that declares none (STL, OBJ, PLY, OFF, XYZ) is written as metres and Y up without changing any number, so set Source units and Source up axis for such a file, for example mm and z for a CAD export.\n\nThis pipeline reads no asset or file metadata. Everything it needs comes from the selected file and this template.",
+    "tagSchema": [
+        {
+            "tagKey": "OUTPUT_FORMAT",
+            "type": "enum",
+            "required": false,
+            "default": ".usdc",
+            "enumValues": [".usdc", ".usda", ".usdz"],
+            "label": "Output format",
+            "description": ".usdc is binary, .usda is text, .usdz is a single file with its textures."
+        },
+        {
+            "tagKey": "SOURCE_UNITS",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "mm", "cm", "m", "km", "in", "ft", "yd"],
+            "label": "Source units",
+            "description": "Unit of the numbers in the source file. auto uses the unit the file declares and assumes metres for a file that declares none."
+        },
+        {
+            "tagKey": "TARGET_UNITS",
+            "type": "enum",
+            "required": false,
+            "default": "keep",
+            "enumValues": ["keep", "mm", "cm", "m", "km", "in", "ft", "yd"],
+            "label": "Target units",
+            "description": "Unit to write as metersPerUnit, with the geometry scaled to match. keep writes the source unit. Any other value needs a known source unit, declared by the file or set in Source units."
+        },
+        {
+            "tagKey": "SOURCE_UP_AXIS",
+            "type": "enum",
+            "required": false,
+            "default": "auto",
+            "enumValues": ["auto", "y", "z"],
+            "label": "Source up axis",
+            "description": "Which axis points up in the source file. auto uses the axis the file declares and assumes Y for a file that declares none."
+        },
+        {
+            "tagKey": "TARGET_UP_AXIS",
+            "type": "enum",
+            "required": false,
+            "default": "keep",
+            "enumValues": ["keep", "y", "z"],
+            "label": "Target up axis",
+            "description": "Which axis points up in the result (the upAxis written to the stage). keep writes the source axis. y or z rotates the geometry and needs a known source up axis."
+        }
+    ]
+}

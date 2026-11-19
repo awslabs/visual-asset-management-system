@@ -15,6 +15,7 @@ import threading
 import time
 import referenced_files
 import size_check
+import units_axes
 from conversion_worker import (  # noqa: F401  (re-exported: the checks the child applies)
     MESH_ONLY_OUTPUT_FORMATS, USER_ERRORS, check_exportable, geometry_counts)
 from common.logger import safeLogger
@@ -277,7 +278,8 @@ def relative_subdir_from_manifest_path(relative_path):
 # and `.3mf` / `.xaml` / `.3dxml` need lxml and networkx; with none of those installed trimesh
 # registers an exception wrapper in place of each loader. The registered inputFileFilters in
 # vamsSchema/pipeline.json declare this same set to VAMS.
-SUPPORTED_INPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz'}
+SUPPORTED_INPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz', '.usd', '.usda', '.usdc', '.usdz',
+                           '.dae', '.3mf', '.off'}
 
 # The formats it can produce as output. Loading a format is not the same as writing it: `.xyz` is a
 # point-cloud text format trimesh reads into a PointCloud, and its xyz exporter accepts a PointCloud
@@ -285,7 +287,8 @@ SUPPORTED_INPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.xyz'}
 # `.3dxml` have no exporter at any dependency set, and the `.3mf` exporter is registered behind the
 # same lxml and networkx pair as its loader, which is why the requested output type is checked against
 # this set rather than against the accept list.
-SUPPORTED_OUTPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb'}
+SUPPORTED_OUTPUT_FORMATS = {'.stl', '.obj', '.ply', '.gltf', '.glb', '.usda', '.usdc', '.usdz', '.off', '.dae',
+                            '.3mf'}
 
 class InputTextError(ValueError):
     """The text a model input is read from is not UTF-8, so the loader cannot read it."""
@@ -311,6 +314,8 @@ INPUT_TEXT_ERRORS = {
     '.stl': ("{name} could not be read as STL: it is not a binary STL (its size does not match the "
              "triangle count in its header), and as ASCII STL text, " + _NOT_UTF8 + ". Export it as "
              "binary STL or as UTF-8 ASCII STL and run the conversion again."),
+    '.off': ("{name} could not be read as OFF text: " + _NOT_UTF8 + ". The file is binary data or text "
+             "saved in another encoding. Save it as UTF-8 OFF text and run the conversion again."),
     '.glb': ("{name} could not be read as GLB: in its JSON chunk, " + _NOT_UTF8 + ". glTF JSON must be "
              "UTF-8 text. Export the model again and run the conversion again."),
 }
@@ -751,7 +756,7 @@ def _log_worker_stderr(path):
         logger.error(f"Conversion worker stderr: {tail}")
 
 
-def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version=""):
+def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version="", options=None):
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
     logger.info(f"Converting s3://{input_bucket}/{input_key} to {output_filetype}")
@@ -770,6 +775,10 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         raise ValueError(f"Input format {input_s3_asset_extension} not supported by Trimesh pipeline")
     if output_filetype not in SUPPORTED_OUTPUT_FORMATS:
         raise ValueError(f"Output format {output_filetype} not supported by Trimesh pipeline")
+    # The unit and up-axis options are checked here, before anything is downloaded, so an illegal
+    # combination (a target glTF cannot have, a target with no known source) fails naming the option.
+    options = options if isinstance(options, units_axes.Options) else units_axes.Options.from_config(options)
+    units_axes.validate_request(input_s3_asset_extension, output_filetype, options)
 
     # The input's size is checked before anything is downloaded: the function's memory and working
     # disk set what it can convert (see size_check.py), and an input over them fails here naming the
@@ -778,7 +787,8 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     input_size, input_etag = head_input(input_bucket, input_key, input_version)
     size_limit = size_check.check_size(
         os.path.basename(input_key), input_s3_asset_extension, input_size,
-        memory_bytes=size_check.memory_limit_bytes(), disk_free_bytes=size_check.free_disk_bytes(tempfile.gettempdir()))
+        memory_bytes=size_check.memory_limit_bytes(), disk_free_bytes=size_check.free_disk_bytes(tempfile.gettempdir()),
+        output_extension=output_filetype)
 
     # Download, convert and upload inside a working directory of this invocation's own, removed
     # before returning either way. The Lambda execution environment is reused between invocations
@@ -822,7 +832,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
                 # geometry leaves, not by their file size.
                 max_geometry_bytes=(size_limit - input_size) if size_limit is not None else None,
                 image_budget=(lambda geometry_bytes: size_check.texture_budget_bytes(
-                    input_s3_asset_extension, geometry_bytes, memory_bytes)) if memory_bytes else None),
+                    input_s3_asset_extension, geometry_bytes, memory_bytes, output_filetype)) if memory_bytes else None),
             logger=logger)
 
         # Export mesh to output format, under the name it will carry in the asset: the input file's
@@ -838,6 +848,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "by_reference": fetched.by_reference,
             "output_file": output_file,
             "output_filetype": output_filetype,
+            "options": {key: getattr(options, field) for key, (field, _) in units_axes.OPTION_KEYS.items()},
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
             "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
@@ -965,12 +976,16 @@ def lambda_handler(event, context):
     # The target output format comes from the input configuration (outputType). Fall back to the
     # legacy inline body field for executions whose ASL predates this change.
     output_filetype = (input_configuration or {}).get('outputType') or data.get('outputType', '')
+    # A value without its leading dot is the same format.
+    if isinstance(output_filetype, str) and output_filetype and not output_filetype.startswith('.'):
+        output_filetype = '.' + output_filetype
+    options = units_axes.Options.from_config(input_configuration)
 
     # Resolve the input file + output-files paths and the input's asset-relative subdirectory from
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
     input_path, output_path, relative_subdir, version_id = resolve_inputs_from_manifest(data)
 
-    message = convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id)
+    message = convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id, options)
 
     if message:
         logger.warning(message)

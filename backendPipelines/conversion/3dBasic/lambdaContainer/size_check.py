@@ -42,7 +42,40 @@ MEMORY_EXPANSION_FACTORS = {
     '.glb': 27,
     '.gltf': 27,
     '.xyz': 13,
+    # The USD family: a text layer expands little; a binary (crate) layer and a package of one are
+    # compressed on disk, and the generic `.usd` extension may be either, so it takes the larger.
+    '.usd': 46,
+    '.usda': 15,
+    '.usdc': 46,
+    '.usdz': 46,
+    '.dae': 18,
+    # A 3MF is a zip of XML, so its bytes on disk are a fraction of what is parsed.
+    '.3mf': 106,
+    '.off': 20,
 }
+# The COLLADA exporter holds the whole model as Python objects as well, so a conversion to `.dae`
+# needs more per input byte than to any other format. Used in place of the factor above when the
+# output is `.dae` (and larger).
+DAE_OUTPUT_EXPANSION_FACTORS = {
+    '.stl': 23,
+    '.obj': 12,
+    '.ply': 40,
+    '.glb': 50,
+    '.gltf': 50,
+    '.xyz': 13,
+    '.usd': 82,
+    '.usda': 25,
+    '.usdc': 82,
+    '.usdz': 82,
+    '.dae': 18,
+    '.3mf': 114,
+    '.off': 27,
+}
+# Each factor is the largest peak resident memory above the interpreter and trimesh baseline, per byte
+# of input, over the output formats this pipeline writes (the COLLADA output separately), measured on
+# a 0.33 to 1.3 million triangle sphere through the worker child (`conversion_worker.convert_model`)
+# and rounded up by at least 15 percent. The first six are the factors of the formats this pipeline
+# has always read.
 # Used for an extension without a measured factor: the largest measured one.
 DEFAULT_MEMORY_EXPANSION_FACTOR = max(MEMORY_EXPANSION_FACTORS.values())
 
@@ -113,18 +146,22 @@ def free_disk_bytes(path="/tmp"):
     return shutil.disk_usage(path).free
 
 
-def expansion_factor(extension):
-    return MEMORY_EXPANSION_FACTORS.get((extension or "").lower(), DEFAULT_MEMORY_EXPANSION_FACTOR)
+def expansion_factor(extension, output_extension=None):
+    extension = (extension or "").lower()
+    factor = MEMORY_EXPANSION_FACTORS.get(extension, DEFAULT_MEMORY_EXPANSION_FACTOR)
+    if (output_extension or "").lower() == '.dae':
+        factor = max(factor, DAE_OUTPUT_EXPANSION_FACTORS.get(extension, DEFAULT_MEMORY_EXPANSION_FACTOR))
+    return factor
 
 
-def limits(extension, memory_bytes=None, disk_free_bytes=None):
+def limits(extension, memory_bytes=None, disk_free_bytes=None, output_extension=None):
     """``(max_total_bytes, binding_resource)``: the most the input and its referenced files may total
     in bytes, and which resource sets that. A resource that is unknown (None) sets no limit; with
     neither known the limit is None."""
     candidates = []
     if memory_bytes:
         usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
-        candidates.append((max(int(usable / expansion_factor(extension)), 0), MEMORY_RESOURCE))
+        candidates.append((max(int(usable / expansion_factor(extension, output_extension)), 0), MEMORY_RESOURCE))
     if disk_free_bytes is not None:
         usable = disk_free_bytes - DISK_HEADROOM_BYTES
         candidates.append((max(int(usable / (1 + OUTPUT_DISK_FACTOR)), 0), DISK_RESOURCE))
@@ -135,11 +172,12 @@ def _mb(value):
     return f"{value / MB:,.1f} MB"
 
 
-def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=None, extra_bytes=0):
+def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=None, extra_bytes=0,
+               output_extension=None):
     """Raise ``InputTooLargeError`` when ``size_bytes`` (plus ``extra_bytes`` already declared for
     referenced files) is over what the function can convert. Returns the limit in bytes (None when no
     limit is known) so the caller can bound the files the input references."""
-    limit, resource = limits(extension, memory_bytes, disk_free_bytes)
+    limit, resource = limits(extension, memory_bytes, disk_free_bytes, output_extension)
     if limit is None:
         return None
     total = size_bytes + extra_bytes
@@ -177,12 +215,12 @@ def head_object_info(client, bucket, key, version_id=""):
 TEXTURE_MEMORY_FACTOR = 5
 
 
-def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None):
+def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None, output_extension=None):
     """Decoded RGBA bytes of texture images the function can hold beside a model whose input and
     non-image files total ``geometry_bytes``: the memory a conversion may use, less the base and the
     geometry's share, divided by ``TEXTURE_MEMORY_FACTOR``. None when the memory is not known."""
     if not memory_bytes:
         return None
     usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
-    usable -= expansion_factor(extension) * geometry_bytes
+    usable -= expansion_factor(extension, output_extension) * geometry_bytes
     return max(int(usable / TEXTURE_MEMORY_FACTOR), 0)

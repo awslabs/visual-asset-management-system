@@ -57,6 +57,23 @@ class TestLimits:
     def test_the_factors_cover_exactly_the_accepted_input_formats(self):
         assert set(size_check.MEMORY_EXPANSION_FACTORS) == _load().SUPPORTED_INPUT_FORMATS
 
+    @pytest.mark.parametrize("extension", [".usd", ".usda", ".usdc", ".usdz", ".dae", ".3mf", ".off"])
+    def test_every_new_input_format_has_its_own_measured_factor(self, extension):
+        assert extension in size_check.MEMORY_EXPANSION_FACTORS
+        assert extension in size_check.DAE_OUTPUT_EXPANSION_FACTORS
+
+    def test_a_collada_output_never_lowers_the_factor_and_raises_it_where_measured(self):
+        for extension, base in size_check.MEMORY_EXPANSION_FACTORS.items():
+            assert size_check.expansion_factor(extension, ".dae") >= base, extension
+            assert size_check.expansion_factor(extension, ".glb") == base, extension
+        assert size_check.expansion_factor(".glb", ".dae") > size_check.expansion_factor(".glb", ".obj")
+        assert size_check.expansion_factor(".glb") == 27, "an existing format keeps its factor for other outputs"
+
+    def test_the_collada_limit_is_lower_for_the_same_input(self):
+        plain, _ = size_check.limits(".glb", FUNCTION_MEMORY_MB * MB, BIG_DISK * 100)
+        collada, _ = size_check.limits(".glb", FUNCTION_MEMORY_MB * MB, BIG_DISK * 100, ".dae")
+        assert collada < plain
+
     def test_a_larger_function_converts_a_larger_input(self):
         small, _ = size_check.limits(".obj", 2048 * MB, None)
         large, _ = size_check.limits(".obj", 8192 * MB, None)
