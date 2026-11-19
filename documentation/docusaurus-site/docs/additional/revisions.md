@@ -252,6 +252,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
+-   **3MF size check on the uncompressed size** — 3D Basic Conversion checks a 3MF package's declared uncompressed size against the function's memory after the download and before any part is parsed, and the refusal names that size. A package that compresses better than about 5 to 1 passed the zip-size check and could run out of memory. (issue #1743)
 -   **API stack template under the CloudFormation limit** — A deployment with, for example, a customer managed key, every Lambda function in the VPC and Download as Zip failed on the `ApiBuilder2` nested stack, whose template was over 1,000,000 bytes. The shared CDK Nag suppressions are written only on the IAM roles and policies they apply to, so the template is about a third smaller; no resource is replaced. (issue #1647)
 -   **File page Preview toggle** — The Preview toggle requests the preview file without the source file's version ID, so a generated preview shows instead of failing with "File not found in S3". When an older version of the file is viewed, a notice on the Preview tab says the preview belongs to the latest version. (issue #1656)
 -   **File page Preview option** — The file page offers the Preview option for any file that has a preview file, whichever of the file and the asset details loads first, and a version opened from the file's versions list keeps it. (issue #1673)
