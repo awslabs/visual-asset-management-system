@@ -30,6 +30,7 @@ ALL_SWITCHES = [
     addon_constants.FEATURE_EDH_WORKSTATIONS,
     addon_constants.FEATURE_EDH_CONTAINERS,
     addon_constants.FEATURE_EDH_AMI_RECIPES,
+    "AUDITLOGSEARCH",
 ]
 
 TABLES = {
@@ -125,7 +126,8 @@ def test_the_tools_table_matches_what_the_tools_call():
 
 
 async def test_every_tool_the_manifest_names_is_registered(server_with_switches):
-    with server_with_switches(ALL_SWITCHES, enable_writes=True, enable_destructive=True) as reloaded:
+    with server_with_switches(ALL_SWITCHES, enable_writes=True, enable_destructive=True,
+                              toolsets="all,audit") as reloaded:
         registered = {tool.name for tool in await reloaded.mcp.list_tools()}
     named = set().union(*api_coverage.TOOLS.values())
     assert len(registered) > 140, "the full tool set was not registered, so this would be vacuous"
