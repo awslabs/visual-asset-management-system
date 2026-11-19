@@ -193,6 +193,30 @@ for folder, with_image in (("gltfimg", True), ("noimg", False)):
 run("gltf_external_image_to_glb", "xasset/gltfimg/model.gltf", ".glb", "gltfimg")
 run("gltf_missing_image_to_glb", "xasset/noimg/model.gltf", ".glb", "noimg")
 
+# Material names that are free text in a glTF, converted to OBJ, which names its texture file and
+# its newmtl line after the material. A name with a path separator or a colon or the name '..' must
+# neither fail the run nor become a file name.
+for tag, material_name in (("slash", "Mat/Wood"), ("colon", "Mat:1"), ("dots", ".."), ("plain", "BoomBox_Mat")):
+    named_doc = json.loads(json.dumps(textured_doc))
+    for material in named_doc["materials"]:
+        material["name"] = material_name
+    put(f"xasset/mat_{tag}/model.gltf", json.dumps(named_doc))
+    for name, data in textured.items():
+        if name != "model.gltf":
+            put(f"xasset/mat_{tag}/{name}", data)
+    put(f"xasset/mat_{tag}/tex/base.png", png.getvalue())
+    run(f"gltf_material_{tag}_to_obj", f"xasset/mat_{tag}/model.gltf", ".obj", f"mat_{tag}")
+    obj_mtl = [k for k in bucket.objects if k.startswith(FILES + f"mat_{tag}/") and k.endswith(".mtl")]
+    results[f"gltf_material_{tag}_to_obj"]["mtl"] = (
+        bucket.objects[obj_mtl[0]].decode("utf-8") if obj_mtl else None)
+# The same model written as GLB keeps the material's own name.
+run("gltf_material_slash_to_glb", "xasset/mat_slash/model.gltf", ".glb", "mat_slash")
+glb_key = [k for k in bucket.objects if k.endswith("model.glb") and "mat_slash" in k][0]
+glb_json_length = int.from_bytes(bucket.objects[glb_key][12:16], "little")
+glb_document = json.loads(bucket.objects[glb_key][20:20 + glb_json_length])
+results["gltf_material_slash_to_glb"]["glb_material_names"] = sorted(
+    {m.get("name") for m in glb_document.get("materials", [])})
+
 # The pipeline's own .gltf output, converted again from the run's output folder.
 put("xasset/round/ball.glb", trimesh.creation.icosphere().export(file_type="glb"))
 run("glb_to_gltf", "xasset/round/ball.glb", ".gltf", "round")
@@ -381,6 +405,25 @@ def _ok(results, name):
 
 
 @pytest.mark.unit
+class TestMaterialNamesNeverBecomeFileNames:
+    """glTF material names are free text; an OBJ export writes a texture file and a newmtl line from
+    them (D2, D3)."""
+
+    @pytest.mark.parametrize("tag", ["slash", "colon", "dots", "plain"])
+    def test_a_gltf_with_that_material_name_converts_to_obj_with_the_old_names(self, results, tag):
+        result = _ok(results, f"gltf_material_{tag}_to_obj")
+        written = [name.rsplit("/", 1)[-1] for name in result["written"]]
+        assert "material_0.png" in written, result
+        assert "newmtl material_0" in result["mtl"], result
+        # Nothing was written under a folder the name made up.
+        assert all("Mat" not in name and ".." not in name for name in result["written"]), result
+
+    def test_a_glb_output_keeps_the_materials_own_name(self, results):
+        _ok(results, "gltf_material_slash_to_glb")
+        assert results["gltf_material_slash_to_glb"]["glb_material_names"] == ["Mat/Wood"]
+
+
+@pytest.mark.unit
 class TestTexturesSurvive:
     def test_a_textured_obj_converts_to_glb_with_its_texture(self, results):
         result = _ok(results, "obj_textured_to_glb")
@@ -522,7 +565,8 @@ class TestInputsThatAreNotUtf8Text:
 
     def test_nothing_the_obj_references_is_fetched(self, results):
         # The material library it names is in the asset; only the input itself was downloaded.
-        assert results["obj_latin1"]["requested"] == ["xasset/enc/latin1.obj"], results["obj_latin1"]
+        # (The input is sized with a HEAD before it is downloaded, so it is requested twice.)
+        assert set(results["obj_latin1"]["requested"]) == {"xasset/enc/latin1.obj"}, results["obj_latin1"]
 
     @pytest.mark.parametrize("name", ["obj_utf8_non_ascii", "stl_ascii_utf8", "stl_binary_latin1_header"])
     def test_utf8_text_and_a_binary_stl_header_still_convert(self, results, name):
