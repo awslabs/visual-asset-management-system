@@ -52,12 +52,31 @@ class TestTheSandboxIsClosedByConfiguration:
     def test_no_approval_prompt_can_ever_block_a_headless_run(self):
         assert 'approval_policy = "never"' in codex_config("http://x/v1", "KEY", "high")
 
-    def test_credentials_are_kept_out_of_the_commands_the_agent_runs(self):
-        config = codex_config("http://x/v1", "BRIDGE", "high")
-        # Up to the next section header, not the next bracket: the exclude list itself opens with one.
+    def test_codex_starts_with_the_allowlist_and_this_runs_values_only(self):
+        parent = {
+            "PATH": "/opt/venv/bin:/usr/bin", "LANG": "C.UTF-8", "U2NET_HOME": "/opt/rembg",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/x", "AWS_REGION": "us-east-1",
+            "AWS_ACCESS_KEY_ID": "test-access-key", "AWS_BATCH_JOB_ID": "job", "AWS_EXECUTION_ENV": "AWS_ECS_EC2",
+            "HF_TOKEN": "test-hf-token", "HF_HOME": "/mnt/efs/x", "S3_MODEL_PREFIX": "imageTo3d/hf_cache/blenderagent/",
+        }
+        run = {"CODEX_HOME": "/var/agent/codex_home", "BRIDGE": "sk-run", "AGENT_WORKSPACE": "/var/agent/workspace"}
+        env = blenderagent.codex_process_env(parent, run)
+        assert env == {"PATH": "/opt/venv/bin:/usr/bin", "LANG": "C.UTF-8", "U2NET_HOME": "/opt/rembg", **run}
+        assert not [name for name in env if name.startswith(("AWS_", "HF_"))]
+
+    def test_the_allowlist_names_no_credential_or_job_variable(self):
+        for name in blenderagent.CODEX_INHERITED_ENV:
+            assert not name.startswith(("AWS_", "HF_")), name
+            assert not re.search("KEY|TOKEN|SECRET|CREDENTIAL", name), name
+
+    def test_the_bridge_key_is_excluded_from_the_commands_and_snapshots_are_off(self):
+        config = codex_config("http://x/v1", "BLENDERAGENT_BRIDGE_KEY", "high")
+        # A shell snapshot replays Codex's own variables before every command, past the policy below.
+        assert "shell_snapshot = false" in config
         policy = config.split("[shell_environment_policy]", 1)[1].split("\n[", 1)[0]
-        for pattern in ('"AWS_*"', '"*TOKEN*"', '"*SECRET*"', '"*KEY*"'):
-            assert pattern in policy, f"{pattern} is not excluded from the agent's command environment"
+        # Codex's default excludes (*KEY*, *SECRET*, *TOKEN*) are what remove the bridge key.
+        assert "ignore_default_excludes = false" in policy
+        assert '"*KEY*"' in policy
 
     def test_the_model_provider_is_the_bridge_over_the_responses_api(self):
         config = codex_config("http://127.0.0.1:4321/v1", "BRIDGE_KEY", "high")

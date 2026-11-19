@@ -568,8 +568,10 @@ the mesh rather than believing the final message.
 **How it is confined.** Codex runs its commands in its own sandbox in `workspace-write` mode with the
 default `/tmp` carve-outs switched off, so the only writable location is the agent's workspace, which sits
 outside `/tmp` deliberately -- the pipeline's own directories live there. Its commands have no network. The
-workspace is wiped before every run. Credentials are excluded from the environment its commands see; the
-model is reached by the Codex process alone, through a loopback bridge that calls Bedrock on the task role.
+workspace is wiped before every run. Codex starts with only the job's basic variables (such as `PATH` and
+the locale) and this run's own, so its commands receive no task credentials and no Hugging Face token; the
+model is reached by the Codex process alone, through a loopback bridge that calls Bedrock on the task role,
+and the per-run key Codex sends to that bridge is excluded from the commands' environment too.
 The sandbox mode is fixed, and no run option widens it.
 
 **How it reaches an image model.** The photograph covers the surface the camera saw and nothing else, so

@@ -20,8 +20,11 @@ by partition and entitlement.
 **The agent is confined by construction, not by instruction.** Codex runs its commands under its own
 sandbox in ``workspace-write`` mode, with ``/tmp`` and ``$TMPDIR`` deliberately excluded from the writable
 set, so the only place it can write is the workspace this adapter creates -- which sits outside ``/tmp``
-precisely so the pipeline's own working directories are out of reach. Its commands have no network. The
-workspace is wiped before every run. The Blender-side tools refuse to write outside it as well.
+precisely so the pipeline's own working directories are out of reach. Its commands have no network and no
+task credentials: Codex starts with an allowlisted environment (``CODEX_INHERITED_ENV`` plus this run's
+values), the AWS calls are made by the bridge and the image broker outside it, and Codex's environment
+policy keeps the bridge key it sends to the bridge out of the commands. The workspace is wiped before every
+run. The Blender-side tools refuse to write outside it as well.
 
 The sandbox is Codex's Landlock + seccomp backend (``features.use_legacy_landlock``), not its default
 bubblewrap one: bubblewrap needs an unprivileged user namespace, which an unprivileged container does not
@@ -90,6 +93,15 @@ SANDBOX_MODE = "workspace-write"
 # Present in the workspace before Codex starts, empty. Codex's Landlock backend runs a workspace-write
 # sandbox only when these exist (see the module docstring); without them every command is refused.
 SANDBOX_METADATA_DIRS = (".git", ".agents", ".codex")
+
+# The only variables of the job's own environment that Codex starts with; everything else it gets is this
+# run's (codex_process_env). What Codex holds, the commands it runs can see, so the job's task credentials
+# (AWS_CONTAINER_CREDENTIALS_*), the Hugging Face token and the rest of the Batch environment stay with the
+# bridge and the image broker, which make the AWS calls.
+CODEX_INHERITED_ENV = (
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL",
+    "LD_LIBRARY_PATH", "VIRTUAL_ENV", "PYTHONUNBUFFERED", "U2NET_HOME", "BLENDERAGENT_ROOT",
+)
 
 # The alias the bridge exposes to Codex. Codex asks for this name; LiteLLM maps it to the Bedrock model.
 BRIDGE_MODEL_ALIAS = "agent"
@@ -225,14 +237,28 @@ def litellm_config(model_id: str, region: str) -> dict:
     }
 
 
+def codex_process_env(parent: Dict[str, str], run_env: Dict[str, str]) -> Dict[str, str]:
+    """The whole environment Codex starts with: CODEX_INHERITED_ENV from the job, then this run's values.
+
+    An allowlist, not a filter: a variable the job definition adds later stays out until it is named here.
+    The bridge key is in ``run_env`` because Codex sends it to the bridge (``env_key``); Codex's own
+    environment policy, with shell snapshots off, keeps it out of the commands (see codex_config).
+    """
+    env = {name: parent[name] for name in CODEX_INHERITED_ENV if name in parent}
+    env.update(run_env)
+    return env
+
+
 def codex_config(bridge_url: str, bridge_key_env: str, reasoning_effort: str) -> str:
     """Codex's config.toml for this run, written fresh into a per-run CODEX_HOME.
 
     The provider block is what points Codex at the bridge rather than at OpenAI. The sandbox block is what
     keeps the agent inside its workspace: ``exclude_slash_tmp`` and ``exclude_tmpdir_env_var`` remove the
-    default writable carve-outs, so writable means the workspace and nothing else. The environment policy
-    keeps credentials out of every command the agent runs -- the bridge key is read by Codex itself, not by
-    the commands, and AWS credentials are the bridge's business.
+    default writable carve-outs, so writable means the workspace and nothing else.
+
+    The commands' environment is Codex's own (codex_process_env, which holds no AWS credentials) minus what
+    ``shell_environment_policy`` excludes, which removes the bridge key. ``shell_snapshot`` is off because a
+    snapshot replays the variables Codex's shell started with in front of every command, past that policy.
     """
     return f'''# Written per run by the image-to-3D pipeline. Nothing here persists between runs.
 model = "{BRIDGE_MODEL_ALIAS}"
@@ -263,6 +289,8 @@ exclude_slash_tmp = true
 [features]
 # Landlock + seccomp instead of bubblewrap, which needs a user namespace the unprivileged job does not get.
 use_legacy_landlock = true
+# A shell snapshot re-exports Codex's own variables before every command, past the policy below.
+shell_snapshot = false
 
 [shell_environment_policy]
 inherit = "all"
@@ -387,6 +415,34 @@ class BlenderAgentAdapter(ModelAdapter):
         for name in SANDBOX_METADATA_DIRS:
             (dirs["workspace"] / name).mkdir(exist_ok=True)
         return dirs
+
+    @staticmethod
+    def _codex_run_env(dirs: Dict[str, Path], bridge_key_env: str, bridge_key: str, render_engine: str,
+                       render_samples: int) -> Dict[str, str]:
+        """This run's own variables for Codex, on top of codex_process_env's allowlist."""
+        workspace = dirs["workspace"]
+        return {
+            "CODEX_HOME": str(dirs["codex_home"]),
+            bridge_key_env: bridge_key,
+            # Blender and anything else that writes to a home directory land inside the writable
+            # root rather than in a real home the sandbox would refuse.
+            "HOME": str(dirs["home"]),
+            "XDG_CONFIG_HOME": str(workspace / ".config"),
+            "XDG_CACHE_HOME": str(workspace / ".cache"),
+            # Blender writes a session directory under the system temp path, which the sandbox denies
+            # -- its log showed the fallback to /tmp. Pointing TMPDIR into the workspace keeps that
+            # inside the one writable root. The sandbox does not ADD this path as a writable root
+            # (exclude_tmpdir_env_var); it does not need to, since the workspace already is one.
+            "TMPDIR": str(workspace / ".tmp"),
+            "TMP": str(workspace / ".tmp"),
+            "TEMP": str(workspace / ".tmp"),
+            "AGENT_WORKSPACE": str(workspace),
+            # Where agent_gate.py finds the pipeline's own gate and silhouette code to run on a model.
+            "PIPELINE_CODE_DIR": str(Path(__file__).resolve().parents[1]),
+            "AGENT_RENDER_ENGINE": render_engine,
+            "AGENT_RENDER_SAMPLES": str(render_samples),
+            "PYTHONUTF8": "1",
+        }
 
     @staticmethod
     def _stage_references(workspace: Path, prepared: Sequence[str], originals: Sequence[str]) -> List[str]:
@@ -632,29 +688,9 @@ class BlenderAgentAdapter(ModelAdapter):
                 codex_config(f"http://127.0.0.1:{bridge_port}/v1", bridge_key_env, reasoning),
                 encoding="utf-8")
 
-            agent_env = dict(base_env)
-            agent_env.update({
-                "CODEX_HOME": str(dirs["codex_home"]),
-                bridge_key_env: bridge_key,
-                # Blender and anything else that writes to a home directory land inside the writable
-                # root rather than in a real home the sandbox would refuse.
-                "HOME": str(dirs["home"]),
-                "XDG_CONFIG_HOME": str(workspace / ".config"),
-                "XDG_CACHE_HOME": str(workspace / ".cache"),
-                # Blender writes a session directory under the system temp path, which the sandbox denies
-                # -- its log showed the fallback to /tmp. Pointing TMPDIR into the workspace keeps that
-                # inside the one writable root. The sandbox does not ADD this path as a writable root
-                # (exclude_tmpdir_env_var); it does not need to, since the workspace already is one.
-                "TMPDIR": str(workspace / ".tmp"),
-                "TMP": str(workspace / ".tmp"),
-                "TEMP": str(workspace / ".tmp"),
-                "AGENT_WORKSPACE": str(workspace),
-                # Where agent_gate.py finds the pipeline's own gate and silhouette code to run on a model.
-                "PIPELINE_CODE_DIR": str(Path(__file__).resolve().parents[1]),
-                "AGENT_RENDER_ENGINE": render_engine,
-                "AGENT_RENDER_SAMPLES": str(render_samples),
-                "PYTHONUTF8": "1",
-            })
+            agent_env = codex_process_env(
+                dict(os.environ),
+                self._codex_run_env(dirs, bridge_key_env, bridge_key, render_engine, render_samples))
             # The home the sandbox will not let the agent write to is still where HOME points for the
             # bridge; the agent gets its own.
             (workspace / ".config").mkdir(exist_ok=True)
