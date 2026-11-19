@@ -18,7 +18,7 @@ from botocore.exceptions import ClientError
 from zip_archive_pipeline.engine.reader import PrefetchReader, RangeReadError
 from zip_archive_pipeline.engine.sink import MultipartSink, part_size_bytes
 from zip_archive_pipeline.engine.tarstream import TarStreamWriter
-from zip_archive_pipeline.engine.zipstream import ZipStreamWriter, check_member_name
+from zip_archive_pipeline.engine.zipstream import ZipStreamWriter
 
 pytestmark = pytest.mark.unit
 MIB = 1024 * 1024
@@ -124,19 +124,6 @@ class TestTar:
             assert t.extractfile("a.txt").read() == b"hello"
             assert t.extractfile(long_name).read() == b"\x00" * 600
             assert t.getmember("empty").isdir()
-
-    @pytest.mark.parametrize("name", ["/abs", "../x", "a/../b", "a/./b", "a\\b", "", "nul\x00"])
-    def test_unsafe_names_refused(self, name):
-        with pytest.raises(ValueError):
-            TarStreamWriter(BytesSink()).add_file(name, [b"x"], 1)
-        with pytest.raises(ValueError):
-            check_member_name(name)
-
-    def test_duplicate_names_refused(self):
-        writer = TarStreamWriter(BytesSink())
-        writer.add_file("a", [b"x"], 1)
-        with pytest.raises(ValueError):
-            writer.add_file("a", [b"y"], 1)
 
     def test_member_over_8_gib_gets_a_pax_size(self):
         """ustar's octal size field stops below 8 GiB; the member streams through and its pax header

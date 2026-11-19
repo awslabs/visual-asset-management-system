@@ -36,6 +36,11 @@ function onlyCadStepAgent(runtime: "agentcore" | "fargate", extra?: (c: any) => 
             c.app.pipelines.useRapidPipeline.useEcs.enabled = false;
             c.app.pipelines.useRapidPipeline.useEks.enabled = false;
         }
+        // Vector search is not a pipeline, so the loop above leaves it on; its query embedder carries a
+        // Bedrock grant of its own that the grant scans below would otherwise read as the agent's.
+        if (c.app.vectorSearch) {
+            c.app.vectorSearch.enabled = false;
+        }
         c.app.pipelines.useGenAiCadStepAgent.runtime = runtime;
         c.app.pipelines.useGenAiCadStepAgent.useCodeBuild = true;
         c.app.pipelines.useGenAiCadStepAgent.autoRegisterWithVAMS = true;
@@ -400,18 +405,6 @@ describe("CAD STEP agent on the Fargate runtime", () => {
         );
         // The attempt duration equals the run state's wait on the inner token.
         expect((jobDef.properties as any).Timeout.AttemptDurationSeconds).toBe(6600);
-    });
-
-    test("the job definition is sized for the agent, not the shared 16 vCPU / 64 GiB default", () => {
-        const jobDef = synth
-            .ofType("AWS::Batch::JobDefinition")
-            .find((j) => /CadStepAgent/.test(j.logicalId))!;
-        const requirements = (jobDef.properties as any).ContainerProperties
-            .ResourceRequirements as Array<{ Type: string; Value: string }>;
-        expect(Object.fromEntries(requirements.map((r) => [r.Type, r.Value]))).toEqual({
-            VCPU: "2",
-            MEMORY: "16384",
-        });
     });
 
     test("the job definition is created only after the image build custom resource completes", () => {

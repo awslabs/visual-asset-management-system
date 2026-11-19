@@ -10,6 +10,7 @@ import { useFeaturesEnabled } from "../../../context/RuntimeConfigContext";
 import { useEdhHealth } from "../api/adminQueries";
 import type { EdhHealthReason } from "../api/admin";
 import TabStrip from "../components/TabStrip";
+import NotEnabledPanel from "../components/NotEnabledPanel";
 import ImagesTab from "./ImagesTab";
 import InstancesTab from "./InstancesTab";
 import CapacityTab from "./CapacityTab";
@@ -87,8 +88,8 @@ const NoAccess: React.FC<{ what: string }> = ({ what }) => (
 );
 
 const EdhAdminPage: React.FC = () => {
-    // The route is mounted only where EDH_WORKSTATIONS is on (addons/addonRoutes.tsx).
     const features = useFeaturesEnabled();
+    const enabled = features.includes(addonFeaturesEnabled.EDH_WORKSTATIONS);
     // The AMI recipes tab is present only where the deployment builds AMIs.
     const amiRecipesEnabled = features.includes(addonFeaturesEnabled.EDH_AMI_RECIPES);
     // The tab the user chose; until then the page shows the first one it may read.
@@ -96,7 +97,16 @@ const EdhAdminPage: React.FC = () => {
     const tabIdBase = useId();
     const { loading: permissionsLoading, can } = useAllowedRoutes();
     const canHealth = !permissionsLoading && can("GET", "/addon/edh/admin/health");
-    const health = useEdhHealth(canHealth);
+    const health = useEdhHealth(enabled && canHealth);
+
+    if (!enabled) {
+        return (
+            <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
+                <h1 className="text-text-primary">Workstation Admin</h1>
+                <NotEnabledPanel />
+            </div>
+        );
+    }
 
     const tabDomId = (key: TabKey) => `${tabIdBase}-tab-${key}`;
     const panelDomId = `${tabIdBase}-panel`;

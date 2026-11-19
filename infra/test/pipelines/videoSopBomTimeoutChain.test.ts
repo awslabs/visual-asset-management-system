@@ -4,23 +4,25 @@
  */
 
 /**
- * The Video SOP/BOM timeout chain has four members, each enforced by a different clock, and every link
- * must hold:
+ * The Video SOP/BOM timeout chain has three members, each enforced by a different service, and every
+ * link must hold:
  *
  *   job definition AttemptDurationSeconds 21600 (AWS Batch, from the attempt's startedAt)
- *     < Batch state TimeoutSeconds 27900 (Step Functions, from the state's entry: queue wait + attempt)
- *       < state machine TimeoutSeconds 28800 (Step Functions, from start_execution)
- *         < bundle taskTimeout "30600" (the parent workflow's callback wait)
+ *     < state machine TimeoutSeconds 28800 (Step Functions, from start_execution)
+ *       < bundle taskTimeout "30600" (the parent workflow's callback wait)
  *
- * The gap between the first two absorbs a RUNNABLE wait behind the Fargate On-Demand vCPU quota: the
- * state clock runs while the job is queued, the attempt clock does not. The Batch state's States.Timeout
- * is caught and reaches PipelineEndTask; an execution-level States.Timeout would bypass every Catch, so
- * the state machine leaves 15 minutes past the Batch state for the two 5-minute Lambda states.
+ * The 2 h gap between the first two absorbs a RUNNABLE wait behind the Fargate On-Demand vCPU quota:
+ * the execution clock runs while the job is queued, the attempt clock does not. An execution-level
+ * States.Timeout bypasses every Catch, so it skips PipelineEndTask and the external token is released
+ * only by the parent's own taskTimeout with a generic cause.
  *
- * The state bound comes from `StateTimeoutBatchSubmitJob`. A `taskTimeout` prop on `tasks.BatchSubmitJob`
- * renders as the SubmitJob `Timeout.AttemptDurationSeconds` parameter instead, a second attempt bound
- * competing with the job definition's; `Parameters.Timeout` stays the guard against that, and the control
- * at the end of this file shows it is the path such a prop lands on.
+ * The Batch task itself carries NO Step Functions timeout. `tasks.BatchSubmitJob` renders a `taskTimeout`
+ * prop as the SubmitJob `Timeout.AttemptDurationSeconds` parameter and forces the state's TimeoutSeconds
+ * to undefined, so a value written there would silently become a second attempt bound rather than a task
+ * clock. The state's `TimeoutSeconds` is therefore undefined BY CONSTRUCTION whatever props are given, and
+ * asserting it proves nothing; the falsifiable half is `Parameters.Timeout`, and the control at the end of
+ * this file renders a `BatchSubmitJob` WITH a `taskTimeout` to show that this is the path a regression
+ * would populate.
  */
 
 import * as fs from "fs";
@@ -41,7 +43,6 @@ import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import commercialTemplate from "../../config/config.template.commercial.json";
 import { newTestApp } from "../support/testApp";
-import { expectBatchStateTimeoutCleanup } from "../support/batchStateTimeoutCleanup";
 
 const ACCOUNT = "123456789012";
 const REGION = "us-east-1";
@@ -149,22 +150,6 @@ describe("Video SOP/BOM timeout chain", () => {
         expect(definition.TimeoutSeconds).toBeGreaterThan(attemptSeconds());
     });
 
-    test("the Batch state's own bound sits between the attempt and the state machine", () => {
-        const task = definition.States.VideoSopBomBatchJob;
-        expect(task.TimeoutSeconds).toBe(27900);
-        expect(task.TimeoutSeconds).toBeGreaterThan(attemptSeconds());
-        // Room for ConstructPipelineTask and PipelineEndTask, 5-minute Lambdas each.
-        expect(definition.TimeoutSeconds - task.TimeoutSeconds).toBeGreaterThanOrEqual(600);
-        // Its States.Timeout is caught (States.ALL) and reaches PipelineEndTask.
-        const catchers = task.Catch as any[];
-        expect(catchers.some((c) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
-        expect(definition.States[catchers[0].Next].Next).toBe("PipelineEndTask");
-    });
-
-    test("pipelineEnd can end the run's job after the Batch state's timeout", () => {
-        expectBatchStateTimeoutCleanup(template);
-    });
-
     test("the bundle taskTimeout is the config constant and envelopes the state machine", () => {
         const bundle = JSON.parse(fs.readFileSync(BUNDLE_PIPELINE_JSON, "utf-8"));
         // A string in the bundle, as every shipped pipeline.json spells it.
@@ -179,9 +164,12 @@ describe("Video SOP/BOM timeout chain", () => {
         expect(bundle.executionConfig.taskHeartbeatTimeout).toBe("");
     });
 
-    test("the Batch task carries no heartbeat and no SubmitJob attempt override", () => {
+    test("the Batch task carries neither a Step Functions timeout nor a SubmitJob attempt override", () => {
         const task = definition.States.VideoSopBomBatchJob;
         expect(task).toBeDefined();
+        // Undefined by construction (see the header); kept as documentation of the rendered shape, not
+        // as the guard.
+        expect(task.TimeoutSeconds).toBeUndefined();
         expect(task.TimeoutSecondsPath).toBeUndefined();
         expect(task.HeartbeatSeconds).toBeUndefined();
         // The guard. A `taskTimeout` prop would render here, as a second attempt bound competing with
@@ -192,7 +180,8 @@ describe("Video SOP/BOM timeout chain", () => {
     test("[control] a taskTimeout prop lands at Parameters.Timeout, the path the negative above reads", () => {
         // A BatchSubmitJob built WITH the prop the pipeline must not carry, rendered on its own: the
         // attempt override appears under Parameters.Timeout and the state's TimeoutSeconds stays
-        // undefined even now, which is why the state bound needs StateTimeoutBatchSubmitJob.
+        // undefined even now — which is what makes the two halves of the negative above mean what
+        // they say.
         const scratch = new cdk.Stack(newTestApp(), "VideoSopBomTimeoutControlStack", {
             env: { account: ACCOUNT, region: REGION },
         });

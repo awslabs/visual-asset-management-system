@@ -45,6 +45,7 @@ import WorkstationStatusBadge, {
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
 import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
+import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
@@ -55,7 +56,6 @@ import {
     useRemovedRowRef,
 } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
-import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     RecordCard,
     RecordCardFields,
@@ -775,13 +775,11 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 </div>
             )}
 
-            {!loading && error && data && <RefreshFailedNotice error={error} />}
-
             {loading ? (
                 <div role="status" className="p-8 text-center text-text-secondary">
                     Loading workstations...
                 </div>
-            ) : error && !data ? (
+            ) : error ? (
                 <div role="alert" className="p-4 text-vams-error">
                     Error loading workstations: {toastErrorMessage(error)}
                 </div>
@@ -899,12 +897,20 @@ const WorkstationsAndSimulations: React.FC = () => {
 };
 
 /**
- * The route is mounted only where `EDH_WORKSTATIONS` is on (`addons/addonRoutes.tsx`), so a
- * bookmarked URL on a deployment without the add-on shows "Page not found". The Simulations tab
- * follows `EDH_CONTAINERS`.
+ * The web route is visible to anyone whose `web` constraints allow it (the seeded admin role allows
+ * every route), while the API routes exist only where the add-on stack is deployed — so the page
+ * gates itself on the feature flag and says so rather than failing every request.
  */
 const WorkstationsPage: React.FC = () => {
     const enabledFeatures = useFeaturesEnabled();
+    if (!enabledFeatures.includes(addonFeaturesEnabled.EDH_WORKSTATIONS)) {
+        return (
+            <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
+                <h1 className="text-text-primary">Workstations</h1>
+                <NotEnabledPanel />
+            </div>
+        );
+    }
     if (!enabledFeatures.includes(addonFeaturesEnabled.EDH_CONTAINERS)) {
         return <WorkstationsBoard />;
     }

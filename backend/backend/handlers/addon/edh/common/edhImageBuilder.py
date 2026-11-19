@@ -61,12 +61,6 @@ _NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable", "Invali
 # The DescribeImages errors of a parent AMI id EC2 does not find, and the refusal they become.
 _PARENT_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Malformed")
 PARENT_IMAGE_NOT_FOUND = "the parent image could not be found"
-# Refusal texts that name no recipe input and no AWS error code; the detail goes to the log only.
-COMPONENT_PLACEHOLDER_UNRESOLVED = "a component document names a placeholder the recipe does not declare"
-COMPONENT_DEPLOYMENT_VALUE_MALFORMED = "a component document names a deployment value not in its expected form"
-PARENT_SSM_PARAMETER_UNREADABLE = "the parent image's SSM parameter could not be read"
-PARENT_EDH_STACK_NOT_LISTED = "EDH lists no stack of the recipe's kind with the parent image's name"
-PARENT_REFERENCE_UNSUPPORTED = "the parent image reference is not supported"
 # The DescribeInstanceTypes error of a call naming an instance type EC2 does not offer.
 _INSTANCE_TYPE_NOT_OFFERED_CODE = "InvalidInstanceType"
 # The root volume's device name when the parent image does not report one.
@@ -206,11 +200,11 @@ def substitute_component_data(data: str, artefacts_bucket: str, recipe: Dict[str
 
     resolved = _PLACEHOLDER.sub(resolve, data)
     if unresolved:
-        logger.warning(f"Unresolved placeholder(s) in a component document: {', '.join(sorted(set(unresolved)))}")
-        raise ComponentDocumentError(COMPONENT_PLACEHOLDER_UNRESOLVED)
+        raise ComponentDocumentError(
+            f"unresolved placeholder(s) in component document: {', '.join(sorted(set(unresolved)))}")
     if malformed:
-        logger.warning(f"Deployment value(s) not in the expected form for: {', '.join(sorted(set(malformed)))}")
-        raise ComponentDocumentError(COMPONENT_DEPLOYMENT_VALUE_MALFORMED)
+        raise ComponentDocumentError(
+            f"deployment value(s) not in the expected form for: {', '.join(sorted(set(malformed)))}")
     return resolved
 
 
@@ -247,19 +241,15 @@ def resolve_parent_image(parent_image: str, *, ctx: ImageBuilderContext, edh_cli
         try:
             return ctx.ssm.get_parameter(Name=name)["Parameter"]["Value"]
         except ClientError as err:
-            logger.warning(f"Parent image SSM parameter {name} could not be read "
-                           f"({err.response.get('Error', {}).get('Code')})")
-            raise ParentImageUnavailable(PARENT_SSM_PARAMETER_UNREADABLE)
+            raise ParentImageUnavailable(f"SSM parameter {name} could not be read ({err.response['Error']['Code']})")
     if parent_image.startswith(PARENT_EDH_STACK_PREFIX):
         stack_name = parent_image[len(PARENT_EDH_STACK_PREFIX):]
         for record in edh_client.list_software_stacks(KIND_BY_IMAGE_KIND[kind]):
             if (isinstance(record, dict) and str(record.get(EDH_STACK_NAME_FIELD)) == stack_name
                     and record.get(EDH_STACK_AMI_FIELD)):
                 return str(record[EDH_STACK_AMI_FIELD])
-        logger.warning(f"EDH lists no {kind} stack named {stack_name!r}")
-        raise ParentImageUnavailable(PARENT_EDH_STACK_NOT_LISTED)
-    logger.warning(f"Unsupported parent image reference: {parent_image!r}")
-    raise ParentImageUnavailable(PARENT_REFERENCE_UNSUPPORTED)
+        raise ParentImageUnavailable(f"EDH lists no {kind} stack named {stack_name!r}")
+    raise ParentImageUnavailable(f"unsupported parent image reference: {parent_image!r}")
 
 
 def describe_parent_image(ec2, ami_id: str) -> Dict[str, Any]:

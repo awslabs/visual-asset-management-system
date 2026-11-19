@@ -121,7 +121,10 @@ web/
       metadataSchema/
       metadataV2/
       modals/
-      search/               # ModernSearchContainer.tsx - main search UI
+      search/               # ModernSearchContainer.tsx - unified keyword / natural-language search
+                            #   (the body of the search page's "Search" view)
+                            #   SearchLayout/lockedDatabase.ts — trigger text of the Database filter
+                            #   a database route locks (names the database, not "All databases")
       searchSmall/
       selectors/
       single/               # Single-entity views (ViewFile, AssetIngestion, Metadata)
@@ -134,7 +137,9 @@ web/
       Databases.tsx
       LandingPage.tsx
       ListPage.tsx ListPageNoDatabase.tsx MetadataSchema.tsx
-      search/
+                            #   ListPage.tsx keys its body by the route's databaseId: the routes
+                            #   that share one page component keep it mounted (#1228)
+      search/               # SearchPage.tsx — breadcrumbs + searchPlugin's SearchTabsHost (title row, views)
       Subscription/ Tag/
       # Compliance pages — permission-filtered via webRoutes() like every other page (no feature
       # flag); each deploys unconditionally and the nav/routes filter hides them without access.
@@ -155,6 +160,14 @@ web/
         viewerConfig.json   # Plugin configuration
       viewers/              # Individual viewer plugins
         manifest.ts
+
+    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.5
+      index.ts
+      config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
+      core/                 # SearchProviderRegistry.ts, providerAvailability.ts,
+                            #   useSearchProvidersReady.ts, types.ts
+      components/SearchTabsHost.tsx  # title row (h1, view switch, titleSlots) + active body
+      providers/            # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities, helpers, and feature-switch constants
     constants/uploadLimits.ts
@@ -431,7 +444,7 @@ Cache.setItem("config", data);
 
 The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers Add, Edit and Retry only to a role that may call the trigger `PUT` route and Delete only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
 
-The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the asset search list (Create Asset, Delete Selected). The delete dialog both open (`modals/AssetDeleteModal.tsx`) offers its permanent-delete toggle only with `canPermanentlyDelete` (the `deleteAsset` route), and the search list disables Delete Selected for a selection with an archived row without that route, since such a selection can only be permanently deleted. The metadata editor (`metadataV2/MetadataContainer.tsx`) is editable with POST or PUT on the asset metadata route and offers row delete on a stored field only with `canDelete` (DELETE on that route); clearing a schema field and removing a field added in the same edit stay available. With `canDelete` false a bulk-edit CSV import also keeps every stored field the file leaves out, since a `replace_all` that removes stored keys needs the route's DELETE. The file metadata editor (`metadata/FileMetadata.tsx`, both file tabs) and the asset-link metadata editor pass `canDelete` from DELETE on their own routes (`.../metadata/file`, `/asset-links/{assetLinkId}/metadata`). The database metadata editor is not gated: the `database-user` template grants DELETE on `/database/{databaseId}/metadata` for its own database only, which the listing does not report (see below). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). The delete dialog both open (`modals/AssetDeleteModal.tsx`) offers its permanent-delete toggle only with `canPermanentlyDelete` (the `deleteAsset` route), and the search list disables Delete Selected for a selection with an archived row without that route, since such a selection can only be permanently deleted. The metadata editor (`metadataV2/MetadataContainer.tsx`) is editable with POST or PUT on the asset metadata route and offers row delete on a stored field only with `canDelete` (DELETE on that route); clearing a schema field and removing a field added in the same edit stay available. With `canDelete` false a bulk-edit CSV import also keeps every stored field the file leaves out, since a `replace_all` that removes stored keys needs the route's DELETE. The file metadata editor (`metadata/FileMetadata.tsx`, both file tabs) and the asset-link metadata editor pass `canDelete` from DELETE on their own routes (`.../metadata/file`, `/asset-links/{assetLinkId}/metadata`). The database metadata editor is not gated: the `database-user` template grants DELETE on `/database/{databaseId}/metadata` for its own database only, which the listing does not report (see below). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 ```typescript
 const { can } = useAllowedRoutes();
@@ -459,7 +472,7 @@ try {
 }
 ```
 
-Match the app's message convention: a short header naming the outcome (`"Archive failed"` / `"Pipeline archived"`, mirroring `"Search failed"` / `"Search completed"`), with the entity name and backend message in the `description` — never the entity in the header. Never leave a mutation's `catch` as `console.error` only and never use `alert()`. Always confirm success when the surface disappears (a form that closes, a page that navigates away). Keep an inline message as well where it has context; the toast is additive. `toastErrorMessage(err)` normalizes an `Error`, a raw string, or a `{message|error|detail}` object instead of rendering `[object Object]`. The provider adds lifecycle safety over the search hook: timers cleared on unmount, identical repeats collapsed, stack capped at four, and z-index 4000 so a failure raised inside a dialog (z 3001) is not painted underneath it.
+Match the app's message convention: a short header naming the outcome (`"Archive failed"` / `"Pipeline archived"`, mirroring `"Search failed"` / `"Search cleared"`), with the entity name and backend message in the `description` — never the entity in the header. Never leave a mutation's `catch` as `console.error` only and never use `alert()`. Always confirm success when the surface disappears (a form that closes, a page that navigates away). Keep an inline message as well where it has context; the toast is additive. `toastErrorMessage(err)` normalizes an `Error`, a raw string, or a `{message|error|detail}` object instead of rendering `[object Object]`. The provider adds lifecycle safety over the search hook: timers cleared on unmount, identical repeats collapsed, stack capped at four, and z-index 4000 so a failure raised inside a dialog (z 3001) is not painted underneath it.
 
 ### **Rule 14: Use Dual-Mode Auth Token Utilities**
 
@@ -480,14 +493,14 @@ const session = await AmplifyAuth.currentSession();
 
 When frontend changes affect user-facing functionality, update the relevant Docusaurus documentation:
 
-| Change Type          | Documentation to Update                                         |
-| -------------------- | --------------------------------------------------------------- |
-| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.mdx` |
-| New feature/page     | `overview/features.md`, relevant user guide page                |
-| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`   |
-| Config/feature flag  | `deployment/configuration-reference.md`                         |
-| Search UI change     | `user-guide/search-and-discovery.md`                            |
-| Upload flow change   | `user-guide/upload-first-asset.md`                              |
+| Change Type          | Documentation to Update                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| UI navigation change | `user-guide/web-interface.md`, `user-guide/getting-started.mdx`                                                      |
+| New feature/page     | `overview/features.md`, relevant user guide page                                                                     |
+| New viewer plugin    | `developer/viewer-plugins.md`, `additional/viewer-plugins.md`                                                        |
+| Config/feature flag  | `deployment/configuration-reference.md`, feature-flag tables in `overview/features.md` and `architecture/details.md` |
+| Search UI change     | `user-guide/search-and-discovery.md`, `concepts/vector-search.md` (natural-language mode)                            |
+| Upload flow change   | `user-guide/upload-first-asset.md`                                                                                   |
 
 ### **Rule 17: Update Steering Files When Standards Change**
 
@@ -664,6 +677,8 @@ A surface that stays mounted across a login (the side navigation) or that gates 
 
 Any side-navigation entry (a section, link or group in the core, add-on or custom lists) may carry `featuresEnabledRestriction: string[]`, the field name and all-of meaning the viewer config uses: `layout/Navigation.tsx` drops the entry until every listed switch is enabled, re-runs the web-route check when the switches arrive, and strips the field before the items reach `SideNavigation`. An add-on's switch names live in `addons/addonFeatures.ts` (`addonFeaturesEnabled`), each one declared in `infra/common/addonAppFeatures.ts` (`addons/addonFeatures.test.ts`); a fork's live in `custom/customFeatures.ts`.
 
+`VECTORSEARCH` enables the natural-language mode of the search page's Search view; the Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs), and its `System-ZipDownload` trigger filter only with `ZIPDOWNLOADS` (only Download as Zip starts such runs). Full flag list: `WEB_FRONTEND.md` section 9.3.
+
 ---
 
 ## 📐 **Gold Standard Reference Files**
@@ -680,6 +695,7 @@ Any side-navigation entry (a section, link or group in the core, add-on or custo
 | Viewer config        | `src/visualizerPlugin/config/viewerConfig.json`   |
 | Complex component    | `src/components/asset/ViewAsset.tsx`              |
 | Search UI            | `src/components/search/ModernSearchContainer.tsx` |
+| Search page views    | `src/searchPlugin/components/SearchTabsHost.tsx`  |
 | Upload service       | `src/services/AssetUploadService.ts`              |
 | Token utilities      | `src/utils/authTokenUtils.ts`                     |
 | Synonyms config      | `src/synonyms.tsx`                                |
@@ -931,6 +947,45 @@ counterpart: `web/CLAUDE.md` section 11.4.1.
 
 **End-to-end specs** (`web/e2e/`, Playwright against a deployed stack) follow the rules in "End-to-End Testing (Playwright)" below.
 
+**Playwright specs for the search page (`web/e2e/`).** These drive the deployed search page and must pass
+against any sandbox. The core spec for a page outside the orchestration module is `{page}.spec.ts`
+(`search.spec.ts`), with its own `goto*` helper that waits on the page's own structure: `gotoSearch(page,
+{ databaseId?, tab? })` waits on the h1 and the view's first searchbox. The shared helpers in
+`e2e/support/fixtures.ts` are `gotoSearch`, `searchViewSwitch` / `searchViewSegment`, `searchPageHeading`,
+`searchCountBadge` / `searchCountBadgeText`, `searchSubmitButton`, `searchNotice`, `readFeaturesEnabled`,
+`expectSearchRendered` and `actionDisabledReason`. Selector facts:
+
+-   **Views switch from the title row**: one h1 every view shares, and a SegmentedControl
+    (`searchViewSwitch`, a `toolbar` of `aria-pressed` buttons; a select below 688 px) when more than one
+    view is available. There is no `role=tablist`. The asset list view is always there and the `Search`
+    view only when OpenSearch or vector search is on, so derive the expectation from
+    `readFeaturesEnabled(page)` (`VECTORSEARCH` present, or `NOOPENSEARCH` absent), never from a fixture.
+    The active view is the `?tab=` hash query. The empty states read `No matches` (search table) and
+    `No assets to display.` (asset list); use `expectSearchRendered(page)`.
+-   **The count badge carries a `+` when the total is a minimum** (`hits.total.relation` `gte`). Compare
+    it through `searchCountBadgeText`, which adds the `+` only for `gte`.
+-   **A segment locator filtered on `pressed` re-resolves after the click.** Pin the segment by its
+    `data-testid` (the view id) before pressing it.
+-   **A permission-gated action depends on the signed-in role.** A refused role sees the Button disabled
+    with its reason (named by `aria-describedby`), and "Checking your permissions." until the
+    allowed-routes check answers. Branch on `actionDisabledReason(button)`; never assume the admin role.
+-   **A finished search's count is announced, not toasted.** "Found N results" goes to a hidden polite
+    live region, followed by the Search notice's text. Rare natural-language warnings, and a keyword page the time bound cut short (`truncated:time`), show in the
+    dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
+    as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
+-   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
+    the API's message, and the switches and the query band stay.
+-   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
+    opened by click, Enter or Space; an exact count has none.
+-   **A database route locks the Database filter and names it**: the disabled multiselect reads the
+    database id, not "All databases".
+-   **Clear all filters is absent until a criterion is set**: it shows once a query, a filter or a
+    metadata filter row is set and is gone after it is pressed; a fresh load, a record type switch
+    and a database route's locked database show none.
+
+Claude Code counterpart: `web/e2e/CLAUDE.md` ("Selector facts worth not rediscovering", "Adding a core
+spec for a new page").
+
 **Lint and format (from project root):**
 
 ```bash
@@ -955,12 +1010,12 @@ deployment took by matching the served main-bundle hash to the local one
 
 ### **Two kinds of spec**
 
-|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                      | **Ad-hoc specs (untracked)**                                |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                        | Prove one specific change or fix works                      |
-| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                            | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                           | No: keep out of git                                         |
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change or fix works                      |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No: keep out of git                                         |
 
 -   Add a core spec only when a new page or shared component is added. A fix to existing behaviour gets an
     ad-hoc spec, or a new assertion in the relevant core spec when the behaviour is permanent.

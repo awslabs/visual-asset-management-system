@@ -155,7 +155,7 @@ function allFargatePipelinesWithCmk(c: any) {
     c.app.useKmsCmkEncryption.enabled = true;
     for (const flag of [
         "useConversionCoordinateTransform",
-        "useGenAiMetadata3dLabeling",
+        "useSystemGenAiMetadata",
         "usePreview3dThumbnail",
         "usePreviewPcPotreeViewer",
         "useGenAiVideoSopBom",
@@ -166,6 +166,8 @@ function allFargatePipelinesWithCmk(c: any) {
             c.app.pipelines[flag].autoRegisterWithVAMS = false;
         }
     }
+    // The system GenAI metadata pipeline builds its Fargate job definition on this sub-flag only.
+    c.app.pipelines.useSystemGenAiMetadata.useFargateRenderer = true;
     c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
     // The CAD STEP agent builds a Fargate job definition on its Fargate runtime only.
     c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
@@ -208,21 +210,19 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
     });
 
     test("[control] the seven Fargate job definitions are emitted in this synth", () => {
-        // Coordinate transform, Blender renderer, 3D thumbnail, PDAL and Potree, the video SOP/BOM job
-        // and the CAD STEP agent. A lower count means a pipeline was left out of the mutate, and the
-        // loop below would then assert on nothing for it.
+        // Coordinate transform, the system GenAI metadata renderer, 3D thumbnail, PDAL and Potree,
+        // the video SOP/BOM job and the CAD STEP agent. A lower count means a pipeline was left out of
+        // the mutate, and the loop below would then assert on nothing for it.
         expect(fargateJobDefinitions(synth)).toHaveLength(7);
     });
 
-    test("the video SOP/BOM job is sized 4 vCPU / 16 GiB and the CAD STEP agent job 2 vCPU / 16 GiB; the untiered four keep 16 vCPU / 64 GiB", () => {
+    test("the video SOP/BOM job is sized 4 vCPU / 16 GiB; the untiered five keep 16 vCPU / 64 GiB", () => {
         const requirementOf = (jd: Resource, type: string) =>
             ((jd.properties as any).ContainerProperties?.ResourceRequirements ?? []).find(
                 (r: any) => r.Type === type
             )?.Value;
         const isVideo = (jd: Resource) =>
             String((jd.properties as any).JobDefinitionName).startsWith("VideoSopBomJob_");
-        const isCad = (jd: Resource) =>
-            String((jd.properties as any).JobDefinitionName).startsWith("CadStepAgentJob_");
         // The 3D thumbnail job is sized by app.pipelines.usePreview3dThumbnail.computeTiers, which
         // preview3dThumbnailComputeTiers.test.ts asserts, so it is not held to the construct default.
         const isTiered = (jd: Resource) => jd.logicalId.includes("Preview3dThumbnail");
@@ -230,13 +230,9 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
         expect(video).toHaveLength(1);
         expect(requirementOf(video[0], "VCPU")).toBe("4");
         expect(requirementOf(video[0], "MEMORY")).toBe("16384");
-        const cad = fargateJobDefinitions(synth).filter(isCad);
-        expect(cad).toHaveLength(1);
-        expect(requirementOf(cad[0], "VCPU")).toBe("2");
-        expect(requirementOf(cad[0], "MEMORY")).toBe("16384");
         expect(fargateJobDefinitions(synth).filter(isTiered)).toHaveLength(1);
         const resized = fargateJobDefinitions(synth)
-            .filter((jd) => !isVideo(jd) && !isCad(jd) && !isTiered(jd))
+            .filter((jd) => !isVideo(jd) && !isTiered(jd))
             .filter(
                 (jd) =>
                     requirementOf(jd, "VCPU") !== "16" || requirementOf(jd, "MEMORY") !== "65536"

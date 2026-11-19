@@ -275,34 +275,23 @@ describe("WorkstationsPage", () => {
         expect(screen.getByRole("button", { name: "Launch Workstation" })).toBeInTheDocument();
     });
 
-    it("keeps the listed workstations when a later poll fails, and says the list could not be refreshed", () => {
-        (queries.useWorkstations as jest.Mock).mockReturnValue({
-            ...list([activeRow]),
-            error: new Error("Service unavailable"),
-        });
+    it("renders the not-enabled panel and reads nothing when the flag is absent", () => {
+        const { appCache } = require("../../../services/appCache");
+        appCache.getItem.mockReturnValue({ featuresEnabled: [] });
+
         renderPage();
 
-        expect(screen.getByText("Dev box")).toBeInTheDocument();
+        const panel = screen.getByRole("status");
+        expect(panel).toHaveTextContent("EDH Workstations is not enabled in this deployment.");
+        expect(panel).toHaveTextContent("Ask a VAMS administrator to enable the add-on.");
+        // The neutral tone of an unavailable view, not the warning tone of a data caveat.
+        expect(panel).toHaveClass("bg-surface-container");
+        expect(panel).not.toHaveClass("bg-yellow-100");
+        expect(screen.queryByRole("table")).not.toBeInTheDocument();
         expect(
-            screen.getByText(
-                "Could not refresh: Service unavailable. The list shows the last answer."
-            )
-        ).toBeInTheDocument();
-        expect(screen.queryByText(/Error loading workstations/)).not.toBeInTheDocument();
-    });
-
-    it("shows the error panel when the first read fails and there is nothing to keep", () => {
-        (queries.useWorkstations as jest.Mock).mockReturnValue({
-            ...list([]),
-            data: undefined,
-            error: new Error("Service unavailable"),
-        });
-        renderPage();
-
-        expect(
-            screen.getByText("Error loading workstations: Service unavailable")
-        ).toBeInTheDocument();
-        expect(screen.queryByText(/Could not refresh/)).not.toBeInTheDocument();
+            screen.queryByRole("button", { name: "Launch Workstation" })
+        ).not.toBeInTheDocument();
+        expect(queries.useWorkstations).not.toHaveBeenCalled();
     });
 
     it("shows an empty state with a call to action, not an empty table, when the caller has no workstations", () => {

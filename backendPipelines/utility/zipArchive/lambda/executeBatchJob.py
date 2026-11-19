@@ -111,7 +111,7 @@ def lambda_handler(event, context):
                 {"name": "TASK_TOKEN", "value": task_token},
                 {
                     "name": "AWS_REGION",
-                    "value": os.environ["AWS_REGION"],
+                    "value": os.environ.get("AWS_REGION", "us-east-1"),
                 },
             ],
         },

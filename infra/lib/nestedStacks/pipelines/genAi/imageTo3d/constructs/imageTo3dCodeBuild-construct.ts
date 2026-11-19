@@ -35,32 +35,6 @@ export interface ImageTo3dModelImage {
 }
 
 /**
- * Regions that offer AWS CodeArtifact, all in the commercial partition (AWS General Reference, "AWS
- * CodeArtifact endpoints and quotas"). Not AWS GovCloud (US) or the AWS European Sovereign Cloud.
- * shortcut: a fixed list, read from that page on 2026-11-18; add a Region when AWS launches
- * CodeArtifact there.
- */
-export const CODEARTIFACT_REGIONS: readonly string[] = [
-    "us-east-1",
-    "us-east-2",
-    "us-west-2",
-    "ap-south-1",
-    "ap-southeast-1",
-    "ap-southeast-2",
-    "ap-northeast-1",
-    "eu-central-1",
-    "eu-west-1",
-    "eu-west-2",
-    "eu-south-1",
-    "eu-west-3",
-    "eu-north-1",
-];
-
-/** Whether the Image to 3D builds can use an AWS CodeArtifact PyPI cache in this partition and Region. */
-export const codeArtifactAvailable = (partition: string, region: string): boolean =>
-    partition === "aws" && CODEARTIFACT_REGIONS.includes(region);
-
-/**
  * Model keys, in registration order. Each key names the per-model Dockerfile
  * (Dockerfile.<modelKey>) inside the shared container source directory.
  */
@@ -132,49 +106,27 @@ export class ImageTo3dCodeBuildConstruct extends Construct {
         // through CodeArtifact instead means the first build populates the cache and later builds are
         // served from it, which makes a rebuild reproducible rather than dependent on the internet.
         //
-        // CodeArtifact is offered in some commercial Regions only (codeArtifactAvailable), so the
-        // cache is created only there; elsewhere the builds install from the public index.
-        //
         // One domain and one repository serve every model build.
         // The domain name includes baseStackName because a CodeArtifact domain name is unique per
         // account and Region: keyed on config.name and the Region alone, two VAMS deployments in one
         // account would try to create the same domain and the second would fail. baseStackName already
         // carries the Region in practice, so the name is truncated to CodeArtifact's 50-character limit.
-        //
-        // The domain is encrypted with the shared VAMS key when the CMK is on. A domain's key cannot
-        // change after it is created, so turning useKmsCmkEncryption on or off replaces the domain,
-        // and AWS CloudFormation cannot replace a custom-named resource under the same name: the name
-        // carries `-kms` when the key is used, as the CAD STEP agent's ECR repository does. The cache
-        // fills again on the next build.
-        const useCodeArtifactCache = codeArtifactAvailable(
-            props.config.env.partition,
-            props.config.env.region
-        );
-        const domainBaseName = `${props.config.name}-${props.config.app.baseStackName}-imageto3d`
-            .toLowerCase()
-            .replace(/[^a-z0-9-]/g, "-");
-        const packageDomain = useCodeArtifactCache
-            ? new codeartifact.CfnDomain(this, "PackageDomain", {
-                  domainName: props.kmsKey
-                      ? `${domainBaseName.slice(0, 46)}-kms`
-                      : domainBaseName.slice(0, 50),
-                  encryptionKey: props.kmsKey?.keyArn,
-              })
-            : undefined;
+        const packageDomain = new codeartifact.CfnDomain(this, "PackageDomain", {
+            domainName: `${props.config.name}-${props.config.app.baseStackName}-imageto3d`
+                .toLowerCase()
+                .replace(/[^a-z0-9-]/g, "-")
+                .slice(0, 50),
+        });
 
-        const pypiCache = packageDomain
-            ? new codeartifact.CfnRepository(this, "PypiCache", {
-                  domainName: packageDomain.domainName,
-                  repositoryName: "pypi-store",
-                  description:
-                      "Pull-through cache for PyPI, used by the Image to 3D container builds so a rebuild " +
-                      "does not depend on reaching the public package CDN",
-                  externalConnections: ["public:pypi"],
-              })
-            : undefined;
-        if (packageDomain && pypiCache) {
-            pypiCache.addDependency(packageDomain);
-        }
+        const pypiCache = new codeartifact.CfnRepository(this, "PypiCache", {
+            domainName: packageDomain.domainName,
+            repositoryName: "pypi-store",
+            description:
+                "Pull-through cache for PyPI, used by the Image to 3D container builds so a rebuild " +
+                "does not depend on reaching the public package CDN",
+            externalConnections: ["public:pypi"],
+        });
+        pypiCache.addDependency(packageDomain);
 
         /**
          * Helper: Create ECR repo, CodeBuild project, and build trigger for a single model.
@@ -227,16 +179,15 @@ export class ImageTo3dCodeBuildConstruct extends Construct {
                             value: enableGplMeshRepair,
                         },
                         // The buildspec resolves an endpoint and a short-lived token from these and
-                        // points pip at the cache instead of the public index. Empty where the
-                        // Region has no CodeArtifact: the build then installs from the public index.
+                        // points pip at the cache instead of the public index.
                         CODEARTIFACT_DOMAIN: {
-                            value: packageDomain?.domainName ?? "",
+                            value: packageDomain.domainName,
                         },
                         CODEARTIFACT_DOMAIN_OWNER: {
                             value: account,
                         },
                         CODEARTIFACT_REPOSITORY: {
-                            value: pypiCache?.repositoryName ?? "",
+                            value: pypiCache.repositoryName,
                         },
                     },
                 },
@@ -272,54 +223,52 @@ export class ImageTo3dCodeBuildConstruct extends Construct {
             // Permissions: read Python packages through the CodeArtifact cache. The token is minted per
             // build and expires, so nothing long-lived is stored anywhere.
             const stack = Stack.of(this);
-            if (packageDomain && pypiCache) {
-                project.addToRolePolicy(
-                    new iam.PolicyStatement({
-                        actions: ["codeartifact:GetAuthorizationToken"],
-                        resources: [
-                            stack.formatArn({
-                                service: "codeartifact",
-                                resource: "domain",
-                                resourceName: packageDomain.domainName,
-                            }),
-                        ],
-                    })
-                );
-                project.addToRolePolicy(
-                    new iam.PolicyStatement({
-                        actions: [
-                            "codeartifact:GetRepositoryEndpoint",
-                            "codeartifact:ReadFromRepository",
-                        ],
-                        resources: [
-                            stack.formatArn({
-                                service: "codeartifact",
-                                resource: "repository",
-                                resourceName: `${packageDomain.domainName}/${pypiCache.repositoryName}`,
-                            }),
-                            // ReadFromRepository is evaluated against the package as well as the repository
-                            stack.formatArn({
-                                service: "codeartifact",
-                                resource: "package",
-                                resourceName: `${packageDomain.domainName}/${pypiCache.repositoryName}/*`,
-                            }),
-                        ],
-                    })
-                );
-                // GetAuthorizationToken is implemented by STS on CodeArtifact's behalf, so the build
-                // role needs the bearer-token action as well, restricted to that service.
-                project.addToRolePolicy(
-                    new iam.PolicyStatement({
-                        actions: ["sts:GetServiceBearerToken"],
-                        resources: ["*"],
-                        conditions: {
-                            StringEquals: {
-                                "sts:AWSServiceName": "codeartifact.amazonaws.com",
-                            },
+            project.addToRolePolicy(
+                new iam.PolicyStatement({
+                    actions: ["codeartifact:GetAuthorizationToken"],
+                    resources: [
+                        stack.formatArn({
+                            service: "codeartifact",
+                            resource: "domain",
+                            resourceName: packageDomain.domainName,
+                        }),
+                    ],
+                })
+            );
+            project.addToRolePolicy(
+                new iam.PolicyStatement({
+                    actions: [
+                        "codeartifact:GetRepositoryEndpoint",
+                        "codeartifact:ReadFromRepository",
+                    ],
+                    resources: [
+                        stack.formatArn({
+                            service: "codeartifact",
+                            resource: "repository",
+                            resourceName: `${packageDomain.domainName}/${pypiCache.repositoryName}`,
+                        }),
+                        // ReadFromRepository is evaluated against the package as well as the repository
+                        stack.formatArn({
+                            service: "codeartifact",
+                            resource: "package",
+                            resourceName: `${packageDomain.domainName}/${pypiCache.repositoryName}/*`,
+                        }),
+                    ],
+                })
+            );
+            // GetAuthorizationToken is implemented by STS on CodeArtifact's behalf, so the build role
+            // needs the bearer-token action as well, restricted to that service.
+            project.addToRolePolicy(
+                new iam.PolicyStatement({
+                    actions: ["sts:GetServiceBearerToken"],
+                    resources: ["*"],
+                    conditions: {
+                        StringEquals: {
+                            "sts:AWSServiceName": "codeartifact.amazonaws.com",
                         },
-                    })
-                );
-            }
+                    },
+                })
+            );
 
             // Custom Resource: trigger CodeBuild on Create/Update
             const triggerFunction = new cdk.aws_lambda.Function(this, `BuildTrigger-${modelKey}`, {

@@ -9,7 +9,6 @@ import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as path from "path";
 import { Construct } from "constructs";
 import { ArnFormat, Duration, Stack } from "aws-cdk-lib";
-import { NagSuppressions } from "cdk-nag";
 import { storageResources } from "../nestedStacks/storage/storageBuilder-nestedStack";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
@@ -18,6 +17,7 @@ import { Service } from "../helper/service-helper";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
+    addIamNagSuppressions,
     kmsKeyLambdaPermissionAddToResourcePolicy,
     globalLambdaEnvironmentsAndPermissions,
     suppressCdkNagLambda,
@@ -608,26 +608,22 @@ export function buildApiOriginVerifyRotationFunction(
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagLambda(fun);
     suppressCdkNagErrorsByGrantReadWrite(fun);
-    NagSuppressions.addResourceSuppressions(
-        fun,
-        [
-            {
-                id: "AwsSolutions-IAM5",
-                reason: "secretsmanager:GetRandomPassword generates the new value and supports no resource-level permission.",
-                appliesTo: ["Resource::*"],
-            },
-            {
-                id: "AwsSolutions-IAM5",
-                reason: "UpdateWebACL is authorized against each AWS managed rule group the regional web ACL references; the action is the only one granted on them.",
-                appliesTo: [
-                    {
-                        regex: "/^Resource::arn:.*:wafv2:.*:regional\\/managedruleset\\/\\*\\/\\*$/g",
-                    },
-                ],
-            },
-        ],
-        true
-    );
+    addIamNagSuppressions(fun, [
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "secretsmanager:GetRandomPassword generates the new value and supports no resource-level permission.",
+            appliesTo: ["Resource::*"],
+        },
+        {
+            id: "AwsSolutions-IAM5",
+            reason: "UpdateWebACL is authorized against each AWS managed rule group the regional web ACL references; the action is the only one granted on them.",
+            appliesTo: [
+                {
+                    regex: "/^Resource::arn:.*:wafv2:.*:regional\\/managedruleset\\/\\*\\/\\*$/g",
+                },
+            ],
+        },
+    ]);
 
     return fun;
 }

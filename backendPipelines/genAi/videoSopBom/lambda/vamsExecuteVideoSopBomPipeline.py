@@ -28,7 +28,7 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 logger = safeLogger(service="VamsExecuteVideoSopBomPipeline")
 lambda_client = boto3.client('lambda', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
-sfn_client = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'], config=retry_config)
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".mp4,.mov,.m4v,.webm,.mkv")

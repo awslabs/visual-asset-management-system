@@ -51,7 +51,7 @@ tools/VamsCLI/
       comment.py             # Asset version comments (list, get, add, update, delete)
       subscription.py        # Asset event subscriptions (list, create, update, delete, unsubscribe, check)
       features.py            # Feature switch inspection
-      search.py              # Search (OpenSearch integration)
+      search.py              # Search (OpenSearch keyword commands + `search nlp` over POST /search/nlp, gated on VECTORSEARCH)
       sync.py                # Directory sync (sync file push/pull)
       pipeline.py            # Pipeline CRUD + template + tag-schema sub-groups
       workflow.py            # Workflow CRUD + trigger sub-group + asset-less execute + per-asset execution list
@@ -201,7 +201,7 @@ VamsCLIError (base)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
     ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
-    EdhError (+ 18 subclasses; add-on, in utils/addon/edh_exceptions.py)
+    EdhError (+ 17 subclasses; add-on, in utils/addon/edh_exceptions.py)
     ProfileAlreadyExistsError
 ```
 
@@ -264,7 +264,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
 -   Pre-flight token validation for override tokens (checks expiry before request)
 -   Refuses an endpoint whose path has an empty, `.` or `..` segment (raw or percent-encoded), a control character (raw or percent-encoded), or a raw `?` or `#` with `InvalidRequestPathError` before anything is sent: the URL join drops or resolves such a segment and changes a path that contains a control character, and a `?` or `#` ends the path, so a path value carrying one would address another route. Query parameters go in `params=` (`tests/test_api_request_path.py`)
 -   Endpoints are built with `route_path(API_X, name=value)`, never `API_X.format(...)`: it percent-encodes a `/`, `?`, `#` or `%` in each value so the value stays in its own segment and the API, which decodes each path value once, reads it as given; every other character is left to requests. It lives in `utils/request_paths.py`, which imports nothing from the package, so the add-on and fork mixins import it at module level (`api_client` re-exports it). A ratchet test fails on a new `API_*.format(` call outside the EDH client, which encodes an image, recipe, version or job id with `_edh_path_value` and refuses a workstation or capacity-reservation id that is not one valid segment (`_edh_session_id`, `_edh_capacity_reservation_id`) before any request; VamsMCP's `tests/test_path_value_encoding.py` holds `vams_mcp` to the same rule
--   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header. A 429 whose body is a known business refusal (`_BUSINESS_REFUSAL_429_MESSAGES`: the per-user active zip download cap, plus each add-on's own from `ADDON_BUSINESS_REFUSAL_429_MESSAGES` in `addon_constants.py`, such as the EDH quota refusal, which `_edh_error` raises as `EdhQuotaExceededError`; `api_client.py` names no add-on) is not throttling and goes straight to the caller's status mapping, since backing off cannot clear it
+-   HTTP 429: Exponential backoff with jitter, respects `Retry-After` header. A 429 whose body is a known business refusal (`_BUSINESS_REFUSAL_429_MESSAGES`: the per-user active zip download cap) is not throttling and goes straight to the caller's status mapping, since backing off cannot clear it
 -   HTTP 401: Auto-refresh token (Cognito only), fails immediately for override tokens (`OverrideTokenError`); a 401 that persists through `MAX_AUTH_RETRIES` refreshes raises `AuthenticationError`, also with `raise_http_errors=True`. From v2.7.0 the authorizer answers a credential it does not accept (expired or invalid token; unknown, disabled or expired API key) with 401 (#1212)
 -   HTTP 403: Classified by the party that answered it (see the table below); only the authorizer's deny and an unclassified (`unknown`) 403 are refreshed and resent (kept for APIs older than v2.7.0, which answered a rejected token with the authorizer's 403)
 -   Refresh is single-flight across threads (`_TOKEN_REFRESH_LOCK`, which is not reentrant). A request the refresh makes itself (the login-profile and feature-switch reads after a re-authentication with saved credentials) is answered without a further refresh (`_REFRESH_IN_PROGRESS`), so a 401 or an authorizer 403 on it ends the refresh instead of leaving the thread waiting on its own lock (`tests/test_token_refresh_reentry.py`)
@@ -273,6 +273,7 @@ api_client = APIClient(config['api_gateway_url'], profile_manager)
     -   `409` --> `AlreadyExistsError` variants
     -   `403` --> `RequestBlockedError`, `PermissionDeniedError`, `TokenExpiredError` or `APIError`, raised by `_make_request` itself
     -   `429` --> `RateLimitExceededError` / `RetryExhaustedError`
+-   A method that maps its own status codes (catches `requests.exceptions.HTTPError` and raises its own error for a `400`, `404` or `503`) passes `raise_http_errors=True` to `post()` / `get()`. Without it the request wrapper turns every non-2xx into its generic error first, and the method's own branches never run. Its tests replace only `session.request`, so the call goes through the wrapper; a test that mocks `post()` cannot catch the gap (`search_nlp`, `search_query`, `search_simple`).
 
 **HTTP 403 classification.** `_classify_403(response)` (module level in `api_client.py`, never raises) names the party that answered from the response alone, and `_make_request` raises before the `raise_http_errors` re-raise. A 403 from another host that a followed redirect reached (`_redirected_host`: a non-empty `response.history` and a final host other than the request's, such as the presigned Amazon S3 URL of a staged `assets export` payload) is not classified: it is `APIError` (`_REDIRECT_TARGET_REFUSED_MESSAGE`) naming that host, never the URL, after one send. Any other status from such a host is `APIError` (`_REDIRECT_TARGET_FAILED_MESSAGE`) naming the host and status, a transport failure there names the host and the failure type (`_raise_if_redirect_target_unreachable`), and the fallback text of every other transport error passes through `scrub_text`. Only the authorizer's deny can be cured by a fresh token, so only it and an unclassified (`unknown`) 403, which may be one, are refreshed and resent:
 
@@ -1184,6 +1185,7 @@ constant is a gate no command can name, and an extra one names a gate no deploym
 | `FEATURE_EDH_WORKSTATIONS` (`addon_constants.py`) | `"EDH_WORKSTATIONS"`              | EDH Workstations add-on  |
 | `FEATURE_EDH_CONTAINERS` (`addon_constants.py`)   | `"EDH_CONTAINERS"`                | EDH container jobs       |
 | `FEATURE_EDH_AMI_RECIPES` (`addon_constants.py`)  | `"EDH_AMI_RECIPES"`               | EDH AMI recipe builds    |
+| `FEATURE_VECTORSEARCH`                            | `"VECTORSEARCH"`                  | `search nlp` available   |
 
 ---
 

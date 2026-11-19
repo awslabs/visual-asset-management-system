@@ -61,8 +61,7 @@ export const ZIP_ARCHIVE_STATE_MACHINE_TIMEOUT = cdk.Duration.minutes(11 * 60 + 
  * States.HeartbeatTimeout within 30 minutes instead of at the 11-hour task timeout, and the read-time
  * reconcile finalizes its job FAILED "The archive job stopped responding". The clock starts when the
  * Batch job is submitted, so the 30 minutes also cover the job's wait in the Batch queue and its
- * Fargate start. pipelineEnd then looks the job up: one still waiting to start is cancelled and
- * reported as having waited too long, one that failed before its container ran as unable to start.
+ * Fargate start; a job still queued after that ends the same way.
  */
 export const ZIP_ARCHIVE_BATCH_HEARTBEAT = cdk.Duration.minutes(30);
 
@@ -96,55 +95,35 @@ export class ZipArchiveConstruct extends Construct {
         const account = cdk.Stack.of(this).account;
         const zip = props.config.app.pipelines.useZipDownloads;
 
-        // Asset buckets: read the selection (any version) under each record's prefix, list it there,
-        // and in mode 2 write the archive as a multipart upload under the run's outputs, which sit
-        // in `<prefix>pipelines/` of the run bucket.
+        // Asset buckets: read the selection (any version), and in mode 2 write the archive to the run's
+        // outputs prefix as a multipart upload.
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
-                ...s3AssetBuckets.getS3AssetBucketRecords().flatMap((record) => {
+                ...s3AssetBuckets.getS3AssetBucketRecords().map((record) => {
                     const prefix = record.prefix || "/";
                     // {bucketArn}/{prefix}*, with any leading slash stripped so the root prefix
                     // yields {bucketArn}/*.
                     const normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
                     const objectPrefix = normalizedPrefix.replace(/^\/+/, "");
-                    return [
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: [
-                                "s3:GetObject",
-                                // Every member is read at the S3 version the job resolved.
-                                "s3:GetObjectVersion",
-                            ],
-                            resources: [`${record.bucket.bucketArn}/${objectPrefix}*`],
-                        }),
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: [
-                                "s3:PutObject",
-                                "s3:AbortMultipartUpload",
-                                "s3:ListMultipartUploadParts",
-                            ],
-                            resources: [`${record.bucket.bucketArn}/${objectPrefix}pipelines/*`],
-                        }),
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: [
-                                "s3:ListBucket",
-                                // Folder and whole-asset entries expand by ListObjectVersions.
-                                "s3:ListBucketVersions",
-                            ],
-                            resources: [record.bucket.bucketArn],
-                            // A record registered at the bucket root lists the whole bucket.
-                            conditions: objectPrefix
-                                ? { StringLike: { "s3:prefix": [`${objectPrefix}*`] } }
-                                : undefined,
-                        }),
-                        new iam.PolicyStatement({
-                            effect: iam.Effect.ALLOW,
-                            actions: ["s3:GetBucketLocation"],
-                            resources: [record.bucket.bucketArn],
-                        }),
-                    ];
+                    return new iam.PolicyStatement({
+                        effect: iam.Effect.ALLOW,
+                        actions: [
+                            "s3:GetObject",
+                            // Every member is read at the S3 version the job resolved.
+                            "s3:GetObjectVersion",
+                            "s3:PutObject",
+                            "s3:AbortMultipartUpload",
+                            "s3:ListMultipartUploadParts",
+                            "s3:ListBucket",
+                            // Folder and whole-asset entries expand by ListObjectVersions.
+                            "s3:ListBucketVersions",
+                            "s3:GetBucketLocation",
+                        ],
+                        resources: [
+                            record.bucket.bucketArn,
+                            `${record.bucket.bucketArn}/${objectPrefix}*`,
+                        ],
+                    });
                 }),
             ],
         });
@@ -226,8 +205,7 @@ export class ZipArchiveConstruct extends Construct {
             ],
         });
 
-        // Container JOB role: what the zipArchive process itself calls. Pulling the image and writing
-        // the log stream are the execution role's.
+        // Container JOB role: what the zipArchive process itself calls.
         const containerJobRole = new iam.Role(this, "ZipArchiveContainerJobRole", {
             assumedBy: Service("ECS_TASKS").Principal,
             inlinePolicies: {
@@ -236,7 +214,12 @@ export class ZipArchiveConstruct extends Construct {
                 TablePolicy: tablePolicy,
                 StateTaskPolicy: stateTaskPolicy,
             },
-            managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess")],
+            managedPolicies: [
+                iam.ManagedPolicy.fromAwsManagedPolicyName(
+                    "service-role/AmazonECSTaskExecutionRolePolicy"
+                ),
+                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
+            ],
         });
 
         // Cross-account external asset buckets encrypted with their own keys (no-op without them).
@@ -353,7 +336,6 @@ export class ZipArchiveConstruct extends Construct {
             this,
             props.lambdaCommonBaseLayer,
             props.assetAuxiliaryBucket,
-            batchPipeline.batchJobQueue,
             props.config,
             props.vpc,
             props.pipelineSubnets,
@@ -396,10 +378,6 @@ export class ZipArchiveConstruct extends Construct {
         const archiveBatchJob = new tasks.LambdaInvoke(this, "ZipArchiveBatchJob", {
             lambdaFunction: executeBatchJobFunction,
             integrationPattern: sfn.IntegrationPattern.WAIT_FOR_TASK_TOKEN,
-            // executeBatchJob submits a Batch job on every call, so a retry after a Lambda service
-            // fault could start a second container on the same token and job row. The fault is
-            // caught like any other error and reaches pipelineEnd.
-            retryOnServiceExceptions: false,
             payload: sfn.TaskInput.fromObject({
                 taskToken: sfn.JsonPath.taskToken,
                 "jobName.$": "$.jobName",
@@ -499,17 +477,14 @@ export class ZipArchiveConstruct extends Construct {
         });
 
         // CDK Nag suppressions
-        for (const [role, managedReason] of [
-            [containerExecutionRole, NAG_REASON_ECS_TASK_EXECUTION_MANAGED],
-            [containerJobRole, "AWSXrayWriteOnlyAccess grants X-Ray segment writes only."],
-        ] as const) {
+        for (const role of [containerExecutionRole, containerJobRole]) {
             NagSuppressions.addResourceSuppressions(
                 role,
                 [
-                    { id: "AwsSolutions-IAM4", reason: managedReason },
+                    { id: "AwsSolutions-IAM4", reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED },
                     {
                         id: "AwsSolutions-IAM5",
-                        reason: "The zipArchive container reads any file under an asset bucket's registered prefix (the selection is resolved at run time), writes only under that prefix's pipelines/ outputs and the auxiliary bucket's prepared-downloads prefix, and answers its own Step Functions task token.",
+                        reason: "The zipArchive container reads any file of the selected asset and writes under one object prefix.",
                     },
                 ],
                 true
@@ -521,7 +496,7 @@ export class ZipArchiveConstruct extends Construct {
             [
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "Pipeline Lambda functions read the asset buckets and answer Step Functions task tokens. pipelineEnd lists the run's AWS Batch jobs (ListJobs supports no resource-level permission) and cancels the run's job by id, which AWS Batch generates at submit, so job/* in this account and Region is the narrowest ARN.",
+                    reason: "Pipeline Lambda functions read the asset buckets and answer Step Functions task tokens.",
                 },
                 {
                     id: "AwsSolutions-IAM4",

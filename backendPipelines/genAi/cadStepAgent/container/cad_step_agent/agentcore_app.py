@@ -7,9 +7,7 @@ The runtime posts the invocation payload (``{"jobName", "definition", "taskToken
 ``/invocations``. The handler validates it, starts the job as a background task and returns an
 acknowledgement at once; the job reports the task token itself when it finishes, and the runtime keeps
 the session alive while the task runs (its ping reports busy). One run per session container: a
-payload that arrives while a run is active is answered ``accepted: false``. Each run starts with no
-process from an earlier run in the session: once a run holds the slot, and again when it ends, every
-process in the container other than the init and this server is ended. A SIGTERM (the session
+payload that arrives while a run is active is answered ``accepted: false``. A SIGTERM (the session
 ending) stops the active run through ``cancellation`` and then lets the server shut down.
 """
 
@@ -69,14 +67,6 @@ def active_job():
         return _active["job"]
 
 
-def _end_leftover_processes(job_name):
-    """End every process in the container other than its init and this server, so a run starts with
-    no process from an earlier run in the same session. Called only while this run holds the slot."""
-    if not sandbox.end_leftover_processes():
-        logger.warning("leftover processes not ended job=%s: the server is not the image init's child "
-                       "at PID 1", job_name)
-
-
 def validate_payload(payload):
     """The (definition, task token, job name) of an invocation payload; raises ValueError when malformed."""
     if not isinstance(payload, dict):
@@ -108,11 +98,7 @@ async def run_in_background(definition, task_token, job_name):
     else:
         logger.info("background run done job=%s", job_name)
     finally:
-        # Before the slot frees, so the processes ended are never a later run's.
-        try:
-            _end_leftover_processes(job_name)
-        finally:
-            _release()
+        _release()
 
 
 @app.entrypoint
@@ -126,11 +112,6 @@ async def invoke(payload, context=None):
     if not _claim(job_name):
         logger.warning("rejected invocation job=%s: a run is already active in this session", job_name)
         return {"accepted": False, "error": "busy: a run is already active in this session"}
-    try:
-        _end_leftover_processes(job_name)
-    except Exception:
-        _release()
-        raise
     asyncio.create_task(run_in_background(definition, task_token, job_name))
     return {"accepted": True, "jobName": job_name}
 

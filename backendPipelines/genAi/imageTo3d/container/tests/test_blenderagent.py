@@ -18,7 +18,6 @@ import json
 import os
 import re
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -85,20 +84,6 @@ class TestTheBridgeRoutesToBedrockOnTheTaskRole:
         params = config["model_list"][0]["litellm_params"]
         assert params["model"] == "bedrock/converse/us.openai.gpt-5.6-terra"
         assert params["aws_region_name"] == "us-west-2"
-
-    @pytest.mark.parametrize("region, host", [
-        ("us-west-2", "https://bedrock-runtime.us-west-2.amazonaws.com"),
-        ("us-gov-west-1", "https://bedrock-runtime.us-gov-west-1.amazonaws.com"),
-        ("eusc-de-east-1", "https://bedrock-runtime.eusc-de-east-1.amazonaws.eu"),
-    ])
-    def test_the_bridge_is_given_the_partitions_bedrock_host(self, region, host):
-        """LiteLLM's own Region-prefix table has no EU Sovereign Cloud entry, so without an explicit
-        endpoint the first model call there goes to an amazonaws.com host that does not exist."""
-        boto3 = pytest.importorskip("boto3")
-        if isinstance(boto3, MagicMock):
-            pytest.skip("boto3 is stubbed here; the endpoint comes from botocore's partition data")
-        params = litellm_config("m", region)["model_list"][0]["litellm_params"]
-        assert params["aws_bedrock_runtime_endpoint"] == host
 
     def test_no_credential_is_written_into_the_bridge_configuration(self):
         config = json.dumps(litellm_config("m", "r"))

@@ -21,12 +21,12 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ConstructPipeline-ZipArchive")
 s3 = boto3.client('s3', config=retry_config)
-sfn = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'], config=retry_config)
+sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
 # The zipArchive run configBody keys the container accepts (anything else is refused, so a typo does not
 # silently fall back to a default).
 ARCHIVE_CONFIG_KEYS = ("format", "compression", "outputFileName", "includePatterns", "excludePatterns",
-                       "assetVersionId")
+                       "assetVersionId", "includePreviewFiles")
 FORMATS = ("zip", "tar", "tar.gz", "tgz")
 
 
@@ -62,6 +62,10 @@ def archive_config(raw):
             raise ValueError(f"{field} must be a list of strings")
     if config.get("outputFileName") is not None and not isinstance(config["outputFileName"], str):
         raise ValueError("outputFileName must be a string")
+    # Preview companions ({file}.previewFile.{ext}) are left out of the archive unless this is true; a
+    # missing key is false, and only a JSON boolean is accepted (not "true", 1 or null).
+    if "includePreviewFiles" in config and not isinstance(config["includePreviewFiles"], bool):
+        raise ValueError("includePreviewFiles must be true or false")
     return config
 
 

@@ -53,7 +53,7 @@ from models.common import (
     VAMSGeneralErrorResponse, validation_error_message,
 )
 from models.addon.edh import (
-    EDH_OS_FAMILIES, CapacityReservationViewModel, LeaseSettingsRequestModel, RegisterCapacityReservationRequestModel,
+    CapacityReservationViewModel, LeaseSettingsRequestModel, RegisterCapacityReservationRequestModel,
     RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel, UpdateCapacityReservationRequestModel,
     edh_failure_projection, start_failure_projection,
 )
@@ -127,8 +127,6 @@ _STACK_LABEL_ID = re.compile(r"\(id:\s*(\d+)\)\s*$")
 # Stale views: a desktop EDH reports stopped whose row last changed at least idleMinutes ago (or that
 # has no row to time against), and a row EDH no longer lists at all.
 STALE_IDLE_MINUTES_DEFAULT = 120
-# A year. A larger threshold lists nothing a year cannot, and an unbounded one overflows the cutoff.
-STALE_IDLE_MINUTES_MAX = 525600
 STALE_REASON_STOPPED = "stopped"
 STALE_REASON_MISSING = "missingInEdh"
 STOPPED_STATES = frozenset({STATE_STOPPED, STATE_ORPHANED})
@@ -952,9 +950,6 @@ def list_stale_instances(event):
         return validation_error(body={'message': "idleMinutes must be an integer"}, event=event)
     if idle_minutes < 1:
         return validation_error(body={'message': "idleMinutes must be at least 1"}, event=event)
-    if idle_minutes > STALE_IDLE_MINUTES_MAX:
-        return validation_error(body={'message': f"idleMinutes must be at most {STALE_IDLE_MINUTES_MAX}"},
-                                event=event)
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=idle_minutes)
     client = EdhClient(profile="api")
@@ -1001,12 +996,6 @@ def act_on_instance(event, action):
             record = candidate
             break
     if record is None and row is None:
-        # Decided as a session of no known image or type, of every OS family: a caller who passes is
-        # told it is missing, any other gets the refusal a session it may not act on gets.
-        if len(claims_and_roles["tokens"]) == 0 or not all(
-                _enforcer().enforce(_workstation_auth_object("", os_family, ""), "POST")
-                for os_family in EDH_OS_FAMILIES):
-            return authorization_error()
         return general_error(status_code=404, body={'message': "Session not found"}, event=event)
 
     item = _instance_item(record, row)

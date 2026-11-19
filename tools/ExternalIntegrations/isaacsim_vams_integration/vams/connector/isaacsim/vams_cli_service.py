@@ -201,7 +201,7 @@ class VamsAuthenticationError(VamsCliError):
 
 
 class VamsAccessDeniedError(VamsCliError):
-    """Raised when VAMS did not accept the credential a call was made with (HTTP 401)."""
+    """Raised when VAMS refused the credential a call was made with (HTTP 401 or 403)."""
     pass
 
 
@@ -233,13 +233,13 @@ class VamsTransferError(VamsCliError):
 # The CLI exits with the same status for a refused credential as for any other failure, so a refusal
 # is recognised from the error it prints: the exception class a command names as the error type, the
 # heading the CLI's global handler puts on the message, or the CLI's own wording, which a command that
-# wraps the exception in a message of its own keeps. The API answers a key or token it does not accept
-# with 401, which the CLI raises as one of these. A 403 (PermissionDeniedError, "Access
-# forbidden.") is a denial of the call itself, on an entity, a role or the network path, which signing
-# in again does not change, so it is an ordinary error.
-_ACCESS_DENIED_ERROR_TYPES = frozenset(("AuthenticationError", "OverrideTokenError", "TokenExpiredError"))
-_ACCESS_DENIED_HEADINGS = ("Authentication Error:", "Override Token Error:", "Token Expired:")
-_ACCESS_DENIED_WORDING = ("Authentication failed", "Override token authentication failed")
+# wraps the exception in a message of its own keeps.
+_ACCESS_DENIED_ERROR_TYPES = frozenset((
+    "PermissionDeniedError", "AuthenticationError", "OverrideTokenError", "TokenExpiredError"))
+_ACCESS_DENIED_HEADINGS = (
+    "Permission Denied:", "Authentication Error:", "Override Token Error:", "Token Expired:")
+_ACCESS_DENIED_WORDING = (
+    "Access forbidden.", "Authentication failed", "Override token authentication failed")
 
 
 def _cli_error(message: str, error_type: str, exit_code: int = 1) -> VamsCliError:
@@ -262,7 +262,6 @@ class AuthStatus:
     expires_at: str = ""
     web_deployed_url: str = ""
     success: bool = False
-    refresh_supported: bool = False
 
 
 @dataclass
@@ -737,23 +736,11 @@ class VamsCliService:
 
     def check_authentication(self) -> AuthStatus:
         """
-        Check current authentication status. A Cognito sign-in whose access token has expired is
-        renewed once with the CLI's refresh token, so a session the extension took over keeps
-        working past the token's lifetime; when the renewal fails the expired status is returned.
+        Check current authentication status.
 
         Returns:
             AuthStatus dataclass with current auth state.
         """
-        status = self._read_auth_status()
-        if status.authenticated and status.is_expired and status.refresh_supported:
-            try:
-                self._execute_command(["auth", "refresh", "--json-output"])
-            except VamsCliError:
-                return status
-            return self._read_auth_status()
-        return status
-
-    def _read_auth_status(self) -> AuthStatus:
         try:
             output = self._execute_command(["auth", "status", "--json-output"])
             data = self._parse_json(output)
@@ -772,7 +759,6 @@ class VamsCliService:
                 expires_at=data.get("expires_at", ""),
                 web_deployed_url=data.get("web_deployed_url", ""),
                 success=data.get("success", False),
-                refresh_supported=data.get("refresh_supported", False) is True,
             )
 
             if status.web_deployed_url:

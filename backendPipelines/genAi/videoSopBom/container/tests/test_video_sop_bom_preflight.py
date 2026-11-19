@@ -227,44 +227,8 @@ class TestConnectivityPreflight:
         preflight.check_connectivity(make_clients(s3=s3, transcribe=transcribe, bedrock=bedrock), make_definition())
         assert transcribe.get_calls == ["vams-video-sop-bom-preflight"]
         assert bedrock.calls[0]["modelId"] == "global.anthropic.claude-sonnet-5-5"
-        # The full-mode default: finalize and vision verification ask for 32,000 output tokens.
-        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 32000}
+        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": 1}
         assert s3.head_bucket_calls == ["aux-bucket"]
-
-    @pytest.mark.parametrize("config, expected", [
-        ({}, 32000),
-        ({"runVisualVerification": False}, 32000),
-        ({"runVisualVerification": False, "profile": {"stages": {"finalize": {"maxTokens": 8000}}}}, 16000),
-        ({"profile": {"stages": {"finalize": {"maxTokens": 8000}}}}, 32000),
-        ({"profile": {"stages": {"window_extraction": {"maxTokens": 4000}, "finalize": {"maxTokens": 8000},
-                                 "vision_verification": {"maxTokens": 6000}}}}, 8000),
-        ({"mode": "transcript"}, 1),
-    ], ids=["default", "no-vision", "no-vision-lower-finalize", "lower-finalize-vision-on", "all-lowered",
-            "transcript-only"])
-    def test_the_bedrock_probe_asks_for_the_runs_largest_output_request(self, config, expected):
-        from conftest import FakeBedrock, FakeS3, FakeTranscribe, make_clients, make_definition, text_response
-        from video_sop_bom_pipeline import preflight
-
-        bedrock = FakeBedrock(lambda request, n: text_response("ok"))
-        clients = make_clients(s3=FakeS3(), transcribe=FakeTranscribe(), bedrock=bedrock)
-        preflight.check_connectivity(clients, make_definition(config=config))
-        assert bedrock.calls[0]["inferenceConfig"] == {"maxTokens": expected}
-
-    def test_a_model_that_refuses_the_runs_output_request_names_the_stage_knob(self):
-        from conftest import FakeBedrock, client_error, make_clients, make_definition
-        from video_sop_bom_pipeline import preflight
-        from video_sop_bom_pipeline.errors import PipelineRejection
-
-        message = "The maximum tokens you requested exceeds the model limit of 8192."
-        bedrock = FakeBedrock(lambda request, n: client_error("ValidationException", message, "Converse"))
-        with pytest.raises(PipelineRejection) as raised:
-            preflight.check_connectivity(make_clients(bedrock=bedrock), make_definition())
-        assert raised.value.code == "VideoSopBomConnectivityError"
-        assert raised.value.cause == (
-            "Amazon Bedrock model global.anthropic.claude-sonnet-5-5 refused the preflight request "
-            f"(ValidationException: {message}). The run asks for up to 32000 output tokens per call (finalize), "
-            "so the model must accept that many; a workload profile can lower stages.finalize.maxTokens."
-        )
 
     @pytest.mark.parametrize("exc_class_name", ["ConnectTimeoutError", "EndpointConnectionError"])
     def test_transcribe_connection_errors_name_the_host_and_the_missing_endpoint(self, exc_class_name):
@@ -308,21 +272,15 @@ class TestConnectivityPreflight:
             "— the Bedrock Runtime interface endpoint is missing (app.useGlobalVpc.addVpcEndpoints)."
         )
 
-    @pytest.mark.parametrize("code, config", [
-        ("AccessDeniedException", {}),
-        ("ResourceNotFoundException", {}),
-        # A transcript-only run sends no analysis call, so its probe asks for one token and a
-        # ValidationException there is about the model id or access, not the output size.
-        ("ValidationException", {"mode": "transcript"}),
-    ])
-    def test_bedrock_model_access_codes_are_readable(self, code, config):
+    @pytest.mark.parametrize("code", ["AccessDeniedException", "ResourceNotFoundException", "ValidationException"])
+    def test_bedrock_model_access_codes_are_readable(self, code):
         from conftest import FakeBedrock, client_error, make_clients, make_definition
         from video_sop_bom_pipeline import preflight
         from video_sop_bom_pipeline.errors import PipelineRejection
 
         bedrock = FakeBedrock(lambda request, n: client_error(code, "denied", "Converse"))
         with pytest.raises(PipelineRejection) as raised:
-            preflight.check_connectivity(make_clients(bedrock=bedrock), make_definition(config=config))
+            preflight.check_connectivity(make_clients(bedrock=bedrock), make_definition())
         assert raised.value.code == "VideoSopBomConnectivityError"
         assert raised.value.cause == (
             f"Amazon Bedrock model global.anthropic.claude-sonnet-5-5 is not accessible from this account/Region ({code}) "

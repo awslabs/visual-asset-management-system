@@ -150,7 +150,6 @@ export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     assetAuxiliaryBucket: s3.IBucket,
-    batchJobQueue: batch.JobQueue,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -177,10 +176,7 @@ export function buildPipelineEndFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {
-            // After a heartbeat timeout pipelineEnd looks up the run's job here (by job name).
-            BATCH_JOB_QUEUE: batchJobQueue.jobQueueName,
-        },
+        environment: {},
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -194,21 +190,6 @@ export function buildPipelineEndFunction(
         new iam.PolicyStatement({
             actions: ["states:SendTaskSuccess", "states:SendTaskFailure"],
             resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
-        })
-    );
-
-    // After a heartbeat timeout: find the run's job (ListJobs takes no resource) and cancel it when it
-    // is still waiting to start (job ids are generated at submit, so no narrower ARN exists).
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["batch:ListJobs"],
-            resources: ["*"],
-        })
-    );
-    fun.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["batch:TerminateJob"],
-            resources: [`arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job/*`],
         })
     );
 

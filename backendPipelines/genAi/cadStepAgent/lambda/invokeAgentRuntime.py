@@ -32,7 +32,7 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="InvokeAgentRuntime-CadStepAgent")
 agentcore = boto3.client("bedrock-agentcore", config=retry_config)
-sfn = boto3.client("stepfunctions", region_name=os.environ["AWS_REGION"], config=retry_config)
+sfn = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "us-east-1"), config=retry_config)
 
 AGENT_RUNTIME_ARN = os.environ["AGENT_RUNTIME_ARN"]
 AGENT_RUNTIME_QUALIFIER = os.environ.get("AGENT_RUNTIME_QUALIFIER", "DEFAULT")
@@ -105,19 +105,9 @@ def abort_external_workflow(error, task_token, error_name=INVOKE_ERROR):
         logger.error(f"Failed to send task failure callback: {e}")
 
 
-def definition_summary(definition):
-    """``mode=<mode> provider=<provider>`` of a definition, for the log line. The definition also
-    carries the caller's prompt, which is not logged."""
-    try:
-        agent = definition.get("agent") or {}
-        return f"mode={definition.get('mode')} provider={agent.get('modelProvider')}"
-    except AttributeError:
-        return "mode=? provider=?"
-
-
 def lambda_handler(event, context):
-    # Named first, so a malformed event still leaves the run's identifier in the log.
-    logger.info(f"Event: job={event.get('jobName')}")
+    logger.info("Event", event=event)
+
     job_name = event["jobName"]
     definition = event["definition"]
     task_token = event.get("taskToken", "")
@@ -125,7 +115,6 @@ def lambda_handler(event, context):
     definition_obj = json.loads(definition[0]) if isinstance(definition, list) else definition
     if isinstance(definition_obj, str):
         definition_obj = json.loads(definition_obj)
-    logger.info(f"Definition: job={job_name} {definition_summary(definition_obj)}")
 
     payload = {
         "jobName": job_name,

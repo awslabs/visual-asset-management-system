@@ -1,9 +1,8 @@
 """Tests for how the Isaac Sim connector's CLI wrapper recognises a credential VAMS refused.
 
-The CLI exits 1 for an HTTP 401 exactly as for any other failure, so a refusal is told apart by the
-error document it prints. A workstation's desktop session can hold a key VAMS revoked when the desktop
-last stopped, and the extension says how to recover only when it recognises that case. A 403 is a
-denial of the call (an entity, a role, the network path), which signing in again does not change.
+The CLI exits 1 for an HTTP 401 or 403 exactly as for any other failure, so a refusal is told apart
+by the error document it prints. A workstation's desktop session can hold a key VAMS revoked when the
+desktop last stopped, and the extension says how to recover only when it recognises that case.
 """
 
 import ast
@@ -66,15 +65,19 @@ def cli_error(monkeypatch):
 
 
 @pytest.mark.parametrize("document", [
+    # A 403 a command wrapped in its own message; the live desktop showed this one.
+    {"error": "API Error: Failed to list databases: Access forbidden. You do not have permission to "
+              "perform this action. Contact your administrator if you believe this is an error."},
+    {"error": "Permission Denied: Access forbidden. You do not have permission to perform this action."},
     {"error": "Authentication Error: Authentication failed: 401 Client Error: Unauthorized"},
-    # A 401 a command wrapped in its own message.
-    {"error": "API Error: Failed to list databases: Authentication failed. Please run 'vamscli auth login' "
-              "to re-authenticate."},
     {"error": "Override Token Error: Override token authentication failed. The token may be invalid "
               "or expired."},
     {"error": "Token Expired: Authentication token has expired."},
+    {"error": "Access forbidden. You do not have permission to perform this action.",
+     "error_type": "PermissionDeniedError"},
     {"error": "Token has expired", "error_type": "TokenExpiredError"},
-    {"error": "Invalid credential", "error_type": "AuthenticationError"},
+    # A role or entity refusal by a VAMS handler, as the CLI's global handler prints it.
+    {"error": "Permission Denied: Access forbidden. Not Authorized", "error_type": "PermissionDeniedError"},
 ])
 def test_a_refused_credential_is_recognised(cli_error, document):
     error = cli_error(document)
@@ -84,16 +87,11 @@ def test_a_refused_credential_is_recognised(cli_error, document):
 
 
 def test_a_refusal_in_a_zero_exit_response_is_recognised(cli_error):
-    assert isinstance(cli_error({"error": "Authentication Error: Authentication failed."}, returncode=0),
+    assert isinstance(cli_error({"error": "Permission Denied: Access forbidden."}, returncode=0),
                       VamsAccessDeniedError)
 
 
 @pytest.mark.parametrize("document", [
-    # A role or entity refusal by a VAMS handler, as the CLI's global handler prints it.
-    {"error": "Permission Denied: Access forbidden. Not Authorized", "error_type": "PermissionDeniedError"},
-    {"error": "Permission Denied: Access forbidden. You do not have permission to perform this action."},
-    {"error": "API Error: Failed to list databases: Access forbidden. You do not have permission to "
-              "perform this action. Contact your administrator if you believe this is an error."},
     {"error": "Asset 'a1' not found", "error_type": "Resource Not Found"},
     {"error": "API Error: Failed to list databases: 500 Server Error: Internal Server Error"},
     {"error": "Operation cancelled by user", "error_type": "Aborted"},
@@ -167,22 +165,12 @@ def test_the_cli_texts_for_a_blocked_request_carry_no_refusal_wording():
         assert isinstance(text, str) and text, name
         for trigger in triggers:
             assert trigger.lower() not in text.lower(), (name, trigger)
-    # Control: the CLI's own text for a token the API did not accept carries a trigger, and reads as
-    # a refusal by its wording alone, so the matching above is live.
-    rejected = _module_string(api_client, "_INJECTED_TOKEN_REJECTED_MESSAGE")
-    assert any(trigger.lower() in rejected.lower() for trigger in triggers)
-    assert isinstance(module._cli_error(rejected, "Error"), VamsAccessDeniedError)
-
-
-@pytest.mark.skipif(not VAMSCLI_PACKAGE.is_dir(), reason="the VAMS CLI sources are not beside the connector")
-def test_the_cli_texts_for_a_denied_call_are_not_a_refused_credential():
-    """A 403 is a denial signing in again does not change: an entity or role the handler refused, the
-    API's resource policy, the authorizer's source-address rule."""
-    api_client = VAMSCLI_PACKAGE / "utils" / "api_client.py"
-    for name in ("_RESOURCE_POLICY_MESSAGE", "_AUTHORIZER_DENIED_MESSAGE", "_INJECTED_TOKEN_DENIED_MESSAGE"):
+    # Control: the CLI's own denial texts carry a trigger, and read as a refusal by their wording
+    # alone, so the matching above is live.
+    for name in ("_RESOURCE_POLICY_MESSAGE", "_AUTHORIZER_DENIED_MESSAGE"):
         denial = _module_string(api_client, name)
-        assert type(module._cli_error(denial, "Error")) is VamsCliError, name
-        assert type(module._cli_error(f"Permission Denied: {denial}", "PermissionDeniedError")) is VamsCliError
+        assert any(trigger.lower() in denial.lower() for trigger in triggers), name
+        assert isinstance(module._cli_error(denial, "Error"), VamsAccessDeniedError), name
 
 
 @pytest.mark.skipif(not ARCGIS_CLI_SERVICE.is_file(), reason="the ArcGIS Pro connector is not beside this one")

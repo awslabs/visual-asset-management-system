@@ -17,7 +17,6 @@ import {
 import type { EdhAdminInstance, EdhDesktopProfile } from "../api/admin";
 import type { CapacityReservationView } from "../types";
 import { edhStateLabel } from "../labels";
-import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     ADMIN_INSTANCES_ROUTE,
     CAPACITY_RESERVATIONS_ROUTE,
@@ -260,16 +259,6 @@ const tileValue = (
     value: () => React.ReactNode
 ): React.ReactNode => (query.isLoading ? "…" : query.error ? "—" : value());
 
-/**
- * The same for the polled sessions query: a later poll that fails keeps the last answer in `data`,
- * and its section keeps its rows beside a could-not-refresh line, so the card keeps its value.
- */
-const polledTileValue = (
-    query: { isLoading: boolean; error: unknown; data?: unknown },
-    value: () => React.ReactNode
-): React.ReactNode =>
-    query.isLoading ? "…" : query.error && query.data === undefined ? "—" : value();
-
 const Section: React.FC<{ title: string; action?: React.ReactNode; children: React.ReactNode }> = ({
     title,
     action,
@@ -319,9 +308,7 @@ const CapacityTab: React.FC<CapacityTabProps> = ({ can, onManageReservations }) 
     const reservationsQuery = useEdhAdminCapacityReservations(canReservations);
     const sessions = sessionsQuery.data ?? NO_SESSIONS;
     const reservations = reservationsQuery.data ?? NO_RESERVATIONS;
-    // A failed poll keeps the last listing in `data`, so the sessions stay known.
-    const sessionsKnown =
-        !sessionsQuery.isLoading && (!sessionsQuery.error || sessionsQuery.data !== undefined);
+    const sessionsKnown = !sessionsQuery.isLoading && !sessionsQuery.error;
     const reservationsKnown = !reservationsQuery.isLoading && !reservationsQuery.error;
 
     const refresh = () => {
@@ -453,10 +440,7 @@ const CapacityTab: React.FC<CapacityTabProps> = ({ can, onManageReservations }) 
                     value={tileValue(capacity, () => capacity.data?.totalSessions ?? 0)}
                 />
                 {canSessions && (
-                    <Tile
-                        label="Running"
-                        value={polledTileValue(sessionsQuery, () => running.length)}
-                    />
+                    <Tile label="Running" value={tileValue(sessionsQuery, () => running.length)} />
                 )}
                 <Tile
                     label="Distinct owners"
@@ -535,25 +519,18 @@ const CapacityTab: React.FC<CapacityTabProps> = ({ can, onManageReservations }) 
                 <Section title="Running workstations by instance type">
                     {sessionsQuery.isLoading ? (
                         <Muted>Loading sessions...</Muted>
-                    ) : sessionsQuery.error && !sessionsQuery.data ? (
+                    ) : sessionsQuery.error ? (
                         <LoadError what="sessions" error={sessionsQuery.error} />
+                    ) : byType.length === 0 ? (
+                        <Muted>No workstations are running.</Muted>
                     ) : (
-                        <>
-                            {sessionsQuery.error && (
-                                <RefreshFailedNotice error={sessionsQuery.error} />
-                            )}
-                            {byType.length === 0 ? (
-                                <Muted>No workstations are running.</Muted>
-                            ) : (
-                                <DataTable
-                                    columns={typeColumns}
-                                    rows={byType}
-                                    ariaLabel="Running workstations by instance type"
-                                    getRowId={(row) => row.instanceType}
-                                    filtering={false}
-                                />
-                            )}
-                        </>
+                        <DataTable
+                            columns={typeColumns}
+                            rows={byType}
+                            ariaLabel="Running workstations by instance type"
+                            getRowId={(row) => row.instanceType}
+                            filtering={false}
+                        />
                     )}
                 </Section>
             )}

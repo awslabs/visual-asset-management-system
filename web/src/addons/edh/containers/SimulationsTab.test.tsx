@@ -920,28 +920,3 @@ describe("focus when the Submit dialog closes", () => {
         await waitFor(() => expect(button("Submit Job")).toHaveFocus());
     });
 });
-
-describe("a failed poll of a listed job board", () => {
-    beforeEach(() => {
-        jest.clearAllMocks();
-        (containerQueries.useContainerCatalog as jest.Mock).mockReturnValue(catalog(false));
-        (containerQueries.useContainerJobMutations as jest.Mock).mockReturnValue(mutations());
-        allow(() => true);
-    });
-
-    it("keeps the listed jobs and says the list could not be refreshed", () => {
-        (containerQueries.useContainerJobs as jest.Mock).mockReturnValue({
-            ...jobs([runningJob]),
-            error: new Error("Service unavailable"),
-        });
-        renderTab();
-
-        expect(screen.getByRole("button", { name: "Actions for render-1" })).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Could not refresh: Service unavailable. The list shows the last answer."
-            )
-        ).toBeInTheDocument();
-        expect(screen.queryByText(/Error loading container jobs/)).not.toBeInTheDocument();
-    });
-});

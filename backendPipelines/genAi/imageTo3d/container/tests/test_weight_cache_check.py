@@ -19,11 +19,8 @@ The layout under test is the HuggingFace cache's own:
 ``hub/models--{org}--{name}/snapshots/{revision}/`` holding files that are symlinks into ``blobs/``.
 """
 
-import fcntl
 import os
-import subprocess  # nosec B404
 import sys
-import time
 
 import pytest
 
@@ -219,69 +216,3 @@ class TestFetchingARepoSurvivesTheSharedFilesystem:
         assert model_manager.fetch_repo(
             "briaai/RMBG-2.0", cache_dir=str(tmp_path)) == "/cache/snapshots/abc"
         assert calls == ["briaai/RMBG-2.0"]
-
-    def test_a_retry_leaves_a_partial_another_download_is_writing(self, tmp_path, monkeypatch):
-        # Another job on another instance holds that blob's huggingface_hub lock while it writes it.
-        stale = OSError(116, "Stale file handle")
-        self._patched_download(monkeypatch, [stale, "/cache/snapshots/abc"])
-        repo = "facebook/sam-vit-huge"
-        ours = self._partial(tmp_path, repo, "aaaa.incomplete")
-        theirs = self._partial(tmp_path, repo, "bbbb.incomplete")
-        lock_dir = tmp_path / ".locks" / ("models--" + repo.replace("/", "--"))
-        lock_dir.mkdir(parents=True)
-        held = os.open(lock_dir / "bbbb.lock", os.O_RDWR | os.O_CREAT)
-        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            model_manager.fetch_repo(repo, cache_dir=str(tmp_path))
-        finally:
-            fcntl.flock(held, fcntl.LOCK_UN)
-            os.close(held)
-        assert not ours.exists()
-        assert theirs.exists(), "another job's live download must not lose its partial file"
-
-
-class TestTheStartupSweepSparesLiveDownloads:
-    """entrypoint.sh clears what crashed runs left in the shared cache, but other instances may be
-    downloading into it at the same moment: only files older than any live job may go."""
-
-    ENTRYPOINT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                              "entrypoint.sh")
-
-    def _sweep(self, hf_home, stale_minutes="180"):
-        with open(self.ENTRYPOINT, encoding="utf-8") as handle:
-            script = handle.read()
-        start = script.index("HF_CACHE=")
-        end = script.index("\nfi\n", start) + len("\nfi\n")
-        env = {k: v for k, v in os.environ.items() if k != "HF_CACHE_STALE_MINUTES"}
-        env["HF_HOME"] = str(hf_home)
-        if stale_minutes is not None:
-            env["HF_CACHE_STALE_MINUTES"] = stale_minutes
-        subprocess.run(["bash", "-c", "set -e\n" + script[start:end]],  # nosec B603 B607
-                       env=env, check=True)
-
-    def _cache(self, tmp_path):
-        """An old and a fresh partial download and lock; returns (old files, fresh files)."""
-        blobs = tmp_path / "models--org--name" / "blobs"
-        locks = tmp_path / ".locks" / "models--org--name"
-        blobs.mkdir(parents=True)
-        locks.mkdir(parents=True)
-        old = (blobs / "old.incomplete", locks / "old.lock")
-        live = (blobs / "live.incomplete", locks / "live.lock")
-        for path in old + live:
-            path.write_bytes(b"x")
-        four_hours_ago = time.time() - 4 * 3600
-        for path in old:
-            os.utime(path, (four_hours_ago, four_hours_ago))
-        return old, live
-
-    def test_old_leftovers_go_and_fresh_files_stay(self, tmp_path):
-        old, live = self._cache(tmp_path)
-        self._sweep(tmp_path)
-        assert not any(path.exists() for path in old)
-        assert all(path.exists() for path in live)
-
-    @pytest.mark.parametrize("stale_minutes", [None, "", "0", "three hours"])
-    def test_without_an_age_from_the_job_definition_nothing_is_removed(self, tmp_path, stale_minutes):
-        old, live = self._cache(tmp_path)
-        self._sweep(tmp_path, stale_minutes)
-        assert all(path.exists() for path in old + live)

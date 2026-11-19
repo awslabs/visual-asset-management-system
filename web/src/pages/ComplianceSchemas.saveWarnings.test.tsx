@@ -111,4 +111,20 @@ describe("the Schemas page after a save refused for a pipeline rule", () => {
         expect(await within(dialog).findByText(refusal)).toBeInTheDocument();
         expect(screen.queryByText('Schema "s1" created')).not.toBeInTheDocument();
     }, 20_000);
+
+    it("keeps the editor open with the refusal of a rule that uses a system pipeline", async () => {
+        // The editor names workflows and pipelines by id; the API decides, and the page shows its answer.
+        const refusal =
+            "A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.";
+        service().createComplianceSchema.mockResolvedValue([false, refusal]);
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        const dialog = await screen.findByRole("dialog");
+        fireEvent.change(within(dialog).getByPlaceholderText(/engineering-asset-standard/), {
+            target: { value: "s1" },
+        });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+        expect(await within(dialog).findByText(refusal)).toBeInTheDocument();
+        expect(screen.queryByText('Schema "s1" created')).not.toBeInTheDocument();
+    }, 20_000);
 });

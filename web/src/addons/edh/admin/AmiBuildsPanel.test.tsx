@@ -438,28 +438,3 @@ describe("a retry of the registration on the real queries, the builds read again
         expect(amiRecipes.listAmiBuilds).toHaveBeenCalledTimes(1);
     });
 });
-
-describe("a failed poll of a listed build table", () => {
-    it("keeps the listed builds and says the list could not be refreshed", () => {
-        (amiRecipeQueries.useEdhAmiBuilds as jest.Mock).mockReturnValue({
-            ...query([
-                {
-                    recipeId: "mine",
-                    version: 2,
-                    status: "AVAILABLE",
-                    amiId: "ami-0bbbbbbbbbbbbbbbb",
-                },
-            ]),
-            error: new Error("Service unavailable"),
-        });
-        renderPanel();
-
-        expect(statusCell(2)).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Could not refresh: Service unavailable. The list shows the last answer."
-            )
-        ).toBeInTheDocument();
-        expect(screen.queryByText(/Error loading builds/)).not.toBeInTheDocument();
-    });
-});

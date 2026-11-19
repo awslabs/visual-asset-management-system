@@ -3,14 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 import {
+    allowedApiRoutes,
+    AllowedApiRoute,
     collectPageErrors,
     expectNoPageOverflowX,
     expectReachable,
     firstCardId,
+    firstCardName,
     gotoOrchestration,
     openCardMenu,
+    routeAllowed,
     searchBox,
     VIEWPORTS,
 } from "./support/fixtures";
@@ -20,7 +24,42 @@ import {
  * the environment contains and skips when there is none, so it is safe against an empty sandbox.
  *
  * The Execute wizard is opened but never launched — these specs must not mutate the environment.
+ *
+ * Role-aware and system-record-aware (#1634, D130): a card's menu lists only the actions the signed-in
+ * role may call, so the expected items come from the API's allowed routes (the list the app's own
+ * check reads); and a system workflow (the SYSTEM GenAI, preview and Zip Archive workflows, registered
+ * by default) offers View instead of Edit and keeps Archive disabled, so a case about Edit picks an
+ * ordinary card.
  */
+
+/** The API route behind each workflow card action (WorkflowsPage's `can()` checks). */
+const WORKFLOW_ACTION_ROUTES: Record<
+    "edit" | "execute" | "executions" | "archive",
+    [string, string]
+> = {
+    edit: ["PUT", "/database/{databaseId}/workflows/{workflowId}"],
+    execute: ["POST", "/workflows/{workflowDatabaseId}/{workflowId}/execute"],
+    executions: ["GET", "/workflows/executions"],
+    archive: ["DELETE", "/database/{databaseId}/workflows/{workflowId}"],
+};
+
+function mayUse(routes: AllowedApiRoute[], action: keyof typeof WORKFLOW_ACTION_ROUTES): boolean {
+    const [method, path] = WORKFLOW_ACTION_ROUTES[action];
+    return routeAllowed(routes, method, path);
+}
+
+/** A menu item of the open card menu by its exact accessible name ("View" is not "View Executions"). */
+function menuItem(page: Page, name: string) {
+    return page.getByRole("menuitem", { name, exact: true });
+}
+
+/** The labels of the workflow card menu, by action. */
+const LABELS = {
+    edit: "Edit",
+    execute: "Execute",
+    executions: "View Executions",
+    archive: "Archive",
+} as const;
 
 test.describe("Workflows page", () => {
     test.beforeEach(async ({ page }) => {
@@ -47,24 +86,71 @@ test.describe("Workflows page", () => {
     test("a workflow card's actions menu offers Edit / Execute / View Executions / Archive", async ({
         page,
     }) => {
-        const id = await firstCardId(page);
-        test.skip(!id, "No workflows in this environment");
-        const items = await openCardMenu(page, id!);
-        await expect(items.filter({ hasText: "Edit" })).toBeVisible();
-        await expect(items.filter({ hasText: /Execute/ })).toBeVisible();
-        await expect(items.filter({ hasText: /Executions/ })).toBeVisible();
-        await expect(items.filter({ hasText: "Archive" })).toBeVisible();
+        const name = await firstCardName(page, { system: false });
+        test.skip(!name, "No workflow other than the system records in this environment");
+        const routes = await allowedApiRoutes(page);
+        test.skip(!routes, "The role's allowed API routes could not be read (no API context)");
+        const actions = Object.keys(LABELS) as (keyof typeof LABELS)[];
+        test.skip(
+            !actions.some((action) => mayUse(routes!, action)),
+            "This role may use none of a workflow card's actions, so its menu is empty"
+        );
+        await openCardMenu(page, name!);
+        // Each action exactly when the API allows it to this role; the admin role sees all four.
+        for (const action of actions) {
+            const item = menuItem(page, LABELS[action]);
+            if (mayUse(routes!, action)) {
+                await expect(item, `${LABELS[action]} for this role`).toBeVisible();
+            } else {
+                await expect(item, `${LABELS[action]} hidden from this role`).toHaveCount(0);
+            }
+        }
+        await expect(menuItem(page, "View")).toHaveCount(0);
+        await page.keyboard.press("Escape");
+    });
+
+    test("a system workflow card offers View, not Edit, and keeps Archive disabled (D130)", async ({
+        page,
+    }) => {
+        const name = await firstCardName(page, { system: true });
+        test.skip(!name, "No system workflow in this environment");
+        const routes = await allowedApiRoutes(page);
+        test.skip(!routes, "The role's allowed API routes could not be read (no API context)");
+        await openCardMenu(page, name!);
+        await expect(menuItem(page, "View")).toBeVisible();
+        await expect(menuItem(page, "Edit")).toHaveCount(0);
+        for (const action of ["execute", "executions"] as const) {
+            const item = menuItem(page, LABELS[action]);
+            if (mayUse(routes!, action)) await expect(item).toBeVisible();
+            else await expect(item).toHaveCount(0);
+        }
+        if (mayUse(routes!, "archive")) {
+            const archive = menuItem(page, "Archive");
+            await expect(archive).toHaveAttribute("aria-disabled", "true");
+            // ContextMenu reads a disabled item's reason out through aria-description.
+            await expect(archive).toHaveAttribute(
+                "aria-description",
+                /managed by the deployment and cannot be archived/
+            );
+        } else {
+            await expect(menuItem(page, "Archive")).toHaveCount(0);
+        }
         await page.keyboard.press("Escape");
     });
 
     test("the Execute action opens the wizard without launching", async ({ page }) => {
         const id = await firstCardId(page);
         test.skip(!id, "No workflows in this environment");
-        const items = await openCardMenu(page, id!);
-        await items
-            .filter({ hasText: /Execute/ })
-            .first()
-            .click();
+        const routes = await allowedApiRoutes(page);
+        test.skip(!!routes && !mayUse(routes, "execute"), "This role may not execute workflows");
+        await openCardMenu(page, id!);
+        const execute = menuItem(page, "Execute");
+        await expect(execute).toBeVisible();
+        if ((await execute.getAttribute("aria-disabled")) === "true") {
+            await page.keyboard.press("Escape");
+            test.skip(true, "The first workflow is disabled or archived, so it cannot be executed");
+        }
+        await execute.click();
 
         // The wizard is a dialog; assert it opened, then dismiss so nothing is executed.
         const dialog = page.getByRole("dialog");
@@ -80,6 +166,8 @@ test.describe("Workflows page", () => {
     test("View Executions deep-links to the executions board", async ({ page }) => {
         const id = await firstCardId(page);
         test.skip(!id, "No workflows in this environment");
+        const routes = await allowedApiRoutes(page);
+        test.skip(!!routes && !mayUse(routes, "executions"), "This role may not list executions");
         const items = await openCardMenu(page, id!);
         await items
             .filter({ hasText: /Executions/ })
@@ -102,7 +190,8 @@ test.describe("Workflow builder — step definition", () => {
      */
     async function openPipelinesStep(page: import("@playwright/test").Page): Promise<boolean> {
         await gotoOrchestration(page, "workflows", "Workflows");
-        const id = await firstCardId(page);
+        // A system workflow opens read-only (View), so the subject is an ordinary card.
+        const id = await firstCardName(page, { system: false });
         if (!id) return false;
         const items = await openCardMenu(page, id);
         const edit = items.filter({ hasText: "Edit" });
@@ -261,8 +350,8 @@ for (const [name, viewport] of [
             page,
         }) => {
             await gotoOrchestration(page, "workflows", "Workflows");
-            const id = await firstCardId(page);
-            test.skip(!id, "No workflows in this environment");
+            const id = await firstCardName(page, { system: false });
+            test.skip(!id, "No workflow other than the system records in this environment");
             const items = await openCardMenu(page, id!);
             const edit = items.filter({ hasText: "Edit" });
             if ((await edit.count()) === 0) {

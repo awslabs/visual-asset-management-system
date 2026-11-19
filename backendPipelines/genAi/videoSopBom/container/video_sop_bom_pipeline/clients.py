@@ -14,9 +14,8 @@ from botocore.config import Config
 # burst surfaces as a throttling error on the caller instead of being smoothed.
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
-# Bedrock inference calls run for up to 60 minutes and AWS recommends read_timeout >= 3600. max_attempts
-# counts retries, so this is at most three SDK attempts, about 3 h of hung calls at worst: inside the 6 h
-# attempt bound, so the pipeline's own budget still sees the failure.
+# Bedrock inference calls run for up to 60 minutes and AWS recommends read_timeout >= 3600; two SDK
+# attempts so one hung call cannot consume the 6 h attempt bound before the pipeline's own budget sees it.
 bedrock_config = Config(read_timeout=3600, connect_timeout=10, retries={'max_attempts': 2, 'mode': 'adaptive'})
 
 # Preflight probes must surface a missing interface endpoint within seconds, not after five retries:

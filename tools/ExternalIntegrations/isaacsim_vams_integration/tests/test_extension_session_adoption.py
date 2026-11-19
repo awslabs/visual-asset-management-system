@@ -29,7 +29,8 @@ from vams.connector.isaacsim.vams_cli_service import (
     VamsCliError,
 )
 
-_REFUSED = "Authentication Error: Authentication failed: 401 Client Error: Unauthorized"
+_FORBIDDEN = ("API Error: Failed to list databases: Access forbidden. You do not have permission to "
+              "perform this action. Contact your administrator if you believe this is an error.")
 _HINT = ("if this desktop was just started, its VAMS sign-in may not have completed; select Refresh "
          "Databases later. If the sign-in has expired, renew the workstation's lease in VAMS, or sign in "
          "under Authentication")
@@ -176,9 +177,9 @@ def test_a_refused_desktop_session_says_how_to_recover(extension):
     """The status line is a single line that clips a long message, so the recovery clause comes
     first and the CLI's own error follows it."""
     extension._connector.signed_in = True
-    extension._connector.list_databases = _raise(VamsAccessDeniedError(_REFUSED))
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
     extension._check_existing_session()
-    assert extension._status_label.text == f"  Error: {_REFUSED} - {_HINT}"
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_HINT}"
 
 
 def test_a_refused_desktop_session_says_how_to_recover_from_a_file_action(extension):
@@ -187,10 +188,10 @@ def test_a_refused_desktop_session_says_how_to_recover_from_a_file_action(extens
     extension._selected_db = Database(database_id="db1")
     extension._selected_asset = Asset(asset_id="a1", asset_name="house")
     extension._connector.fetch_local_copy = _raise(
-        VamsAccessDeniedError("Authentication Error: Authentication failed."))
+        VamsAccessDeniedError("Permission Denied: Access forbidden."))
     extension._on_load_file(AssetFile(relative_path="/house.usda"))
     assert extension._status_label.text == (
-        f"  Load error: Authentication Error: Authentication failed. - {_HINT}")
+        f"  Load error: Permission Denied: Access forbidden. - {_HINT}")
 
 
 def test_a_refused_desktop_session_says_how_to_recover_from_download_only(extension):
@@ -199,10 +200,10 @@ def test_a_refused_desktop_session_says_how_to_recover_from_download_only(extens
     extension._selected_db = Database(database_id="db1")
     extension._selected_asset = Asset(asset_id="a1", asset_name="house")
     extension._connector.download_file = _raise(
-        VamsAccessDeniedError("Authentication Error: Authentication failed."))
+        VamsAccessDeniedError("Permission Denied: Access forbidden."))
     extension._on_download_file(AssetFile(relative_path="/house/textures/color.jpg"))
     assert extension._status_label.text == (
-        f"  Download failed: Authentication Error: Authentication failed. - {_HINT}")
+        f"  Download failed: Permission Denied: Access forbidden. - {_HINT}")
 
 
 def test_the_recovery_hint_covers_an_expired_sign_in():
@@ -231,9 +232,9 @@ def test_a_refusal_of_a_session_signed_in_through_the_extension_carries_no_hint(
     extension._username_model.set_value("user@example.com")
     extension._credential_model.set_value("vams_typed")
     extension._on_login_token()
-    extension._connector.list_databases = _raise(VamsAccessDeniedError(_REFUSED))
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
     extension._load_databases()
-    assert extension._status_label.text == f"  Error: {_REFUSED}"
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN}"
 
 
 def test_any_other_error_on_a_desktop_session_carries_no_hint(extension):
@@ -250,24 +251,24 @@ def test_a_refused_session_off_an_edh_desktop_carries_no_desktop_advice(extensio
     """A session taken over on any other machine: the CLI's error, then the neutral sentence."""
     extension._profile = "default"
     extension._connector.signed_in = True
-    extension._connector.list_databases = _raise(VamsAccessDeniedError(_REFUSED))
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
     extension._check_existing_session()
-    assert extension._status_label.text == f"  Error: {_REFUSED} - {_NEUTRAL}"
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_NEUTRAL}"
     assert "lease" not in extension._status_label.text
 
 
 def test_a_desktop_profile_without_the_sign_in_log_carries_no_desktop_advice(extension, desktop_home):
     (desktop_home / "session-bootstrap.log").unlink()
     extension._connector.signed_in = True
-    extension._connector.list_databases = _raise(VamsAccessDeniedError(_REFUSED))
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
     extension._check_existing_session()
-    assert extension._status_label.text == f"  Error: {_REFUSED} - {_NEUTRAL}"
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_NEUTRAL}"
 
 
 def test_a_desktop_with_no_vams_session_carries_no_desktop_advice(extension, desktop_home):
     """The sign-in found no VAMS session for this desktop (session-none), so there is no lease to renew."""
     (desktop_home / "session-none").write_text("boot\n")
     extension._connector.signed_in = True
-    extension._connector.list_databases = _raise(VamsAccessDeniedError(_REFUSED))
+    extension._connector.list_databases = _raise(VamsAccessDeniedError(_FORBIDDEN))
     extension._check_existing_session()
-    assert extension._status_label.text == f"  Error: {_REFUSED} - {_NEUTRAL}"
+    assert extension._status_label.text == f"  Error: {_FORBIDDEN} - {_NEUTRAL}"

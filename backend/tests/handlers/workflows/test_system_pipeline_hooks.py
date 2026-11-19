@@ -821,11 +821,15 @@ _CORE_SOURCES = [
     _REPO_ROOT / "infra" / "lib" / "lambdaBuilder" / "workflowFunctions.ts",
 ]
 # Feature-specific trigger or pipeline names (any spelling: Zip-Download, zipDownload, zip_archive,
-# utility-zip-archive, ...) and the removed terminal-callback registry.
+# utility-zip-archive, ...) and the removed terminal-callback registry; and the vector-search reindex
+# feature's trigger value and slot names (#316: System-Reindex, systemReindex, system_reindex, the reindex
+# launcher, reindexSlots, reindex_slot, reindexer), which core reaches only as a system trigger value and
+# a generic concurrency slot request.
 _FORBIDDEN = re.compile(
     r"zip[-_ ]?(download|archive)"
     r"|CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER|SystemPipelineCallback|notify_terminal_transition"
-    r"|SYSTEM_TRIGGER_TYPE_TO_STORED|SYSTEM_PIPELINE_TRIGGER_TYPES",
+    r"|SYSTEM_TRIGGER_TYPE_TO_STORED|SYSTEM_PIPELINE_TRIGGER_TYPES"
+    r"|system[-_ ]?reindex|reindex[-_ ]?(launcher|slots?|er)",
     re.IGNORECASE)
 
 
@@ -855,7 +859,11 @@ class TestCoreNamesNoPipeline:
 
     def test_the_guard_catches_each_spelling(self):
         for sample in ("Zip-Download", "zipDownload", "zip_archive", "utility-zip-archive",
-                       "ZipArchiveBuilder", "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER"):
+                       "ZipArchiveBuilder", "CALLBACK_FUNCTIONS_BY_SYSTEM_TRIGGER",
+                       "System-Reindex", "systemReindex", "system_reindex", "reindex launcher",
+                       "reindexSlots", "reindexSlot", "reindex_slot_key", "REINDEX_SLOTS_BUSY", "vector reindexer"):
             assert _FORBIDDEN.search(sample), sample
-        # Ordinary Python is not a false hit.
+        # Ordinary Python is not a false hit, nor the generic slot names.
         assert not _FORBIDDEN.search("for n, v in zip(names, values)")
+        for generic in ("systemSlot", "acquire_system_slot", "concurrencySlots", "System-TestFeature"):
+            assert not _FORBIDDEN.search(generic), generic

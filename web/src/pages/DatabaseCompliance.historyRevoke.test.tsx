@@ -144,7 +144,7 @@ it("offers History and not Revoke to a read-only caller, and keeps names plain t
     render(<DatabaseCompliancePage />);
     await screen.findByText("excepted-asset");
     expect(screen.getAllByRole("button", { name: /^Evaluation history of/ })).toHaveLength(2);
-    expect(screen.queryByRole("button", { name: /^Revoke the exception/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Revoke exception/ })).toBeNull();
     expect(screen.getByText("excepted-asset").closest("a")).toBeNull();
 });
 
@@ -156,9 +156,13 @@ it("offers Revoke exception only on an asset in exception, behind the confirmati
     ]);
     render(<DatabaseCompliancePage />);
     await screen.findByText("excepted-asset");
-    expect(screen.getAllByRole("button", { name: /^Revoke the exception/ })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Revoke exception/ })).toHaveLength(1);
+    // The name starts with the text the button shows (#1592).
+    expect(
+        screen.getByRole("button", { name: "Revoke exception of excepted-asset" })
+    ).toHaveTextContent(/^Revoke exception$/);
     await userEvent.click(
-        screen.getByRole("button", { name: "Revoke the exception of excepted-asset" })
+        screen.getByRole("button", { name: "Revoke exception of excepted-asset" })
     );
     const dialog = (await screen.findByText("Revoke compliance exception")).closest(
         '[role="dialog"]'

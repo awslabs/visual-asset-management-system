@@ -4,7 +4,6 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
-import { isNetworkFailure } from "../../../services/networkFailure";
 import { toTuple } from "../../../features/orchestration/api/client";
 import {
     type EdhRequestError,
@@ -27,9 +26,9 @@ const workstationPath = (sessionId: string, action?: string) =>
     `${WORKSTATIONS_PATH}/${encodeURIComponent(sessionId)}${action ? `/${action}` : ""}`;
 
 /**
- * The launch reply never arrived: the gateway answered 502 or 504 after the request was sent, or no
- * response came back at all, so the workstation may or may not exist. Callers treat this message as
- * "unknown outcome" and let the list poll settle it rather than reporting a failure.
+ * The launch reply never arrived: the gateway answered 502 or 504 after the request was sent, so the
+ * workstation may or may not exist. Callers treat this message as "unknown outcome" and let the list
+ * poll settle it rather than reporting a failure.
  */
 export const LAUNCH_OUTCOME_UNKNOWN_MESSAGE =
     "The launch request did not receive a reply. The workstation may still be starting; " +
@@ -51,10 +50,7 @@ export async function createWorkstation(
         return [true, await apiClient.post(WORKSTATIONS_PATH, { body })];
     } catch (e: any) {
         console.log(e);
-        // A launch that got no response may still have started the workstation.
-        if (isUnknownOutcomeStatus(e?.status) || isNetworkFailure(e)) {
-            return [false, LAUNCH_OUTCOME_UNKNOWN_MESSAGE];
-        }
+        if (isUnknownOutcomeStatus(e?.status)) return [false, LAUNCH_OUTCOME_UNKNOWN_MESSAGE];
         if (isReservationFull(e)) return [false, RESERVATION_FULL_LAUNCH_MESSAGE];
         return [false, e?.message || "Request failed"];
     }

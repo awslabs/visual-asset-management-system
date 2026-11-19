@@ -182,36 +182,7 @@ class TestLaunchChecks:
         assert response_body(response)["message"] == "capacityReservationId is not registered"
         _assert_nothing_launched(fakes)
         assert fakes.reservations.ec2.calls == []
-        # Tier-2 on the id comes first; this role may launch into it.
-        assert ({"object__type": RESERVATION_OBJECT_TYPE, "edhCapacityReservationId": CR_FREE}, "POST") \
-            in _reservation_calls(fakes)
-
-    @pytest.mark.parametrize("registered", [[(CR_FREE, {})], [(CR_FREE, {"enabled": False})], []],
-                             ids=["registered", "disabled", "unregistered"])
-    def test_1_a_role_with_no_access_to_the_id_gets_the_generic_refusal(self, monkeypatch, aws, registered):
-        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=registered,
-                         enforce=_grant(denied_reservations=(CR_FREE,)))
-
-        response = _launch(fakes, capacityReservationId=CR_FREE)
-
-        # One answer whatever the registry holds for the id.
-        assert response["statusCode"] == 403
-        assert response_body(response) != NOT_PERMITTED_BODY
-        assert "registered" not in json.dumps(response_body(response))
-        _assert_nothing_launched(fakes)
-        assert fakes.reservations.ec2.calls == []
-
-    @pytest.mark.parametrize("registered", [[], [(CR_FREE, {"enabled": False})]], ids=["unregistered", "disabled"])
-    def test_1_a_role_that_may_view_the_id_is_told_it_is_not_registered(self, monkeypatch, aws, registered):
-        fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)}, registered=registered,
-                         enforce=_grant(denied_actions=("POST",)))
-
-        response = _launch(fakes, capacityReservationId=CR_FREE)
-
-        assert response["statusCode"] == 400
-        assert response_body(response)["message"] == "capacityReservationId is not registered"
-        _assert_nothing_launched(fakes)
-        assert fakes.reservations.ec2.calls == []
+        assert _reservation_calls(fakes) == []
 
     def test_1_a_disabled_reservation_is_unregistered(self, monkeypatch, aws):
         fakes = _install(monkeypatch, records={CR_FREE: ec2_reservation(CR_FREE)},

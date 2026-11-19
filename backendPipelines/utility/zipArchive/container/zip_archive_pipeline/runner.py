@@ -33,7 +33,7 @@ from .engine.sink import MultipartSink, StopRequested, part_size_bytes
 from .engine.tarstream import TarStreamWriter
 from .engine.zipstream import ZipStreamWriter
 from .resolve import check_members, enforce_limits, expand_selection, filter_patterns, list_current
-from .rules import CORE_BLOCKED_CONTENT_TYPES, CORE_BLOCKED_EXTENSIONS, Refusal
+from .rules import CORE_BLOCKED_CONTENT_TYPES, CORE_BLOCKED_EXTENSIONS, Refusal, include_preview_files
 from .status import StatusWriter
 
 RETRY_CONFIG = Config(retries={"max_attempts": 8, "mode": "adaptive"}, max_pool_connections=64)
@@ -383,12 +383,13 @@ class Job:
                                    self.definition.get("workflowExecutionId", ""))
         bucket, base_key = manifest["assetBucket"], manifest["assetBaseKey"]
         try:
+            # The request manifest records the value the API chose when the job was created.
             members, empty_dirs = expand_selection(self.clients.for_bucket(bucket), bucket, base_key,
-                                                   manifest.get("entries"), manifest.get("pinnedFiles"))
+                                                   manifest.get("entries"), manifest.get("pinnedFiles"),
+                                                   include_preview_files(manifest))
             check_members(self.clients.for_bucket, members,
                           tuple(manifest.get("blockedExtensions") or CORE_BLOCKED_EXTENSIONS),
-                          tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES),
-                          empty_dirs)
+                          tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES))
             limits = manifest.get("limits") or {}
             total = enforce_limits(members, limits.get("maxFiles"), limits.get("maxTotalBytes"))
             check_archive_fits(members, empty_dirs, manifest["archiveFormat"],
@@ -456,10 +457,7 @@ class Job:
         pinned = []
         for item in items:
             rel = "/" + (item.get("fileKey") or "").lstrip("/")
-            # A prefix ending in '/' selects a folder (or, as '/', the whole asset); any other selects
-            # that one file.
-            if not item.get("versionId") or not any(rel == p or (p.endswith("/") and rel.startswith(p))
-                                                    for p in prefixes):
+            if not item.get("versionId") or not any(rel.startswith(p) or rel == p for p in prefixes):
                 continue
             pinned.append({"key": run["assetBaseKey"] + rel.lstrip("/"), "versionId": item["versionId"],
                            "size": int(item.get("size") or 0)})
@@ -511,9 +509,10 @@ class Job:
         bucket, base_key = run["assetBucket"], run["assetBaseKey"]
         client = self.clients.for_bucket(bucket)
         try:
+            include_previews = include_preview_files(config)
             if config.get("assetVersionId"):
                 pinned = self._pinned_members(run, str(config["assetVersionId"]))
-                members, empty_dirs = expand_selection(client, bucket, base_key, [], pinned)
+                members, empty_dirs = expand_selection(client, bucket, base_key, [], pinned, include_previews)
             else:
                 entries = []
                 for entry in run["inputs"]:
@@ -522,10 +521,11 @@ class Job:
                         entries.append({"type": "folder", "key": key})
                     else:
                         entries.append({"type": "file", "key": key, "versionId": entry.get("versionId")})
-                members, empty_dirs = expand_selection(client, bucket, base_key, entries)
+                members, empty_dirs = expand_selection(client, bucket, base_key, entries,
+                                                       include_preview_files=include_previews)
             members = filter_patterns(members, config.get("includePatterns"), config.get("excludePatterns"))
             check_members(self.clients.for_bucket, members, CORE_BLOCKED_EXTENSIONS,
-                          CORE_BLOCKED_CONTENT_TYPES, empty_dirs)
+                          CORE_BLOCKED_CONTENT_TYPES)
             enforce_limits(members, None, S3_MAX_OBJECT_BYTES)
             check_archive_fits(members, empty_dirs, archive_format, compression)
         except Refusal as r:

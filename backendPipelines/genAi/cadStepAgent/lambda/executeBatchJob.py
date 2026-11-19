@@ -104,24 +104,12 @@ def definition_document(definition):
     return definition if isinstance(definition, str) else json.dumps(definition)
 
 
-def definition_summary(document):
-    """``mode=<mode> provider=<provider>`` of a definition document, for the log line. The definition
-    also carries the caller's prompt, which is not logged."""
-    try:
-        parsed = json.loads(document) if isinstance(document, str) else document
-        agent = parsed.get("agent") or {}
-        return f"mode={parsed.get('mode')} provider={agent.get('modelProvider')}"
-    except (TypeError, ValueError, AttributeError):
-        return "mode=? provider=?"
-
-
 def lambda_handler(event, context):
-    # Named first, so a malformed event still leaves the run's identifier in the log.
-    logger.info(f"Event: job={event.get('jobName')}")
+    logger.info("Event", event=event)
+
     job_name = event["jobName"]
     definition = event["definition"]
     task_token = event.get("taskToken", "")
-    logger.info(f"Definition: job={job_name} {definition_summary(definition_document(definition))}")
 
     submit_params = {
         "jobName": job_name,
@@ -136,7 +124,7 @@ def lambda_handler(event, context):
                 {"name": DEFINITION_ENV, "value": definition_document(definition)},
                 {
                     "name": "AWS_REGION",
-                    "value": os.environ["AWS_REGION"],
+                    "value": os.environ.get("AWS_REGION", "us-east-1"),
                 },
             ],
         },

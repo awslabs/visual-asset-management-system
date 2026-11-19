@@ -310,7 +310,7 @@ from ..constants import (
     API_METADATA_SCHEMA_LIST, API_METADATA_SCHEMA_BY_ID,
     API_COMMENTS_ASSET, API_COMMENTS_ASSET_VERSION, API_COMMENTS_ASSET_VERSION_COMMENT,
     API_SUBSCRIPTIONS, API_CHECK_SUBSCRIPTION, API_UNSUBSCRIBE,
-    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING,
+    API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_MAPPING, API_SEARCH_NLP,
     API_PIPELINES, API_DATABASE_PIPELINES, API_DATABASE_PIPELINE,
     API_PIPELINE_TEMPLATES, API_PIPELINE_TEMPLATE, API_PIPELINE_TEMPLATE_TAG_SCHEMA,
     API_WORKFLOWS, API_DATABASE_WORKFLOWS, API_DATABASE_WORKFLOW,
@@ -325,7 +325,7 @@ from ..constants import (
     API_ZIP_DOWNLOADS_GLOBAL, API_ZIP_DOWNLOADS_ASSET_ALL_USERS, FEATURE_ZIPDOWNLOADS,
     ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
     ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
-    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES, ADDON_BUSINESS_REFUSAL_429_MESSAGES,
+    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES,
     ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES,
     ZIP_DOWNLOAD_INTENT_PARAM, ZIP_DOWNLOAD_CANCEL_INTENT,
     API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
@@ -358,6 +358,7 @@ from .exceptions import (
     InvalidWorkflowDataError,
     WorkflowTriggerNotFoundError, InvalidWorkflowTriggerDataError,
     ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    SearchUnavailableError,
     ZipDownloadError, ZipDownloadDisabledError, ZipDownloadNotFoundError,
     InvalidZipDownloadRequestError, ZipDownloadLimitError, ZipDownloadNotReadyError,
     ZipDownloadExpiredError, ZipDownloadStateError, ZipDownloadTransferError,
@@ -373,9 +374,8 @@ from .request_paths import _path_segment, route_path  # noqa: F401 - route_path 
 from .logging import scrub_text
 
 # The exact 429 bodies that are a handler's business refusal rather than throttling
-# (_is_business_refusal_429): retrying cannot clear them. The core one is the per-user active zip
-# download cap; the add-ons declare theirs in addon_constants.py.
-_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,) + tuple(ADDON_BUSINESS_REFUSAL_429_MESSAGES)
+# (_is_business_refusal_429): retrying cannot clear them.
+_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,)
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -579,8 +579,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 pass
             
             # Handle 429 rate limiting with exponential backoff. A 429 whose body is a known business
-            # refusal (the per-user active zip download cap, an add-on's quota) is not throttling: backing
-            # off cannot clear it, so it goes straight to the caller's status mapping.
+            # refusal (the per-user active zip download cap) is not throttling: backing off cannot
+            # clear it, so it goes straight to the caller's status mapping.
             if response.status_code == 429 and not _is_business_refusal_429(response):
                 if retry_config.should_retry(throttle_retry_count):
                     # Parse Retry-After header if present
@@ -5619,11 +5619,17 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             API response data with search results
         
         Raises:
+            SearchUnavailableError: 503 with the server's message: OpenSearch is enabled but could not
+                answer the request now
             AuthenticationError: When authentication fails
-            APIError: When API call fails or search is disabled
+            APIError: 400 (invalid parameters), 404 (search disabled or route absent), other failures,
+                each with the server's message
         """
         try:
-            response = self.post(API_SEARCH, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -5638,16 +5644,73 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 else:
                     raise APIError(f"Search endpoint not found: {error_message}")
                     
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Search query failed: {e}")
+                raise APIError(f"Search query failed ({e.response.status_code}): "
+                               f"{_api_error_message(e.response, str(e))}")
                 
         except GlobalInfrastructureError:
             raise
 
         except Exception as e:
             raise APIError(f"Failed to execute search query: {e}")
+
+    def search_nlp(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a natural-language (vector) search using the /search/nlp POST endpoint.
+
+        Args:
+            search_params: Parameters matching NlpSearchRequestModel:
+                - query: natural-language text (1-1000 characters), embedded server-side
+                - entityTypes: ["file"] (default) or ["asset"]
+                - databaseIds: restrict to these databases (at most 100)
+                - includeArchived, includeSegments, fileClasses, fileExtensions, size (1-100)
+                - filters, metadataQuery, metadataSearchMode: OpenSearch-only constraints
+
+        Returns:
+            The raw response body: an OpenSearch-style envelope whose hits carry `_vector`,
+            plus top-level `nlp` and `warnings`
+
+        Raises:
+            SearchUnavailableError: 503 with the server's message: the vector index is being built,
+                the OpenSearch-only constraints could not be applied, or search is busy
+            AuthenticationError: 401/403
+            APIError: 400 (invalid parameters), 404 (route absent - feature off), other failures
+        """
+        try:
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH_NLP, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
+            return response.json()
+
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                error_message = _api_error_message(e.response, str(e))
+                raise APIError(f"Invalid search parameters: {error_message}")
+
+            elif e.response.status_code == 404:
+                error_message = _api_error_message(e.response, str(e))
+                raise APIError(f"Natural-language search endpoint not found "
+                               f"(is the VECTORSEARCH feature enabled?): {error_message}")
+
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
+            elif e.response.status_code in [401, 403]:
+                raise AuthenticationError(f"Authentication failed: {e}")
+            else:
+                raise APIError(f"Natural-language search failed: {e}")
+
+        except GlobalInfrastructureError:
+            raise
+
+        except Exception as e:
+            raise APIError(f"Failed to execute natural-language search: {e}")
 
     def search_simple(self, search_params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -5674,11 +5737,17 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             API response data with search results
         
         Raises:
+            SearchUnavailableError: 503 with the server's message: OpenSearch is enabled but could not
+                answer the request now
             AuthenticationError: When authentication fails
-            APIError: When API call fails or search is disabled
+            APIError: 400 (invalid parameters), 404 (search disabled or route absent), other failures,
+                each with the server's message
         """
         try:
-            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True)
+            # raise_http_errors: the status codes and the handler's message are mapped below; without it
+            # the request wrapper turns every 4xx/5xx into a generic APIError first.
+            response = self.post(API_SEARCH_SIMPLE, data=search_params, include_auth=True,
+                                 raise_http_errors=True)
             return response.json()
             
         except requests.exceptions.HTTPError as e:
@@ -5693,10 +5762,14 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 else:
                     raise APIError(f"Search endpoint not found: {error_message}")
                     
+            elif e.response.status_code == 503:
+                raise SearchUnavailableError(_api_error_message(e.response, str(e)))
+
             elif e.response.status_code in [401, 403]:
                 raise AuthenticationError(f"Authentication failed: {e}")
             else:
-                raise APIError(f"Simple search query failed: {e}")
+                raise APIError(f"Simple search query failed ({e.response.status_code}): "
+                               f"{_api_error_message(e.response, str(e))}")
                 
         except GlobalInfrastructureError:
             raise

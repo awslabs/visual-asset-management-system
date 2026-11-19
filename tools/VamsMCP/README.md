@@ -289,7 +289,7 @@ call it, or why none does, or that it is not exposed yet.
 `list_assets`, `get_asset`, `list_asset_files`, `get_file_info`, `get_file_metadata`,
 `get_asset_metadata`, `get_database_metadata`, `list_asset_versions`, `get_asset_version`,
 `get_asset_history`, `get_asset_links`, `get_asset_link_metadata`, `export_asset`,
-`search_assets`, `search_files`, `get_search_fields`, `list_workflows`,
+`search_assets`, `search_files`, `search_nlp`, `get_search_fields`, `list_workflows`,
 `list_workflow_executions`, `list_tags`, `list_tag_types`, `list_metadata_schemas`,
 `generate_download_url`, `generate_download_urls_bulk`, `find_and_summarize`.
 
@@ -581,6 +581,26 @@ to continue. A `truncated` result must never be used to report a count or to
 conclude that something does not exist. `find_and_summarize` issues one extra
 paginated request per hit, so its `size` is clamped to 25; use
 `search_assets(from_offset=...)` to page a larger result set.
+
+`search_nlp` is the natural-language search: the query is embedded with the
+deployment's Amazon Bedrock model and ranked against the vector index, with or
+without OpenSearch (it needs the `VECTORSEARCH` feature switch instead). The tool
+is registered on every deployment and does not read the switch itself: where vector
+search is off the route does not exist, and the call returns an `APIError` result
+(`No deployed API route matches POST …/search/nlp (HTTP 403)…`) instead of hits. It takes
+`database_ids`, `entity_type`, `size` (1–100), `include_archived`, `file_classes`
+(validated against the indexed class ids, which the docstring lists),
+`file_extensions`, `metadata_query`, `geo_search`, `tags` and `include_segments`,
+and returns `relation`, `nlp` and `warnings` beside the hits — a `gte` relation
+means the total is a lower bound, and every total that is not zero is one,
+because the vector index uses approximate nearest-neighbour search, as is a zero
+total when `nlp.truncated` is `true` (a filled window, an unsearched database, or a
+database the caller may open only in part).
+`metadata_query`, `geo_search` and `tags` are
+OpenSearch-only constraints: without OpenSearch they are ignored and reported as
+the `opensearch:fields_ignored` warning. It is a read tool, but every call bills a
+Bedrock embedding, so it is deliberately left out of the `autoApprove` sample
+above.
 
 ### Write (require `VAMS_ENABLE_WRITES=true`)
 
@@ -1131,11 +1151,8 @@ row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
 returns the stored record (HTTP 200) and launches nothing, while one that another
 user's launch holds is refused (409).
 Its `os_family` (`linux` or `windows`) is the chosen catalog image's `osFamily`
-and is required; its `bootstrap_id` is the idempotency key, and an error carries
-the `bootstrapId` that was sent (generated when the call gave none). When the
-answer was lost (`outcomeUnknown`, a timeout), look that id up with
-`get_edh_workstation` and re-send it only if it is not found, rather than
-launching again. Its optional `lease_hours` (1 up to the
+and is required; its `bootstrap_id` is the idempotency key — re-send the one from
+a call that timed out rather than launching again. Its optional `lease_hours` (1 up to the
 policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch; it is
 refused (400) when leases are disabled and ignored when the policy is `forced`. An
 `instance_type` the image's profile lists only under architectures of another family
@@ -1205,10 +1222,7 @@ until it finishes or is killed; like the workstation tools it stays out of
 cluster for the experimental `eks` backend), its `command` is a token list and
 `environment` a name→value map, sent under the request model's `command` /
 `environment` keys, and `memory` is in MiB (at least 512). It answers 202 with
-the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes. When
-EDH's quota is used up it answers `error_type` `EdhQuotaExceededError` (HTTP 429,
-`The EDH quota for this operation has been reached.`): the client does not resend
-it, and submitting again fails until a job ends (`list_edh_container_jobs`).
+the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes.
 `start_edh_ami_recipe_build` starts an EC2 Image Builder build instance that is
 billed until the image completes; like the other compute tools it stays out of
 `autoApprove`.

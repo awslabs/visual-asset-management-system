@@ -37,8 +37,10 @@ MAX_SCHEMA_QUERY_PAGES = 20
 # nor a field's controlled list (backend Rule 11). A key outside the schema is caller input, so that
 # refusal names no field and the key is logged. The other two name the schema-defined field (format
 # with ``field=``), which the caller can read from the schema itself.
-MSG_FIELD_NOT_IN_SCHEMA = ("A field is not defined in the metadata schema. Only schema-defined fields "
-                           "are allowed when restrictMetadataOutsideSchemas is enabled.")
+MSG_FIELD_NOT_IN_SCHEMA = (
+    "A field is not defined in the metadata schema. "
+    "Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled."
+)
 MSG_FIELD_TYPE_FIXED_BY_SCHEMA = ("Field '{field}' has its type defined by its metadata schema; the type "
                                   "cannot be changed.")
 MSG_VALUE_NOT_IN_CONTROLLED_LIST = "Field '{field}' has a value that is not in its controlled list."

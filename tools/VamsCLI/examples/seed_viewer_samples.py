@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import email.utils
 import hashlib
 import io
 import json
@@ -36,6 +37,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -57,6 +60,18 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = REPO_ROOT / "web" / "e2e" / "fixtures" / "viewer-samples.json"
 DEFAULT_OUT = REPO_ROOT / "web" / "e2e" / "fixtures" / "viewer-samples-seed.json"
 DOWNLOAD_TIMEOUT_SECONDS = 120
+# The samples come from public hosts (Wikimedia Commons, GitHub, the Khronos and Niantic sample sets)
+# whose bot policies ask a client to say what it is and how to reach its maintainers.
+USER_AGENT = (
+    "vams-seed-viewer-samples/1.0 (+https://github.com/awslabs/visual-asset-management-system; "
+    "seeds the VAMS end-to-end viewer test samples)"
+)
+# A host that rate limits answers 429 with a Retry-After; the download waits that long and tries
+# again, at most DOWNLOAD_ATTEMPTS times in all, and never waits longer than RETRY_AFTER_MAX_SECONDS
+# for one retry. Without a readable Retry-After it waits RETRY_AFTER_DEFAULT_SECONDS.
+DOWNLOAD_ATTEMPTS = 4
+RETRY_AFTER_DEFAULT_SECONDS = 30
+RETRY_AFTER_MAX_SECONDS = 300
 UTF8_BOM = b"\xef\xbb\xbf"
 # The extensionless sample `--asset-version` gives a second version (#1198 version-row Compare).
 VERSIONED_SAMPLE = "noext-readme"
@@ -402,6 +417,64 @@ def required_features(sample: Dict[str, Any]) -> List[str]:
     return [required] if isinstance(required, str) else list(required)
 
 
+def retry_after_seconds(value: Any, now: Any = None) -> float:
+    """The wait an HTTP `Retry-After` header asks for, in seconds: its delta-seconds, or the time until
+    its HTTP-date (never negative); RETRY_AFTER_DEFAULT_SECONDS when it is absent or unreadable."""
+    text = str(value or "").strip()
+    if not text:
+        return float(RETRY_AFTER_DEFAULT_SECONDS)
+    if text.isdigit():
+        return float(int(text))
+    try:
+        when = email.utils.parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError):
+        return float(RETRY_AFTER_DEFAULT_SECONDS)
+    if when is None:
+        return float(RETRY_AFTER_DEFAULT_SECONDS)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_dt.timezone.utc)
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    return max(0.0, (when - now).total_seconds())
+
+
+def fetch(
+    url: str,
+    opener: Callable[..., Any] = urllib.request.urlopen,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bytes:
+    """GET an https sample URL with the script's User-Agent. An HTTP 429 is retried after its
+    Retry-After delay, at most DOWNLOAD_ATTEMPTS times in all; a delay over RETRY_AFTER_MAX_SECONDS,
+    or a 429 on the last attempt, stops the run with the reason. Any other HTTP error is raised."""
+    if not url.startswith("https://"):
+        raise SeedError(f"refusing a non-HTTPS sample URL: {url}")
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            # nosec B310: the scheme is checked to be https above.
+            with opener(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:  # nosec
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code != 429:
+                raise
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise SeedError(
+                    f"{url}: still rate limited (HTTP 429) after {DOWNLOAD_ATTEMPTS} "
+                    "attempts; run the script again later"
+                ) from error
+            delay = retry_after_seconds(error.headers.get("Retry-After") if error.headers else None)
+            if delay > RETRY_AFTER_MAX_SECONDS:
+                raise SeedError(
+                    f"{url}: rate limited (HTTP 429) and asked to wait {delay:.0f} s, more than "
+                    f"the {RETRY_AFTER_MAX_SECONDS} s this script waits; run it again later"
+                ) from error
+            print(
+                f"  ~ {url}: rate limited (HTTP 429); retrying in {delay:.0f} s "
+                f"(attempt {attempt + 1} of {DOWNLOAD_ATTEMPTS})"
+            )
+            sleep(delay)
+    raise AssertionError("unreachable")  # the loop returns or raises
+
+
 def download(sample: Dict[str, Any], cache: Path) -> bytes:
     """The sample's bytes, from `cache` when an earlier run fetched them, after checking size and
     SHA-256 against the manifest."""
@@ -413,10 +486,7 @@ def download(sample: Dict[str, Any], cache: Path) -> bytes:
         if not url.startswith("https://"):
             raise SeedError(f"{sample['id']}: refusing a non-HTTPS sample URL: {url}")
         print(f"  v {url}")
-        request = urllib.request.Request(url, headers={"User-Agent": "vams-seed-viewer-samples"})
-        # nosec B310: the scheme is checked to be https above.
-        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:  # nosec
-            data = response.read()
+        data = fetch(url)
     if len(data) != sample["size"]:
         raise SeedError(f"{sample['id']}: expected {sample['size']} bytes, got {len(data)}")
     digest = hashlib.sha256(data).hexdigest()

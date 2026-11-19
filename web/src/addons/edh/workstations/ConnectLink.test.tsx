@@ -107,32 +107,6 @@ describe("ConnectLink", () => {
         expect(openSpy.mock.calls.length).toBeLessThanOrEqual(1);
     });
 
-    it("opens only an https connection link, and closes the tab with a toast for any other", async () => {
-        const user = userEvent.setup();
-        for (const link of ["http://dcv.example.internal/?authToken=x", "not a url"]) {
-            const tab = fakeTab();
-            openSpy.mockReturnValue(tab as unknown as Window);
-            connect.mutateAsync.mockResolvedValue({
-                sessionId: "s-1",
-                connectionUrl: link,
-                osFamily: "linux",
-            });
-            mockToast.error.mockClear();
-            const { unmount } = render(<ConnectLink row={row({})} />);
-
-            await user.click(screen.getByRole("button", { name: "Connect to Dev box" }));
-
-            await waitFor(() => expect(tab.close).toHaveBeenCalled());
-            expect(tab.location.replace).not.toHaveBeenCalled();
-            expect(connect.reset).toHaveBeenCalled();
-            expect(mockToast.error).toHaveBeenCalledWith("Connect failed", {
-                description:
-                    "Dev box: the cluster returned a connection link that cannot be opened.",
-            });
-            unmount();
-        }
-    });
-
     it("closes the tab and raises a toast when the connection request fails", async () => {
         const user = userEvent.setup();
         const tab = fakeTab();

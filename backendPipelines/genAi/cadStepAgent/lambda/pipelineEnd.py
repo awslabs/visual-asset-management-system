@@ -51,8 +51,7 @@ def lambda_handler(event, context):
     Handles final pipeline closeout and external task token callbacks.
     """
 
-    # The state's input carries the definition, prompt included: the line names the run only.
-    logger.info(f"Event: job={event.get('jobName')} stage={event.get('currentStageType')}")
+    logger.info("Event", event=event)
 
     externalSfnTaskToken = event.get('externalSfnTaskToken', "")
 

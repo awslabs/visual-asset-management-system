@@ -14,7 +14,7 @@ import type {
     RegisterSimulationImageRequest,
     RegisterVdiImageRequest,
 } from "./admin";
-import { callService, mayHaveTakenEffect } from "./outcome";
+import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
 import type {
     CapacityReservationView,
     LeasePolicy,
@@ -40,6 +40,18 @@ export const adminQk = {
 // Instance views poll on a fixed cadence: an administrator watches other users' sessions, none of
 // which are transitional because of an action taken on this page.
 export const ADMIN_INSTANCES_REFETCH_MS = 20000;
+
+async function callService<T>(
+    serviceFn: () => Promise<[boolean, T | string | EdhRequestError]>
+): Promise<T> {
+    const [ok, data] = await serviceFn();
+    if (!ok) {
+        // An EdhRequestError is thrown as it is: its status and body say whether EDH confirmed it.
+        if (data instanceof Error) throw data;
+        throw new Error(typeof data === "string" ? data : "Service call failed");
+    }
+    return data as T;
+}
 
 export function useEdhAdminImages(enabled = true) {
     return useQuery({

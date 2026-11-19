@@ -37,10 +37,6 @@ import {
     kmsKeyPolicyStatementGenerator,
 } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
-import {
-    StateTimeoutBatchSubmitJob,
-    grantBatchStateTimeoutCleanup,
-} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { ImageTo3dModelImage } from "./imageTo3dCodeBuild-construct";
 import { populateHuggingFaceTokenSecret } from "../../nvidia/customResources/populateHuggingFaceTokenSecret";
 
@@ -91,9 +87,12 @@ export const BLENDERAGENT_STABILITY_INFERENCE_PROFILES = [
     "us.stability.stable-image-erase-object-v1:0",
 ] as const;
 
-/** The foundation-model id underneath a cross-Region inference-profile prefix. */
+/**
+ * The foundation-model id underneath a cross-Region inference-profile prefix
+ * (Config.BEDROCK_INFERENCE_PROFILE_PREFIXES); a bare model id is returned as it is.
+ */
 function foundationModelId(modelId: string): string {
-    return modelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+    return modelId.replace(Config.BEDROCK_INFERENCE_PROFILE_PREFIX, "");
 }
 
 /**
@@ -173,26 +172,6 @@ const EFS_MOUNT_PATH = "/mnt/efs/imageto3d-models";
 
 /** Host/container volume name for the shared model cache. */
 const EFS_VOLUME_NAME = "imageto3d-models";
-
-/**
- * Timeout chain, innermost first. AWS Batch bounds one attempt from the moment it starts. The Batch
- * state's own Step Functions bound covers the queue wait plus that attempt, so a job that waits for
- * GPU capacity ends in a States.Timeout the state's Catch routes to pipelineEnd. The state machine
- * leaves 15 minutes past the Batch state for ConstructPipelineTask and PipelineEndTask (5-minute
- * Lambda timeouts each), and the bundle's 4-hour taskTimeout envelopes the state machine.
- */
-const IMAGE_TO_3D_BATCH_ATTEMPT_DURATION = Duration.hours(2);
-const IMAGE_TO_3D_STATE_MACHINE_TIMEOUT = Duration.hours(3);
-const IMAGE_TO_3D_BATCH_STATE_TIMEOUT = IMAGE_TO_3D_STATE_MACHINE_TIMEOUT.minus(
-    Duration.minutes(15)
-);
-/**
- * A partial download or lock in the shared EFS weight cache older than this has no live owner: every
- * job's attempt ends within IMAGE_TO_3D_BATCH_ATTEMPT_DURATION. The hour of margin covers clock skew
- * between instances and a slow write that touches a file late. Passed to entrypoint.sh as
- * HF_CACHE_STALE_MINUTES.
- */
-const IMAGE_TO_3D_HF_CACHE_STALE_AGE = IMAGE_TO_3D_BATCH_ATTEMPT_DURATION.plus(Duration.hours(1));
 
 export class ImageTo3dConstruct extends Construct {
     public pipelineVamsLambdaFunctionName: string;
@@ -791,11 +770,6 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
-        // After a Batch state's own bound fires, pipelineEnd ends the run's job on either queue.
-        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
-            batchJobQueue.ref,
-            ...(highGpuMemoryJobQueue ? [highGpuMemoryJobQueue.ref] : []),
-        ]);
 
         /**
          * Per-model Batch job definition. They differ only by model key, image, container memory, and
@@ -842,12 +816,6 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                     { name: "AWS_REGION", value: region },
                     { name: "S3_MODEL_BUCKET", value: modelCacheBucket.bucketName },
                     { name: "S3_MODEL_PREFIX", value: `imageTo3d/hf_cache/${modelKey}` },
-                    // Age past which entrypoint.sh removes a partial download or lock from the shared
-                    // weight cache: longer than any live job, whose attempt is bounded here.
-                    {
-                        name: "HF_CACHE_STALE_MINUTES",
-                        value: String(IMAGE_TO_3D_HF_CACHE_STALE_AGE.toMinutes()),
-                    },
                     // The Bedrock model the Blender agent reasons with. Present on every job definition so
                     // the container has one source for it; only the agent reads it.
                     {
@@ -925,7 +893,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                     attempts: 1,
                 },
                 timeout: {
-                    attemptDurationSeconds: IMAGE_TO_3D_BATCH_ATTEMPT_DURATION.toSeconds(),
+                    attemptDurationSeconds: 7200,
                 },
             });
         };
@@ -994,8 +962,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             const jobDefinition = createModelJobDefinition(modelKey);
             batchJobDefinitionNames[modelKey] = jobDefinitionNameFromRef(jobDefinition.ref);
 
-            const batchJob = new StateTimeoutBatchSubmitJob(this, `ImageTo3dBatchJob-${modelKey}`, {
-                stateTimeout: IMAGE_TO_3D_BATCH_STATE_TIMEOUT,
+            const batchJob = new tasks.BatchSubmitJob(this, `ImageTo3dBatchJob-${modelKey}`, {
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: jobDefinition.attrJobDefinitionArn,
                 jobQueueArn: queueForModel(modelKey),
@@ -1047,10 +1014,9 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
          */
         const pipelineStateMachine = new sfn.StateMachine(this, "ImageTo3d-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-            // Envelopes the Batch state's own bound (queue wait plus the 2h attempt) and the Lambda
-            // states around it, so pipelineEnd always runs and closes the token; the pipeline's own
-            // 4h task timeout in turn envelopes this.
-            timeout: IMAGE_TO_3D_STATE_MACHINE_TIMEOUT,
+            // Envelopes the 2h Batch attempt so pipelineEnd always runs and closes the token; the
+            // pipeline's own 4h task timeout in turn envelopes this.
+            timeout: Duration.hours(3),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

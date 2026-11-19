@@ -19,10 +19,6 @@ import {
     buildPipelineEndFunction,
 } from "../lambdaBuilder/pcPotreeViewerFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
-import {
-    StateTimeoutBatchSubmitJob,
-    grantBatchStateTimeoutCleanup,
-} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -55,20 +51,6 @@ const defaultProps: Partial<PcPotreeViewerConstructProps> = {
     //stackName: "",
     //env: {},
 };
-
-/**
- * Timeout chain. The registered pipeline's 14,400-second `taskTimeout` (vamsSchema/pipeline.json)
- * starts before the execution does, so the state machine ends 15 minutes inside it. Each Batch
- * state's own bound counts the queue wait as well as the attempt and leaves 15 minutes for
- * ConstructPipelineTask and PipelineEndTask (5-minute Lambdas each); each job's attempt duration
- * equals that bound.
- * shortcut: the PDAL path runs its two Batch states in sequence and each may take the full bound, so
- * a run whose two jobs together outlast the state machine still ends in an uncaught execution
- * timeout; split the budget between the states (or derive the second state's bound from the time
- * left) if long two-stage conversions become common.
- */
-export const PC_POTREE_STATE_MACHINE_TIMEOUT = Duration.minutes(225);
-export const PC_POTREE_BATCH_STATE_TIMEOUT = Duration.minutes(210);
 
 /**
  * Deploys a specific batch to ECS workflow for a particular container image for the website visualizer files
@@ -239,8 +221,8 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_PDAL",
             {
-                // The Batch state's own bound (see PC_POTREE_BATCH_STATE_TIMEOUT).
-                attemptDuration: PC_POTREE_BATCH_STATE_TIMEOUT,
+                // Matches the 5-hour state machine timeout that encloses this job.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -275,9 +257,10 @@ export class PcPotreeViewerConstruct extends NestedStack {
             this,
             "BatchFargatePipeline_Potree",
             {
-                // The Batch state's own bound (see PC_POTREE_BATCH_STATE_TIMEOUT). The Potree
-                // conversion is the second Batch job in the same state machine as the PDAL one.
-                attemptDuration: PC_POTREE_BATCH_STATE_TIMEOUT,
+                // Matches the 5-hour state machine timeout that encloses this job. The Potree
+                // conversion is the second Batch job in the same state machine as the PDAL one, so
+                // both are bounded by that single timeout.
+                attemptDuration: cdk.Duration.hours(5),
                 config: props.config,
                 vpc: props.vpc,
                 subnets: props.pipelineSubnets,
@@ -354,11 +337,6 @@ export class PcPotreeViewerConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
-        // After either Batch state's own bound fires, pipelineEnd ends the run's job on its queue.
-        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
-            pdalBatchPipeline.batchJobQueue.jobQueueArn,
-            potreeBatchPipeline.batchJobQueue.jobQueueArn,
-        ]);
 
         const pipeLineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,
@@ -403,46 +381,36 @@ export class PcPotreeViewerConstruct extends NestedStack {
             }`;
 
         // batch job Potree Converter
-        const potreeConverterBatchJob = new StateTimeoutBatchSubmitJob(
-            this,
-            "PotreeConverterBatchJob",
-            {
-                stateTimeout: PC_POTREE_BATCH_STATE_TIMEOUT,
-                jobName: sfn.JsonPath.stringAt("$.jobName"),
-                jobDefinitionArn: latestRevisionJobDefinitionArn(potreeBatchPipeline),
-                jobQueueArn: potreeBatchPipeline.batchJobQueue.jobQueueArn,
-                containerOverrides: {
-                    command: [...sfn.JsonPath.listAt("$.definition")],
-                    environment: {
-                        TASK_TOKEN: sfn.JsonPath.taskToken,
-                        AWS_REGION: region,
-                    },
+        const potreeConverterBatchJob = new tasks.BatchSubmitJob(this, "PotreeConverterBatchJob", {
+            jobName: sfn.JsonPath.stringAt("$.jobName"),
+            jobDefinitionArn: latestRevisionJobDefinitionArn(potreeBatchPipeline),
+            jobQueueArn: potreeBatchPipeline.batchJobQueue.jobQueueArn,
+            containerOverrides: {
+                command: [...sfn.JsonPath.listAt("$.definition")],
+                environment: {
+                    TASK_TOKEN: sfn.JsonPath.taskToken,
+                    AWS_REGION: region,
                 },
-            }
-        )
+            },
+        })
             .addCatch(handlePotreeError, {
                 resultPath: "$.error",
             })
             .next(pipeLineEndTask);
 
         // batch job PDAL
-        const pdalConverterBatchJob = new StateTimeoutBatchSubmitJob(
-            this,
-            "PdalConverterBatchJob",
-            {
-                stateTimeout: PC_POTREE_BATCH_STATE_TIMEOUT,
-                jobName: sfn.JsonPath.stringAt("$.jobName"),
-                jobDefinitionArn: latestRevisionJobDefinitionArn(pdalBatchPipeline),
-                jobQueueArn: pdalBatchPipeline.batchJobQueue.jobQueueArn,
-                containerOverrides: {
-                    command: [...sfn.JsonPath.listAt("$.definition")],
-                    environment: {
-                        TASK_TOKEN: sfn.JsonPath.taskToken,
-                        AWS_REGION: region,
-                    },
+        const pdalConverterBatchJob = new tasks.BatchSubmitJob(this, "PdalConverterBatchJob", {
+            jobName: sfn.JsonPath.stringAt("$.jobName"),
+            jobDefinitionArn: latestRevisionJobDefinitionArn(pdalBatchPipeline),
+            jobQueueArn: pdalBatchPipeline.batchJobQueue.jobQueueArn,
+            containerOverrides: {
+                command: [...sfn.JsonPath.listAt("$.definition")],
+                environment: {
+                    TASK_TOKEN: sfn.JsonPath.taskToken,
+                    AWS_REGION: region,
                 },
-            }
-        )
+            },
+        })
             .addCatch(handlePdalError, {
                 resultPath: "$.error",
             })
@@ -491,7 +459,7 @@ export class PcPotreeViewerConstruct extends NestedStack {
             "PcPotreeViewerProcessing-StateMachine",
             {
                 definitionBody: sfn.DefinitionBody.fromChainable(sfnPipelineDefinition),
-                timeout: PC_POTREE_STATE_MACHINE_TIMEOUT,
+                timeout: Duration.hours(5),
                 logs: {
                     destination: stateMachineLogGroup,
                     includeExecutionData: true,

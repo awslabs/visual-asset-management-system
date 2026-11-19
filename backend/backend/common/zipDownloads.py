@@ -103,6 +103,14 @@ MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_FILE_NAME = "manifest.json"
 RESOLVED_MANIFEST_FILE_NAME = "resolved-manifest.jsonl"
 
+# Preview companions ({file}.previewFile.{ext}, common.s3PathPatterns.PREVIEW_FILE_PATTERN) are left out
+# of a zip download, as the asset file list hides them and the export folds them into their base file's
+# entry. The request manifest records the value under INCLUDE_PREVIEW_FILES_KEY, and the zipArchive
+# container applies it (its rules.include_preview_files; a Zip Archive run reads the same key from its
+# configBody). A selection that holds nothing but preview companions is refused with MSG_NO_FILES.
+INCLUDE_PREVIEW_FILES_KEY = "includePreviewFiles"
+ZIP_DOWNLOAD_INCLUDE_PREVIEW_FILES = False
+
 # A refusal or failure reason the zipArchive container writes is user-safe text it prefixes with this
 # marker; only such text is ever shown from a workflow's execution error.
 CONTAINER_REASON_PREFIX = "ZIPDOWNLOAD: "
@@ -115,6 +123,9 @@ LAUNCH_GRACE_SECONDS = 600
 
 MSG_DISABLED = "Zip downloads are not enabled for this deployment"
 MSG_NOT_FOUND = "Zip download not found"
+# The selection resolved to no file, for example only preview companions (INCLUDE_PREVIEW_FILES_KEY). The
+# zipArchive container refuses an empty member list with the same words (its resolve.enforce_limits).
+MSG_NO_FILES = "The selection has no files"
 MSG_CAP_REACHED = "You already have the maximum number of active zip downloads"
 MSG_LAUNCH_FAILED = "The archive job could not be started"
 # The zipArchive workflow refused the launch (a 4xx from the execute handler). Generic on purpose: the
@@ -135,18 +146,10 @@ MSG_JOB_STOPPED = "The archive job was stopped"
 # The zipArchive container stopped sending heartbeats (killed without a SIGTERM: out of memory, host
 # loss), so its run ended with States.HeartbeatTimeout (#1125 D26).
 MSG_JOB_LOST = "The archive job stopped responding"
-# The heartbeat clock starts when the Batch job is submitted. When it ran out before the container
-# started, the zipArchive pipelineEnd reports where the job was instead: still waiting in the AWS
-# Batch queue (it cancels the job), or failed before its container ran.
-MSG_JOB_QUEUED = "The archive job waited too long to start; create it again later"
-MSG_JOB_NOT_STARTED = "The archive job failed before it started"
-# Error names in a run's executionError that identify those ends. The zipArchive pipelineEnd
+# Error names in a run's executionError that identify those two ends. The zipArchive pipelineEnd
 # reports the state's error as "Pipeline Failure: <Error>", which the workflow error handler records.
 CONTAINER_STOPPED_ERROR = "ZipArchiveContainerStopped"
 HEARTBEAT_TIMEOUT_ERROR = "States.HeartbeatTimeout"
-STATE_TIMEOUT_ERROR = "States.Timeout"
-JOB_QUEUED_ERROR = "ZipArchiveJobQueued"
-JOB_NOT_STARTED_ERROR = "ZipArchiveJobNotStarted"
 MSG_CANCELLED_FROM_EXECUTIONS = "Cancelled from workflow executions"
 MSG_NOT_READY = "The archive is not ready for download"
 MSG_EXPIRED = "This zip download has expired"
@@ -357,14 +360,11 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
-      a prefixed execution error), else for TIMED_OUT or a States.Timeout in the execution error
-      (STATE_TIMEOUT_ERROR, the job state's 11-hour bound) the timeout message, else the stop the
+      a prefixed execution error), else for TIMED_OUT the timeout message, else the stop the
       container recorded on SIGTERM (``stopReason``, a Batch terminate outside an abort), else, by
       the error name in the execution error, MSG_JOB_STOPPED for the container's own stop answer
       (CONTAINER_STOPPED_ERROR) or MSG_JOB_LOST for a heartbeat timeout (HEARTBEAT_TIMEOUT_ERROR, a
-      container killed without a SIGTERM; #1125 D26), MSG_JOB_QUEUED or MSG_JOB_NOT_STARTED for a
-      heartbeat timeout before the container started (JOB_QUEUED_ERROR, JOB_NOT_STARTED_ERROR), else a
-      fixed message. Raw execution errors are
+      container killed without a SIGTERM; #1125 D26), else a fixed message. Raw execution errors are
       never shown: they can carry internal resource names; only these fixed names are matched.
 
     The container never finalizes a job on SIGTERM; it only records ``stopReason`` and leaves the
@@ -386,22 +386,15 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
         return STATUS_FAILED, {"error_message": MSG_CANCELLED_FROM_EXECUTIONS,
                                "cancelled_by": CANCELLED_BY_EXECUTION}
     if execution_status in ("FAILED", "TIMED_OUT"):
-        error = execution_error if isinstance(execution_error, str) else ""
         reason = (row.get("errorMessage") or "").strip() or container_reason(execution_error)
-        # The ZipArchiveBatchJob state's 11-hour bound ends the run with States.Timeout (reported
-        # by pipelineEnd as a failure), which wins over the stop the container recorded when AWS
-        # Batch ended its attempt at the same bound.
-        if not reason and (execution_status == "TIMED_OUT" or STATE_TIMEOUT_ERROR in error):
+        if not reason and execution_status == "TIMED_OUT":
             reason = MSG_JOB_TIMED_OUT
         if not reason:
             reason = (row.get("stopReason") or "").strip()[:1024]
         if not reason:
+            error = execution_error if isinstance(execution_error, str) else ""
             if CONTAINER_STOPPED_ERROR in error:
                 reason = MSG_JOB_STOPPED
-            elif JOB_QUEUED_ERROR in error:
-                reason = MSG_JOB_QUEUED
-            elif JOB_NOT_STARTED_ERROR in error:
-                reason = MSG_JOB_NOT_STARTED
             elif HEARTBEAT_TIMEOUT_ERROR in error:
                 reason = MSG_JOB_LOST
             else:

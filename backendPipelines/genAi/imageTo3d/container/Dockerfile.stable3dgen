@@ -165,8 +165,7 @@ print('dinov2 checkpoint', size, 'bytes')"
 # its working directory; adding it to PYTHONPATH keeps the import working from anywhere.
 ENV PYTHONPATH="/opt/stable3dgen:${PYTHONPATH}"
 
-# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
-# carries them; only a hand-run build that sets it to false leaves them out.
+# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
         pip install --no-cache-dir pymeshfix pymeshlab; \

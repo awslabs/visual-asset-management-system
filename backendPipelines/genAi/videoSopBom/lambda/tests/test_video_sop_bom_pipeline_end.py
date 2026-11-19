@@ -30,9 +30,7 @@ _TOKEN = "tok-123"
 _CODES = ("VideoSopBomInputRejected", "VideoSopBomLimitExceeded", "VideoSopBomTranscribeFailed",
           "VideoSopBomModelOutputInvalid", "VideoSopBomConnectivityError", "VideoSopBomPipelineError")
 _AUX_BUCKET = "aux"
-# The workflow execution id (executionRecords.new_guid: 32 lowercase hex characters).
-_EXEC_ID = "0123456789abcdef0123456789abcdef"
-_AUX_PREFIX = f"pipelines/genai-video-sop-bom/{_EXEC_ID}/"
+_AUX_PREFIX = "pipelines/genai-video-sop-bom/E1/"
 
 
 def _load():
@@ -209,38 +207,6 @@ class TestFailureCauses:
         assert cause == mod.ATTEMPT_TIMEOUT_CAUSE
         assert cause == "the container did not finish within the 6 h bound; last stage per the container log"
 
-    def test_a_batch_state_timeout_names_the_queue_wait(self):
-        # The Batch state's own bound ends a job that waited in the queue; Step Functions gives that
-        # States.Timeout no cause, so the token gets one that says what the bound counts.
-        mod = _load()
-        _, success, failure = _run(mod, _event(error={"Error": "States.Timeout"}))
-        success.assert_not_called()
-        code, cause = _failure(failure)
-        assert code == "VideoSopBomPipelineError"
-        assert cause == mod.STATE_TIMEOUT_CAUSE
-        assert "AWS Batch queue" in cause
-
-    def test_a_batch_state_timeout_ends_the_runs_job(self):
-        # Step Functions does not cancel the .sync job on a state timeout; pipelineEnd ends it so a
-        # queued job does not start after the run has failed and its scratch prefix is gone.
-        mod = _load()
-        batch = MagicMock()
-        batch.list_jobs.return_value = {"jobSummaryList": [
-            {"jobId": "j-done", "status": "SUCCEEDED"}, {"jobId": "j-queued", "status": "RUNNABLE"}]}
-        with patch.object(mod, "batch", batch), patch.object(mod, "BATCH_JOB_QUEUES", ["queue"]):
-            _, _, failure = _run(mod, _event(error={"Error": "States.Timeout"}))
-        assert batch.list_jobs.call_args.kwargs == {
-            "jobQueue": "queue",
-            "filters": [{"name": "JOB_NAME", "values": [_event()["batchJobName"]]}]}
-        assert [c.kwargs["jobId"] for c in batch.terminate_job.call_args_list] == ["j-queued"]
-        _failure(failure)
-
-    def test_another_failure_ends_no_job(self):
-        mod = _load()
-        batch = MagicMock()
-        with patch.object(mod, "batch", batch), patch.object(mod, "BATCH_JOB_QUEUES", ["queue"]):
-            _run(mod, _event(error={"Error": "States.TaskFailed", "Cause": "x"}))
-        batch.list_jobs.assert_not_called()
     def test_camel_case_job_keys_are_read_too(self):
         mod = _load()
         job = {"jobId": "x", "status": "FAILED", "statusReason": "Task failed to start",
@@ -332,14 +298,13 @@ class TestCallbackWrapping:
 
 @pytest.mark.unit
 class TestAuxScratchCleanup:
-    """The run's objects under pipelines/<name>/<executionId>/ after pipelineEnd."""
+    """The run's objects under pipelines/genai-video-sop-bom/<executionId>/ after pipelineEnd."""
 
     _SCRATCH = (f"{_AUX_PREFIX}definition.json", f"{_AUX_PREFIX}audio/combined.flac",
                 f"{_AUX_PREFIX}transcribe/combined.json", f"{_AUX_PREFIX}analysis/segments.json")
-    # Another run's folder under the same name, and another step's folder of the same execution: neither
-    # is this run's.
-    _OTHERS = ("pipelines/genai-video-sop-bom/fedcba9876543210fedcba9876543210/definition.json",
-               f"pipelines/other-pipeline/{_EXEC_ID}/definition.json")
+    # Another run's folder under the same root, and a sibling pipeline's prefix: neither is this run's.
+    _OTHERS = ("pipelines/genai-video-sop-bom/E2/definition.json",
+               "pipelines/other-pipeline/E1/definition.json")
 
     def _bucket(self, **kwargs):
         return _S3Stub(keys=self._SCRATCH + self._OTHERS, **kwargs)
@@ -414,44 +379,21 @@ class TestAuxScratchCleanup:
         mod = _load()
         assert mod.aux_prefix_location(_event()) == (_AUX_BUCKET, _AUX_PREFIX)
 
-    @pytest.mark.parametrize("prefix", [
-        # A workflow step with its own jobName, or the pipeline registered under another id, runs under
-        # that name (executionRecords.aux_pipeline_prefix); the execution id may be the hyphenated form.
-        f"pipelines/sop-extract/{_EXEC_ID}/",
-        "pipelines/genai-video-sop-bom/01234567-89ab-4cde-8f01-23456789abcd/",
-    ], ids=["step-job-name", "hyphenated-execution-id"])
-    def test_a_run_under_any_one_level_name_is_cleaned_up(self, prefix):
-        mod = _load()
-        scratch = [f"{prefix}definition.json", f"{prefix}audio/combined.flac"]
-        s3 = _S3Stub(keys=scratch + list(self._OTHERS) + list(self._SCRATCH))
-        event = _event(error={"Error": "VideoSopBomTranscribeFailed", "Cause": "no speech was detected."},
-                       definitionCommand=["--definition-s3-uri", f"s3://{_AUX_BUCKET}/{prefix}definition.json"])
-        assert mod.aux_prefix_location(event) == (_AUX_BUCKET, prefix)
-        _, _, failure = _run(mod, event, s3=s3)
-        _failure(failure)
-        assert sorted(s3.deleted) == sorted(scratch)
-        assert set(s3.objects) == set(self._OTHERS) | set(self._SCRATCH)
-
     @pytest.mark.parametrize("command", [
         None, [], ["--definition-s3-uri"], ["--other-flag", f"s3://{_AUX_BUCKET}/{_AUX_PREFIX}definition.json"],
         ["--definition-s3-uri", f"https://{_AUX_BUCKET}/{_AUX_PREFIX}definition.json"],
         ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/{_AUX_PREFIX}other.json"],
-        # The root, a pipeline's whole folder, an empty or non-execution-id folder, a folder deeper than
-        # one execution, a two-level or out-of-charset name, and a key outside the root.
-        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/definition.json"],
+        # Outside this pipeline's root, the root itself, and a folder deeper than one execution.
+        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/other-pipeline/E1/definition.json"],
         ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/genai-video-sop-bom/definition.json"],
         ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/genai-video-sop-bom//definition.json"],
-        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/genai-video-sop-bom/E1/definition.json"],
-        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/genai-video-sop-bom/{_EXEC_ID}/sub/definition.json"],
-        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/team/genai-video-sop-bom/{_EXEC_ID}/definition.json"],
-        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/a.b/{_EXEC_ID}/definition.json"],
-        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/genai-video-sop-bom/{_EXEC_ID}/definition.json"],
-        ["--definition-s3-uri", f"s3:///pipelines/genai-video-sop-bom/{_EXEC_ID}/definition.json"],
+        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/pipelines/genai-video-sop-bom/E1/sub/definition.json"],
+        ["--definition-s3-uri", f"s3://{_AUX_BUCKET}/genai-video-sop-bom/E1/definition.json"],
+        ["--definition-s3-uri", "s3:///pipelines/genai-video-sop-bom/E1/definition.json"],
     ])
-    def test_a_locator_outside_one_execution_folder_deletes_nothing(self, command):
+    def test_a_locator_outside_one_execution_folder_of_this_pipeline_deletes_nothing(self, command):
         # The delete is aimed by the event. A malformed or foreign locator yields no location, so a
-        # failed run can never clear another pipeline's whole folder, a deeper or differently shaped
-        # prefix, or the root.
+        # failed run can never clear another run's folder, another pipeline's prefix, or the root.
         mod = _load()
         event = _event(error={"Error": "VideoSopBomInputRejected", "Cause": "x."})
         if command is None:
@@ -464,18 +406,16 @@ class TestAuxScratchCleanup:
         _failure(failure)
         assert result is event and s3.calls == ["send_task_failure"]
 
-    def test_the_root_the_handler_accepts_under_is_the_platform_prefix_and_the_roles_grant_root(self):
-        # executionRecords.aux_pipeline_prefix renders `pipelines/{pipelineName}/{executionId}/`, and the
-        # pipelineEnd role's s3:prefix condition and delete resource name the same root; the handler's own
-        # guard must be the same string or one of the three drifts.
+    def test_the_root_the_handler_refuses_outside_of_is_the_lifecycle_rules_prefix(self):
+        # The storage stack's lifecycle rule and the pipelineEnd role's s3:prefix condition both name
+        # this root; the handler's own guard must be the same string or one of the three drifts.
         mod = _load()
         here = os.path.dirname(os.path.abspath(__file__))
         repo = os.path.abspath(os.path.join(here, "..", "..", "..", "..", ".."))
-        records = open(os.path.join(repo, "backend", "backend", "common", "workflows", "executionRecords.py"),
-                       encoding="utf-8").read()
+        storage = open(os.path.join(repo, "infra", "lib", "nestedStacks", "storage",
+                                    "storageBuilder-nestedStack.ts"), encoding="utf-8").read()
         builder = open(os.path.join(repo, "infra", "lib", "nestedStacks", "pipelines", "genAi", "videoSopBom",
                                     "lambdaBuilder", "videoSopBomFunctions.ts"), encoding="utf-8").read()
-        assert mod.AUX_PREFIX_ROOT == "pipelines/"
-        assert f'_PIPELINES_PREFIX = "{mod.AUX_PREFIX_ROOT}"' in records
-        assert 'return f"{_PIPELINES_PREFIX}{pipeline_name}/{execution_id}/"' in records
+        assert mod.AUX_PREFIX_ROOT == "pipelines/genai-video-sop-bom/"
+        assert f'prefix: "{mod.AUX_PREFIX_ROOT}"' in storage
         assert f'VIDEO_SOP_BOM_AUX_PREFIX_ROOT = "{mod.AUX_PREFIX_ROOT}"' in builder

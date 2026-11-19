@@ -164,13 +164,17 @@ export class CadStepAgentConstruct extends Construct {
         });
 
         // The model grant names the inference profile the agent invokes and the foundation model
-        // behind it. A cross-Region profile (global., us., eu., apac., us-gov.) routes requests to
-        // other Regions, and Amazon Bedrock authorizes the foundation-model ARN of the Region it
-        // routed to, so that case grants the model in every Region of the partition; a plain model id
-        // is invoked in the deployment Region only. Never foundation-model/*.
+        // behind it. A cross-Region profile (a Config.BEDROCK_INFERENCE_PROFILE_PREFIXES prefix such as
+        // global., us., eu., apac., au., jp., in. or us-gov.) routes requests to other Regions, and
+        // Amazon Bedrock authorizes the foundation-model ARN of the Region it routed to, so that case
+        // grants the model in every Region of the partition; a plain model id is invoked in the
+        // deployment Region only. Never foundation-model/*.
         const bedrockModelId = cad.bedrockModelId;
-        const crossRegionPrefix = /^(global|us-gov|us|eu|apac)\./.exec(bedrockModelId)?.[1];
-        const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+        const crossRegionPrefix = Config.BEDROCK_INFERENCE_PROFILE_PREFIX.exec(bedrockModelId)?.[1];
+        const bedrockModelPermissions = bedrockModelId.replace(
+            Config.BEDROCK_INFERENCE_PROFILE_PREFIX,
+            ""
+        );
         const foundationModelRegion = crossRegionPrefix ? "*" : region;
         const bedrockPolicy = new iam.PolicyDocument({
             statements: [
@@ -439,10 +443,6 @@ export class CadStepAgentConstruct extends Construct {
                         props.config.app.baseStackName,
                     // One STEP input, a handful of script attempts and their outputs; 40 GiB is ample.
                     ephemeralStorageGiB: 40,
-                    // The agent waits on model calls and runs one script at a time under an 8 GiB
-                    // address-space limit: 2 vCPU / 16 GiB.
-                    cpu: 2,
-                    memoryMiB: 16384,
                     logGroup: containerLogGroup,
                     environment: containerEnvironment,
                     // No ECS init process (`initProcessEnabled`): the image's own ENTRYPOINT is PID 1,

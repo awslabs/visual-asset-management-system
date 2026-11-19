@@ -10,6 +10,8 @@ Download as Zip is available when your administrator enables it for the deployme
 -   The current files, or the file versions recorded in an asset version.
 -   Only assets that are distributable and not archived.
 
+The archive holds the files the **File Manager** lists. The generated preview images of files (`{file}.previewFile.{ext}`, such as `model.glb.previewFile.png`), which the file list does not show, are left out of every zip download, under a folder, in the whole asset and in an asset version alike. A selection that holds nothing but such preview files is refused with **The selection has no files**.
+
 VAMS refuses the whole archive, rather than leaving files out, when a selected file is archived, a deleted version, in an archive storage class (Amazon S3 Glacier Flexible Retrieval or Glacier Deep Archive), or has a blocked executable file type, and when the selection exceeds the deployment's limits on file count or total size. The reason names the file, so you can adjust the selection and try again.
 
 ## Creating a zip download
@@ -52,7 +54,7 @@ The search box above each list finds jobs by asset ID, asset name, request ID, a
 | **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. A run aborted from the **Executions** page fails with **Cancelled from workflow executions**. |
 | **Cancelled** | You cancelled the job before it finished.                                                                                                                                                                 |
 
-If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory; create the job again. If it fails with **The archive job waited too long to start**, too many archive jobs were running at once; create it again later. See [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if a failure recurs.
+If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory. Create the job again; see [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if it recurs.
 
 While a job is queued or running, the list refreshes itself every few seconds. A job on the first page that was deleted in another window leaves the list at the next refresh. When two refreshes in a row fail, **Could not refresh the Download Queue** appears above the list: the list keeps the last answer and keeps trying, and **Retry** refreshes it at once.
 

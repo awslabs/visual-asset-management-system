@@ -637,27 +637,3 @@ describe("focus when the Register or Edit dialog closes", () => {
         await waitFor(() => expect(refreshButton()).toHaveFocus());
     });
 });
-
-describe("a failed poll of a listed reservation table", () => {
-    beforeEach(() => jest.clearAllMocks());
-
-    it("keeps the listed reservations and says the list could not be refreshed", () => {
-        (adminQueries.useEdhAdminCapacityReservations as jest.Mock).mockReturnValue(
-            query([RENDER_POOL], { error: new Error("Service unavailable") })
-        );
-        (adminQueries.useEdhCapacityReservationMutations as jest.Mock).mockReturnValue({
-            register: mutation(),
-            update: mutation(),
-            unregister: mutation(),
-        });
-        render(<ReservationsTab can={() => true} />);
-
-        expect(rowOf("Render pool")).toBeInTheDocument();
-        expect(
-            screen.getByText(
-                "Could not refresh: Service unavailable. The list shows the last answer."
-            )
-        ).toBeInTheDocument();
-        expect(screen.queryByText(/Error loading capacity reservations/)).not.toBeInTheDocument();
-    });
-});

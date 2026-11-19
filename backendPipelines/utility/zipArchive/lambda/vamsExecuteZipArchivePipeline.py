@@ -37,7 +37,7 @@ invoke_config = Config(retries={'total_max_attempts': 1}, read_timeout=OPEN_PIPE
                        connect_timeout=10)
 lambda_client = boto3.client('lambda', config=invoke_config)
 s3_client = boto3.client('s3', config=retry_config)
-sfn_client = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'],
+sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'),
                           config=retry_config)
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 

@@ -30,19 +30,6 @@ AUDIO_ARGS = ["-vn", "-ac", "1", "-ar", "16000", "-c:a", "flac"]
 FFMPEG_BASE = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-y"]
 PROBE_ARGS = ["-v", "error", "-show_entries", "stream=index,codec_type,codec_name,duration:format=duration", "-of", "json"]
 
-# Every input opens as a local file through a demuxer allowlist (backendPipelines/CLAUDE.md "Decoding
-# Untrusted Images and Video"). The uploaded videos (.mp4, .mov, .m4v, .mkv, .webm) open only through the
-# QuickTime/MP4 and Matroska/WebM demuxers, each listed under every name FFmpeg gives it; the tracks the
-# pipeline writes open only as FLAC, and the combined track only through the concat list of those FLACs.
-VIDEO_FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm"
-FLAC_FORMATS = "flac"
-CONCAT_FORMATS = "concat,flac"
-
-
-def _input_options(formats):
-    """FFmpeg input options that limit the next input to the `file` protocol and the named demuxers."""
-    return ["-protocol_whitelist", "file", "-format_whitelist", formats]
-
 
 class FrameExtractionFailed(Exception):
     """One key frame could not be produced; the caller records it as skipped and continues."""
@@ -90,11 +77,10 @@ class Probe:
     streams: list = field(default_factory=list)
 
 
-def probe(path, formats=VIDEO_FORMATS):
-    """Stream and duration inspection. A non-zero ffprobe exit is an input rejection, never a 0 duration.
-    `formats` is the demuxer allowlist: the uploaded video formats by default, FLAC for an extracted track."""
+def probe(path):
+    """Stream and duration inspection. A non-zero ffprobe exit is an input rejection, never a 0 duration."""
     name = os.path.basename(path)
-    rc, tail = _run(["ffprobe", *PROBE_ARGS, *_input_options(formats), path], PROBE_TIMEOUT_S)
+    rc, tail = _run(["ffprobe", *PROBE_ARGS, path], PROBE_TIMEOUT_S)
     if rc != 0:
         raise PipelineRejection(INPUT_REJECTED, f"{name} could not be decoded (ffprobe exit {rc}: {_last_line(tail, 'no output')}).")
     try:
@@ -112,13 +98,13 @@ def probe(path, formats=VIDEO_FORMATS):
 
 def extract_audio_flac(src, dst):
     """One video -> mono 16 kHz FLAC; returns the extracted track's duration (what Transcribe will time)."""
-    rc, tail = _run([*FFMPEG_BASE, *_input_options(VIDEO_FORMATS), "-i", src, *AUDIO_ARGS, dst], EXTRACT_TIMEOUT_S)
+    rc, tail = _run([*FFMPEG_BASE, "-i", src, *AUDIO_ARGS, dst], EXTRACT_TIMEOUT_S)
     if rc != 0 or not os.path.isfile(dst):
         raise PipelineRejection(
             INPUT_REJECTED,
             f"{os.path.basename(src)}: audio extraction failed (ffmpeg exit {rc}: {_last_line(tail, 'no output')}).",
         )
-    return probe(dst, FLAC_FORMATS).duration_s
+    return probe(dst).duration_s
 
 
 def concat_flac(parts, dst):
@@ -127,11 +113,10 @@ def concat_flac(parts, dst):
     with open(list_path, "w", encoding="utf-8") as handle:
         for part in parts:
             handle.write("file '" + part.replace("'", "'\\''") + "'\n")
-    rc, tail = _run([*FFMPEG_BASE, *_input_options(CONCAT_FORMATS), "-f", "concat", "-safe", "0", "-i", list_path, *AUDIO_ARGS, dst],
-                    EXTRACT_TIMEOUT_S)
+    rc, tail = _run([*FFMPEG_BASE, "-f", "concat", "-safe", "0", "-i", list_path, *AUDIO_ARGS, dst], EXTRACT_TIMEOUT_S)
     if rc != 0 or not os.path.isfile(dst):
         raise PipelineRejection(INPUT_REJECTED, f"audio concatenation failed (ffmpeg exit {rc}: {_last_line(tail, 'no output')}).")
-    return probe(dst, FLAC_FORMATS).duration_s
+    return probe(dst).duration_s
 
 
 def _encode_jpeg(image, dst, quality):
@@ -143,8 +128,7 @@ def extract_frame(src, t_seconds, dst, max_edge=FRAME_MAX_EDGE):
     """One key frame at `t_seconds` of `src`, scaled to `max_edge` on the long side (aspect preserved,
     never enlarged), JPEG quality 85, re-encoded at lower quality until it fits FRAME_MAX_BYTES."""
     tmp_png = dst + ".png"
-    rc, tail = _run([*FFMPEG_BASE, "-ss", f"{t_seconds:.3f}", *_input_options(VIDEO_FORMATS), "-i", src,
-                     "-frames:v", "1", "-f", "image2", tmp_png], FRAME_TIMEOUT_S)
+    rc, tail = _run([*FFMPEG_BASE, "-ss", f"{t_seconds:.3f}", "-i", src, "-frames:v", "1", "-f", "image2", tmp_png], FRAME_TIMEOUT_S)
     if rc != 0 or not os.path.isfile(tmp_png):
         raise FrameExtractionFailed(f"ffmpeg exit {rc} at {t_seconds:.1f}s: {_last_line(tail, 'no output')}")
     try:

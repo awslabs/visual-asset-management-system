@@ -15,7 +15,6 @@ import { useEdhAmiBuilds, useEdhAmiRecipeMutations } from "../api/amiRecipeQueri
 import ConfirmActionDialog, { controlNamed } from "./ConfirmActionDialog";
 import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
-import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     useRemovedRowRef,
     useReturnFocus,
@@ -234,11 +233,9 @@ const AmiBuildsPanel: React.FC<AmiBuildsPanelProps> = ({
                     <span className="text-sm text-text-secondary">{rows.length} builds</span>
                 </div>
 
-                {!isLoading && error && data && <RefreshFailedNotice error={error} />}
-
                 {isLoading ? (
                     <div className="p-6 text-center text-text-secondary">Loading builds...</div>
-                ) : error && !data ? (
+                ) : error ? (
                     <div className="p-4 text-vams-error">
                         Error loading builds: {toastErrorMessage(error)}
                     </div>
