@@ -171,10 +171,10 @@ class TestTemplateTagsReachTheConfigBody:
 
     def test_the_training_defaults_match_the_task_the_template_advertises(self):
         # A blank TASK with no declared default would fall through to openPipeline's DEFAULT_TASK,
-        # Isaac-Cartpole-v0 — a different environment from the one the template names, and a run that
+        # Isaac-Cartpole — a different environment from the one the template names, and a run that
         # trains the wrong task while reporting success.
         config = json.loads(_body_with_declared_defaults(_template("training")))["trainingConfig"]
-        assert config["task"] == "Isaac-Cartpole-Direct-v0"
+        assert config["task"] == "Isaac-Cartpole-Direct"
         assert config["numEnvs"] == 4096
         assert config["maxIterations"] == 1500
         assert config["rlLibrary"] == "rsl_rl"
@@ -202,3 +202,32 @@ class TestTemplateTagsReachTheConfigBody:
         unlabelled = [field["tagKey"] for field in _template(bundle)["tagSchema"]
                       if not field.get("label") or not field.get("description")]
         assert unlabelled == [], unlabelled
+
+
+@pytest.mark.unit
+class TestPhysicsTag:
+    """The PHYSICS tag (issue #1669): one drop-down per template, rendered into the config body."""
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_default_renders_newton_in_valid_json(self, bundle):
+        config = json.loads(_body_with_declared_defaults(_template(bundle)))["trainingConfig"]
+        assert config["physics"] == "newton_mjwarp"
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_tag_offers_exactly_the_two_engines_the_lambda_accepts(self, bundle):
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import importlib
+        mod = importlib.import_module("openPipeline")
+        (tag,) = [t for t in _template(bundle)["tagSchema"] if t["tagKey"] == "PHYSICS"]
+        assert tag["type"] == "enum" and tag["label"] == "Physics engine"
+        assert tuple(tag["enumValues"]) == mod.SUPPORTED_PHYSICS
+        assert tag["default"] == mod.DEFAULT_PHYSICS
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_the_placeholder_is_quoted_because_an_enum_renders_text(self, bundle):
+        assert '"physics":"{{PHYSICS}}"' in _template(bundle)["configBody"]
+
+    @pytest.mark.parametrize("bundle", _BUNDLE_NAMES)
+    def test_no_template_names_a_2x_task_id(self, bundle):
+        assert "-v0" not in json.dumps(_template(bundle))

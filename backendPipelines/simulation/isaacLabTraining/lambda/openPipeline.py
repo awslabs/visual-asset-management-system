@@ -43,7 +43,7 @@ sfn_client = boto3.client("stepfunctions", config=retry_config)
 # Sort floor for a checkpoint whose S3 object carries no LastModified.
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-DEFAULT_TASK = "Isaac-Cartpole-v0"
+DEFAULT_TASK = "Isaac-Cartpole"
 DEFAULT_RL_LIBRARY = "rsl_rl"
 DEFAULT_NUM_ENVS_TRAIN = 4096
 DEFAULT_NUM_ENVS_EVAL = 100
@@ -56,6 +56,32 @@ DEFAULT_STEPS_PER_EPISODE = 1000
 # script maps): the lambda's code bundle is this directory alone, so the container package is not
 # importable here. lambda/tests/test_config_precedence.py asserts the copies still agree.
 SUPPORTED_RL_LIBRARIES = ("rsl_rl", "rl_games", "skrl")
+
+# The physics engines the run may select (Isaac Lab's ``physics=<preset>`` override): Newton with the
+# MuJoCo-Warp solver, the default, and PhysX on Isaac Sim, which reproduces what Isaac Lab 2.3.0 ran.
+# Further copies live in container/utils/training/config.py (PHYSICS_ENGINES) and in the two vamsSchema
+# templates (the PHYSICS tag's enumValues); lambda/tests/test_config_precedence.py asserts they agree.
+SUPPORTED_PHYSICS = ("newton_mjwarp", "isaacsim_physx")
+DEFAULT_PHYSICS = "newton_mjwarp"
+
+# Isaac Lab 3.0 does not alias the 2.x ``-v0`` task ids, and some were renamed rather than only
+# stripped, so the mapping is data. Only rows confirmed against an Isaac Lab 3.0.0 image are listed
+# (``list_envs`` and a run); an id that ends in ``-v0`` and is not here is passed through unchanged
+# (it may be a custom environment's own id, or a 3.0 id such as IsaacContrib-Stack-Cube-SO101-v0).
+TASK_ID_MAP_2X_TO_3X = {
+    "Isaac-Cartpole-v0": "Isaac-Cartpole",
+    "Isaac-Cartpole-Direct-v0": "Isaac-Cartpole-Direct",
+    "Isaac-Lift-Cube-Franka-v0": "Isaac-Lift-Franka",
+    "Isaac-Velocity-Rough-Anymal-D-v0": "Isaac-Velocity-Rough-AnymalD",
+}
+
+# Task families the spike showed to be limited, as (id prefix, libraries the task offers, engines the
+# task offers among the two above). A deny list: a task no prefix names passes, so a valid
+# combination is never blocked by a stale table. The AutoMate tasks list no physics preset and
+# register an agent configuration for rl_games only (``list_envs`` of Isaac Lab 3.0.0).
+TASK_FAMILY_LIMITS = (
+    ("IsaacContrib-AutoMate-", ("rl_games",), ("isaacsim_physx",)),
+)
 
 # Ceilings for the operator-supplied counts, each far above any shipped default. They catch a value
 # that cannot be what was meant — a mistyped extra digit — rather than describing capacity, which
@@ -151,15 +177,21 @@ def build_job_config_payload(event):
     )
 
     mode = training_config.get("mode", "train")
-    task = require_task(training_config.get("task") or DEFAULT_TASK)
+    requested_task = require_task(training_config.get("task") or DEFAULT_TASK)
+    task = map_task_id(requested_task)
     rl_library = resolve_rl_library(training_config.get("rlLibrary") or DEFAULT_RL_LIBRARY)
+    physics = resolve_physics(training_config.get("physics") or DEFAULT_PHYSICS)
+    require_supported_task(task, rl_library, physics)
 
     if mode == "train":
-        job_config = build_training_config(event, training_config, task, rl_library)
+        job_config = build_training_config(event, training_config, task, rl_library, physics)
     elif mode == "evaluate":
-        job_config = build_evaluation_config(event, training_config, task, rl_library)
+        job_config = build_evaluation_config(event, training_config, task, rl_library, physics)
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'train' or 'evaluate'")
+
+    if task != requested_task:
+        job_config["trainingConfig"]["taskIdRequested"] = requested_task
 
     # Bucket name -> Region for the asset buckets this job reads and writes, so the container signs
     # each bucket's requests with a client for that bucket's Region (see utils/aws/s3.py).
@@ -195,6 +227,86 @@ def resolve_rl_library(rl_library) -> str:
             f"{', '.join(sorted(SUPPORTED_RL_LIBRARIES))}"
         )
     return value
+
+
+def resolve_physics(physics) -> str:
+    """The physics engine the run asked for, checked against the two the container can select.
+
+    An unrecognised value is rejected rather than substituted, so a run cannot complete on an engine
+    the operator did not ask for. Like ``resolve_rl_library``, this is the free check: it fails in the
+    first state of the state machine, before any GPU node is provisioned. The value is not echoed
+    beyond the message of the ValueError.
+    """
+    value = physics.strip() if isinstance(physics, str) else physics
+    if value not in SUPPORTED_PHYSICS:
+        raise ValueError(
+            f"Unsupported physics '{physics}'. Supported engines: {', '.join(SUPPORTED_PHYSICS)}"
+        )
+    return value
+
+
+def map_task_id(task: str) -> str:
+    """The Isaac Lab 3.0 id for a saved 2.x task id, or ``task`` unchanged.
+
+    The mapping is logged once; the original id travels in the run configuration (``taskIdRequested``).
+    """
+    mapped = TASK_ID_MAP_2X_TO_3X.get(task)
+    if not mapped:
+        return task
+    logger.info(f"Task id {task} mapped to {mapped}")
+    return mapped
+
+
+def require_supported_task(task: str, rl_library: str, physics: str) -> None:
+    """Refuse a task, library and engine the spike showed cannot run, before any GPU starts."""
+    for prefix, libraries, engines in TASK_FAMILY_LIMITS:
+        if not task.startswith(prefix):
+            continue
+        if rl_library not in libraries:
+            raise ValueError(
+                f"Task {task} offers the RL library {', '.join(libraries)} in Isaac Lab 3.0. "
+                f"Set rlLibrary to {libraries[0]}."
+            )
+        if physics not in engines:
+            raise ValueError(
+                f"Task {task} has no Newton configuration in Isaac Lab 3.0. "
+                f"Set Physics engine to {engines[0]}."
+            )
+
+
+def physics_note(policy_s3_uri: str, physics: str) -> str:
+    """One line saying the checkpoint was trained on another engine, or ``""``.
+
+    Advisory (it never fails a run: evaluating on the other engine is a legitimate transfer test).
+    Reads the ``train-config.json`` the training run wrote beside its ``checkpoints/`` folder, in the
+    same bucket as the checkpoint, whose bucket scope has already been checked. Every error gives
+    ``""``. A run configuration with no ``physics`` and no ``isaacLabVersion`` was written before the
+    upgrade, which ran PhysX. Only a value of the allow list is repeated, never operator text.
+    """
+    try:
+        parsed = urlparse(policy_s3_uri)
+        key = parsed.path.lstrip("/")
+        folder = key.rsplit("/", 1)[0] if "/" in key else ""
+        if not parsed.netloc or not folder.endswith("checkpoints"):
+            return ""
+        parent = folder[: -len("checkpoints")]
+        response = _s3_client_for_bucket(parsed.netloc).get_object(
+            Bucket=parsed.netloc, Key=f"{parent}train-config.json", Range="bytes=0-1048575")
+        recorded = json.loads(response["Body"].read())
+        training = recorded.get("trainingConfig") or {}
+        trained = training.get("physics")
+        if trained is None and not recorded.get("isaacLabVersion"):
+            trained = "isaacsim_physx"
+            suffix = " (a run made before the upgrade)"
+        else:
+            suffix = ""
+        if trained not in SUPPORTED_PHYSICS or trained == physics:
+            return ""
+        return (f"This checkpoint was trained with physics={trained}{suffix}; this evaluation runs "
+                f"physics={physics}, so the result is a transfer test, not a like-for-like evaluation.")
+    except Exception as error:
+        logger.info(f"No physics note: {type(error).__name__}")
+        return ""
 
 
 def _parse_whole(value):
@@ -321,9 +433,9 @@ def _as_utc(last_modified) -> datetime:
 # may pick (``name``) and the number that orders them (``iteration``, group 1). The container uploads
 # every library's checkpoints flat into the run's checkpoints/ folder; the layouts and the matching
 # table of paths are in container/utils/training/checkpoints.py (CHECKPOINT_PATTERNS), and
-# tests/test_policy_discovery.py asserts that the two agree. Isaac Lab 2.3.0 layouts:
+# tests/test_policy_discovery.py asserts that the two agree. Isaac Lab 3.0.0 layouts:
 #   rsl_rl:   model_<iteration>.pt
-#   rl_games: <name>.pth (best reward, no number), last_<name>_ep_<epoch>_rew_<reward>.pth
+#   rl_games: nn/last_<name>_ep_<epoch>_rew__<reward>_.pth (and <name>.pth, best reward, no number, when written)
 #   skrl:     agent_<timestep>.pt, best_agent.pt (no number)
 CHECKPOINT_RANKING = {
     "rsl_rl": {"name": r"^model_\d+\.pt$", "iteration": r"^model_(\d+)\.pt$"},
@@ -764,7 +876,7 @@ def with_stage_asset_files(job_config, event, training_config):
     return job_config
 
 
-def build_training_config(event, training_config, task, rl_library):
+def build_training_config(event, training_config, task, rl_library, physics=DEFAULT_PHYSICS):
     """Build configuration for training mode."""
     num_envs = whole_number("numEnvs", training_config.get("numEnvs"),
                             DEFAULT_NUM_ENVS_TRAIN, maximum=MAX_NUM_ENVS)
@@ -787,6 +899,7 @@ def build_training_config(event, training_config, task, rl_library):
             "numEnvs": num_envs,
             "maxIterations": max_iterations,
             "rlLibrary": rl_library,
+            "physics": physics,
             "seed": seed,
         },
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
@@ -799,7 +912,7 @@ def build_training_config(event, training_config, task, rl_library):
     return with_stage_asset_files(job_config, event, training_config)
 
 
-def build_evaluation_config(event, training_config, task, rl_library):
+def build_evaluation_config(event, training_config, task, rl_library, physics=DEFAULT_PHYSICS):
     """Build configuration for evaluation mode.
     
     Policy file discovery (in priority order):
@@ -882,6 +995,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
             "policyS3Uri": policy_s3_uri,
             "recordVideo": record_video,
             "rlLibrary": rl_library,
+            "physics": physics,
         },
         "inputS3AssetFilePath": event.get("inputS3AssetFilePath"),
         "customEnvironmentS3Uri": custom_env_s3_uri,
@@ -890,4 +1004,7 @@ def build_evaluation_config(event, training_config, task, rl_library):
         "inputConfigurationS3Location": event.get("inputConfigurationS3Location", ""),
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
     }
+    note = physics_note(policy_s3_uri, physics)
+    if note:
+        job_config["trainingConfig"]["physicsNote"] = note
     return with_stage_asset_files(job_config, event, training_config)
