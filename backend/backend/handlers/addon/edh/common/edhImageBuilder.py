@@ -58,6 +58,7 @@ DEPLOYMENT_PARAMETERS = {
 }
 _SLUG = re.compile(r"[^A-Za-z0-9_-]")
 _NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable")
+_SNAPSHOT_NOT_FOUND_CODE = "InvalidSnapshot.NotFound"
 # The DeregisterImage results of a snapshot that is gone, or kept because another AMI uses it.
 _SNAPSHOT_DELETE_SETTLED_CODES = ("success", "skipped")
 # The DescribeImages errors of a parent AMI id EC2 does not find, and the refusal they become.
@@ -470,25 +471,36 @@ def instances_using_ami(ctx: ImageBuilderContext, ami_id: str) -> List[str]:
                    for instance in reservation.get("Instances", [])})
 
 
-def _ignore_not_found(call, **kwargs) -> Dict[str, Any]:
-    """The call's response; an empty one when EC2 no longer finds the resource."""
+def _error_code(err: ClientError) -> Optional[str]:
+    return err.response.get("Error", {}).get("Code")
+
+
+def _delete_snapshot(ctx: ImageBuilderContext, ami_id: str, snapshot_id: str) -> None:
+    """Delete one snapshot; one already gone is done, and any other failure is logged, not raised."""
     try:
-        return call(**kwargs)
+        ctx.ec2.delete_snapshot(SnapshotId=snapshot_id)
     except ClientError as err:
-        if err.response.get("Error", {}).get("Code") not in _NOT_FOUND_CODES:
-            raise
-        return {}
+        if _error_code(err) != _SNAPSHOT_NOT_FOUND_CODE:
+            logger.error(f"{ami_id}: snapshot {snapshot_id} not deleted ({_error_code(err)})")
+    except Exception as err:
+        logger.error(f"{ami_id}: snapshot {snapshot_id} not deleted ({type(err).__name__})")
 
 
-def deregister_ami(ctx: ImageBuilderContext, ami_id: str) -> None:
+def deregister_ami(ctx: ImageBuilderContext, ami_id: str, snapshot_ids: List[str]) -> None:
     """Deregister the AMI and delete its snapshots in the same call. EC2 keeps a snapshot another AMI also
-    uses; a snapshot it could not delete is logged with EC2's result code."""
-    response = _ignore_not_found(ctx.ec2.deregister_image, ImageId=ami_id, DeleteAssociatedSnapshots=True)
-    left = {result.get("SnapshotId"): result.get("ReturnCode")
-            for result in response.get("DeleteSnapshotResults") or []
-            if result.get("ReturnCode") not in _SNAPSHOT_DELETE_SETTLED_CODES}
-    if left:
-        logger.error(f"{ami_id} deregistered; snapshots not deleted: {left}")
+    uses. A snapshot EC2 reports it did not delete for another reason, and every recorded snapshot of an AMI
+    already gone, is then deleted on its own; a delete that fails is logged and not retried."""
+    try:
+        response = ctx.ec2.deregister_image(ImageId=ami_id, DeleteAssociatedSnapshots=True)
+    except ClientError as err:
+        if _error_code(err) not in _NOT_FOUND_CODES:
+            raise
+        leftover = list(snapshot_ids)
+    else:
+        leftover = [result["SnapshotId"] for result in response.get("DeleteSnapshotResults") or []
+                    if result.get("SnapshotId") and result.get("ReturnCode") not in _SNAPSHOT_DELETE_SETTLED_CODES]
+    for snapshot_id in leftover:
+        _delete_snapshot(ctx, ami_id, snapshot_id)
 
 
 def delete_image_build(ctx: ImageBuilderContext, image_build_version_arn: str) -> None:

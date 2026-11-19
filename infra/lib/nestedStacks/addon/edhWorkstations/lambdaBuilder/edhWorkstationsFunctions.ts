@@ -1033,7 +1033,7 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
         })
     );
     // An AMI is deregistered with its snapshots in one call; EC2 checks `ec2:DeleteSnapshot` on each
-    // snapshot it deletes.
+    // snapshot it deletes. A snapshot the call leaves, or one of an AMI already gone, is deleted on its own.
     if (deletes) {
         fn.addToRolePolicy(
             new iam.PolicyStatement({

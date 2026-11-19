@@ -783,7 +783,7 @@ def prune_amis(recipe: Dict[str, Any]) -> List[int]:
         if not store.claim_build(recipe_id, version, status, status=store.STATUS_RETIRED):
             continue
         try:
-            builder.deregister_ami(ctx, build["amiId"])
+            builder.deregister_ami(ctx, build["amiId"], build.get("snapshotIds", []))
             if build.get("imageBuildVersionArn"):
                 builder.delete_image_build(ctx, build["imageBuildVersionArn"])
         except Exception as err:
@@ -838,7 +838,7 @@ def retire_build(recipe: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any
     if _ami_kept(recipe["recipeId"], pending, ctx):
         return _still_retired(store.get_build(recipe["recipeId"], version))
     try:
-        builder.deregister_ami(ctx, build["amiId"])
+        builder.deregister_ami(ctx, build["amiId"], build.get("snapshotIds", []))
         if build.get("imageBuildVersionArn"):
             builder.delete_image_build(ctx, build["imageBuildVersionArn"])
     except Exception:

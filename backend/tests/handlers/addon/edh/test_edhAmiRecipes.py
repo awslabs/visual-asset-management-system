@@ -2460,6 +2460,16 @@ class TestAmisInUse:
         assert store._table().scan()["Items"] == []
         world["ctx"].ec2.deregister_image.assert_not_called()
 
+    def test_pruning_an_ami_already_gone_deletes_the_snapshot_its_build_recorded(self, world):
+        row = seeded(keepVersions=1)
+        self._ami_rows((2, store.STATUS_AVAILABLE), (1, store.STATUS_RETIRED))
+        world["ctx"].ec2.deregister_image.side_effect = AMI_NOT_FOUND
+
+        assert recipes.prune_amis(row) == [1]
+
+        world["ctx"].ec2.delete_snapshot.assert_called_once_with(SnapshotId="snap-1")
+        assert store.get_build("al2023-desktop", 1)["amiDeregisteredAt"]
+
     def test_pruning_does_not_write_back_a_build_row_deleted_during_the_deregistration(self, world):
         row = seeded(keepVersions=1)
         self._ami_rows((2, store.STATUS_AVAILABLE), (1, store.STATUS_RETIRED))

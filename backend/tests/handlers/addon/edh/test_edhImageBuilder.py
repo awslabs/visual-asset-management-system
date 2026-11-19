@@ -618,38 +618,53 @@ class TestImagesAndCleanup:
         c.ib.get_image.return_value = {"image": {"state": {"status": "FAILED", "reason": "boom"}}}
         assert ib_mod.describe_image(c, "arn:img/1") == {"status": "FAILED", "reason": "boom", "amiId": None, "snapshotIds": []}
 
-    def test_deregister_tolerates_already_gone(self):
-        c = ctx()
-        c.ec2.deregister_image.side_effect = _client_error("InvalidAMIID.NotFound")
-        ib_mod.deregister_ami(c, "ami-1")
-
     def test_deregister_deletes_the_snapshots_in_the_same_call(self):
         # One DeregisterImage call removes the snapshots; no snapshot is deleted on its own.
         c = ctx()
         c.ec2.deregister_image.return_value = {"Return": True, "DeleteSnapshotResults": [
             {"SnapshotId": "snap-1", "ReturnCode": "success"}]}
-        ib_mod.deregister_ami(c, "ami-1")
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1"])
         c.ec2.deregister_image.assert_called_once_with(ImageId="ami-1", DeleteAssociatedSnapshots=True)
         c.ec2.delete_snapshot.assert_not_called()
 
-    def test_a_snapshot_ec2_does_not_delete_is_logged_and_a_shared_one_is_not(self, monkeypatch):
+    @pytest.mark.parametrize("code", ["internal-error", "client-error", "missing-permissions"])
+    def test_a_snapshot_deregistration_left_is_deleted_on_its_own_and_a_shared_one_is_kept(self, code):
         c = ctx()
         c.ec2.deregister_image.return_value = {"Return": True, "DeleteSnapshotResults": [
-            {"SnapshotId": "snap-1", "ReturnCode": "missing-permissions"},
+            {"SnapshotId": "snap-1", "ReturnCode": code},
             {"SnapshotId": "snap-2", "ReturnCode": "skipped"},
             {"SnapshotId": "snap-3", "ReturnCode": "success"}]}
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1", "snap-2", "snap-3"])
+        assert [call.kwargs for call in c.ec2.delete_snapshot.call_args_list] == [{"SnapshotId": "snap-1"}]
+
+    def test_the_recorded_snapshots_of_an_ami_already_gone_are_deleted(self):
+        # An AMI deregistered without its snapshots leaves them; the build row's ids still name them.
+        c = ctx()
+        c.ec2.deregister_image.side_effect = _client_error("InvalidAMIID.NotFound")
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1", "snap-2"])
+        assert [call.kwargs for call in c.ec2.delete_snapshot.call_args_list] == [
+            {"SnapshotId": "snap-1"}, {"SnapshotId": "snap-2"}]
+
+    def test_a_snapshot_already_gone_is_done_and_another_failure_is_logged_not_raised(self, monkeypatch):
+        c = ctx()
+        c.ec2.deregister_image.side_effect = _client_error("InvalidAMIID.NotFound")
+        c.ec2.delete_snapshot.side_effect = [_client_error("InvalidSnapshot.NotFound"),
+                                             _client_error("InvalidSnapshot.InUse"), RuntimeError("timeout")]
         errors = []
         monkeypatch.setattr(ib_mod.logger, "error", lambda message, *a, **k: errors.append(message))
-        ib_mod.deregister_ami(c, "ami-1")
-        assert len(errors) == 1
-        assert "snap-1" in errors[0] and "missing-permissions" in errors[0]
-        assert "snap-2" not in errors[0] and "snap-3" not in errors[0]
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1", "snap-2", "snap-3"])
+        assert c.ec2.delete_snapshot.call_count == 3
+        assert len(errors) == 2
+        assert "snap-2" in errors[0] and "InvalidSnapshot.InUse" in errors[0]
+        assert "snap-3" in errors[1] and "RuntimeError" in errors[1]
+        assert not any("snap-1" in e for e in errors)
 
     def test_deregister_raises_an_error_other_than_not_found(self):
         c = ctx()
         c.ec2.deregister_image.side_effect = _client_error("UnauthorizedOperation")
         with pytest.raises(ClientError):
-            ib_mod.deregister_ami(c, "ami-1")
+            ib_mod.deregister_ami(c, "ami-1", ["snap-1"])
+        c.ec2.delete_snapshot.assert_not_called()
 
     def test_tag_ami_tags_the_ami_only(self):
         # Image Builder tags the snapshots from the distribution configuration.
