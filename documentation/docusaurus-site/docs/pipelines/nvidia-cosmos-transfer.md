@@ -261,11 +261,11 @@ The output video has the same resolution and frame rate as the source video.
 
 The following file metadata keys control Cosmos Transfer pipeline behavior:
 
-| Metadata Key                   | Type   | Description                                                                           | Default                 |
-| ------------------------------ | ------ | ------------------------------------------------------------------------------------- | ----------------------- |
-| `COSMOS_TRANSFER_CONTROL_TYPE` | string | Control signal type: `edge`, `depth`, `seg`, or `vis`                                 | `"edge"`                |
+| Metadata Key                   | Type   | Description                                                                                                                       | Default                 |
+| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `COSMOS_TRANSFER_CONTROL_TYPE` | string | Control signal type: `edge`, `depth`, `seg`, or `vis`                                                                             | `"edge"`                |
 | `COSMOS_TRANSFER_CONTROL_PATH` | string | Path of a pre-computed control signal file within the asset, relative to the asset root (optional, auto-computed if not provided) | `""` (auto-compute)     |
-| `COSMOS_TRANSFER_PROMPT`       | string | Text prompt for transformation style                                                  | `"Transform the video"` |
+| `COSMOS_TRANSFER_PROMPT`       | string | Text prompt for transformation style                                                                                              | `"Transform the video"` |
 
 ## GPU Instance Recommendations
 

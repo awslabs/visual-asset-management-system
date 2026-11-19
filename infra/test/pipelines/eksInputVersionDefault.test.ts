@@ -125,7 +125,11 @@ describe("EKS state machine defaults a missing inputVersionId", () => {
     });
 
     test("an input with a version and a path keeps them, and every other field passes unchanged", () => {
-        const input = { ...OLD_INPUT, inputVersionId: "v-launch", inputRelativePath: "/parts/a.glb" };
+        const input = {
+            ...OLD_INPUT,
+            inputVersionId: "v-launch",
+            inputRelativePath: "/parts/a.glb",
+        };
         expect(run(input)).toEqual(input);
     });
 });
