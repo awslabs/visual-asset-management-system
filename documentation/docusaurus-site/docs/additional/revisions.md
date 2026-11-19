@@ -47,6 +47,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Key fixes:**
 
 -   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593)
+-   **Isaac Lab rl_games and skrl checkpoints** — Training with `rlLibrary` set to `rl_games` or `skrl` uploads the checkpoints the library writes to the run's `checkpoints/` folder, as `rsl_rl` already did: the `.pth` files of an `rl_games` run and the `agent_<timestep>.pt` and `best_agent.pt` files of a `skrl` run. A training run that finds no checkpoint to upload fails, after its logs and configuration are uploaded. Evaluation without a checkpoint path also finds `.pth` files, and selects the latest checkpoint by the chosen library's file naming, ignoring other libraries' checkpoints on the asset. (issue #1315)
 
 **Other changes:**
 
