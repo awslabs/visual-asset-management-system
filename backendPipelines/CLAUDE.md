@@ -569,7 +569,9 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     whose text is 2^31 bytes or more; measured whole at 2,146,875,055 bytes and dropped at 2,175,000,055, so the limit
     is the text size and not an entry count: ints are counted by their digits, a vec3f at 40 bytes, a vec2f at 27), and
     a `.usdc` or `.usdz` array over 0x7E000000 bytes (the
-    LZ4 block limit) is refused because the crate would write and then fail at read. The worker turns a crate's
+    LZ4 block limit) is refused because the crate would write and then fail at read. convert-linked to `.usda` applies
+    the same text bound to each layer it will export (`check_layer_array_text`, estimated per entry from the array type),
+    before any file is written. The worker turns a crate's
     decompression failure into a `ValueError` saying the file could not be read (`conversion_worker.translate_error`).
 -   **Worker environment.** `conversion_service.is_scrubbed` lists what the child never receives (`AWS_*`, `ECS_*`,
     `VAMS_*`, including `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` and `ECS_CONTAINER_METADATA_URI*`, which on Fargate

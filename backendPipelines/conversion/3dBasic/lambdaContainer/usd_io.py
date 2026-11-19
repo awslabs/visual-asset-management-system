@@ -219,6 +219,10 @@ def convert_linked(path, input_dir, output_file, output_extension, output_path_e
     out_dir = os.path.dirname(os.path.abspath(output_file))
     graph = dependency_graph(source, root)
     layers = _leaves_first(graph, source)
+    if output_extension == ".usda":
+        # Refused before anything is written: the text writer drops an array this size without an error.
+        for local in layers:
+            check_layer_array_text(Sdf.Layer.FindOrOpen(local), os.path.relpath(local, root))
     files = sorted({t for targets in graph.values() for t in targets if not _is_layer_name(t)})
 
     def destination(local):
@@ -704,6 +708,61 @@ def check_array_bounds(scene, output_extension, input_name="model"):
                     f"more than the {USDC_MAX_ARRAY_BYTES / 1024 ** 3:,.1f} GiB one array of a {output_extension} "
                     f"file can hold (it would write but could not be read back). Convert it to another "
                     f"format such as .glb or .stl, or split the model into several meshes.")
+
+
+def _layer_entry_text_bytes(value):
+    """The text bytes one entry of a ``Vt`` array takes in a .usda layer, or None when ``value`` is not a
+    numeric array (strings, tokens and paths are not bounded here)."""
+    kind = type(value).__name__
+    if not kind.endswith("Array"):
+        return None
+    name = kind[:-5]
+    digits = re.search(r"(\d)[a-z]?$", name)
+    count = 4 if name.startswith("Quat") else int(digits.group(1)) if digits else 1
+    if name.startswith(("Vec", "Quat")) and count == 3:
+        return USDA_BYTES_PER_VEC3F
+    if name.startswith("Vec") and count == 2:
+        return USDA_BYTES_PER_VEC2F
+    if name.startswith(("Vec", "Quat")) and count == 4:
+        return 4 * USDA_BYTES_PER_VEC3F // 3 + USDA_SEPARATOR_BYTES
+    if name.startswith("Matrix"):
+        return count * count * 14 + USDA_SEPARATOR_BYTES
+    if name.startswith(("Float", "Half", "Double")):
+        return 26 + USDA_SEPARATOR_BYTES
+    if name.startswith(("Int", "Uint", "Uchar", "Char", "Short", "Ushort")):
+        return 20 + USDA_SEPARATOR_BYTES
+    return None
+
+
+def check_layer_array_text(layer, name="layer"):
+    """Refuse a layer holding an array whose .usda text would reach ``USDA_MAX_ARRAY_TEXT_BYTES``: the
+    text writer drops such an array without an error. Used by convert-linked before it exports each layer
+    as ``.usda``; sizes are estimated per entry from the array type, as ``check_array_bounds`` does for a
+    mesh. Checks default values and time samples."""
+    from pxr import Sdf
+    found = []
+
+    def visit(path):
+        if not path.IsPropertyPath():
+            return
+        spec = layer.GetAttributeAtPath(path)
+        if spec is None:
+            return
+        values = [spec.default] if spec.default is not None else []
+        for time in layer.ListTimeSamplesForPath(path):
+            values.append(layer.QueryTimeSample(path, time))
+        for value in values:
+            per_entry = _layer_entry_text_bytes(value)
+            if per_entry is not None and len(value) * per_entry >= USDA_MAX_ARRAY_TEXT_BYTES:
+                found.append((str(path), len(value) * per_entry))
+
+    layer.Traverse(Sdf.Path.absoluteRootPath, visit)
+    if found:
+        where, size = max(found, key=lambda item: item[1])
+        raise ValueError(
+            f"{name} has an array, {where}, that would be about {size / 1e9:,.1f} GB of text, more than the "
+            f"{USDA_MAX_ARRAY_TEXT_BYTES / 1e9:,.1f} GB a .usda array can hold (a larger array is dropped "
+            f"without an error when the text is written). Convert it to .usdc instead.")
 
 
 def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, input_name="model",

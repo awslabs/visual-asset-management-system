@@ -672,3 +672,33 @@ class TestImplicitPrims:
         _write_layer(directory / "prims.usda", '#usda 1.0\ndef Cube "C" {\n}\ndef Sphere "S" {\n    double radius = 0.5\n}\n')
         out = helpers.convert(tmp_path, str(directory / "prims.usda"), ".glb")
         assert len(trimesh.load(out).geometry) == 2
+
+
+@pytest.mark.unit
+class TestLinkedLayerTextGuard:
+    def _linked(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "geo.usda", "#usda 1.0\n" + _MESH)
+        _write_layer(directory / "root.usda", '#usda 1.0\n(\n    subLayers = [@./geo.usda@]\n)\n')
+        out = tmp_path / "export"
+        out.mkdir()
+        return directory, out
+
+    def test_usda_output_refuses_a_linked_layer_with_an_oversize_array_before_writing(self, tmp_path, monkeypatch):
+        directory, out = self._linked(tmp_path)
+        monkeypatch.setattr(usd_io, "USDA_MAX_ARRAY_TEXT_BYTES", 100)
+        with pytest.raises(ValueError, match=r"geo\.usda.*usdc"):
+            usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usda"), ".usda")
+        assert list(out.iterdir()) == []
+
+    def test_usdc_output_is_not_subject_to_the_text_guard(self, tmp_path, monkeypatch):
+        directory, out = self._linked(tmp_path)
+        monkeypatch.setattr(usd_io, "USDA_MAX_ARRAY_TEXT_BYTES", 100)
+        usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usdc"), ".usdc")
+        assert (out / "geo.usdc").is_file()
+
+    def test_usda_output_below_the_limit_converts(self, tmp_path):
+        directory, out = self._linked(tmp_path)
+        usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usda"), ".usda")
+        assert (out / "geo.usda").is_file()
