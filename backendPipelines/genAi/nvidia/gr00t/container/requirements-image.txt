@@ -1,6 +1,7 @@
 # What the GR00T image installs besides Isaac-GR00T's own dependencies (its pyproject.toml with the
 # `base` extra, at the Dockerfile's STABLE_COMMIT). requirements.lock is compiled from both; its header
-# holds the command, run with that pyproject.toml at /workspace/pyproject.toml as in the image.
+# holds the command, run with that pyproject.toml at /workspace/pyproject.toml as in the image. Not named
+# requirements.txt: the pipeline test runner installs a container's requirements.txt for its tests.
 pip
 setuptools>=64.0.0
 wheel

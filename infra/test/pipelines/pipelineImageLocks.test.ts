@@ -280,7 +280,7 @@ describe("the GR00T image", () => {
 
     it("locks Isaac-GR00T's base dependencies and the image's own, a hash on every pin", () => {
         expect(lock).toMatch(
-            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements\.txt --generate-hashes /m
+            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements-image\.txt --generate-hashes /m
         );
         const entries = lockEntries(lock);
         expect(entries.length).toBeGreaterThan(100);
