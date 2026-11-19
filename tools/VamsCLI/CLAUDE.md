@@ -103,6 +103,10 @@ tools/VamsCLI/
     test_*.py                # One file per command group or behavior area
     industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
     addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py, test_edh_workstation_image.py)
+  requirements.txt           # Runtime dependencies; matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
+  requirements-build.txt     # The [build-system] requires of pyproject.toml
+  requirements.lock          # Hashed lock of both, which the EDH Linux AMI recipes install; regenerate with the
+                             #   uv command in its header after a dependency change (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
 ```
 
 ### Command Groups (26 core + add-on groups)
