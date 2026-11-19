@@ -962,8 +962,8 @@ def create_job(event, database_id, asset_id):
         base_key = asset_location.get("Key")
         if not is_folder_location(base_key):
             # A location that names one object is a single-file asset, downloaded directly
-            raise ZipRefusal("An asset that holds a single file cannot be downloaded as a zip. "
-                             "Download the file instead.")
+            raise ZipRefusal("A single-file asset is downloaded directly, not as a zip. "
+                             "Download its file instead.")
         if _cap_reached(user_id):
             return general_error(status_code=429, body={"message": zd.MSG_CAP_REACHED}, event=event)
         pinned, asset_version_id = [], None

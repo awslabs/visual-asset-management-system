@@ -5,8 +5,9 @@
 
 A single-file asset's location key names one object (no trailing ``/``). The archive job expands a
 whole-asset or folder entry by listing the asset's key as an S3 prefix, which for a single-file
-location also lists every longer key that starts with the same characters, so the create refuses such
-an asset outright and points the caller at the plain file download. A folder asset is the control.
+location also lists every longer key that starts with the same characters, and the run's inputs resolve
+under the location as a folder, so the create refuses such an asset outright and points the caller at
+the plain file download. A folder asset is the control.
 """
 
 import pytest
@@ -15,8 +16,8 @@ from backend.tests.handlers.zipDownloads import zipHarness as h
 
 pytestmark = pytest.mark.unit
 
-MESSAGE = ("An asset that holds a single file cannot be downloaded as a zip. "
-           "Download the file instead.")
+MESSAGE = ("A single-file asset is downloaded directly, not as a zip. "
+           "Download its file instead.")
 
 
 @pytest.fixture
