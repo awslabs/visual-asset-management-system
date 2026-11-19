@@ -621,8 +621,42 @@ class TestImagesAndCleanup:
     def test_deregister_tolerates_already_gone(self):
         c = ctx()
         c.ec2.deregister_image.side_effect = _client_error("InvalidAMIID.NotFound")
-        c.ec2.delete_snapshot.side_effect = _client_error("InvalidSnapshot.NotFound")
-        ib_mod.deregister_ami(c, "ami-1", ["snap-1"])
+        ib_mod.deregister_ami(c, "ami-1")
+
+    def test_deregister_deletes_the_snapshots_in_the_same_call(self):
+        # One DeregisterImage call removes the snapshots; no snapshot is deleted on its own.
+        c = ctx()
+        c.ec2.deregister_image.return_value = {"Return": True, "DeleteSnapshotResults": [
+            {"SnapshotId": "snap-1", "ReturnCode": "success"}]}
+        ib_mod.deregister_ami(c, "ami-1")
+        c.ec2.deregister_image.assert_called_once_with(ImageId="ami-1", DeleteAssociatedSnapshots=True)
+        c.ec2.delete_snapshot.assert_not_called()
+
+    def test_a_snapshot_ec2_does_not_delete_is_logged_and_a_shared_one_is_not(self, monkeypatch):
+        c = ctx()
+        c.ec2.deregister_image.return_value = {"Return": True, "DeleteSnapshotResults": [
+            {"SnapshotId": "snap-1", "ReturnCode": "missing-permissions"},
+            {"SnapshotId": "snap-2", "ReturnCode": "skipped"},
+            {"SnapshotId": "snap-3", "ReturnCode": "success"}]}
+        errors = []
+        monkeypatch.setattr(ib_mod.logger, "error", lambda message, *a, **k: errors.append(message))
+        ib_mod.deregister_ami(c, "ami-1")
+        assert len(errors) == 1
+        assert "snap-1" in errors[0] and "missing-permissions" in errors[0]
+        assert "snap-2" not in errors[0] and "snap-3" not in errors[0]
+
+    def test_deregister_raises_an_error_other_than_not_found(self):
+        c = ctx()
+        c.ec2.deregister_image.side_effect = _client_error("UnauthorizedOperation")
+        with pytest.raises(ClientError):
+            ib_mod.deregister_ami(c, "ami-1")
+
+    def test_tag_ami_tags_the_ami_only(self):
+        # Image Builder tags the snapshots from the distribution configuration.
+        c = ctx()
+        ib_mod.tag_ami(c, "ami-1", {"vams:deployment": "vams-t1-edh"})
+        c.ec2.create_tags.assert_called_once_with(
+            Resources=["ami-1"], Tags=[{"Key": "vams:deployment", "Value": "vams-t1-edh"}])
 
     def test_the_instances_using_an_ami_are_listed_across_pages_sorted_and_once_each(self):
         c = ctx()

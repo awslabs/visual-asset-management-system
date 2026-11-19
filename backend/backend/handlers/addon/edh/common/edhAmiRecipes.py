@@ -617,7 +617,7 @@ def _complete(recipe: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     if not build:
         return {"outcome": "already-handled", "version": version}
     try:
-        builder.tag_ami(ctx, described["amiId"], described["snapshotIds"], builder.ami_tags(recipe, ctx))
+        builder.tag_ami(ctx, described["amiId"], builder.ami_tags(recipe, ctx))
         build = register_build(recipe, build)
     except Exception as err:
         logger.exception(f"{recipe_id} v{version}: completion failed")
@@ -679,7 +679,7 @@ def retry_registration(recipe: Dict[str, Any], build: Dict[str, Any], *, automat
     try:
         if build.get("amiId"):
             ctx = _ctx()
-            builder.tag_ami(ctx, build["amiId"], build.get("snapshotIds", []), builder.ami_tags(recipe, ctx))
+            builder.tag_ami(ctx, build["amiId"], builder.ami_tags(recipe, ctx))
         build = register_build(recipe, build, automatic=automatic)
     except Exception as err:
         logger.exception(f"{recipe_id} v{version}: retry registration failed")
@@ -783,7 +783,7 @@ def prune_amis(recipe: Dict[str, Any]) -> List[int]:
         if not store.claim_build(recipe_id, version, status, status=store.STATUS_RETIRED):
             continue
         try:
-            builder.deregister_ami(ctx, build["amiId"], build.get("snapshotIds", []))
+            builder.deregister_ami(ctx, build["amiId"])
             if build.get("imageBuildVersionArn"):
                 builder.delete_image_build(ctx, build["imageBuildVersionArn"])
         except Exception as err:
@@ -838,7 +838,7 @@ def retire_build(recipe: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any
     if _ami_kept(recipe["recipeId"], pending, ctx):
         return _still_retired(store.get_build(recipe["recipeId"], version))
     try:
-        builder.deregister_ami(ctx, build["amiId"], build.get("snapshotIds", []))
+        builder.deregister_ami(ctx, build["amiId"])
         if build.get("imageBuildVersionArn"):
             builder.delete_image_build(ctx, build["imageBuildVersionArn"])
     except Exception:

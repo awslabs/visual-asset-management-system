@@ -57,7 +57,9 @@ DEPLOYMENT_PARAMETERS = {
     "sessionSecretPrefix": ("EDH_SESSION_SECRET_PREFIX", re.compile(r"^[A-Za-z0-9/_+=.@-]+/\Z")),
 }
 _SLUG = re.compile(r"[^A-Za-z0-9_-]")
-_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable", "InvalidSnapshot.NotFound")
+_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable")
+# The DeregisterImage results of a snapshot that is gone, or kept because another AMI uses it.
+_SNAPSHOT_DELETE_SETTLED_CODES = ("success", "skipped")
 # The DescribeImages errors of a parent AMI id EC2 does not find, and the refusal they become.
 _PARENT_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Malformed")
 PARENT_IMAGE_NOT_FOUND = "the parent image could not be found"
@@ -331,7 +333,8 @@ def visibility_tag(cluster_id: str) -> str:
 
 def ami_tags(recipe: Dict[str, Any], ctx: ImageBuilderContext) -> Dict[str, str]:
     """The tag set the built AMI and its snapshots carry: the VAMS tags plus the EDH cluster's
-    visibility tag, applied by the distribution configuration and again once the image is built."""
+    visibility tag, applied to both by the distribution configuration and to the AMI again once the
+    image is built."""
     return {**_tags(recipe, ctx), visibility_tag(ctx.cluster_id): VISIBILITY_TAG_VALUE}
 
 
@@ -452,8 +455,9 @@ def cancel_image(ctx: ImageBuilderContext, image_build_version_arn: str) -> None
     ctx.ib.cancel_image_creation(imageBuildVersionArn=image_build_version_arn)
 
 
-def tag_ami(ctx: ImageBuilderContext, ami_id: str, snapshot_ids: List[str], tags: Dict[str, str]) -> None:
-    ctx.ec2.create_tags(Resources=[ami_id, *snapshot_ids], Tags=[{"Key": k, "Value": v} for k, v in tags.items()])
+def tag_ami(ctx: ImageBuilderContext, ami_id: str, tags: Dict[str, str]) -> None:
+    """Tag the AMI. Its snapshots carry the distribution configuration's tags, which Image Builder writes."""
+    ctx.ec2.create_tags(Resources=[ami_id], Tags=[{"Key": k, "Value": v} for k, v in tags.items()])
 
 
 def instances_using_ami(ctx: ImageBuilderContext, ami_id: str) -> List[str]:
@@ -466,18 +470,25 @@ def instances_using_ami(ctx: ImageBuilderContext, ami_id: str) -> List[str]:
                    for instance in reservation.get("Instances", [])})
 
 
-def _ignore_not_found(call, **kwargs) -> None:
+def _ignore_not_found(call, **kwargs) -> Dict[str, Any]:
+    """The call's response; an empty one when EC2 no longer finds the resource."""
     try:
-        call(**kwargs)
+        return call(**kwargs)
     except ClientError as err:
         if err.response.get("Error", {}).get("Code") not in _NOT_FOUND_CODES:
             raise
+        return {}
 
 
-def deregister_ami(ctx: ImageBuilderContext, ami_id: str, snapshot_ids: List[str]) -> None:
-    _ignore_not_found(ctx.ec2.deregister_image, ImageId=ami_id)
-    for snapshot in snapshot_ids:
-        _ignore_not_found(ctx.ec2.delete_snapshot, SnapshotId=snapshot)
+def deregister_ami(ctx: ImageBuilderContext, ami_id: str) -> None:
+    """Deregister the AMI and delete its snapshots in the same call. EC2 keeps a snapshot another AMI also
+    uses; a snapshot it could not delete is logged with EC2's result code."""
+    response = _ignore_not_found(ctx.ec2.deregister_image, ImageId=ami_id, DeleteAssociatedSnapshots=True)
+    left = {result.get("SnapshotId"): result.get("ReturnCode")
+            for result in response.get("DeleteSnapshotResults") or []
+            if result.get("ReturnCode") not in _SNAPSHOT_DELETE_SETTLED_CODES}
+    if left:
+        logger.error(f"{ami_id} deregistered; snapshots not deleted: {left}")
 
 
 def delete_image_build(ctx: ImageBuilderContext, image_build_version_arn: str) -> None:

@@ -37,9 +37,9 @@ import { IAMArn, Service } from "../../../../helper/service-helper";
 // request the caller has already lost running against the EDH cluster.
 export const EDH_API_LAMBDA_TIMEOUT = Duration.seconds(API_GATEWAY_DEFAULT_TIMEOUT_SECONDS);
 
-// The tags the AMI recipe service and registrar write on an AMI and its snapshots, as
-// `common/edhImageBuilder.py` spells them: the recipe, its content hash and the deployment prefix, plus
-// EDH's per-cluster visibility tag. The IAM conditions on AMI tagging and deletion name these keys.
+// The tags the AMI recipe service and registrar write on an AMI, as `common/edhImageBuilder.py` spells
+// them: the recipe, its content hash and the deployment prefix, plus EDH's per-cluster visibility tag.
+// The IAM conditions on AMI tagging and on AMI and snapshot deletion name these keys.
 const EDH_AMI_DEPLOYMENT_TAG = "vams:deployment";
 const EDH_AMI_VAMS_TAG_KEYS = [
     "vams:edhAmiRecipe",
@@ -1006,10 +1006,10 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
             resources: ["*"],
         })
     );
-    // AMI and snapshot tagging and deletion are bound to this deployment's `vams:deployment` tag value,
-    // so the grants never reach another deployment's images. The tag write is limited to the keys VAMS
-    // writes; an AMI already carries the deployment tag from its distribution configuration, while a
-    // snapshot is first tagged by the build's completion.
+    // AMI tagging and AMI and snapshot deletion are bound to this deployment's `vams:deployment` tag
+    // value, so the grants never reach another deployment's images. Image Builder writes the
+    // distribution configuration's tags on the AMI and on its snapshots, so both carry the deployment
+    // tag before VAMS touches them; the tag write is limited to the AMI and to the keys VAMS writes.
     const amiTagRequest = {
         StringEquals: { [`aws:RequestTag/${EDH_AMI_DEPLOYMENT_TAG}`]: resources.prefix },
         "ForAllValues:StringEquals": {
@@ -1032,13 +1032,8 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
             },
         })
     );
-    fn.addToRolePolicy(
-        new iam.PolicyStatement({
-            actions: ["ec2:CreateTags"],
-            resources: [ec2Arn("snapshot")],
-            conditions: amiTagRequest,
-        })
-    );
+    // An AMI is deregistered with its snapshots in one call; EC2 checks `ec2:DeleteSnapshot` on each
+    // snapshot it deletes.
     if (deletes) {
         fn.addToRolePolicy(
             new iam.PolicyStatement({
@@ -1096,7 +1091,7 @@ export function applyEdhAmiBuildEnvironmentAndPermissions(
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "Image Builder objects are created at runtime from recipe content and named with the deployment prefix, so the grant is scoped to that prefix; list and describe calls take no resource ARN; AMI and snapshot tagging and deletion are conditioned on this deployment's vams:deployment tag value (a snapshot's first tag write is conditioned on the request carrying it); public AMI parameters live under /aws/service; the service-linked role name is fixed by Image Builder.",
+                reason: "Image Builder objects are created at runtime from recipe content and named with the deployment prefix, so the grant is scoped to that prefix; list and describe calls take no resource ARN; AMI tagging and AMI and snapshot deletion are conditioned on this deployment's vams:deployment tag value, which Image Builder writes on the AMI and its snapshots; public AMI parameters live under /aws/service; the service-linked role name is fixed by Image Builder.",
                 appliesTo: [
                     {
                         regex: "/^Resource::arn:.*:imagebuilder:.*:.*:(component|image-recipe|image-pipeline|image|infrastructure-configuration|distribution-configuration)\\/.*\\*$/g",

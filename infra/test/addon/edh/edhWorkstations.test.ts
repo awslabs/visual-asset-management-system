@@ -1062,7 +1062,7 @@ describe("EDH AMI builds", () => {
         expect(text).not.toMatch(/"imagebuilder:\*"/);
     });
 
-    test("AMI and snapshot tagging and deletion are bound to this deployment's tag value", () => {
+    test("AMI tagging and AMI and snapshot deletion are bound to this deployment's tag value", () => {
         // The tag key alone scopes nothing: a role holding CreateTags on the key could tag any AMI and
         // then delete it, another deployment's included. Every statement names the prefix as the value.
         const fns = edhFunctions(withAmiBuilds);
@@ -1082,7 +1082,7 @@ describe("EDH AMI builds", () => {
                     ["ec2:CreateTags", "ec2:DeregisterImage", "ec2:DeleteSnapshot"].includes(a)
                 )
             );
-            expect(sts.length).toBeGreaterThanOrEqual(2);
+            expect(sts.length).toBeGreaterThanOrEqual(1);
             for (const st of sts) {
                 const equals = st.Condition?.StringEquals ?? {};
                 const named = Object.entries(equals).filter(([key]) =>
@@ -1102,6 +1102,37 @@ describe("EDH AMI builds", () => {
                     );
                 }
             }
+        }
+    });
+
+    test("a snapshot is never tagged, and is deleted only when it already carries this deployment's tag", () => {
+        // Image Builder writes the distribution configuration's tags on an AMI's snapshots, so no Lambda
+        // holds a tag write on a snapshot, and every snapshot grant is conditioned on the deployment tag
+        // the snapshot already carries.
+        const fns = edhFunctions(withAmiBuilds);
+        const prefix = fns.find((f) => moduleOf(f) === "edhAmiRecipeService")!.properties
+            .Environment.Variables.EDH_AMI_BUILD_PREFIX;
+        const onSnapshots = (fn: Resource) =>
+            statementsOf(withAmiBuilds, fn).filter(
+                (st) =>
+                    st.Effect === "Allow" &&
+                    resourcesOf(st).some((r) => /:snapshot\//.test(r)) &&
+                    !actionsOf(st).every((a) => a.startsWith("ec2:Describe"))
+            );
+        for (const fn of fns) {
+            for (const st of onSnapshots(fn)) {
+                expect(actionsOf(st)).not.toContain("ec2:CreateTags");
+                expect(actionsOf(st)).not.toContain("ec2:*");
+                expect(st.Condition?.StringEquals?.["aws:ResourceTag/vams:deployment"]).toBe(
+                    prefix
+                );
+            }
+        }
+        // EC2 checks ec2:DeleteSnapshot on each snapshot DeregisterImage deletes, so the Lambdas that
+        // retire and prune hold it.
+        for (const module of ["edhAmiRecipeService", "edhAmiBuildRegistrar"]) {
+            const fn = fns.find((f) => moduleOf(f) === module)!;
+            expect(onSnapshots(fn).flatMap((st) => actionsOf(st))).toContain("ec2:DeleteSnapshot");
         }
     });
 
