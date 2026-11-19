@@ -907,16 +907,17 @@ The model also has to accept image input for the Video SOP/BOM extraction pipeli
 
 ### 3D basic conversion (`app.pipelines.useConversion3dBasic`)
 
-Reads STL, OBJ, PLY, GLTF, GLB and XYZ files and converts them to STL, OBJ, PLY, GLTF or GLB. XYZ is an input-only format. Does not require a VPC.
+Reads STL, OBJ, PLY, GLTF, GLB, XYZ, USD (`.usd`, `.usda`, `.usdc`, `.usdz`), DAE, 3MF, OFF and FBX files, and STEP files when `enableStepInput` is `true`, and converts them to STL, OBJ, PLY, GLTF, GLB, USDA, USDC, USDZ, DAE, 3MF or OFF. XYZ, `.usd`, FBX and STEP are input-only formats. Does not require a VPC.
 
 :::note[Implemented by]
 Nested stack: `infra/lib/nestedStacks/pipelines/conversion/3dBasic/conversion3dBasicBuilder-nestedStack.ts` (`Conversion3dBasicNestedStack`) — a containerized AWS Lambda function.
 :::
 
-| Field                                                     | Type    | Default | Description                                                                               |
-| --------------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------- |
-| `app.pipelines.useConversion3dBasic.enabled`              | boolean | `true`  | Enables the 3D basic conversion pipeline.                                                 |
-| `app.pipelines.useConversion3dBasic.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment. |
+| Field                                                     | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useConversion3dBasic.enabled`              | boolean | `true`  | Enables the 3D basic conversion pipeline.                                                                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useConversion3dBasic.autoRegisterWithVAMS` | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                                                                                                                                                                                                                                      |
+| `app.pipelines.useConversion3dBasic.enableStepInput`      | boolean | `false` | Reads STEP (`.step`, `.stp`) input. The conversion image then includes cascadio, which bundles Open CASCADE (LGPL-2.1 with the OCCT exception). When `false` or absent, the image holds no Open CASCADE code and a STEP run fails before the file is downloaded, with a message naming this key. Any value other than a JSON boolean is a configuration error. |
 
 ### Point cloud coordinate transform (`app.pipelines.useConversionCoordinateTransform`)
 

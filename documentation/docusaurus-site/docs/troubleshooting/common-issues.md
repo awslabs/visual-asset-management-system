@@ -671,6 +671,19 @@ See [Configuration reference](../deployment/configuration-reference.md) for the 
 
 These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). Reduce or split the input; for an FBX file, export it as FBX 2011 (7.1) or later. For an `.lcc2` scene, upload its `data/3dgs/` folder beside the `.lcc2` file in the same asset. The AWS Batch job log in Amazon CloudWatch records the input size, the render budgets and each phase's duration.
 
+### 3D Basic Conversion Refuses a STEP File or Reports an Incomplete Conversion
+
+**Symptoms:**
+
+-   A run on a `.step` or `.stp` file fails with `STEP input is not enabled in this deployment`.
+-   A run succeeds with `Converted <file>, but the converted file is incomplete`, and the execution's Output Results list `conversion-incomplete.json`.
+-   A run fails with `was not converted because MISSING_REFERENCES is fail`.
+
+**Resolution:**
+
+-   STEP input is off by default because it adds Open CASCADE to the conversion image. Set `app.pipelines.useConversion3dBasic.enableStepInput` to `true` in `infra/config/config.json` and deploy again; the image is rebuilt with cascadio. See the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) and the [configuration reference](../deployment/configuration-reference.md).
+-   An incomplete conversion names the referenced files it could not include in `conversion-incomplete.json` and the run log, with the reason for each. Upload a missing file to the asset at the path the model names, or change a reference that points outside the asset (an absolute path, a URL, or a path that leaves the asset) to a relative path, and run the conversion again. Set the template's Missing references option to `fail` to stop such a run instead of converting without the files.
+
 ### Media Preview Run Completes With No Preview
 
 **Symptoms:**

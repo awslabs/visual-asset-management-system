@@ -4,7 +4,7 @@ The 3D Basic Conversion pipeline converts 3D models between common interchange f
 
 ## Supported Formats
 
-The pipeline reads the formats below. All but XYZ and the generic `.usd` extension are also available as a conversion target.
+The pipeline reads the formats below. All but XYZ, the generic `.usd` extension, FBX, and STEP are also available as a conversion target.
 
 | Format | Extension               | Direction        | Description                                                                                     |
 | ------ | ----------------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
@@ -18,6 +18,8 @@ The pipeline reads the formats below. All but XYZ and the generic `.usd` extensi
 | DAE    | `.dae`                  | Input and output | COLLADA -- 3D interchange between content tools                                                 |
 | 3MF    | `.3mf`                  | Input and output | 3D Manufacturing Format -- a zip package used in 3D printing                                    |
 | OFF    | `.off`                  | Input and output | Object File Format -- plain text polygon meshes                                                 |
+| FBX    | `.fbx`                  | Input only       | Autodesk FBX, binary or ASCII, read with the Assimp tool                                        |
+| STEP   | `.step` `.stp`          | Input only       | ISO 10303 CAD exchange, read with cascadio (Open CASCADE) when `enableStepInput` is `true`      |
 | XYZ    | `.xyz`                  | Input only       | Point cloud text format -- simple ASCII coordinate data                                         |
 
 :::note[Conversion Directions]
@@ -35,6 +37,14 @@ A USD file is read as a stage: meshes (with their world transforms, texture coor
 A USD output writes one `UsdGeom` mesh per placement under an Xform, with normals and a `st` texture coordinate primvar, a UsdPreviewSurface material, and an explicit `metersPerUnit`, `upAxis`, and `defaultPrim`. A `.usdz` output is one file that holds its textures; a `.usdc` or `.usda` output with a texture writes it to a `textures` folder beside the file. The written USD is checked in the project's tests with the OpenUSD validators of the `usd-core` wheel (`pxr.UsdValidation`, all 30 registered validators; `UsdUtils.ComplianceChecker` is not part of that wheel) and reports no errors, and the USDZ packaging is checked with `UsdUtils.CreateNewARKitUsdzPackage`. No ARKit-specific conformance check beyond those runs.
 
 A USD file may name other files: sublayers, references, payloads, and textures. Each name must be a path relative to the file that names it that stays inside the input's own asset. A name that is absolute, carries a URI scheme such as `http://` or `s3://`, leaves the asset, or is not among the files fetched with the input is removed from the pipeline's working copy of the layer before the scene is opened, so the USD library never opens it, and it is reported as described in [Multi-File Models](#multi-file-models). A run whose scene has no geometry left fails, naming the geometry layers that could not be used. A `.usdz` package cannot be edited, so a package that names a layer outside itself by an absolute path, a URI scheme, or `..` fails the run.
+
+### FBX
+
+An FBX file is read by the Assimp command-line tool, version 6.0.6, which the image builds from Assimp's hash-checked release source with only the FBX importer and the glTF exporter. The tool runs in the isolated worker process, with its memory, file-size, and time limits, and converts the file to GLB, which is then loaded like any GLB: textures the FBX names are read only if they were fetched from the asset. Assimp applies the file's up axis; its unit (`UnitScaleFactor`, centimetres per unit) is read from the file and handled as described in [Units and up axis](#units-and-up-axis).
+
+### STEP (opt-in)
+
+STEP is read only when `app.pipelines.useConversion3dBasic.enableStepInput` is `true`. CDK then builds the conversion image with cascadio 0.1.1, which bundles Open CASCADE (LGPL-2.1 with the OCCT exception); the default image holds no Open CASCADE code. While the key is `false` or absent, `*.step` and `*.stp` stay selectable and a run on one fails before the file is downloaded, with a message naming the key. A STEP file is tessellated in metres with its Z axis up. Before Open CASCADE reads it, the components its assembly places are counted from the file's text, and a file that places more than 1,000,000 is refused. Product and manufacturing information (PMI) is not converted.
 
 ### DAE, 3MF, and OFF
 
@@ -150,7 +160,8 @@ Enable this pipeline in `infra/config/config.json`:
         "pipelines": {
             "useConversion3dBasic": {
                 "enabled": true,
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "enableStepInput": false
             }
         }
     }
@@ -159,10 +170,11 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                 | Default | Description                                                                                     |
-| ---------------------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `enabled`              | `true`  | Deploy the 3D basic conversion pipeline. This is the only built-in pipeline enabled by default. |
-| `autoRegisterWithVAMS` | `true`  | Automatically register the pipeline and workflow during CDK deployment.                         |
+| Option                 | Default | Description                                                                                                     |
+| ---------------------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `enabled`              | `true`  | Deploy the 3D basic conversion pipeline. This is the only built-in pipeline enabled by default.                 |
+| `autoRegisterWithVAMS` | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                         |
+| `enableStepInput`      | `false` | Read STEP (`.step`, `.stp`) input; adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the image. |
 
 :::tip[Enabled by Default]
 Unlike other built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
@@ -203,6 +215,8 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 -   **Pillow** -- texture image decoding and encoding for Trimesh
 -   **usd-core** -- OpenUSD, for reading and writing USD, USDA, USDC, and USDZ
 -   **pycollada**, **lxml**, and **networkx** -- the packages Trimesh needs to read and write COLLADA and 3MF
+-   **Assimp 6.0.6** command-line tool -- FBX input, built in a separate build stage from the release source, whose SHA-256 is checked (the `ASSIMP_URL` build argument points the build at a mirror for a build host without GitHub access; the hash is still checked)
+-   **cascadio 0.1.1** -- STEP input, only in the image built with `enableStepInput`
 -   **boto3** -- AWS SDK for Amazon S3 operations, from the base image
 
 The installed versions are those in the container's `poetry.lock`, from which its `requirements.txt` is exported with the SHA-256 hash of every package. The Dockerfile installs it with `pip install --require-hashes`, so the image holds exactly the locked packages and `NOTICE.md` lists those versions.
@@ -247,21 +261,23 @@ The limit comes from the running function, not from a fixed number. It is the sm
 -   **Memory.** 90% of the function memory, less 300 MB for the runtime, divided by the format's expansion factor, which is the peak memory a conversion used per byte of input when measured. The input and the files it references count together.
 -   **Working disk.** The free space in `/tmp`, less 64 MB, divided by 4.5: the input plus an output up to 3.5 times its size, which is what a binary PLY or GLB written as OBJ text needs.
 
-| Input format | Expansion factor | Limit at 5,308 MB function memory |
-| ------------ | ---------------- | --------------------------------- |
-| `.stl`       | 14               | 319.8 MB                          |
-| `.obj`       | 9                | 497.5 MB                          |
-| `.ply`       | 25               | 179.1 MB                          |
-| `.glb`       | 27               | 165.8 MB                          |
-| `.gltf`      | 27               | 165.8 MB                          |
-| `.xyz`       | 13               | 344.4 MB                          |
-| `.usd`       | 46               | 97.3 MB                           |
-| `.usda`      | 15               | 298.5 MB                          |
-| `.usdc`      | 46               | 97.3 MB                           |
-| `.usdz`      | 46               | 97.3 MB                           |
-| `.dae`       | 18               | 248.7 MB                          |
-| `.3mf`       | 106              | 42.2 MB                           |
-| `.off`       | 20               | 223.9 MB                          |
+| Input format    | Expansion factor | Limit at 5,308 MB function memory |
+| --------------- | ---------------- | --------------------------------- |
+| `.stl`          | 14               | 319.8 MB                          |
+| `.obj`          | 9                | 497.5 MB                          |
+| `.ply`          | 25               | 179.1 MB                          |
+| `.glb`          | 27               | 165.8 MB                          |
+| `.gltf`         | 27               | 165.8 MB                          |
+| `.xyz`          | 13               | 344.4 MB                          |
+| `.usd`          | 46               | 97.3 MB                           |
+| `.usda`         | 15               | 298.5 MB                          |
+| `.usdc`         | 46               | 97.3 MB                           |
+| `.usdz`         | 46               | 97.3 MB                           |
+| `.dae`          | 18               | 248.7 MB                          |
+| `.3mf`          | 106              | 42.2 MB                           |
+| `.off`          | 20               | 223.9 MB                          |
+| `.fbx`          | 27               | 165.8 MB                          |
+| `.step`, `.stp` | 70               | 64.0 MB                           |
 
 A conversion to COLLADA holds the model as Python objects as well, so it uses a larger factor for every input format (for example 50 for `.glb` and 82 for `.usdc`). The factors of the formats added with USD, DAE, 3MF, and OFF were measured on a model of 0.33 to 1.3 million triangles and rounded up by at least 15 percent. A 3MF package and a binary USD layer are compressed on disk, which is why their factors are high.
 

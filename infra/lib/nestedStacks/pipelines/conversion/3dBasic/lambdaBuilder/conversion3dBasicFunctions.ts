@@ -38,6 +38,9 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "vamsExecute3dBasicConversion";
+    // STEP input installs cascadio (Open CASCADE) into the image; the default image holds none of it,
+    // and the handler refuses a STEP run before download when the variable is not "true".
+    const enableStepInput = config.app.pipelines.useConversion3dBasic.enableStepInput === true;
 
     const fun = new lambda.DockerImageFunction(scope, name, {
         code: lambda.DockerImageCode.fromImageAsset(
@@ -47,6 +50,7 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
             ),
             {
                 platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64, //Fix to the LINUX_AMD64 platform to standardize instruction set across all loads
+                buildArgs: { ENABLE_STEP_INPUT: enableStepInput ? "true" : "false" },
             }
         ),
         // Must match the image: the Dockerfile builds FROM --platform=linux/amd64 and the asset sets
@@ -63,7 +67,7 @@ export function buildVamsExecute3dBasicConversionPipelineFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {},
+        environment: { ENABLE_STEP_INPUT: enableStepInput ? "true" : "false" },
     });
 
     grantReadWritePermissionsToAllAssetBuckets(fun);

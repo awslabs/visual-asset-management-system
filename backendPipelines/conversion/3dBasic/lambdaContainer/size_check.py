@@ -56,8 +56,10 @@ MEMORY_EXPANSION_FACTORS = {
     # process, under the same address-space limit.
     '.fbx': 27,
     # A STEP file is text describing exact geometry; its tessellation is far larger than the text.
-    '.step': 40,
-    '.stp': 40,
+    # Measured 55 to 67 on the NIST and Adafruit test files of 0.4 to 0.5 MB (smaller files are
+    # dominated by the fixed cost of loading Open CASCADE, which BASE_MEMORY_BYTES covers).
+    '.step': 70,
+    '.stp': 70,
 }
 # The COLLADA exporter holds the whole model as Python objects as well, so a conversion to `.dae`
 # needs more per input byte than to any other format. Used in place of the factor above when the
@@ -77,8 +79,8 @@ DAE_OUTPUT_EXPANSION_FACTORS = {
     '.3mf': 114,
     '.off': 27,
     '.fbx': 50,
-    '.step': 60,
-    '.stp': 60,
+    '.step': 80,
+    '.stp': 80,
 }
 # Each factor is the largest peak resident memory above the interpreter and trimesh baseline, per byte
 # of input, over the output formats this pipeline writes (the COLLADA output separately), measured on
