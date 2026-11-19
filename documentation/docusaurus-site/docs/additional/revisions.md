@@ -44,6 +44,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
+-   **Execution config overrides at pipeline registration** — A deployment can register an existing pipeline bundle with a different callback mode, timeouts or Lambda name through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without a second bundle. A registration without the property is unchanged. A change to a value the generated state machines encode redeploys every workflow that uses the pipeline, custom workflows included, and running executions finish on the definition they started with. (issue #1732)
+
 **Key fixes:**
 
 -   **Search map popup position** — A click on a file's footprint in the Search Map view opens its popup at the click, not at the centre of the footprint's box (away from the click for a large or L-shaped footprint, and at longitude 0 for a footprint split at longitude 180). Of overlapping footprints, the smallest under the click opens. (issue #1683)

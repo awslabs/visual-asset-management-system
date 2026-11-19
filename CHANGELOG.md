@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Pipelines** A deployment can register an existing pipeline bundle with a different execution config (callback mode, timeouts or Lambda name) through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without shipping a second bundle. A registration without the property is unchanged. Changing a value that the generated state machines encode redeploys every workflow that uses the pipeline, including custom workflows, and running executions finish on the definition they started with. (issue #1732)
+
 ### Bug Fixes
 
 -   **Web** On the Search page's Map view, clicking a file's footprint opens its popup at the click instead of at the centre of the footprint's box, which for a large or L-shaped footprint was away from the click and for a footprint split at longitude 180 was on the other side of the world. When footprints overlap, the smallest one under the click opens, so a small footprint under a large one can be opened. (issue #1683)
