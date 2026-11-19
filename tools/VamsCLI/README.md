@@ -103,6 +103,7 @@ vamscli assets --help
 | `compliance`       | Compliance schemas, evaluation, quarantine                     |
 | `zip-download`     | Background zip, tar and tar.gz archives of asset files         |
 | `edh`              | EDH Workstations add-on (the deployment must enable it)        |
+| `audit`            | Audit log search: groups, search, results, show, stop, export  |
 
 ## Global Options
 
