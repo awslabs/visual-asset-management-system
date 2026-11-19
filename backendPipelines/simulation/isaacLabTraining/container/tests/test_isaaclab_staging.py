@@ -239,6 +239,8 @@ def main_module():
 
 class _Completed:
     returncode = 0
+    tail = ""
+    timed_out = False
     stdout = ""
     stderr = ""
 
@@ -260,7 +262,7 @@ class TestTheRunSeesTheStagedFolder:
         client = FakeClient(_OBJECTS)
         monkeypatch.setattr(main_module, "S3Client", lambda: FakeS3(client))
         monkeypatch.setattr(main_module, "download_and_install_custom_environment", fake_install)
-        monkeypatch.setattr(main_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(main_module, "run_isaac_lab", fake_run)
         monkeypatch.setattr(main_module, "upload_training_results", lambda *a, **k: None)
         monkeypatch.setattr(main_module, "setup_checkpoint_dir", lambda config: str(tmp_path / "ckpt"))
         monkeypatch.setattr(main_module, "stage_asset_files",
@@ -288,7 +290,7 @@ class TestTheRunSeesTheStagedFolder:
                                                                          tmp_path):
         job_config = {
             "jobName": "job1",
-            "trainingConfig": {"mode": "train", "task": "Isaac-Cartpole-Direct-v0", "rlLibrary": "rsl_rl"},
+            "trainingConfig": {"mode": "train", "task": "Isaac-Cartpole-Direct", "rlLibrary": "rsl_rl"},
             "outputS3AssetFilesPath": _OUTPUT_PREFIX,
         }
         events, local_root = self._run(main_module, monkeypatch, tmp_path, job_config)

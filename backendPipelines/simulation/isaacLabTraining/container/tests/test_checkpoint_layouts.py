@@ -5,7 +5,8 @@
 
 The container uploaded only ``model_*.pt`` (rsl_rl), so a rl_games run (``nn/*.pth``) or a skrl run
 (``checkpoints/agent_*.pt``, ``best_agent.pt``) finished green with an empty checkpoints folder. Each
-test builds the log tree one library writes under Isaac Lab 2.3.0 and checks what is uploaded.
+test builds the log tree one library writes under Isaac Lab 3.0.0 (read from a three-iteration Cartpole
+run of the stock image, issue #1669) and checks what is uploaded.
 Layouts: ``utils/training/checkpoints.py``."""
 
 import importlib.util
@@ -29,17 +30,17 @@ LAYOUTS = {
                    "rsl_rl/cartpole/2026-01-01_00-00-00/events.out.tfevents.1"],
     },
     "rl_games": {
-        "checkpoints": ["rl_games/cartpole_direct/2026-01-01_00-00-00/nn/cartpole_direct.pth",
-                        "rl_games/cartpole_direct/2026-01-01_00-00-00/nn/last_cartpole_direct_ep_150_rew__12.5_.pth"],
-        "others": ["rl_games/cartpole_direct/2026-01-01_00-00-00/params/agent.yaml",
-                   "rl_games/cartpole_direct/2026-01-01_00-00-00/summaries/events.out.tfevents.1"],
+        "checkpoints": ["rl_games/cartpole/2026-01-01_00-00-00/nn/cartpole_direct.pth",
+                        "rl_games/cartpole/2026-01-01_00-00-00/nn/last_cartpole_ep_150_rew__12.5_.pth"],
+        "others": ["rl_games/cartpole/2026-01-01_00-00-00/params/agent.yaml",
+                   "rl_games/cartpole/2026-01-01_00-00-00/summaries/events.out.tfevents.1"],
     },
     "skrl": {
-        "checkpoints": ["skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_1000.pt",
-                        "skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_30000.pt",
-                        "skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/checkpoints/best_agent.pt"],
-        "others": ["skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/params/agent.yaml",
-                   "skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/events.out.tfevents.1"],
+        "checkpoints": ["skrl/cartpole/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_1000.pt",
+                        "skrl/cartpole/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_30000.pt",
+                        "skrl/cartpole/2026-01-01_00-00-00_ppo_torch/checkpoints/best_agent.pt"],
+        "others": ["skrl/cartpole/2026-01-01_00-00-00_ppo_torch/params/agent.yaml",
+                   "skrl/cartpole/2026-01-01_00-00-00_ppo_torch/events.out.tfevents.1"],
     },
 }
 
@@ -63,7 +64,7 @@ def main_module():
 
 
 def _config(library):
-    return PipelineConfig(job_name="job1", mode="train", task="Isaac-Cartpole-Direct-v0",
+    return PipelineConfig(job_name="job1", mode="train", task="Isaac-Cartpole-Direct",
                           rl_library=library, input_s3_path="", output_s3_path=_OUTPUT_PREFIX)
 
 
@@ -175,7 +176,7 @@ class TestFindCheckpoints:
 @pytest.mark.unit
 class TestEvaluationPolicyPath:
     """play.py of rl_games and skrl takes the run folder from the checkpoint's parent's parent
-    (Isaac Lab 2.3.0 ``log_dir = dirname(dirname(resume_path))``), so the downloaded policy must sit
+    (Isaac Lab ``log_dir = dirname(dirname(resume_path))``), so the downloaded policy must sit
     two folders below a folder the runtime user owns, whatever the checkpoint's own extension."""
 
     def test_policy_lands_two_folders_below_the_owned_log_root(self, main_module):

@@ -200,18 +200,26 @@ describe.each(GPU_DOCKERFILES)("GPU image $label runs as non-root (issue #327)",
         .map((l, i) => ({ i, m: /^USER\s+(\S+)/.exec(l.trim()) }))
         .filter((x) => x.m !== null);
 
-    it("declares exactly one USER, set to 10000:10000", () => {
+    // The last USER is the one the container runs as. An image whose base runs as its own non-root
+    // user (the Isaac Lab 3.0 image runs as ubuntu, uid 1000) needs a `USER root` ahead of its build
+    // steps (useradd, chown); any USER before the last one may only be that.
+    const finalUser = userLines[userLines.length - 1];
+
+    it("declares a final USER set to 10000:10000, with only `USER root` ahead of it", () => {
         // Numeric uid:gid, not a name: a runtime runAsNonRoot check verifies it without reading the
         // image's /etc/passwd, and the EFS ownership (userdata chown / access point) is on 10000:10000.
-        expect(userLines.length).toBe(1);
-        expect(userLines[0].m![1]).toBe("10000:10000");
+        expect(userLines.length).toBeGreaterThanOrEqual(1);
+        expect(finalUser.m![1]).toBe("10000:10000");
+        for (const earlier of userLines.slice(0, -1)) {
+            expect(earlier.m![1]).toBe("root");
+        }
     });
 
     it("switches to that USER after the last COPY", () => {
         // A USER ahead of the last COPY leaves the copied application root-owned; several of these
         // images regressed exactly that way (USER before the build steps) and could not even build.
         const lastCopyAt = lines.reduce((acc, l, i) => (/^COPY\s/.test(l.trim()) ? i : acc), -1);
-        expect(userLines[0].i).toBeGreaterThan(lastCopyAt);
+        expect(finalUser.i).toBeGreaterThan(lastCopyAt);
     });
 });
 
