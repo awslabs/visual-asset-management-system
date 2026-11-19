@@ -541,6 +541,9 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
             {/* Map */}
             <Map
                 ref={mapRef}
+                // Flat map: the basemap style selects the globe, whose fit-to-bounds frames the wrong
+                // place for results spread over the world or either side of longitude 180.
+                projection="mercator"
                 initialViewState={initialViewState}
                 style={{ height: "70vh", width: "100%" }}
                 mapStyle={mapStyleUrl}
