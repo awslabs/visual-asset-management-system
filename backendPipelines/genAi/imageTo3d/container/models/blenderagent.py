@@ -564,7 +564,9 @@ class BlenderAgentAdapter(ModelAdapter):
                     if response.status == 200:
                         return
             except urllib.error.HTTPError as e:
-                refused = refused or e.code in (401, 403)
+                # Any 4xx is a bridge that answered and refused this run's key: LiteLLM 1.100.0 without a
+                # database answers a foreign key with 400 ("No connected db."), not 401.
+                refused = refused or 400 <= e.code < 500
             except Exception:
                 pass
             time.sleep(2)

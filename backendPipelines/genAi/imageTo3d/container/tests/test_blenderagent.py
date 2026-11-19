@@ -198,8 +198,12 @@ class _FakeBridgeProcess:
         self.stopped = True
 
 
-def _bridge_stand_in(accepted_key: str):
-    """A loopback server answering /v1/models with 200 for ``accepted_key`` and 401 for any other key."""
+def _bridge_stand_in(accepted_key: str, refusal: int = 400):
+    """A loopback server answering /v1/models with 200 for ``accepted_key`` and ``refusal`` for any other key.
+
+    400 with "No connected db." is what the pinned LiteLLM 1.100.0, run without a database as the adapter
+    runs it, answers to a key it does not hold.
+    """
     import http.server
     import threading
 
@@ -209,8 +213,9 @@ def _bridge_stand_in(accepted_key: str):
 
         def do_GET(self):
             ok = self.path == "/v1/models" and self.headers.get("Authorization") == f"Bearer {accepted_key}"
-            body = b'{"data": [{"id": "agent"}]}' if ok else b'{"error": "Authentication Error"}'
-            self.send_response(200 if ok else 401)
+            body = (b'{"data": [{"id": "agent"}]}' if ok
+                    else b'{"error": {"message": "No connected db.", "type": "no_db_connection"}}')
+            self.send_response(200 if ok else refusal)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -241,10 +246,11 @@ class TestEachRunHasItsOwnBridge:
         finally:
             held.close()
 
-    def test_readiness_refuses_a_bridge_that_rejects_this_runs_key(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("refusal", [400, 401])
+    def test_readiness_refuses_a_bridge_that_rejects_this_runs_key(self, tmp_path, monkeypatch, refusal):
         real_sleep = blenderagent.time.sleep
         monkeypatch.setattr(blenderagent.time, "sleep", lambda s: real_sleep(0.05))
-        server = _bridge_stand_in("sk-another-run")
+        server = _bridge_stand_in("sk-another-run", refusal)
         try:
             port = server.server_address[1]
             with pytest.raises(RuntimeError, match="refused this run's key"):
@@ -292,6 +298,25 @@ class TestEachRunHasItsOwnBridge:
         with pytest.raises(blenderagent.BridgeExited):
             BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 4000, "sk-x", {})
         assert len(started) == 1
+
+    def test_a_readiness_timeout_is_raised_and_not_retried(self, tmp_path, monkeypatch):
+        # Only a bridge that exited is started again; one that never became ready would only time out again.
+        started = []
+
+        def start(self, bridge_dir, model_id, region, port, key, env):
+            started.append(_FakeBridgeProcess())
+            return started[-1]
+
+        def wait(port, key, process, log_path, timeout=120):
+            raise RuntimeError(f"The model bridge did not become ready on port {port} within {timeout}s.")
+
+        monkeypatch.setattr(BlenderAgentAdapter, "_start_bridge", start)
+        monkeypatch.setattr(BlenderAgentAdapter, "_wait_for_bridge", staticmethod(wait))
+        with pytest.raises(RuntimeError, match="did not become ready") as raised:
+            BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 0, "sk-x", {})
+        assert not isinstance(raised.value, blenderagent.BridgeExited)
+        assert len(started) == 1, "a readiness timeout was retried"
+        assert started[0].stopped, "the bridge that never became ready is left running"
 
 
 @pytest.mark.unit
