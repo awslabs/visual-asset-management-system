@@ -17,6 +17,7 @@ import pytest
 from common.addonApiRoutes import ADDON_ROUTES
 from common.addonConstants import ADDON_CONSTRAINT_OBJECT_TYPE_FEATURES, ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS
 from common.addonFeatures import (
+    CORE_FEATURE_AUDIT_LOG_SEARCH,
     ADDON_FEATURES,
     ADDON_FEATURES_ENABLED_ENV,
     addon_feature_deployed,
@@ -43,10 +44,43 @@ def test_every_add_on_route_is_tagged_with_a_published_switch():
     assert untagged == []
 
 
-def test_no_core_or_fork_route_is_tagged():
+def test_no_core_or_fork_route_is_tagged_except_the_audit_search_routes():
     addon = {id(route) for route in ADDON_ROUTES}
-    tagged = [route.path for route in ALL_API_ROUTES if id(route) not in addon and route.addon_feature]
+    tagged = [
+        route.path for route in ALL_API_ROUTES
+        if id(route) not in addon and route.addon_feature and route.category != "audit"
+    ]
     assert tagged == []
+
+
+def test_every_audit_route_carries_the_audit_search_switch_and_nothing_else_does():
+    audit = [route for route in ALL_API_ROUTES if route.category == "audit"]
+    assert len(audit) == 4
+    assert {route.addon_feature for route in audit} == {CORE_FEATURE_AUDIT_LOG_SEARCH}
+    assert CORE_FEATURE_AUDIT_LOG_SEARCH not in ADDON_FEATURES
+
+
+def test_the_audit_search_switch_mirrors_the_cdk_enum():
+    ts = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "infra", "common", "vamsAppFeatures.ts"))
+    with open(ts, encoding="utf-8") as handle:
+        assert f'AUDITLOGSEARCH = "{CORE_FEATURE_AUDIT_LOG_SEARCH}"' in handle.read()
+
+
+def test_the_audit_routes_are_listed_only_when_the_deployment_enabled_search(monkeypatch):
+    from common.apiRoutes import get_public_api_routes
+
+    def audit_paths():
+        return {route.path for route in get_public_api_routes() if route.category == "audit"}
+
+    monkeypatch.delenv(ADDON_FEATURES_ENABLED_ENV, raising=False)
+    assert len(audit_paths()) == 4  # switches unknown (local server, unit test): everything listed
+    monkeypatch.setenv(ADDON_FEATURES_ENABLED_ENV, "")
+    assert audit_paths() == set()
+    monkeypatch.setenv(ADDON_FEATURES_ENABLED_ENV, "PHYSNA_ADDON")
+    assert audit_paths() == set()
+    monkeypatch.setenv(ADDON_FEATURES_ENABLED_ENV, f"PHYSNA_ADDON,{CORE_FEATURE_AUDIT_LOG_SEARCH}")
+    assert len(audit_paths()) == 4
 
 
 def test_every_add_on_object_type_is_tagged_once_with_a_published_switch():

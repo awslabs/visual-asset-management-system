@@ -314,14 +314,15 @@ Configuration values resolve through a four-tier fallback chain:
 | `DEADLINECLOUD_PIPELINES`       | AWS Deadline Cloud pipeline execution type enabled                                                                        |
 | `VECTORSEARCH`                  | Natural-language (vector) search enabled; the search page shows the natural-language toggle and `POST /search/nlp` exists |
 | `ZIPDOWNLOADS`                  | Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`)                                                         |
+| `AUDITLOGSEARCH`                | Audit Log Search deployed (`app.auditLogging.search.enabled`, default `true`)                                             |
 
 An enabled add-on adds feature flags of its own, which are listed on the add-on's pages. See [Add-ons Overview](../developer/addons-overview.md).
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there.
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there. ApiBuilder3 is built only while `app.auditLogging.search.enabled` is `true` (the default; `false` in the EU Sovereign Cloud template).
 
-Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. The dotted arrow from PipelineBuilder to SearchBuilder is an explicit dependency declared only when `vectorSearch.enabled` is `true`, so the vector reindex custom resource runs after the system pipelines it launches exist. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
+Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. The dotted arrow from PipelineBuilder to SearchBuilder is an explicit dependency declared only when `vectorSearch.enabled` is `true`, so the vector reindex custom resource runs after the system pipelines it launches exist. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
 
 ```mermaid
 graph TD
@@ -340,6 +341,9 @@ graph TD
 
     SRB --> APIBuild["ApiBuilder"]
     RNB --> APIBuild
+
+    SRB --> APIBuild3["ApiBuilder3"]
+    RNB --> APIBuild3
 
     SRB --> APIBuild2["ApiBuilder2"]
     RNB --> APIBuild2
@@ -361,6 +365,7 @@ graph TD
     AB --> REST
     APIBuild --> REST
     APIBuild2 --> REST
+    APIBuild3 --> REST
     SearchB --> REST
     Addon --> REST
 
@@ -372,7 +377,7 @@ graph TD
 
 ## Resource Name Resolution
 
-VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}-{region}/resourceNames/` — 80 in the shipped configuration (62 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 3 integration values for externally owned pipeline bridges; 4 Lambda function names). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 75 of them; the search nested stack (`SearchBuilder`) publishes the two reindexer function names (`lambdaFunctions/crOsReindexer`, `lambdaFunctions/vectorReindexer`): the OpenSearch one when Amazon OpenSearch Service is enabled, the vector one whenever the SYSTEM GenAI metadata pipeline is on and registers its workflow, and the secondary API stack publishes the workflow role ARN, the `vamsSchema` import function name and the large object copy engine function name, because those resources are created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
+VAMS Lambda functions resolve AWS resource names (Amazon DynamoDB tables, Amazon S3 buckets, Amazon CloudWatch log groups) from AWS Systems Manager Parameter Store at cold start. The CDK deployment publishes one SSM String parameter per registered resource name under `/{config.name}-{baseStackName}-{region}/resourceNames/` — 81 in the shipped configuration (63 DynamoDB tables, of which 7 are deprecated tables retained for migration under `dynamoTables/legacy/`; 9 audit log groups; 2 S3 buckets; 3 integration values for externally owned pipeline bridges; 4 Lambda function names). The set is derived from the `resourceNameRegistry`, so it grows with each registered resource. The Resource Names nested stack materializes 76 of them; the search nested stack (`SearchBuilder`) publishes the two reindexer function names (`lambdaFunctions/crOsReindexer`, `lambdaFunctions/vectorReindexer`): the OpenSearch one when Amazon OpenSearch Service is enabled, the vector one whenever the SYSTEM GenAI metadata pipeline is on and registers its workflow, and the secondary API stack publishes the workflow role ARN, the `vamsSchema` import function name and the large object copy engine function name, because those resources are created there. Non-pipeline handlers receive a single `VAMS_RESOURCE_PARAM_PREFIX` environment variable pointing to this SSM prefix, plus AWS IAM permissions for `ssm:GetParameter`, `ssm:GetParameters`, and `ssm:GetParametersByPath`.
 
 At cold start, each handler calls `get_table_name(ResourceKeys.*)`, `get_bucket_name(ResourceKeys.*)`, or `get_log_group_name(ResourceKeys.*)` from `backend/backend/common/resourceNames.py`, which caches the parameter fetch for 60 minutes. This centralizes name management, enables environment variable overrides for testing, and reduces CDK template size by removing per-handler table/bucket/log-group environment variables (pipelines in `backendPipelines/` retain their direct environment variables).
 

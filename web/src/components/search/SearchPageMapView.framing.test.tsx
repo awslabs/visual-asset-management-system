@@ -24,6 +24,7 @@ import { BOUNDS_PADDING_DEGREES, FIT_BOUNDS_OPTIONS } from "./utils/mapBounds";
 
 const mockFitBounds = jest.fn();
 const mockMap: { load: () => void } = { load: () => undefined };
+const mockMapProps: { last: any } = { last: null };
 
 jest.mock("react-map-gl/maplibre", () => {
     const ReactActual = jest.requireActual("react");
@@ -31,6 +32,7 @@ jest.mock("react-map-gl/maplibre", () => {
         __esModule: true,
         default: ReactActual.forwardRef((props: any, ref: any) => {
             const [instance, setInstance] = ReactActual.useState(null);
+            mockMapProps.last = props;
             mockMap.load = () => setInstance({ fitBounds: mockFitBounds });
             ReactActual.useImperativeHandle(ref, () => instance, [instance]);
             ReactActual.useEffect(() => {
@@ -180,6 +182,55 @@ describe("Map view framing (D99)", () => {
 
         expect(mockFitBounds).toHaveBeenCalledTimes(1);
         expectFramed(DETROIT, SEATTLE);
+    });
+
+    it("draws a flat map and frames both sides of longitude 180 for a split footprint beside Bay Area files (UAT A)", () => {
+        const fileHit = (id: string, geo: any) => ({
+            _index: "file",
+            _id: `db#${id}`,
+            _score: 1,
+            _source: {
+                str_rectype: "file",
+                str_databaseid: "db",
+                str_assetid: "a",
+                str_key: `/${id}.tif`,
+                str_fileext: "tif",
+                geo_MD_location: geo,
+            },
+        });
+        const ring = (w: number, e: number, s: number, n: number) => [
+            [
+                [w, s],
+                [e, s],
+                [e, n],
+                [w, n],
+                [w, s],
+            ],
+        ];
+        const hits = [
+            fileHit("bay", { type: "Polygon", coordinates: ring(-123, -122, 37, 38) }),
+            fileHit("split", {
+                type: "MultiPolygon",
+                coordinates: [ring(-180, -179, -1, 1), ring(179, 180, -1, 1)],
+            }),
+        ];
+        render(
+            view({
+                ...INITIAL_STATE,
+                filters: { _rectype: { value: "file" } },
+                useMapView: true,
+                result: { hits: { total: { value: 2, relation: "eq" }, hits }, aggregations: {} },
+            } as any)
+        );
+        expect(mockMapProps.last.projection).toBe("mercator");
+        act(() => mockMap.load());
+        expect(mockFitBounds).toHaveBeenCalledTimes(1);
+        const [[west, south], [east, north]] = lastBounds();
+        // The Pacific between 179 and -122 (238 when counted eastward), not the world from -180 to 180.
+        expect(west).toBeCloseTo(179 - BOUNDS_PADDING_DEGREES, 6);
+        expect(east).toBeCloseTo(238 + BOUNDS_PADDING_DEGREES, 6);
+        expect(south).toBeCloseTo(-1 - BOUNDS_PADDING_DEGREES, 6);
+        expect(north).toBeCloseTo(38 + BOUNDS_PADDING_DEGREES, 6);
     });
 
     it("frames nothing when no result on the page has a location", () => {

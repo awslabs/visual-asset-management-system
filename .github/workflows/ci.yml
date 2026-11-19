@@ -632,6 +632,39 @@ jobs:
                   path: ${{ runner.temp }}/pipeline-tests/logs/
                   retention-days: 7
 
+    # Golden round trip of the 3D Basic Conversion image: builds the container exactly as CDK does,
+    # runs it under the Lambda runtime interface emulator against an S3 stand-in (moto), and converts a
+    # generated fixture of every accepted input format to every written output format, checking triangle
+    # and point counts, bounding box and textures. The unit suite in pipelines-test stubs or bypasses the
+    # image; this job is what proves the image's own dependency set converts. The fixtures are generated
+    # by tests/test_3dbasic_golden_round_trip.py, so nothing is downloaded. Python 3.12 matches the image.
+    conversion-3dbasic-golden:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.12.16
+
+            # The image's own locked packages (to generate fixtures and load results with the same trimesh
+            # the image ships), then the test tools that are not part of the image.
+            - name: Install the test environment
+              run: |
+                  python -m pip install --require-hashes -r backendPipelines/conversion/3dBasic/lambdaContainer/requirements.txt
+                  python -m pip install pytest==9.2.0 boto3==1.44.5 "moto[server,s3]==5.2.5"
+
+            - name: Build the image and run the golden round trip
+              run: bash backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh
+
     # The VamsMCP suite. The server imports vamscli, which is not on PyPI, so VamsCLI is installed from
     # its directory first. The mcp SDK needs Pydantic v2, so this suite has a job of its own rather
     # than sharing the backend's Pydantic v1 environment.

@@ -178,6 +178,11 @@ TOOLS = {
     "reject_compliance_cascade": ("reject_compliance_cascade",),
     "query_compliance_audit": ("query_compliance_audit",),
     "get_asset_compliance_audit": ("get_asset_compliance_audit",),
+    # Audit log search (opt-in `audit` tool set).
+    "list_audit_log_groups": ("vams_audit_groups",),
+    "start_audit_query": ("vams_audit_search",),
+    "get_audit_query": ("vams_audit_results", "vams_audit_search"),
+    "stop_audit_query": ("vams_audit_stop",),
     # --- EDH Workstations add-on (vams_mcp/addon_tools/edh.py) ---
     "get_edh_health": ("get_edh_health",),
     "get_edh_capacity": ("get_edh_capacity",),
@@ -272,6 +277,8 @@ EXCLUDED = {
     # --- Preview images, which the web app shows and the pipelines regenerate ---
     "download_asset_preview": "a presigned URL of the preview image the web app shows; agents read the asset's files",
     "delete_auxiliary_preview_files": "removes generated preview files a pipeline rebuilds; maintenance, not an agent task",
+    # --- Audit export ---
+    "export_audit_query": "a file-sized CSV or NDJSON document for a person (vamscli audit export, the web page); an agent reads rows with vams_audit_results",
     # --- Writes a local file ---
     "download_zip_archive": "streams a finished archive to a local file (vamscli zip-download download)",
     # --- Never returned to an agent ---

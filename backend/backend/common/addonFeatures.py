@@ -35,6 +35,13 @@ ADDON_FEATURE_EDH_WORKSTATIONS = "EDH_WORKSTATIONS"
 ADDON_FEATURE_EDH_CONTAINERS = "EDH_CONTAINERS"
 ADDON_FEATURE_EDH_AMI_RECIPES = "EDH_AMI_RECIPES"
 
+# A core feature a deployment can switch off is gated by the same mechanism: its routes carry the
+# switch in ``ApiRoute.addon_feature``, and the core stack adds the name to the same environment
+# variable when the feature is on. Audit log search (``app.auditLogging.search.enabled``, default
+# on) is the one such feature. The value mirrors ``VAMS_APP_FEATURES.AUDITLOGSEARCH``
+# (infra/common/vamsAppFeatures.ts); it is not an ``ADDON_FEATURES`` member.
+CORE_FEATURE_AUDIT_LOG_SEARCH = "AUDITLOGSEARCH"
+
 ADDON_FEATURES = (
     ADDON_FEATURE_PHYSNA,
     ADDON_FEATURE_EDH_WORKSTATIONS,
