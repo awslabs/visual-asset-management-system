@@ -16,9 +16,9 @@
  *
  * Three claims are asserted:
  *
- *   1. the Kubernetes layer's `pyproject.toml`, `poetry.lock` and exported `requirements.txt` name none
- *      of the SDK packages, so the base layer is the function's only SDK (the layer build re-exports
- *      the lock, so the lock is what ships);
+ *   1. the Kubernetes layer's `pyproject.toml`, `poetry.lock` and committed `requirements.txt` name none
+ *      of the SDK packages, so the base layer is the function's only SDK (the layer build installs the
+ *      committed export of the lock, so the lock is what ships);
  *   2. every other package both layers' locks carry is locked at the same version;
  *   3. in the synthesized template, every Lambda function that lists the Kubernetes layer also lists
  *      the base layer, which (1) depends on.
@@ -37,7 +37,7 @@ const KUBERNETES_LAYER_DIR = path.join(
     VAMS_ROOT,
     "backendPipelines/multi/rapidPipelineEKS/lambdaLayer"
 );
-const BASE_LAYER_LOCK = path.join(VAMS_ROOT, "backend/lambdaLayers/base/poetry.lock");
+const BASE_LAYER_LOCK = path.join(VAMS_ROOT, "backend/lambdaLayers/base/uv.lock");
 const SDK_PACKAGES = ["boto3", "botocore", "s3transfer"];
 
 /** PEP 503 normalized project name, so `typing_extensions` and `typing-extensions` match. */
@@ -46,7 +46,7 @@ const normalize = (name: string): string => name.replace(/[-_.]+/g, "-").toLower
 const readLayerFile = (file: string): string =>
     fs.readFileSync(path.join(KUBERNETES_LAYER_DIR, file), "utf8");
 
-/** {normalized name: version} for every `[[package]]` table in a poetry.lock. */
+/** {normalized name: version} for every `[[package]]` table in a poetry.lock or uv.lock. */
 function lockedVersions(lock: string): Map<string, string> {
     const versions = new Map<string, string>();
     for (const m of lock.matchAll(
@@ -144,7 +144,7 @@ describe("RapidPipeline EKS Kubernetes layer: packages it shares with the base l
     test("every package both layers lock is at the base layer's version", () => {
         // On a failure, re-lock the Kubernetes layer to the base layer's version: add a temporary
         // exact constraint to its pyproject.toml, `poetry lock`, remove it, `poetry lock` again, and
-        // re-export (backend/CLAUDE.md "Updating Python Dependencies").
+        // re-export (backend/CLAUDE.md "Updating Python Dependencies"). The base layer's lock is a uv.lock.
         expect(versionDrift(kubernetesLock(), baseLock())).toEqual([]);
     });
 });

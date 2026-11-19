@@ -150,7 +150,7 @@ describe("CI workflow", () => {
         expect(pytestRuns.length).toBe(1);
         expect(pytestRuns[0]).toMatch(/(^|\s)-n auto(\s|$)/);
         expect(pytestRuns[0]).toMatch(/(^|\s)--dist loadfile(\s|$)/);
-        expect(read("backend/requirements-dev.txt")).toMatch(/^pytest-xdist==\d+\.\d+\.\d+ ;/m);
+        expect(read("backend/requirements-dev.txt")).toMatch(/^pytest-xdist==\d+\.\d+\.\d+(\s|$)/m);
     });
 
     test("push and pull_request both filter on main, release, development and development-*", () => {
