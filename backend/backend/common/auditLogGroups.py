@@ -19,8 +19,8 @@ Two consumers read the merged registry:
   the groups without a ``[type: ...]`` segment from it;
 * the audit search library (``common/auditSearch``) derives the groups a caller may search, their
   record prefix and the parser that reads their records. The per-group ``auditLog`` permission that
-  will authorize them (``authorization_object``) is part of the audit search work that is planned; no
-  permission check or search handler exists on this branch.
+  authorizes them is checked through ``authorization_object`` by the audit search handler
+  (``handlers/audit/auditLogService.py``).
 
 Adding an audit group is one descriptor here (or in a lane), its ``ResourceKeys`` entry and the CDK log
 group; see "Add an audit group" in ``docs/developer/audit-logging.md``. The module is import-light: it
@@ -214,8 +214,7 @@ def resource_keys() -> Tuple[Any, ...]:
 def authorization_object(group_key: str) -> Dict[str, str]:
     """The object a group is authorized as: ``{object__type: auditLog, auditLogGroup: <key>}``.
 
-    Planned: the audit search will check each requested group with this object and the GET action, once
-    the ``auditLog`` object type exists (a separate change). The key is the group's registry key, so
-    the constraint value and the registry cannot drift apart.
+    The audit search checks each requested group with this object and the GET action. The key is the
+    group's registry key, so the constraint value and the registry cannot drift apart.
     """
     return {"object__type": "auditLog", "auditLogGroup": group_key}
