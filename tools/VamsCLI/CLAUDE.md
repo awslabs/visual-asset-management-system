@@ -557,21 +557,25 @@ rather than at an audit. Redaction runs before truncation, so the length cut can
 
 **Two properties that must not be broken** (both pinned by `tests/test_log_redaction.py`):
 
-1. **Full redaction applies to the log file only — never to command output or `--json-output`.** A newly
-   created API key is displayed exactly once and cannot be retrieved again, so leaking redaction into the
-   output path would make `api-key create` useless. `redact_sensitive` returns a **copy** and never mutates
-   its input.
+1. **Redaction applies to the log file and the `--verbose` echo — never to command output or
+   `--json-output`.** A newly created API key is displayed exactly once and cannot be retrieved again, so
+   leaking redaction into the output path would make `api-key create` useless. `redact_sensitive` returns a
+   **copy** and never mutates its input.
 2. **Non-secret keys must survive.** This CLI logs S3 object keys constantly (`s3Key`, `objectKey`,
    `keyName`, `bucketExistingKey`). Over-redaction destroys the diagnostic value the log exists for, which
    is why the key-fragment list spells out credential names instead of matching a bare `key`.
 
-**The `--verbose` echo masks presigned-URL secrets and nothing else.** Every line `utils/logging.py`
-writes to the console goes through `_echo`, which applies `mask_presigned_url_secrets`: the values of
-`X-Amz-Signature` and `X-Amz-Security-Token` become `***REDACTED***` in a query string (plain or
-percent-encoded), a header or a mapping entry, and the parameter names stay. The rest of the echo is
-printed as received. A new console write in that module calls `_echo`, not `click.echo`; pinned by
-`tests/test_log_redaction.py::TestVerboseEchoMasksPresignedUrlSecrets`, which also scans the module for
-a write that bypasses it.
+**The `--verbose` echo masks credentials and shows everything else.** Every line `utils/logging.py`
+writes to the console goes through `_echo`, which applies `mask_console_text`: credential shapes
+(`vams_…` keys, JWTs, `Bearer …`) become `***REDACTED***`, and so do the values of `X-Amz-Signature` and
+`X-Amz-Security-Token` in a query string (plain or percent-encoded), a header or a mapping entry, with the
+parameter names kept. Request and response bodies first pass through `_console_view`, the log file's
+key-name redaction, so a credential-named field (`password`, `apiKey`, `idToken`, `connectionUrl`, …)
+keeps its name and shows a masked value. The verbose and `--debug` tracebacks of
+`@handle_global_exceptions()` pass through `mask_console_text` too. A new console write in
+`utils/logging.py` calls `_echo`, not `click.echo`; pinned by
+`tests/test_log_redaction.py::TestVerboseEchoMasksPresignedUrlSecrets` (which also scans the module for a
+write that bypasses it) and `tests/test_verbose_echo_credentials.py`.
 
 **One predicate, every per-key filter.** `redact_mapping_for_log()` wraps `_is_sensitive_key` and is
 what `log_command_start`, `log_api_request`'s header filter, `log_config_info`,

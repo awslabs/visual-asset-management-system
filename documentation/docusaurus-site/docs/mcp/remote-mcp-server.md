@@ -295,7 +295,7 @@ In the client, ask the agent to call `vams_status`. In remote mode it returns `m
 
 ### Token forwarding
 
-The server sends each request's own access token on to the VAMS API; it does not exchange it for a new token. The MCP specification forbids this token passthrough (see its [security best practices](https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices#token-passthrough)). VAMS forwards the token by design:
+The server validates each request's access token, including its audience, and then sends that same token on to the VAMS API; it does not exchange it for a new token. The MCP authorization specification says a server must not pass the token it received from the client through to an upstream API (see [Access Token Privilege Restriction](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#access-token-privilege-restriction)). VAMS forwards the token by design:
 
 -   **The VAMS API is the server's only downstream service, and it already accepts the token.** The token was issued to a client the deployment lists in `additionalTokenAudiences`, and the API's authorizer and Casbin authorization decide each call for the user the token names. VAMS authorizes by the user's roles, not by token scopes, so an exchanged token with narrower scopes would not limit what a call may do.
 -   **It works with every identity provider VAMS supports.** Amazon Cognito token exchange (`GetDerivedToken`) needs the Essentials or Plus feature plan, which VAMS sets on its user pool only in the commercial AWS partition, and an external OAuth IdP need not offer token exchange at all.

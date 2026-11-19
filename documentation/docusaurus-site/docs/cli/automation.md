@@ -525,7 +525,7 @@ Enable `--verbose` for debugging scripts and troubleshooting API issues. Verbose
 vamscli --verbose assets list -d my-database
 ```
 
-Presigned URLs in verbose output have their `X-Amz-Signature` and `X-Amz-Security-Token` values masked. See [Verbose Output](troubleshooting/general.md#verbose-output) for what else it shows.
+Verbose output masks credentials such as passwords, tokens, API keys, and the signatures of presigned URLs. See [Verbose Output](troubleshooting/general.md#verbose-output) for what it masks.
 
 :::tip[Combining Verbose and JSON Output]
 Verbose log messages are written to a rotating log file and do not interfere with `--json-output`. You can safely use both flags together in scripts where you need clean JSON output but also want log files for debugging.
