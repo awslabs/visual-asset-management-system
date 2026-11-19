@@ -1,29 +1,75 @@
 # 3D Basic Conversion Pipeline
 
-The 3D Basic Conversion pipeline converts 3D mesh files between common interchange formats using the Trimesh library. It runs as a containerized AWS Lambda function, making it a lightweight and fast option for format conversion without requiring a VPC or AWS Batch infrastructure. This pipeline is enabled by default in new VAMS deployments.
+The 3D Basic Conversion pipeline converts 3D models between common interchange formats using the Trimesh and OpenUSD libraries. It runs as a containerized AWS Lambda function, making it a lightweight and fast option for format conversion without requiring a VPC or AWS Batch infrastructure. This pipeline is enabled by default in new VAMS deployments.
 
 ## Supported Formats
 
-The pipeline reads the following formats. Five of them are also available as a conversion target; XYZ is read only.
+The pipeline reads the formats below. All but XYZ and the generic `.usd` extension are also available as a conversion target.
 
-| Format | Extension | Direction        | Description                                                              |
-| ------ | --------- | ---------------- | ------------------------------------------------------------------------ |
-| STL    | `.stl`    | Input and output | Stereolithography -- widely used in 3D printing and CAD                  |
-| OBJ    | `.obj`    | Input and output | Wavefront OBJ -- common mesh interchange format                          |
-| PLY    | `.ply`    | Input and output | Polygon File Format -- supports vertex colors, normals, and point clouds |
-| GLTF   | `.gltf`   | Input and output | GL Transmission Format -- open standard for 3D scenes                    |
-| GLB    | `.glb`    | Input and output | Binary GLTF -- single-file variant of GLTF                               |
-| XYZ    | `.xyz`    | Input only       | Point cloud text format -- simple ASCII coordinate data                  |
+| Format | Extension               | Direction        | Description                                                                                     |
+| ------ | ----------------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
+| STL    | `.stl`                  | Input and output | Stereolithography -- widely used in 3D printing and CAD                                         |
+| OBJ    | `.obj`                  | Input and output | Wavefront OBJ -- common mesh interchange format                                                 |
+| PLY    | `.ply`                  | Input and output | Polygon File Format -- supports vertex colors, normals, and point clouds                        |
+| GLTF   | `.gltf`                 | Input and output | GL Transmission Format -- open standard for 3D scenes                                           |
+| GLB    | `.glb`                  | Input and output | Binary GLTF -- single-file variant of GLTF                                                      |
+| USD    | `.usda` `.usdc` `.usdz` | Input and output | OpenUSD: text layer, binary (crate) layer, and a single-file package that carries its textures  |
+| USD    | `.usd`                  | Input only       | OpenUSD layer in either encoding; a USD output names its encoding (`.usdc`, `.usda` or `.usdz`) |
+| DAE    | `.dae`                  | Input and output | COLLADA -- 3D interchange between content tools                                                 |
+| 3MF    | `.3mf`                  | Input and output | 3D Manufacturing Format -- a zip package used in 3D printing                                    |
+| OFF    | `.off`                  | Input and output | Object File Format -- plain text polygon meshes                                                 |
+| XYZ    | `.xyz`                  | Input only       | Point cloud text format -- simple ASCII coordinate data                                         |
 
 :::note[Conversion Directions]
-A mesh in any format marked **Input and output** can be converted to any other format marked **Input and output**. For example, you can convert STL to GLB, OBJ to PLY, or PLY to GLTF. The pipeline uses Trimesh's import/export capabilities to handle the translation.
+A model in any format marked **Input and output** can be converted to any other format marked **Input and output**, for example STL to GLB, a USDZ to OBJ, or a 3MF to USDC. The pipeline uses Trimesh's import and export capabilities and OpenUSD's `usd-core` library to handle the translation.
 
-XYZ is an input-only format. Trimesh reads an XYZ file as a point cloud, and its XYZ exporter cannot write one back, so a run that names `.xyz` as its target is rejected before the input file is downloaded.
+XYZ is an input-only format. Trimesh reads an XYZ file as a point cloud, and its XYZ exporter cannot write one back, so a run that names `.xyz` as its target is rejected before the input file is downloaded. The same holds for the generic `.usd` extension, which is only read.
 
-STL stores triangle meshes only. A point cloud -- an XYZ file, or a PLY file that has vertices and no faces -- converts to PLY, OBJ, GLB, or GLTF, which keep the points; a run that converts a point cloud to STL fails with a message saying so. An input that contains no geometry at all fails for every target. When a scene holds both meshes and point clouds, GLB and GLTF keep both, and STL, OBJ, and PLY keep the meshes.
+STL, DAE, 3MF, and OFF store triangle meshes only. A point cloud -- an XYZ file, or a PLY file that has vertices and no faces -- converts to PLY, OBJ, GLB, GLTF, or USD, which keep the points; a run that converts a point cloud to STL, DAE, 3MF, or OFF fails with a message saying so. An input that contains no geometry at all is refused for every target.
 :::
 
-OBJ, ASCII STL, XYZ, and GLTF files are text, and the pipeline reads that text as UTF-8, as it does the JSON inside a GLB file. ASCII text is UTF-8, so a file without accented or other non-ASCII characters is unaffected. A file whose text is not UTF-8 -- binary data with one of these extensions, or text saved in another encoding such as Windows-1252 -- fails before any referenced file is downloaded, with a message naming the file and the first byte that is not UTF-8. The pipeline does not guess another encoding, because a wrong guess would change the object, group, and material names in the converted model. Save the file as UTF-8 and run the conversion again. A binary STL file is read whatever its 80-byte header holds.
+### USD
+
+A USD file is read as a stage: meshes (with their world transforms, texture coordinates, and the base color or base color texture of a UsdPreviewSurface material) and points become the converted model's geometry. Hidden prims and prims with a purpose other than default or render (guides and proxies) are left out, and a scene that expands past the function's limits through instancing fails instead of being cut short.
+
+A USD output writes one `UsdGeom` mesh per placement under an Xform, with normals and a `st` texture coordinate primvar, a UsdPreviewSurface material, and an explicit `metersPerUnit`, `upAxis`, and `defaultPrim`. A `.usdz` output is one file that holds its textures; a `.usdc` or `.usda` output with a texture writes it to a `textures` folder beside the file. The written USD passes the OpenUSD validators with no errors.
+
+A USD file may name other files: sublayers, references, payloads, and textures. Each name must be a path relative to the file that names it that stays inside the input's own asset. A layer that is absolute, carries a URI scheme such as `http://` or `s3://`, leaves the asset through `..`, or is not among the files fetched with the input fails the run naming it. A texture that cannot be followed is left out, the run log records a warning, and the geometry converts without it.
+
+### DAE, 3MF, and OFF
+
+Every XML document -- a DAE file and the model parts of a 3MF package -- is read through a hardened parser first. A document type declaration or an entity declaration is refused, because neither format needs one. A 3MF package's central directory is checked before any part is read: members that would expand past the function's free disk, that compress implausibly, or that are named with an absolute path or `..` are refused.
+
+A DAE output keeps one mesh per placement and does not carry textures; use USD or GLB when textures matter. DAE and 3MF files declare their unit, see [Units and up axis](#units-and-up-axis).
+
+OBJ, ASCII STL, XYZ, OFF, and GLTF files are text, and the pipeline reads that text as UTF-8, as it does the JSON inside a GLB file. ASCII text is UTF-8, so a file without accented or other non-ASCII characters is unaffected. A file whose text is not UTF-8 -- binary data with one of these extensions, or text saved in another encoding such as Windows-1252 -- fails before any referenced file is downloaded, with a message naming the file and the first byte that is not UTF-8. The pipeline does not guess another encoding, because a wrong guess would change the object, group, and material names in the converted model. Save the file as UTF-8 and run the conversion again. A binary STL file is read whatever its 80-byte header holds.
+
+## Units and up axis
+
+CAD exports are usually in millimetres and Z up, while glTF and USD tools expect metres and Y up. Every template has optional drop-downs that state what the file's numbers mean and what the result should be:
+
+| Option         | Values                                          | Default | Meaning                                                                      |
+| -------------- | ----------------------------------------------- | ------- | ---------------------------------------------------------------------------- |
+| Source units   | `auto`, `mm`, `cm`, `m`, `km`, `in`, `ft`, `yd` | `auto`  | Unit of the numbers in the input. `auto` uses the unit the file declares.    |
+| Target units   | `keep`, `mm`, `cm`, `m`, `km`, `in`, `ft`, `yd` | `keep`  | Unit to scale to. `keep` leaves the scale unchanged.                         |
+| Source up axis | `auto`, `y`, `z`                                | `auto`  | Which axis points up in the input. `auto` uses the axis the file declares.   |
+| Target up axis | `keep`, `y`, `z`                                | `keep`  | Which axis points up in the result. `keep` leaves the orientation unchanged. |
+
+With the defaults, no number in the geometry changes, and every conversion that existed before these options gives the same output. The GLB and GLTF templates have no target options.
+
+What a file declares: USD (`metersPerUnit` and `upAxis`, or USD's own default of 0.01 and Y), COLLADA (the `unit` and `up_axis` of its asset, or its defaults of one metre and Y), 3MF (its `unit` attribute, millimetres by default, and always Z up), and glTF and GLB (always metres and Y up). STL, OBJ, PLY, OFF, and XYZ declare nothing.
+
+| Output             | What the result declares                                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GLB, GLTF          | Always metres and Y up. A source that declares another convention, or one set in Source units and Source up axis, is scaled and rotated to it. Target options other than `m` and `y` are refused. |
+| USDA, USDC, USDZ   | `metersPerUnit` and `upAxis` are written. By default the source's own are kept; a source that declares none is written as metres and Y up, without changing any number.                           |
+| DAE                | `unit` and `up_axis` are written in the same way.                                                                                                                                                 |
+| 3MF                | The `unit` attribute is written (`micron`, `millimeter`, `centimeter`, `inch`, `foot` or `meter`; a source in km or yd is written in metres). 3MF is always Z up, so a Y-up source is rotated.    |
+| OBJ, STL, PLY, OFF | Nothing is declared, so the scale and rotation are applied to the vertices.                                                                                                                       |
+
+Z up to Y up maps `(x, y, z)` to `(x, z, -y)`, and Y up to Z up maps `(x, y, z)` to `(x, -z, y)`.
+
+A Target option other than `keep` needs a known source. For STL, OBJ, PLY, OFF, and XYZ inputs, which declare nothing, the run fails before the file is downloaded with a message naming Source units or Source up axis. A CAD file converted to USD with the defaults is written as metres and Y up without changing its numbers, so set Source units and Source up axis for such a file.
 
 ## Multi-File Models
 
@@ -116,7 +162,7 @@ When executing the pipeline through a workflow, the request body carries the fol
 
 For a direct invocation without a manifest, the function falls back to the `inputS3AssetFilePath`, `outputS3AssetFilesPath`, and `outputType` body fields.
 
-`outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers one template per target format -- `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, `convert-to-ply`, and `convert-to-stl`. A run can also override the selected template's body (`systemConfig.allowCustomTemplateOverride` is `true`). An `outputType` the pipeline cannot write fails the execution with `Output format <extension> not supported by Trimesh pipeline`.
+`outputType` comes from the configuration body of the pipeline template the run uses. Selecting a template is mandatory for this pipeline (`systemConfig.requireTemplate` is `true`); deployment registers seven templates: `convert-to-glb`, `convert-to-gltf`, `convert-to-obj`, `convert-to-ply`, and `convert-to-stl` (one target format each), `convert-to-usd` (an Output format drop-down with `.usdc`, `.usda` and `.usdz`), and `convert-to-interchange` (an Output format drop-down with `.dae`, `.3mf` and `.off`). Each template has the optional [unit and up-axis drop-downs](#units-and-up-axis), and the five template ids that existed before keep their ids and their output. A run can also override the selected template's body (`systemConfig.allowCustomTemplateOverride` is `true`). An `outputType` the pipeline cannot write fails the execution with `Output format <extension> not supported by Trimesh pipeline`.
 
 ### Output Naming
 
@@ -138,6 +184,8 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 -   **Python 3.12** -- Lambda runtime
 -   **Trimesh** -- 3D mesh loading and export library
 -   **Pillow** -- texture image decoding and encoding for Trimesh
+-   **usd-core** -- OpenUSD, for reading and writing USD, USDA, USDC, and USDZ
+-   **pycollada**, **lxml**, and **networkx** -- the packages Trimesh needs to read and write COLLADA and 3MF
 -   **boto3** -- AWS SDK for Amazon S3 operations, from the base image
 
 The installed versions are those in the container's `poetry.lock`, from which its `requirements.txt` is exported with the SHA-256 hash of every package. The Dockerfile installs it with `pip install --require-hashes`, so the image holds exactly the locked packages and `NOTICE.md` lists those versions.
@@ -153,14 +201,14 @@ The installed versions are those in the container's `poetry.lock`, from which it
 
 ## Limitations
 
-| Constraint        | Details                                                                                                                                                                             |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Maximum file size | Bounded by function memory, not by disk -- see [Input Size Limits](#input-size-limits)                                                                                              |
-| Execution timeout | 15 minutes (Lambda maximum)                                                                                                                                                         |
-| Geometry only     | Converts mesh geometry; complex materials, animations, or scene hierarchies may not transfer between all formats                                                                    |
-| Textures          | The base color texture is carried into OBJ, GLTF, and GLB output; a PLY output keeps texture coordinates without the image. Other texture maps may not transfer, and none are baked |
-| Referenced files  | Must be in the input's own asset, at relative paths -- see [Multi-File Models](#multi-file-models)                                                                                  |
-| Text encoding     | OBJ, ASCII STL, XYZ, and GLTF text, and the JSON inside a GLB, must be UTF-8 -- see [Supported Formats](#supported-formats)                                                         |
+| Constraint        | Details                                                                                                                                                                                  |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Maximum file size | Bounded by function memory, not by disk -- see [Input Size Limits](#input-size-limits)                                                                                                   |
+| Execution timeout | 15 minutes (Lambda maximum)                                                                                                                                                              |
+| Geometry only     | Converts mesh and point geometry, transforms, and the base color material; complex materials, animations, skinning, or scene hierarchies may not transfer between all formats            |
+| Textures          | The base color texture is carried into OBJ, GLTF, GLB, and USD output; a PLY output keeps texture coordinates without the image. Other texture maps may not transfer, and none are baked |
+| Referenced files  | Must be in the input's own asset, at relative paths -- see [Multi-File Models](#multi-file-models)                                                                                       |
+| Text encoding     | OBJ, ASCII STL, XYZ, and GLTF text, and the JSON inside a GLB, must be UTF-8 -- see [Supported Formats](#supported-formats)                                                              |
 
 Two AWS Lambda quotas bound the largest model the pipeline can convert:
 
@@ -190,6 +238,15 @@ The limit comes from the running function, not from a fixed number. It is the sm
 | `.glb`       | 27               | 165.8 MB                          |
 | `.gltf`      | 27               | 165.8 MB                          |
 | `.xyz`       | 13               | 344.4 MB                          |
+| `.usd`       | 46               | 97.3 MB                           |
+| `.usda`      | 15               | 298.5 MB                          |
+| `.usdc`      | 46               | 97.3 MB                           |
+| `.usdz`      | 46               | 97.3 MB                           |
+| `.dae`       | 18               | 248.7 MB                          |
+| `.3mf`       | 106              | 42.2 MB                           |
+| `.off`       | 20               | 223.9 MB                          |
+
+A conversion to COLLADA holds the model as Python objects as well, so it uses a larger factor for every input format (for example 50 for `.glb` and 82 for `.usdc`). The factors of the formats added with USD, DAE, 3MF, and OFF were measured on a model of 0.33 to 1.3 million triangles and rounded up by at least 15 percent. A 3MF package and a binary USD layer are compressed on disk, which is why their factors are high.
 
 A larger function memory raises these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
 

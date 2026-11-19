@@ -192,14 +192,20 @@ This software includes third party software subject to the following copyrights:
 
 **3D Basic Conversion Pipeline**
 
-| Name                  | Version | License      |
-| :-------------------- | :------ | :----------- |
-| aws-lambda-powertools | 3.41.0  | MIT-0        |
-| jmespath              | 1.1.0   | MIT          |
-| numpy                 | 2.5.5   | BSD-3-Clause |
-| pillow                | 13.0.0  | MIT-CMU      |
-| trimesh               | 5.2.1   | MIT          |
-| typing-extensions     | 4.16.0  | Python-2.0   |
+| Name                  | Version | License                    |
+| :-------------------- | :------ | :------------------------- |
+| aws-lambda-powertools | 3.41.0  | MIT-0                      |
+| jmespath              | 1.1.0   | MIT                        |
+| lxml                  | 6.1.3   | BSD-3-Clause               |
+| networkx              | 3.7     | BSD-3-Clause               |
+| numpy                 | 2.5.5   | BSD-3-Clause               |
+| pillow                | 13.0.0  | MIT-CMU                    |
+| pycollada             | 0.9.3   | BSD-3-Clause               |
+| python-dateutil       | 4.0.0   | Apache-2.0 OR BSD-3-Clause |
+| trimesh               | 5.2.1   | MIT                        |
+| typing-extensions     | 4.16.0  | Python-2.0                 |
+| tzdata                | 2026.6  | Apache-2.0                 |
+| usd-core              | 26.11   | LicenseRef-TOST-1.0        |
 
 **Other Pipeline Components**
 
