@@ -175,6 +175,17 @@ def lambda_handler(event, context):
         raise
 
 
+def input_relative_subdir(event, input_key, asset_id):
+    """The input file's directory within its asset ('sub/dir/' or ''): the folder of its manifest
+    relativePath when the event carries one, which holds for an asset created on an existing bucket
+    folder and for a chained step's input alike; else derived from the key
+    (``cad_step_naming.relative_subdir_of``)."""
+    relative = (event.get("inputRelativePath") or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] + "/" if "/" in relative else ""
+    return cad_step_naming.relative_subdir_of(input_key, asset_id)
+
+
 def _build_execution_params(event):
     """The state machine payload for the agent run."""
     output_bucket, output_key = _split_s3_uri(
@@ -204,7 +215,7 @@ def _build_execution_params(event):
             **({"versionId": event["inputVersionId"]} if event.get("inputVersionId") else {}),
         }
         input_file_name = input_key.rsplit("/", 1)[-1]
-        relative_subdir = cad_step_naming.relative_subdir_of(input_key, asset_id)
+        relative_subdir = input_relative_subdir(event, input_key, asset_id)
 
     # The modify template raises the pipeline's arity to one; a modify run with no file, or a
     # generate run handed one, is a template/workflow mismatch worth refusing here.

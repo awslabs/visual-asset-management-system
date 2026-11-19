@@ -112,6 +112,20 @@ class TestVamsExecute:
         assert resp["statusCode"] == 200
         assert json.loads(invoke.call_args.kwargs["Payload"])["inputS3AssetFilePath"] == ""
 
+    def test_forwards_the_first_entrys_location_in_its_asset(self):
+        mod = _load("vamsExecuteCadStepAgentPipeline.py")
+        resolved = _resolved()
+        resolved["inputFiles"] = [{"relativePath": "/sub/part.stp", "assetRootS3Key": "projects/site-a/",
+                                   "assetRootBucket": "abkt"}]
+        _, invoke, _ = self._run(mod, resolved, {"StatusCode": 200})
+        payload = json.loads(invoke.call_args.kwargs["Payload"])
+        assert (payload["inputRelativePath"], payload["inputAssetRootS3Key"], payload["inputAssetRootBucket"]) == (
+            "/sub/part.stp", "projects/site-a/", "abkt")
+        _, invoke, _ = self._run(mod, _resolved(with_input=False), {"StatusCode": 200})
+        payload = json.loads(invoke.call_args.kwargs["Payload"])
+        assert (payload["inputRelativePath"], payload["inputAssetRootS3Key"], payload["inputAssetRootBucket"]) == (
+            "", "", "")
+
     def test_function_error_from_open_pipeline_fails_the_token(self):
         mod = _load("vamsExecuteCadStepAgentPipeline.py")
         resp, _, send_failure = self._run(
@@ -213,6 +227,22 @@ class TestOpenPipeline:
         assert sfn_input["inputS3AssetFilePath"] == ""
         assert sfn_input["jobName"].startswith("CadStepAgent_")
         assert sfn_input["outputS3AssetResultsPath"] == "s3://abkt/pipelines/cad/job/output/E1/results/"
+        assert [sfn_input[k] for k in ("inputRelativePath", "inputAssetRootS3Key", "inputAssetRootBucket")] == [
+            "", "", ""]
+
+    def test_the_input_location_in_its_asset_is_forwarded(self):
+        mod = _load("openPipeline.py")
+        fields = {"inputRelativePath": "/sub/part.stp", "inputAssetRootS3Key": "projects/site-a/",
+                  "inputAssetRootBucket": "abkt"}
+        start = MagicMock(return_value={"executionArn": "arn:aws:states:us-east-1:1:execution:cad:CadStepAgent_x",
+                                        "startDate": datetime.datetime(2026, 1, 1)})
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.sfn, "send_task_failure", MagicMock()), \
+                patch.object(mod.events_client, "put_events", MagicMock()):
+            resp = mod.lambda_handler(dict(_open_event(""), **fields), MagicMock())
+        assert resp["statusCode"] == 200
+        sfn_input = json.loads(start.call_args.kwargs["input"])
+        assert {k: sfn_input[k] for k in fields} == fields
 
     def test_the_sub_execution_is_registered_with_the_state_machine_log_source(self):
         mod = _load("openPipeline.py", {
@@ -326,6 +356,32 @@ class TestConstructPipeline:
         event["inputS3AssetFilePath"] = "s3://abkt/elsewhere/sub/part.stp"
         resp, send_failure, exc = self._run(mod, event, _config())
         assert isinstance(exc, ValueError) and send_failure.call_count == 1
+
+    def test_an_asset_on_an_existing_bucket_folder_takes_the_manifest_path(self):
+        # The key carries no asset id: without the manifest path the run is refused before compute.
+        mod = _load("constructPipeline.py")
+        event = _construct_event()
+        event["inputS3AssetFilePath"] = "s3://abkt/projects/site-a/sub/dir/part.stp"
+        _, _, exc = self._run(mod, event, _config())
+        assert isinstance(exc, ValueError)
+        event.update(inputRelativePath="/sub/dir/part.stp", inputAssetRootS3Key="projects/site-a/",
+                     inputAssetRootBucket="abkt")
+        resp, send_failure, exc = self._run(mod, event, _config())
+        assert exc is None and send_failure.call_count == 0
+        assert json.loads(resp["definition"][0])["outputFiles"]["relativeSubdir"] == "sub/dir/"
+
+    @pytest.mark.parametrize("key,relative_path,expected", [
+        ("pipelines/other/Job_1/output/E0/files/sub/dir/part.stp", "/sub/dir/part.stp", "sub/dir/"),
+        ("projects/site-a/left/part.stp", "/left/part.stp", "left/"),
+        ("projects/site-a/right/part.stp", "/right/part.stp", "right/"),
+        ("projects/site-a/part.stp", "/part.stp", ""),
+    ])
+    def test_the_manifest_path_names_the_subfolder(self, key, relative_path, expected):
+        mod = _load("constructPipeline.py")
+        event = dict(_construct_event(), inputS3AssetFilePath=f"s3://abkt/{key}", inputRelativePath=relative_path)
+        resp, _, exc = self._run(mod, event, _config())
+        assert exc is None
+        assert json.loads(resp["definition"][0])["outputFiles"]["relativeSubdir"] == expected
 
     def test_an_event_without_a_results_folder_builds_an_empty_results_block(self):
         mod = _load("constructPipeline.py")

@@ -50,6 +50,11 @@ MANIFEST_PATH_PIPELINES = {
     "genAi/nvidia/cosmos/transfer": {
         "vamsExecute": ["vamsExecuteCosmosTransferPipeline.py"],
         "openPipeline": "openPipeline.py", "builder": "constructPipeline.py"},
+    "genAi/cadStepAgent": {
+        "vamsExecute": ["vamsExecuteCadStepAgentPipeline.py"],
+        "openPipeline": "openPipeline.py", "builder": "constructPipeline.py",
+        # The subfolder is resolved in the Lambda; the container receives it as relativeSubdir.
+        "builderReads": ("inputRelativePath",)},
 }
 
 FIELDS = ("inputRelativePath", "inputAssetRootS3Key", "inputAssetRootBucket")
@@ -82,7 +87,7 @@ class TestTheChainCarriesTheLocation:
 
     def test_the_builder_reads_them(self, pipeline):
         source = _read(_lambda_path(pipeline, MANIFEST_PATH_PIPELINES[pipeline]["builder"]))
-        for field in FIELDS:
+        for field in MANIFEST_PATH_PIPELINES[pipeline].get("builderReads", FIELDS):
             assert re.search(rf"event\.get\(['\"]{field}['\"]\)", source), field
 
 
