@@ -119,6 +119,27 @@ describe("footprintArea", () => {
                 ],
             })
         ).toBe(Infinity);
+        // Malformed vertices, rings and coordinates never throw.
+        const bad = (coordinates: any, type = "Polygon") => ({ type, coordinates });
+        const ok = ring(0, 1, 0, 1)[0];
+        for (const geo of [
+            bad([[[0, 0], null, [1, 1], [0, 0]]]),
+            bad([[[0, 0], undefined, [1, 1], [0, 0]]]),
+            bad([[[0, 0], "x", [1, 1], [0, 0]]]),
+            bad([[[0, 0], [1], [1, 1], [0, 0]]]),
+            bad([undefined]),
+            bad([null]),
+            bad([ok, undefined]),
+            bad([ok, [[0, 0], null, [1, 1]]]),
+            bad("not coordinates"),
+            bad(undefined),
+            bad(undefined, "MultiPolygon"),
+            bad("x", "MultiPolygon"),
+            bad([undefined, [ok]], "MultiPolygon"),
+        ]) {
+            expect(() => footprintArea(geo)).not.toThrow();
+            expect(footprintArea(geo)).toBe(Infinity);
+        }
     });
 
     it("measures area as drawn on the flat map, so latitude does not skew the comparison (#1729)", () => {
@@ -208,6 +229,26 @@ describe("pickFootprint", () => {
         expect(pickFootprint([feature("broken"), feature("square")], [broken, square])).toBe(
             square
         );
+    });
+
+    it("is not stopped by a malformed footprint: a readable overlapping one is still picked", () => {
+        const square = item("square", polygon(0, 50, 0, 50));
+        for (const coordinates of [
+            [[[0, 0], null, [1, 1], [0, 0]]],
+            [undefined],
+            "not coordinates",
+        ]) {
+            const broken = item("broken", { type: "Polygon", coordinates });
+            expect(() =>
+                pickFootprint([feature("broken"), feature("square")], [broken, square])
+            ).not.toThrow();
+            expect(pickFootprint([feature("broken"), feature("square")], [broken, square])).toBe(
+                square
+            );
+            expect(pickFootprint([feature("square"), feature("broken")], [broken, square])).toBe(
+                square
+            );
+        }
     });
 
     it("measures a split footprint by its parts, so it beats a large footprint over it", () => {

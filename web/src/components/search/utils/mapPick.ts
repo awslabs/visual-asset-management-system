@@ -71,9 +71,16 @@ const mercatorY = (lat: number) =>
         Math.tan(Math.PI / 4 + (Math.max(-85.051129, Math.min(85.051129, lat)) * Math.PI) / 360)
     );
 
-/** Shoelace area of a ring in Web Mercator, so it matches what the user sees on the flat map. */
+/**
+ * Shoelace area of a ring in Web Mercator, so it matches what the user sees on the flat map. A ring that
+ * is not an array, or holds a vertex that is not a pair of finite numbers, is unreadable: Infinity.
+ */
 function ringArea(ring: any): number {
-    if (!Array.isArray(ring) || ring.length < 3) return 0;
+    if (!Array.isArray(ring)) return Infinity;
+    if (ring.length < 3) return 0;
+    for (const v of ring) {
+        if (!Array.isArray(v) || !Number.isFinite(v[0]) || !Number.isFinite(v[1])) return Infinity;
+    }
     let twice = 0;
     for (let i = 0; i < ring.length; i++) {
         const [lon1, lat1] = ring[i];
@@ -89,17 +96,27 @@ function ringArea(ring: any): number {
 function polygonsOf(geom: any, polygons: any[]): void {
     if (!geom) return;
     if (geom.type === "Polygon") polygons.push(geom.coordinates);
-    else if (geom.type === "MultiPolygon") for (const p of geom.coordinates ?? []) polygons.push(p);
-    else if (geom.type === "GeometryCollection")
-        for (const g of geom.geometries ?? []) polygonsOf(g, polygons);
+    else if (geom.type === "MultiPolygon") {
+        if (Array.isArray(geom.coordinates)) for (const p of geom.coordinates) polygons.push(p);
+        else polygons.push(undefined);
+    } else if (geom.type === "GeometryCollection") {
+        if (Array.isArray(geom.geometries))
+            for (const g of geom.geometries) polygonsOf(g, polygons);
+    }
 }
 
-/** A polygon's area: its shell minus its holes, never below 0 (a malformed hole cannot go negative). */
+/**
+ * A polygon's area: its shell minus its holes, never below 0 (a malformed hole cannot go negative).
+ * Infinity when the polygon, its shell or a hole is unreadable.
+ */
 function polygonArea(rings: any): number {
-    if (!Array.isArray(rings)) return 0;
+    if (!Array.isArray(rings)) return Infinity;
     const [shell, ...holes] = rings;
-    const holeArea = holes.reduce((sum: number, hole: any) => sum + ringArea(hole), 0);
-    return Math.max(0, ringArea(shell) - holeArea);
+    const shellArea = ringArea(shell);
+    let holeArea = 0;
+    for (const hole of holes) holeArea += ringArea(hole);
+    if (!Number.isFinite(shellArea) || !Number.isFinite(holeArea)) return Infinity;
+    return Math.max(0, shellArea - holeArea);
 }
 
 /**
