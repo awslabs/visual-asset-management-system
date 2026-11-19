@@ -9,7 +9,7 @@ import Badge from "@cloudscape-design/components/badge";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import ToggleButton from "@cloudscape-design/components/toggle-button";
+import Toggle from "@cloudscape-design/components/toggle";
 import Slider from "@cloudscape-design/components/slider";
 import { RasterLayerEntry } from "./RasterLayerManager";
 import { RasterNotice, UseRasterLayers } from "./useRasterLayers";
@@ -30,7 +30,7 @@ export interface RasterLayerPanelProps {
     > &
         Partial<Pick<UseRasterLayers, "setVisible">>;
     /**
-     * Offers Hide / Show on each raster in place of Remove: a hidden raster stays in the list, dimmed, with
+     * Offers a Visible switch on each raster in place of Remove: a hidden raster stays in the list, dimmed, with
      * its opacity and place, and is off the map. The GeoTIFF Map Viewer uses this (a raster leaves it by
      * being deselected); the Search map keeps Remove.
      */
@@ -77,7 +77,6 @@ const LayerRow: React.FC<{
                 >
                     {entry.label}
                 </Box>
-                {!entry.visible && <Badge data-testid="raster-hidden-badge">Hidden</Badge>}
                 {entry.mode === "tile" && <Badge color="green">COG tiles</Badge>}
                 {entry.approximate && (
                     <Badge color="red" data-testid="raster-approximate-badge">
@@ -152,17 +151,18 @@ const LayerRow: React.FC<{
                 </Button>
                 {visibilityToggle && layers.setVisible && !entry.failed ? (
                     <span data-testid="raster-layer-visibility">
-                        {/* One name for both states, and the state in aria-pressed: a screen reader
-                            says "Hide <label>, toggle button, pressed" while the raster is hidden. */}
-                        <ToggleButton
-                            pressed={!entry.visible}
-                            ariaLabel={`Hide ${entry.label}`}
+                        {/* A switch labelled "Visible": on means the raster is on the map. Its accessible
+                            name is the same in both states and the checked state carries the state, so a
+                            screen reader says "Show <label> on the map, switch, on / off". */}
+                        <Toggle
+                            checked={entry.visible}
+                            ariaLabel={`Show "${entry.label}" on the map`}
                             onChange={({ detail }) => {
-                                void layers.setVisible!(entry.id, !detail.pressed);
+                                void layers.setVisible!(entry.id, detail.checked);
                             }}
                         >
-                            Hide
-                        </ToggleButton>
+                            Visible
+                        </Toggle>
                     </span>
                 ) : (
                     !visibilityToggle && (

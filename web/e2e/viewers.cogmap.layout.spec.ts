@@ -279,24 +279,24 @@ test.describe("GeoTIFF Map Viewer layout", () => {
         const label = (await row.getByTestId("raster-layer-label").innerText()).trim();
         // A raster leaves the list by being deselected, not from the list.
         await expect(page.getByRole("button", { name: /^Remove /i })).toHaveCount(0);
-        const hide = row.getByRole("button", { name: `Hide ${label}` });
-        await expect(hide).toHaveAttribute("aria-pressed", "false");
+        const hide = row.getByRole("checkbox", { name: `Show "${label}" on the map` });
+        await expect(hide).toBeChecked();
         await hide.click();
 
-        // It stays in the list, marked hidden, with Zoom disabled, and the change is announced. The
-        // toggle keeps its name; its pressed state says it is hidden.
-        await expect(hide).toHaveAttribute("aria-pressed", "true");
-        await expect(row.getByTestId("raster-hidden-badge")).toBeVisible();
+        // It stays in the list, dimmed, with Zoom disabled, and the change is announced. The switch
+        // keeps its name; its unchecked state says it is hidden.
+        await expect(hide).not.toBeChecked();
+        await expect(row).toHaveAttribute("data-hidden", "true");
         await expect(row.getByRole("button", { name: `Zoom to ${label}` })).toBeDisabled();
         await expect(page.getByTestId("raster-visibility-status")).toHaveText(`${label} hidden`);
         await expect(page.getByTestId("raster-layer-row")).toHaveCount(1);
 
-        // Pressing it again shows it (the keyboard works as well as the mouse).
+        // Space on the switch shows it again (the keyboard works as well as the mouse).
         await hide.focus();
-        await page.keyboard.press("Enter");
-        await expect(hide).toHaveAttribute("aria-pressed", "false");
+        await page.keyboard.press("Space");
+        await expect(hide).toBeChecked();
         await expect(page.getByTestId("raster-visibility-status")).toHaveText(`${label} shown`);
-        await expect(row.getByTestId("raster-hidden-badge")).toHaveCount(0);
+        await expect(row).not.toHaveAttribute("data-hidden", "true");
         await expect(row.getByRole("button", { name: `Zoom to ${label}` })).toBeEnabled();
     });
 
