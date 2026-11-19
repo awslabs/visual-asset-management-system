@@ -402,8 +402,8 @@ class TestVerboseEchoMasksPresignedUrlSecrets:
     """The `--verbose` echo masks the values of `X-Amz-Signature` and `X-Amz-Security-Token`.
 
     Every line `utils/logging.py` writes to the console goes through `_echo`, which replaces the two
-    values and keeps the parameter names. Nothing else in the echo is masked, and command output and
-    `--json-output` are not touched.
+    values and keeps the parameter names; the rest of each URL stays readable. Command output and
+    `--json-output` are not touched. Credential fields and shapes: `test_verbose_echo_credentials.py`.
     """
 
     @staticmethod

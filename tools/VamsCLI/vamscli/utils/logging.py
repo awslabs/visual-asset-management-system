@@ -44,10 +44,12 @@ _SENSITIVE_KEY_FRAGMENTS = (
 # Value-level backstop for credentials that arrive without a helpful key — for example when a
 # response has already been rendered to a string before it reaches a log call. Matches the shapes
 # VAMS actually issues rather than attempting to detect secrets generally.
-_SENSITIVE_VALUE_PATTERNS = (
+_CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r'vams_[A-Za-z0-9_\-]{16,}'),                                  # VAMS API key
     re.compile(r'eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]+'),  # JWT (Cognito/OIDC)
     re.compile(r'(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}'),                       # Bearer header value
+)
+_SENSITIVE_VALUE_PATTERNS = _CREDENTIAL_VALUE_PATTERNS + (
     re.compile(r'(?i)(X-Amz-Signature|X-Amz-Security-Token)=[^&\s\'"]+'),     # presigned URL secrets
 )
 
@@ -152,24 +154,47 @@ def scrub_text(value: str) -> str:
     return value
 
 
+def _scrub_credential_shapes(value: str) -> str:
+    """`scrub_text` without the presigned-URL pair, which `_echo` masks keeping the parameter name."""
+    if not isinstance(value, str) or not value:
+        return value
+    for pattern in _CREDENTIAL_VALUE_PATTERNS:
+        value = pattern.sub(REDACTED, value)
+    return value
+
+
 def mask_presigned_url_secrets(value: str) -> str:
     """Replace the `X-Amz-Signature` and `X-Amz-Security-Token` values in ``value``, keeping the names.
 
-    Applied to every line this module writes to the console (`_echo`). It masks nothing else, so the
-    `--verbose` echo still shows the rest of each request and response; the log file gets the full
-    `redact_to_text` treatment instead.
+    Part of `mask_console_text`, which `_echo` applies to every line this module writes to the
+    console. The log file gets the full `redact_to_text` treatment instead.
     """
     if not isinstance(value, str) or not value:
         return value
     return _PRESIGNED_URL_SECRET.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", value)
 
 
+def mask_console_text(value: str) -> str:
+    """What the console shows of a diagnostic line: credential shapes masked, and presigned-URL
+    values masked with their parameter names kept."""
+    return mask_presigned_url_secrets(_scrub_credential_shapes(value))
+
+
 def _echo(message: str) -> None:
-    """Write one diagnostic line to stderr with presigned-URL secrets masked."""
-    click.echo(mask_presigned_url_secrets(message), err=True)
+    """Write one diagnostic line to stderr with credentials masked."""
+    click.echo(mask_console_text(message), err=True)
 
 
-def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
+def _console_view(body: Any) -> Any:
+    """A request or response body as the `--verbose` echo shows it.
+
+    Credential-named fields and credential-shaped values are masked as in the log file; the
+    presigned-URL parameters are left to `_echo`, which keeps their names.
+    """
+    return redact_sensitive(body, _scrub=_scrub_credential_shapes)
+
+
+def redact_sensitive(obj: Any, _depth: int = 0, _scrub=None) -> Any:
     """
     Return a copy of ``obj`` with credential values replaced by ``REDACTED``.
 
@@ -184,14 +209,14 @@ def redact_sensitive(obj: Any, _depth: int = 0) -> Any:
             return '***DEPTH_LIMIT***'
         if isinstance(obj, dict):
             return {
-                k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1))
+                k: (REDACTED if _is_sensitive_key(k) else redact_sensitive(v, _depth + 1, _scrub))
                 for k, v in obj.items()
             }
         if isinstance(obj, (list, tuple, set)):
-            rendered = [redact_sensitive(v, _depth + 1) for v in obj]
+            rendered = [redact_sensitive(v, _depth + 1, _scrub) for v in obj]
             return type(obj)(rendered) if isinstance(obj, (list, tuple)) else rendered
         if isinstance(obj, str):
-            return scrub_text(obj)
+            return (_scrub or scrub_text)(obj)
         return obj
     except Exception:
         # A redaction failure must never leak the original value, and must never break the command.
@@ -474,7 +499,8 @@ def log_api_request(method: str, url: str, headers: Dict[str, str] = None, body:
         
         # Enhanced body display
         if body:
-            body_str = mask_presigned_url_secrets(str(body))
+            shown_body = _console_view(body)
+            body_str = mask_console_text(str(shown_body))
             body_size = len(body_str)
             if body_size > 1000:
                 _echo(f"   📦 Body ({body_size} chars, truncated for display):")
@@ -486,7 +512,7 @@ def log_api_request(method: str, url: str, headers: Dict[str, str] = None, body:
                 try:
                     if isinstance(body, (dict, list)):
                         import json
-                        formatted_body = json.dumps(body, indent=2)
+                        formatted_body = json.dumps(shown_body, indent=2)
                         for line in formatted_body.split('\n'):
                             _echo(f"      {line}")
                     else:
@@ -554,7 +580,8 @@ def log_api_response(status_code: int, response_data: Any = None, duration: floa
         
         # Enhanced response data display
         if response_data:
-            response_str = mask_presigned_url_secrets(str(response_data))
+            shown_response = _console_view(response_data)
+            response_str = mask_console_text(str(shown_response))
             response_size = len(response_str)
             
             if response_size > 1000:
@@ -567,7 +594,7 @@ def log_api_response(status_code: int, response_data: Any = None, duration: floa
                 try:
                     if isinstance(response_data, (dict, list)):
                         import json
-                        formatted_response = json.dumps(response_data, indent=2)
+                        formatted_response = json.dumps(shown_response, indent=2)
                         for line in formatted_response.split('\n'):
                             _echo(f"      {line}")
                     else:
