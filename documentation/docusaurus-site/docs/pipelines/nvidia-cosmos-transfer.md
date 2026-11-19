@@ -227,7 +227,7 @@ The control signal type is set via the `COSMOS_TRANSFER_CONTROL_TYPE` file metad
 
 -   If `COSMOS_TRANSFER_CONTROL_PATH` is not set, the pipeline automatically computes the control signal from the source video using the specified `COSMOS_TRANSFER_CONTROL_TYPE`.
 -   **Visual Blur** is always auto-computed and cannot be pre-provided.
--   For pre-computed control signals (edge, depth, seg), upload the control signal file to the asset and set its S3 path in the `COSMOS_TRANSFER_CONTROL_PATH` metadata key.
+-   For pre-computed control signals (edge, depth, seg), upload the control signal file to the asset and set its path within the asset in the `COSMOS_TRANSFER_CONTROL_PATH` metadata key.
 
 ### Input Prompt
 
@@ -264,7 +264,7 @@ The following file metadata keys control Cosmos Transfer pipeline behavior:
 | Metadata Key                   | Type   | Description                                                                           | Default                 |
 | ------------------------------ | ------ | ------------------------------------------------------------------------------------- | ----------------------- |
 | `COSMOS_TRANSFER_CONTROL_TYPE` | string | Control signal type: `edge`, `depth`, `seg`, or `vis`                                 | `"edge"`                |
-| `COSMOS_TRANSFER_CONTROL_PATH` | string | S3 path to pre-computed control signal file (optional, auto-computed if not provided) | `""` (auto-compute)     |
+| `COSMOS_TRANSFER_CONTROL_PATH` | string | Path of a pre-computed control signal file within the asset, relative to the asset root (optional, auto-computed if not provided) | `""` (auto-compute)     |
 | `COSMOS_TRANSFER_PROMPT`       | string | Text prompt for transformation style                                                  | `"Transform the video"` |
 
 ## GPU Instance Recommendations
@@ -353,7 +353,7 @@ All three metadata keys must be set as **file-level metadata** on the specific s
 
 **Minimum required:** Only the source video file is needed. If no metadata is set, Transfer defaults to edge-based transformation with an auto-computed edge map and the prompt "Transform the video."
 
-**With pre-computed control signal:** Set `COSMOS_TRANSFER_CONTROL_PATH` to the relative path of the control signal video within the same asset. The path is relative to the asset root (after the `inputAssetLocationKey` prefix). For example, if the asset has files:
+**With pre-computed control signal:** Set `COSMOS_TRANSFER_CONTROL_PATH` to the path of the control signal video within the same asset, relative to the asset root (a leading `/` is accepted, as in other asset file paths). The pipeline reads it from the asset's own folder, which the execution records, so the path works the same for an asset in a bucket with a base prefix and for an asset created on an existing bucket folder. A path that is not a file within the asset (a URI, a `.` or `..` segment, an empty segment, a backslash or a control character, or more than 1,024 characters) fails the run before its job starts. For example, if the asset has files:
 
 ```
 asset-id/source_video.mp4
