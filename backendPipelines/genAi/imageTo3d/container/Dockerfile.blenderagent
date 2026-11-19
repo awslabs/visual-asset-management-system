@@ -35,8 +35,9 @@ ENV HOME=/home/vams
 # exporter's export_image_format, which are the 4.x names.
 ARG BLENDER_VERSION="4.5.13"
 ARG BLENDER_SERIES="4.5"
-# The Codex CLI release, as a static musl binary. bwrap ships in the same release and backs the sandbox on
-# a kernel where Landlock is not available.
+# The Codex CLI release, as a static musl binary. bwrap ships in the same release; the job does not use it:
+# it needs a user namespace the unprivileged job does not get, so Codex runs its Landlock + seccomp sandbox
+# (models/blenderagent.py).
 ARG CODEX_RELEASE="rust-v0.153.4"
 # The bridge that turns the Responses API Codex speaks into Bedrock Converse calls on the task role.
 ARG LITELLM_VERSION="1.100.0"

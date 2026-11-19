@@ -23,6 +23,15 @@ set, so the only place it can write is the workspace this adapter creates -- whi
 precisely so the pipeline's own working directories are out of reach. Its commands have no network. The
 workspace is wiped before every run. The Blender-side tools refuse to write outside it as well.
 
+The sandbox is Codex's Landlock + seccomp backend (``features.use_legacy_landlock``), not its default
+bubblewrap one: bubblewrap needs an unprivileged user namespace, which an unprivileged container does not
+get, and the job runs unprivileged as uid 10000. Landlock makes the filesystem read-only except the
+workspace, and the seccomp filter refuses network sockets. Codex accepts that backend only when the
+workspace's ``.git``, ``.agents`` and ``.codex`` already exist (it cannot otherwise mark them read-only), so
+the workspace is created with all three, empty; Landlock does not make them read-only, and nothing reads
+them back: the workspace is not a repository, and Codex loads its configuration from ``CODEX_HOME`` and its
+instructions from ``AGENTS.md`` once, at start.
+
 **Completion is a set of files, not a message.** The agent's instructions make the deliverable
 ``output/model.glb`` plus ``output/DONE.json``, and this adapter checks for the mesh, loads it, and fails
 legibly when it is absent, whatever the final message says. A "done" without the file is a failed run.
@@ -77,6 +86,10 @@ MAX_PROMPT_IMAGES = 6
 # Codex's sandbox mode for every run. workspace-write is what confines the agent's commands to its
 # workspace with no network; it is not a run setting, because the only other mode removes the confinement.
 SANDBOX_MODE = "workspace-write"
+
+# Present in the workspace before Codex starts, empty. Codex's Landlock backend runs a workspace-write
+# sandbox only when these exist (see the module docstring); without them every command is refused.
+SANDBOX_METADATA_DIRS = (".git", ".agents", ".codex")
 
 # The alias the bridge exposes to Codex. Codex asks for this name; LiteLLM maps it to the Bedrock model.
 BRIDGE_MODEL_ALIAS = "agent"
@@ -247,6 +260,10 @@ network_access = false
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
 
+[features]
+# Landlock + seccomp instead of bubblewrap, which needs a user namespace the unprivileged job does not get.
+use_legacy_landlock = true
+
 [shell_environment_policy]
 inherit = "all"
 ignore_default_excludes = false
@@ -367,6 +384,8 @@ class BlenderAgentAdapter(ModelAdapter):
             path.mkdir(parents=True, exist_ok=True)
         for sub in ("refs", "start", "tools", "scripts", "renders", "textures", "output", "requests"):
             (dirs["workspace"] / sub).mkdir(exist_ok=True)
+        for name in SANDBOX_METADATA_DIRS:
+            (dirs["workspace"] / name).mkdir(exist_ok=True)
         return dirs
 
     @staticmethod

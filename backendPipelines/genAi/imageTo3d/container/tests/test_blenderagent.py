@@ -77,6 +77,22 @@ class TestTheSandboxIsClosedByConfiguration:
         """The whole point of excluding /tmp from the sandbox is defeated if the workspace lives there."""
         assert not str(blenderagent.AGENT_ROOT).replace("\\", "/").startswith("/tmp")
 
+    def test_the_sandbox_needs_no_user_namespace(self):
+        """The job runs unprivileged, where bubblewrap cannot create its user namespace and every command the
+        agent runs failed ("bwrap: No permissions to create a new namespace"). Landlock + seccomp needs none."""
+        config = codex_config("http://x/v1", "KEY", "high")
+        features = config.split("[features]", 1)[1].split("\n[", 1)[0]
+        assert "use_legacy_landlock = true" in features
+
+    def test_a_fresh_workspace_holds_the_metadata_dirs_the_landlock_sandbox_requires(self, tmp_path, monkeypatch):
+        """Without .git, .agents and .codex present, Codex refuses the Landlock backend for a workspace-write
+        sandbox ('permission profiles requiring direct runtime enforcement'), and every command fails."""
+        monkeypatch.setattr(blenderagent, "AGENT_ROOT", tmp_path / "agent")
+        dirs = BlenderAgentAdapter()._fresh_root()
+        for name in (".git", ".agents", ".codex"):
+            assert (dirs["workspace"] / name).is_dir(), name
+            assert not any((dirs["workspace"] / name).iterdir()), f"{name} must start empty"
+
 
 @pytest.mark.unit
 class TestTheBridgeRoutesToBedrockOnTheTaskRole:
