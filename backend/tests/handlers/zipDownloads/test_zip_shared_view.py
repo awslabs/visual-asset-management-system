@@ -9,13 +9,12 @@ archive.
   the 404 of a missing asset, audited.
 - POST .../download/zip/{requestId}/url signs another user's finished archive only for a caller who
   may download from the asset (Tier 1 on the asset's file download route, Tier 2 asset GET), after
-  the archive's member files pass the download eligibility rules again.
+  the archive's member files pass the download eligibility rules again (as the requester's own
+  archive does, test_zip_requester_member_recheck.py).
 - Cancel and delete of another user's job stay refused.
 
 The handlers run against the in-memory doubles of zipHarness.
 """
-
-import json
 
 import pytest
 
@@ -50,11 +49,7 @@ def _succeed(e, user, request_id, members=("/a.glb",)):
     row["status"] = "SUCCEEDED"
     row["archiveSizeBytes"] = 4242
     e.s3.add(row["archiveKey"], size=4242, bucket=h.AUX)
-    resolved = e.zd.resolved_manifest_key("db1", "asset1", user, request_id)
-    row["resolvedManifestKey"] = resolved
-    body = "".join(json.dumps({"relativePath": m, "versionId": "va1", "size": 100}) + "\n"
-                   for m in members)
-    e.s3.put_object(Bucket=h.AUX, Key=resolved, Body=body.encode("utf-8"))
+    h.write_resolved_manifest(e, row, members)
     return row
 
 
@@ -224,11 +219,14 @@ class TestOtherUsersArchive:
         env.s3.add("xasset1/a.glb", version="vdm", delete_marker=True)
         assert _job_route(env, "POST", theirs, "alice", "/url")["statusCode"] == 400
 
-    def test_the_owners_own_download_needs_no_member_recheck(self, env):
+    def test_the_requesters_own_download_is_rechecked_too(self, env):
         mine = _create(env, "bob")
         _succeed(env, "bob", mine)
-        env.s3.add("xasset1/a.glb", version="vdm", delete_marker=True)
         assert _job_route(env, "POST", mine, "bob", "/url")["statusCode"] == 200
+        env.s3.add("xasset1/a.glb", version="vdm", delete_marker=True)
+        response = _job_route(env, "POST", mine, "bob", "/url")
+        assert response["statusCode"] == 400
+        assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVED_IN_SELECTION
 
     def test_cancel_and_delete_of_another_users_job_are_refused(self, env):
         running = _create(env, "bob")

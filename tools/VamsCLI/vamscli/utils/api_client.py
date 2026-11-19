@@ -4667,7 +4667,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
             ZipDownloadNotReadyError: When the job has not succeeded (409)
             ZipDownloadExpiredError: When the archive is no longer stored (410)
-            InvalidZipDownloadRequestError: When the asset is no longer distributable
+            InvalidZipDownloadRequestError: When the asset is no longer distributable, or a file
+                in the archive is no longer downloadable
             APIError: When the API call fails
         """
         endpoint = route_path(

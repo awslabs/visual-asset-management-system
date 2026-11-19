@@ -77,6 +77,7 @@ def _succeeded_job(e, user="alice"):
     row = next(iter(e.zip.items.values()))
     row["status"] = "SUCCEEDED"
     e.s3.add(row["archiveKey"], size=4242, bucket=h.AUX)
+    h.write_resolved_manifest(e, row)
     return h.body_of(response)["requestId"]
 
 
