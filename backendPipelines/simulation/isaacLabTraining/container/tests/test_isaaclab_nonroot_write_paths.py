@@ -449,3 +449,32 @@ class TestControls:
             pattern = pattern.format(r=tmp_path)
             assert sorted(virtual.glob(pattern, recursive=True)) == \
                 sorted(real_glob.glob(pattern, recursive=True)), pattern
+
+
+@pytest.mark.unit
+class TestKitStateFolders:
+    """Kit writes its caches, user config and logs under ``/isaac-sim/kit`` (issue #1669, D1).
+
+    The base image owns them as root. With the PhysX engine the evaluation video comes from Kit's
+    RTX renderer, which cannot create its shader database in a folder it cannot write; the video is
+    black. The log lines of the failing run are ``Unable to create ShaderDb cache directory
+    /isaac-sim/kit/cache/shadercache/common``, ``Permission denied: '/isaac-sim/kit/cache/
+    ogn_generated'`` and ``failed to open file '/isaac-sim/kit/data/Kit/IsaacLab/3.0/user.config.json'``.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "/isaac-sim/kit/cache/shadercache/common",
+        "/isaac-sim/kit/cache/nv_shadercache",
+        "/isaac-sim/kit/cache/DerivedDataCache",
+        "/isaac-sim/kit/cache/ogn_generated",
+        "/isaac-sim/kit/data/Kit/IsaacLab/3.0/user.config.json",
+        "/isaac-sim/kit/data/documents/Kit/apps/IsaacLab/scripts/new_stage",
+        "/isaac-sim/kit/logs/Kit/IsaacLab/3.0/kit.log",
+    ])
+    def test_the_runtime_user_can_write_where_kit_writes(self, image, path):
+        assert image.writable(path), f"{image.runtime_user} cannot write {path}"
+
+    def test_only_the_kit_state_folders_are_handed_over(self, image):
+        owned = [folder for folder, _ in image.owned if folder.startswith("/isaac-sim")]
+        assert sorted(owned) == ["/isaac-sim/kit/cache", "/isaac-sim/kit/data", "/isaac-sim/kit/logs"]
+        assert not any(t in ("/isaac-sim", "/isaac-sim/kit") for t in image.recursive_changes)

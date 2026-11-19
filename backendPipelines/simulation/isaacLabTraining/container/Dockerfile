@@ -63,8 +63,8 @@ RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 # ~/.cache/ov, ~/.local/share/ov), Warp and Newton compile and cache kernels (~/.cache/warp) and
 # CUDA keeps its compute cache (~/.nv), and the entrypoint writes to /app and /tmp/assets.
 # /mnt/efs/checkpoints is mounted via the EFS access point and already owned by 10000:10000, so it
-# is not chowned here. The base image's Isaac Sim (/isaac-sim) is read, not written, so it is left
-# as shipped.
+# is not chowned here. The base image's Isaac Sim (/isaac-sim) is read, not written, except for the
+# three Kit state folders given to the user in the next step.
 RUN groupadd -g 10000 vams && \
     useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams && \
     chown -R vams:vams /app /tmp/assets
@@ -76,6 +76,15 @@ ENV HOME=/home/vams \
 RUN mkdir -p /home/vams/.cache/warp /home/vams/.nvidia-omniverse /home/vams/.local/share \
         /home/vams/.nv/ComputeCache && \
     chown -R vams:vams /home/vams
+
+# Kit writes its shader database, derived-data cache, generated OmniGraph node cache, user config
+# and logs under /isaac-sim/kit/{cache,data,logs}. The PhysX evaluation path renders video with the
+# RTX renderer inside Kit; when these folders are root-owned, the renderer cannot create its shader
+# cache and fails with "HydraEngine rtx failed creating scene renderer", so the video comes out
+# black (issue #1669, defect D1). Only these three folders are given to the runtime user; the rest
+# of /isaac-sim stays as shipped.
+RUN mkdir -p /isaac-sim/kit/cache /isaac-sim/kit/data /isaac-sim/kit/logs && \
+    chown -R vams:vams /isaac-sim/kit/cache /isaac-sim/kit/data /isaac-sim/kit/logs
 
 # A custom environment package is installed at run time with pip (download_and_install_custom_
 # environment), which writes into the Isaac Lab environment: its site-packages is world-writable in
