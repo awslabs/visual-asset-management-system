@@ -292,4 +292,10 @@ NOT_YET_EXPOSED = {
     "update_asset_link": "change an asset link's tags or alias",
     "update_asset_link_metadata_v2": "set an asset link's metadata",
     "delete_asset_link_metadata_v2": "delete an asset link's metadata keys",
+    # --- Audit log search: exposed by the audit MCP tool set in the stacked PR (#1624) ---
+    "list_audit_log_groups": "exposed by the audit MCP tool set in the stacked PR (#1624)",
+    "start_audit_query": "exposed by the audit MCP tool set in the stacked PR (#1624)",
+    "get_audit_query": "exposed by the audit MCP tool set in the stacked PR (#1624)",
+    "stop_audit_query": "exposed by the audit MCP tool set in the stacked PR (#1624)",
+    "export_audit_query": "exposed by the audit MCP tool set in the stacked PR (#1624)",
 }
