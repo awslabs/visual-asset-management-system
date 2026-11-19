@@ -60,7 +60,7 @@ While a job is queued or running, the list refreshes itself every few seconds. A
 
 Each job's actions are icon buttons in its **Actions** column, named for screen readers and in their tooltip: a download icon (**Download**), a close icon (**Cancel**) and a remove icon (**Delete**). An action your role does not allow is greyed, with its reason when you hover or focus it.
 
--   **Download** -- available when the job has succeeded. VAMS checks the archive's files again first: if a file in it has since been archived, deleted, or blocked, the download is refused with the same message a new zip download would get. Otherwise VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
+-   **Download** -- available when the job has succeeded. VAMS checks the archive's files again first: if a file in it has since been archived, deleted, or blocked, the download is refused with **A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.** Otherwise VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
 -   **Cancel** -- available while a job is queued or running. The Zip Archive run stops and nothing is kept. A cancel never deletes a job. If the job finishes while the cancel dialog is open, the dialog says so and no longer offers the cancel; close it and download or delete the job from the list. If the job finishes just before your cancel reaches it, it keeps its outcome and a message says it finished before it could be cancelled.
 -   **Delete** -- available when a job has finished. The archive and the job are removed.
 

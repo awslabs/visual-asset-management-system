@@ -497,7 +497,7 @@ test.describe("Download as Zip (second user)", () => {
     const username = process.env.E2E_SECOND_USERNAME;
     const password = process.env.E2E_SECOND_PASSWORD;
     // The shared view's URL refusal: a member of the archive is no longer downloadable.
-    const NO_LONGER_DOWNLOADABLE = "The selection includes an archived or deleted item";
+    const NO_LONGER_DOWNLOADABLE = "A file in this archive has since been archived or deleted";
 
     test("another user reads the admin's zip download only as the API's shared view allows", async ({
         browser,

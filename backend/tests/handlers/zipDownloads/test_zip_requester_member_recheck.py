@@ -7,8 +7,8 @@ POST .../download/zip/{requestId}/url signs a finished archive only while every 
 downloadable: present, not archived, not a deleted version, not in an archive storage class, and
 not a blocked type. Another user's archive was already rechecked (test_zip_shared_view.py); the
 requester's own archive now is too, so a file archived or permanently deleted after the job
-finished refuses its requester's link with the refusal a new zip download gets, instead of the
-archive staying downloadable until the job expires.
+finished refuses its requester's link (the URL route's own message, which names the archive rather
+than a selection), instead of the archive staying downloadable until the job expires.
 
 - each such change refuses the requester's link (400), signs nothing, and is recorded once as
   ``zipDownloadUrl`` failed, ``validation``, without the both-users details;
@@ -93,7 +93,7 @@ def test_the_requesters_link_is_refused_once_a_member_is_no_longer_downloadable(
     env.audit.reset_mock()
     response = _url(env, request_id)
     assert response["statusCode"] == 400
-    assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVED_IN_SELECTION
+    assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE
     assert env.s3.presigned == []
     refused = _url_records(env)
     assert len(refused) == 1
@@ -180,4 +180,4 @@ def test_under_a_granted_exception_the_members_are_rechecked(env):
     with _quarantine(exception_granted=True):
         response = _url(env, request_id)
     assert response["statusCode"] == 400
-    assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVED_IN_SELECTION
+    assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE

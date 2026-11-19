@@ -2371,7 +2371,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
         post:
             summary: "Issue a short-lived download URL for a finished zip download."
-            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, the same message as a refused create). Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, 'A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.'). Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "A download URL for the archive."
@@ -2380,7 +2380,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or a file in the archive is no longer downloadable ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.')."
+                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or a file in the archive is no longer downloadable ('A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.')."
                     content:
                         application/json:
                             schema:

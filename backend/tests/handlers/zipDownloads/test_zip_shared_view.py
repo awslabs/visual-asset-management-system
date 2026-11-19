@@ -191,7 +191,7 @@ class TestOtherUsersArchive:
         env.audit.reset_mock()
         response = _job_route(env, "POST", theirs, "alice", "/url")
         assert response["statusCode"] == 400
-        assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVED_IN_SELECTION
+        assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE
         assert env.s3.presigned == []
         refused = [c.kwargs for c in env.audit.call_args_list if c.args[1] == "zipDownloadUrl"]
         assert len(refused) == 1
@@ -226,7 +226,7 @@ class TestOtherUsersArchive:
         env.s3.add("xasset1/a.glb", version="vdm", delete_marker=True)
         response = _job_route(env, "POST", mine, "bob", "/url")
         assert response["statusCode"] == 400
-        assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVED_IN_SELECTION
+        assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE
 
     def test_cancel_and_delete_of_another_users_job_are_refused(self, env):
         running = _create(env, "bob")

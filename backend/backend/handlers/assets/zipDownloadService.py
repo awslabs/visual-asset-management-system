@@ -1385,7 +1385,7 @@ def job_url(event, database_id, asset_id, request_id):
         # AUDIT LOG: the archive refused because a member is no longer downloadable.
         log_action(event, "zipDownloadUrl", outcome="failed", reason="validation",
                    database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)
-        return general_error(status_code=400, body={"message": zd.MSG_ARCHIVED_IN_SELECTION},
+        return general_error(status_code=400, body={"message": zd.MSG_ARCHIVE_FILE_UNAVAILABLE},
                              event=event)
     exists, size = zd.archive_head(s3, aux_bucket_name, row.get("archiveKey", ""))
     if not exists:
