@@ -1467,7 +1467,7 @@ paths:
               - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}:
+    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionIdAndCommentId}:
         get:
             summary: "Get specified comment."
             responses:
@@ -1494,9 +1494,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId"
+              - name: "assetVersionIdAndCommentId"
                 in: "path"
-                description: "Unique identifier for comment. Validation will be performed on asset version ID and comment ID."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path. Validation will be performed on asset version ID and comment ID."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1525,9 +1525,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1561,9 +1561,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1597,9 +1597,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
