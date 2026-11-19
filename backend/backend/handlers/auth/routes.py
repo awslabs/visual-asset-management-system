@@ -129,6 +129,10 @@ class _DenialAuditBatch:
             self._denials.append((dict(obj), act))
         return allowed
 
+    def add_denial(self, obj, act):
+        """Keep one denial found by a check made elsewhere (a summary of several denied checks)."""
+        self._denials.append((dict(obj), act))
+
     def _denial_record(self, obj, act):
         """One denial record, in the format ``log_authorization`` writes plus the probe marker."""
         return auditLogging.format_authorization_denial_record(

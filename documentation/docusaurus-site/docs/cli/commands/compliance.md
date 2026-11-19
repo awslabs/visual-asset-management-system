@@ -643,7 +643,7 @@ Only a cascade in `pending_approval` can be approved or rejected; any other stat
 
 ## compliance audit
 
-Query the compliance audit trail: the global trail, optionally narrowed to one event type, or one asset's history.
+Query the compliance audit trail: the global trail, optionally narrowed to one event type, or one asset's history. To search the VAMS audit logs (who did what to which entity), see [Audit Log Search](audit.md) and `vamscli audit search`.
 
 ```bash
 vamscli compliance audit [OPTIONS]

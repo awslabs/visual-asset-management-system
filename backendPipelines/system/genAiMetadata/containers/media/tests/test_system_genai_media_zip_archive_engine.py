@@ -12,8 +12,9 @@ writes the ZIP64 end records. The media branch lists such a ZIP by ranged reads 
 directory, never downloading it, and lists the engine's pax tar and tar.gz from the downloaded copy, as D109
 bounds both.
 
-The engine modules are loaded by file path (they are stdlib only); this suite does not run the Zip Archive
-container.
+The engine modules are loaded by file path (they are stdlib only), as submodules of one package so the
+engine's own relative imports resolve (`tarstream` imports `check_member_name` from `zipstream`); this suite
+does not run the Zip Archive container.
 """
 
 import importlib
@@ -33,15 +34,17 @@ from test_system_genai_media_handler import (
 _ENGINE_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), *[os.pardir] * 5, "utility", "zipArchive", "container", "zip_archive_pipeline",
     "engine"))
+
+
 _ENGINE_PACKAGE = "zip_archive_engine"
 
 
 def _engine(name):
-    # The engine's modules import each other relatively (tarstream uses zipstream's entry-name check),
-    # so each loads as a submodule of the engine package, itself loaded by file path.
+    """The engine module ``name``, imported as ``zip_archive_engine.<name>`` from the engine directory."""
     if _ENGINE_PACKAGE not in sys.modules:
         spec = importlib.util.spec_from_file_location(
-            _ENGINE_PACKAGE, os.path.join(_ENGINE_DIR, "__init__.py"), submodule_search_locations=[_ENGINE_DIR])
+            _ENGINE_PACKAGE, os.path.join(_ENGINE_DIR, "__init__.py"),
+            submodule_search_locations=[_ENGINE_DIR])
         package = importlib.util.module_from_spec(spec)
         sys.modules[_ENGINE_PACKAGE] = package
         spec.loader.exec_module(package)
