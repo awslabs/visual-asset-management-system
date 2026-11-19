@@ -84,16 +84,17 @@ from .common.edhClient import (
 from .common.edhIdentity import SYSTEM_USER_ID
 from .common.edhLeasePolicy import lease_action, parse_iso, read_lease_policy
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
-    EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_STOPPED, EDH_UNLISTED_AT_FIELD, EXPIRES_AT_FIELD,
-    LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED,
-    MAX_LAUNCH_ATTEMPTS, START_ACCEPTED_FIELD, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_STALL_EDH_STATES,
-    START_STALL_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
-    credential_claim_fresh, credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
+    ACTIVITY_FIELD, CONNECTION_UNAVAILABLE_REASON_FIELD, CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD,
+    EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD, EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_STOPPED,
+    EDH_UNLISTED_AT_FIELD, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED,
+    LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED, MAX_LAUNCH_ATTEMPTS, START_ACCEPTED_FIELD,
+    START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_STALL_EDH_STATES, START_STALL_SECONDS, STATE_ACTIVE,
+    STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, credential_claim_fresh, credential_claim_stamp,
+    deleted_row_expiry, desktop_has_run, edh_failure_attributes, edh_failure_read_due, edh_reports_error,
     instance_state_reason, never_auto_start_schedule, observed_row_attributes, orphaned_last_error,
-    schedule_never_auto_starts, session_row_live, start_failure, start_in_progress, start_resolve_due,
-    start_return_attributes, start_returned_to_stopped, start_stall_cleared, start_stall_due, start_stamp,
-    state_for_edh_session_state,
+    schedule_never_auto_starts, session_row_live, start_failure, start_in_progress,
+    start_resolve_due, start_return_attributes, start_returned_to_stopped, start_stall_cleared, start_stall_due,
+    start_stamp, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -714,11 +715,17 @@ def _sweep_orphan_keys(referenced_key_ids: Set[str], live_bootstrap_ids: Set[str
 
 def _live_state(row: Dict[str, Any], index: DesktopIndex) -> Optional[str]:
     """The state EDH's listing implies for the row's desktop: None when EDH lists no desktop for the row.
-    A listed desktop in a state outside the mapping yields the empty string, which no lease branch acts on."""
+    A listed desktop in a state outside the mapping yields the empty string, which no lease branch acts on.
+    EDH's ``error`` on a row whose desktop has run (``desktop_has_run``) reads ACTIVE: EDH sets it on a desktop that
+    runs when its Amazon DCV check fails, so the lease stops such a desktop (EDH's stop takes a desktop in ``error``
+    that has an instance) and never deletes it as stopped; on any other row it reads ORPHANED, a failed launch."""
     desktop = _desktop_for_row(row, index) or _resumed_desktop(row, index)
     if desktop is None:
         return None
-    return state_for_edh_session_state(desktop.get(EDH_SESSION_STATE_FIELD), "")
+    session_state = desktop.get(EDH_SESSION_STATE_FIELD)
+    if edh_reports_error(session_state) and desktop_has_run(row):
+        return STATE_ACTIVE
+    return state_for_edh_session_state(session_state, "")
 
 
 def _apply_lease_action(action: str, row: Dict[str, Any], index: DesktopIndex, now: datetime,
@@ -745,7 +752,9 @@ def _apply_lease_action(action: str, row: Dict[str, Any], index: DesktopIndex, n
                 return False
         elif live != STATE_STOPPED:
             return False
-        stamped = _persist(bootstrap_id, {"state": STATE_STOPPED, "leaseStoppedAt": now.isoformat(),
+        # A reason the row recorded for not being connectable goes with the stop.
+        cleared = {CONNECTION_UNAVAILABLE_REASON_FIELD: None} if row.get(CONNECTION_UNAVAILABLE_REASON_FIELD) else {}
+        stamped = _persist(bootstrap_id, {**cleared, "state": STATE_STOPPED, "leaseStoppedAt": now.isoformat(),
                                           "lastError": LAST_ERROR_LEASE_EXPIRED, "connectionAvailable": False},
                            row["updatedAt"])
         summary["deferred" if stamped is None else "updated"] += 1

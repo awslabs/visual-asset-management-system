@@ -1963,17 +1963,64 @@ class TestLeaseSweep:
         assert "leaseStoppedAt" not in row
         assert summary["failed"] == 0
 
-    def test_a_stop_of_a_desktop_in_error_takes_the_ordinary_path(self, edh_session_table):
+    def test_an_expired_lease_stops_a_desktop_that_has_run_while_edh_reports_it_in_error(self, edh_session_table):
+        # EDH sets error on a desktop that runs when its Amazon DCV check fails: the lease still stops it.
         calls = self._fake_edh_client()
 
-        _, row = self._sweep(edh_session_table, self._expired("b10"), _index(_desktop("sess-b10", "error")), calls)
+        summary, row = self._sweep(edh_session_table, self._expired("b10"), _index(_desktop("sess-b10", "error")), calls)
 
-        assert calls.stopped == []
-        # The ordinary path keeps a desktop that has run in its state; EDH's error only makes it not connectable.
-        assert row["state"] == rec.STATE_ACTIVE
-        assert row["connectionUnavailableReason"] == "DESKTOP_ERROR"
-        assert row.get("lastError") is None
-        assert "leaseStoppedAt" not in row
+        assert set(calls.stopped) == {(EDH_UID, "sess-b10")}
+        assert calls.deleted == []
+        assert row["state"] == rec.STATE_STOPPED
+        assert row["leaseStoppedAt"] == NOW.isoformat()
+        assert row["lastError"] == rec.LAST_ERROR_LEASE_EXPIRED
+        assert row["connectionAvailable"] is False
+        assert summary == {**self.UNTOUCHED, "updated": 1}
+
+    def test_the_lease_stop_clears_the_desktop_error_the_row_recorded(self, edh_session_table):
+        calls = self._fake_edh_client()
+        expired = self._expired("b10c", edhState="error", connectionAvailable=False,
+                                connectionUnavailableReason="DESKTOP_ERROR")
+
+        _summary_, row = self._sweep(edh_session_table, expired, _index(_desktop("sess-b10c", "error")), calls)
+
+        assert set(calls.stopped) == {(EDH_UID, "sess-b10c")}
+        assert row["state"] == rec.STATE_STOPPED and row["lastError"] == rec.LAST_ERROR_LEASE_EXPIRED
+        assert "connectionUnavailableReason" not in row
+
+    def test_a_lease_stopped_desktop_that_has_run_is_revoked_while_edh_still_reports_error(self, edh_session_table):
+        # The lease stop leaves the row STOPPED, a revoking state, whatever EDH reports next.
+        calls = self._fake_edh_client()
+        keyed = self._expired("b10k", apiKeyId="key-b10k", secretName="vams/edh-session/b10k",
+                              keyExpiresAt=(NOW + timedelta(hours=6)).strftime(STAMP))
+
+        _summary_, row = self._sweep(edh_session_table, keyed, _index(_desktop("sess-b10k", "error")), calls)
+        _updates, revoke, delete_secret = rec.reconcile_row(row, _index(_desktop("sess-b10k", "error")),
+                                                            NOW + timedelta(minutes=15))
+
+        assert set(calls.stopped) == {(EDH_UID, "sess-b10k")}
+        assert (revoke, delete_secret) == (True, False)
+
+    def test_a_lease_stopped_desktop_edh_reports_in_error_is_not_deleted(self, edh_session_table):
+        # Past its grace, but EDH's error means the desktop may be running: the delete is not sent.
+        calls = self._fake_edh_client()
+
+        _summary_, row = self._sweep(edh_session_table, self._lease_stopped("b10d"),
+                                     _index(_desktop("sess-b10d", "error")), calls)
+
+        assert calls.deleted == [] and calls.stopped == []
+        assert row["state"] == rec.STATE_STOPPED
+        assert row["leaseStoppedAt"] == self.LEASE_STOPPED_AT
+
+    def test_a_new_launch_in_error_is_not_stopped_by_the_lease(self, edh_session_table):
+        calls = self._fake_edh_client()
+        launch = self._expired("b10n", state=rec.STATE_CREATING, edhState="placing", connectionAvailable=False)
+
+        _summary_, row = self._sweep(edh_session_table, launch, _index(_desktop("sess-b10n", "error")), calls)
+
+        assert calls.stopped == [] and calls.deleted == []
+        assert row["state"] == rec.STATE_ORPHANED
+        assert row["lastError"] == LAST_ERROR_LAUNCH_ERROR
 
     def test_a_delete_claims_the_row_before_edh_is_called(self, edh_session_table):
         states_at_call = []
