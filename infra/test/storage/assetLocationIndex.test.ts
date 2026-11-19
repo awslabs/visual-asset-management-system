@@ -47,7 +47,10 @@ describe("AssetStorageTable location index", () => {
             { AttributeName: "locationBucket", KeyType: "HASH" },
             { AttributeName: "locationKey", KeyType: "RANGE" },
         ]);
-        expect(gsi.Projection).toEqual({ ProjectionType: "INCLUDE", NonKeyAttributes: ["bucketId"] });
+        expect(gsi.Projection).toEqual({
+            ProjectionType: "INCLUDE",
+            NonKeyAttributes: ["bucketId"],
+        });
     });
 
     test("the existing indexes are unchanged", () => {

@@ -22,7 +22,6 @@ UpdateItem) is outside it.
 
 import ast
 import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,7 +32,6 @@ from tests.handlers.assets.test_assetService_history import _load as _load_asset
 from tests.handlers.assets.test_createAsset_conditional_put import _load as _load_create_asset
 from tests.handlers.indexing.test_sqsBucketSync_recreation_guard import _load as _load_bucket_sync
 
-al = sys.modules['common.assetLocations']
 
 BACKEND_ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend")
 WRITE_METHODS = {"put_item", "update_item", "delete_item", "batch_writer", "transact_write_items",
@@ -71,7 +69,8 @@ WHOLE_ROW_PUTS_WITH_TESTS = {
     ("handlers/indexing/sqsBucketSync.py", "restore_archived_asset"),
 }
 
-INDEX_ATTRIBUTES = {al.LOCATION_BUCKET_ATTRIBUTE: "vams-assets", al.LOCATION_KEY_ATTRIBUTE: "a1/"}
+# The stored attribute names are part of the index contract (AssetLocationGSI keys on them).
+INDEX_ATTRIBUTES = {"locationBucket": "vams-assets", "locationKey": "a1/"}
 
 
 def _is_asset_table_name_call(node):
@@ -224,8 +223,8 @@ class TestCreateAssetSetsTheAttributes:
         m.create_asset(self._request(m), {"tokens": ["user1"]})
         row = _put_item(m.asset_table)
         assert row["assetLocation"] == {"Key": expected_key}
-        assert row[al.LOCATION_BUCKET_ATTRIBUTE] == "vams-assets"
-        assert row[al.LOCATION_KEY_ATTRIBUTE] == expected_key
+        assert row["locationBucket"] == "vams-assets"
+        assert row["locationKey"] == expected_key
         # The derived key is what the create path composed before the shared helper existed.
         assert expected_key == base_prefix + "asset-1/"
 
@@ -240,8 +239,8 @@ class TestCreateAssetSetsTheAttributes:
         m.create_asset(self._request(m, bucketExistingKey=existing_key), {"tokens": ["user1"]})
         row = _put_item(m.asset_table)
         assert row["assetLocation"] == {"Key": expected_key}
-        assert row[al.LOCATION_BUCKET_ATTRIBUTE] == "vams-assets"
-        assert row[al.LOCATION_KEY_ATTRIBUTE] == expected_key
+        assert row["locationBucket"] == "vams-assets"
+        assert row["locationKey"] == expected_key
 
     def test_bucket_sync_auto_create_sets_them(self):
         m = _load_create_asset(fresh=True)
@@ -249,7 +248,7 @@ class TestCreateAssetSetsTheAttributes:
         m.check_s3_prefix_exists = MagicMock(return_value=True)
         m.create_asset(self._request(m), {"tokens": ["SYSTEM_USER"]}, True)
         row = _put_item(m.asset_table)
-        assert (row[al.LOCATION_BUCKET_ATTRIBUTE], row[al.LOCATION_KEY_ATTRIBUTE]) == ("vams-assets", "asset-1/")
+        assert (row["locationBucket"], row["locationKey"]) == ("vams-assets", "asset-1/")
 
 
 @pytest.mark.unit

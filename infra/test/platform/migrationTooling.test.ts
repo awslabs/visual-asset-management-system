@@ -603,7 +603,9 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
         expect(block.slice(0, 400)).toContain(
             `name: "${pyConstant(backend, "LOCATION_BUCKET_ATTRIBUTE")}"`
         );
-        expect(block.slice(0, 400)).toContain(`name: "${pyConstant(backend, "LOCATION_KEY_ATTRIBUTE")}"`);
+        expect(block.slice(0, 400)).toContain(
+            `name: "${pyConstant(backend, "LOCATION_KEY_ATTRIBUTE")}"`
+        );
     });
 
     it("[control] the constant reader rejects a name that is not assigned", () => {
