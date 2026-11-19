@@ -410,6 +410,47 @@ class TestZipArchiveRunMode:
             job.run()
         assert e.value.refusal
 
+    def test_an_asset_on_an_existing_bucket_folder_is_archived_from_its_root(self, s3):
+        # The keys carry no asset ID: without the manifest root the run was refused.
+        s3.add("projects/site-a/left/part.glb", b"L" * 10)
+        s3.add("projects/site-a/right/part.glb", b"R" * 10)
+        entry = {"bucket": ASSETS, "key": "projects/site-a/", "versionId": "", "relativePath": "/"}
+        with pytest.raises(runner.ArchiveFailure):
+            self._job(s3, [entry]).run()
+        entry.update(assetRootS3Key="projects/site-a/", assetRootBucket=ASSETS)
+        result = self._job(s3, [entry], {"format": "zip"}).run()
+        with zipfile.ZipFile(io.BytesIO(s3.completed[(ASSETS, result["archiveKey"])])) as z:
+            assert sorted(z.namelist()) == ["left/part.glb", "right/part.glb"]
+            assert z.read("left/part.glb") == b"L" * 10
+
+    def test_a_folder_of_an_asset_on_an_existing_bucket_folder(self, s3):
+        s3.add("projects/site-a/left/part.glb", b"L" * 10)
+        s3.add("projects/site-a/right/part.glb", b"R" * 10)
+        entry = {"bucket": ASSETS, "key": "projects/site-a/left/", "versionId": "", "relativePath": "/left/",
+                 "assetRootS3Key": "projects/site-a/", "assetRootBucket": ASSETS}
+        result = self._job(s3, [entry], {"format": "zip"}).run()
+        with zipfile.ZipFile(io.BytesIO(s3.completed[(ASSETS, result["archiveKey"])])) as z:
+            assert z.namelist() == ["left/part.glb"]
+
+    def test_an_earlier_steps_output_read_from_the_run_bucket_is_refused(self, s3):
+        entry = {"bucket": "run-bkt", "key": "pipelines/p0/J/output/E1/files/a.glb", "versionId": "v1",
+                 "assetRootS3Key": "projects/site-a/", "assetRootBucket": ASSETS}
+        with pytest.raises(runner.ArchiveFailure) as e:
+            self._job(s3, [entry]).run()
+        assert e.value.refusal and "outside the run's asset" in e.value.reason
+
+    @pytest.mark.parametrize("entry,expected", [
+        ({"bucket": "b", "key": "projects/site-a/x/a.glb", "assetRootS3Key": "projects/site-a/"}, "projects/site-a/"),
+        ({"bucket": "b", "key": "projects/site-a/", "assetRootS3Key": "/projects/site-a"}, "projects/site-a/"),
+        ({"bucket": "b", "key": "base/xasset1/a.glb"}, "base/xasset1/"),
+        ({"bucket": "b", "key": "projects/other/a.glb", "assetRootS3Key": "projects/site-a/"}, None),
+        ({"bucket": "run", "key": "projects/site-a/a.glb", "assetRootS3Key": "projects/site-a/",
+          "assetRootBucket": "b"}, None),
+        ({"bucket": "b", "key": "other/a.glb"}, None),
+    ])
+    def test_input_asset_root(self, entry, expected):
+        assert runner.input_asset_root(entry, "xasset1") == expected
+
     def test_blocked_type_refused(self, s3):
         s3.add(BASE + "evil.bat", b"x")
         job = self._job(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}])
