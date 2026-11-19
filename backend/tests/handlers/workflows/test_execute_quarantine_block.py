@@ -44,11 +44,38 @@ def _quarantined(asset_id="a1", exception_granted=False):
     return row
 
 
-def _run(event, table, enforcer=None, block_on=True, get_asset=None):
-    """The handler on a happy-path launch (one Lambda pipeline, one input asset) with the given
-    asset-state table. Returns (response, sfn mock)."""
-    with patch(f"{MOD}._get_workflow", return_value=with_current_deployment(_WORKFLOW, [_PIPELINE])), \
-            patch(f"{MOD}._get_pipeline", return_value=dict(_PIPELINE)), \
+def _multi_asset(record):
+    """A copy of a workflow or pipeline record that takes several input files across assets."""
+    record = dict(record)
+    record["systemConfig"] = dict(record["systemConfig"], inputFileArity="multi", assetScope={
+        "crossAssetAllowed": True, "singleAssetOnly": False, "wholeAssetAllowed": True,
+        "folderAllowed": True})
+    return record
+
+
+_MULTI_WORKFLOW = _multi_asset(_WORKFLOW)
+_MULTI_PIPELINE = _multi_asset(_PIPELINE)
+# Inputs on two assets with an explicit output target, as a multi-asset run requires.
+TWO_ASSETS = {"inputFiles": [
+    {"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/f.glb"},
+    {"databaseId": "db1", "assetId": "a2", "relativeFileKey": "/g.glb"}],
+    "outputAssetId": "a1", "outputDatabaseId": "db1"}
+
+
+def _state_rows(rows):
+    """An asset-state table answering get_item from {assetId: row}; an absent id has no record."""
+    table = MagicMock(name="compliance_asset_state_table")
+    table.get_item.side_effect = lambda Key: (
+        {"Item": rows[Key["assetId"]]} if Key["assetId"] in rows else {})
+    return table
+
+
+def _run(event, table, enforcer=None, block_on=True, get_asset=None, workflow=_WORKFLOW,
+         pipeline=_PIPELINE):
+    """The handler on a happy-path launch (one Lambda pipeline, one input asset unless `workflow`
+    takes several) with the given asset-state table. Returns (response, sfn mock)."""
+    with patch(f"{MOD}._get_workflow", return_value=with_current_deployment(workflow, [pipeline])), \
+            patch(f"{MOD}._get_pipeline", return_value=dict(pipeline)), \
             patch(f"{MOD}._get_asset", side_effect=get_asset or (lambda db, a: dict(_ASSET, assetId=a))), \
             patch(f"{MOD}._default_run_bucket",
                   return_value={"bucketName": "run-bucket", "baseAssetsPrefix": ""}), \
@@ -102,6 +129,29 @@ class TestACallersRunIsQuarantineGuarded:
         assert response["statusCode"] == 403
         table.get_item.assert_not_called()
         m_sfn.start_execution.assert_not_called()
+
+    def test_a_quarantined_second_input_asset_refuses_the_run(self):
+        """Every distinct input asset is checked, not only the first: a1 has no record, a2 is
+        quarantined, and the run is refused before it starts."""
+        table = _state_rows({"a2": _quarantined("a2")})
+        response, m_sfn = _run(_event(body=TWO_ASSETS), table, workflow=_MULTI_WORKFLOW,
+                               pipeline=_MULTI_PIPELINE)
+
+        assert response["statusCode"] == 400
+        assert json.loads(response["body"]) == {"message": INPUT_MESSAGE}
+        assert [c.kwargs["Key"]["assetId"] for c in table.get_item.call_args_list] == ["a1", "a2"]
+        m_sfn.start_execution.assert_not_called()
+
+    def test_two_input_assets_without_a_quarantine_run(self):
+        """[control] The same two-asset launch starts when neither asset is quarantined, so the
+        refusal above is the quarantine block's and not the workflow's selection rules."""
+        table = _state_rows({})
+        response, m_sfn = _run(_event(body=TWO_ASSETS), table, workflow=_MULTI_WORKFLOW,
+                               pipeline=_MULTI_PIPELINE)
+
+        assert response["statusCode"] == 200
+        assert [c.kwargs["Key"]["assetId"] for c in table.get_item.call_args_list] == ["a1", "a2"]
+        m_sfn.start_execution.assert_called_once()
 
     def test_each_input_asset_is_read_once_however_many_files_it_has(self):
         body = {"inputFiles": [
