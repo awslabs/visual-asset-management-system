@@ -54,6 +54,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
     -   Note: A boolean such as `true`, which earlier saved and ran as priority 1, is refused too; send the number instead.
     -   Note: A workflow that uses a DeadlineCloud pipeline saved earlier with an out-of-range value is refused when its state machine is next built; set the pipeline's value within the range.
 -   **RapidPipeline EKS token in other partitions** — The pipeline signs its Kubernetes authentication token for the STS endpoint of the deployment's partition, such as `amazonaws.eu` in the AWS European Sovereign Cloud, instead of always naming an `amazonaws.com` host. (issue #1593, PR #1641 by @mangeshraut712)
+-   **Uninstall log group cleanup stays within the deployment** — Step 4 of the uninstall guide reads the log groups to delete from the deleted stack's AWS CloudFormation record, leaves out those of a current stack of the same name and lists them for review first, so it no longer deletes the groups of other VAMS deployments that share the `/aws/vendedlogs/` prefixes; it also covers the API Gateway execution log group. (issue #1572)
 
 **Other changes:**
 
