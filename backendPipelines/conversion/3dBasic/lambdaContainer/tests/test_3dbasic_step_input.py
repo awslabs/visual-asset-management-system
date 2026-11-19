@@ -14,6 +14,7 @@ import ast
 import importlib.util
 import os
 import sys
+import types
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -76,7 +77,6 @@ class TestTheAssemblyBound:
         path.parent.mkdir()
         path.write_text(_assembly(30, 2))
         monkeypatch.setattr(scene_limits, "MAX_SCENE_NODES", 1000)
-        sys.modules.setdefault("cascadio", MagicMock())
         job = {"input_file": str(path), "input_dir": str(path.parent), "input_relative_path": "bomb.step",
                "by_reference": {}, "input_name": "bomb.step"}
         with patch.dict(sys.modules, {"cascadio": MagicMock()}):
@@ -121,10 +121,24 @@ class TestTheOptIn:
 
 
 @pytest.mark.unit
+def test_no_test_leaves_a_cascadio_stand_in_behind():
+    # A stand-in left in sys.modules made the conversion cases below run against a MagicMock in an
+    # environment without cascadio (CI), where they must skip.
+    module = sys.modules.get("cascadio")
+    assert module is None or isinstance(module, types.ModuleType), module
+
+
+@pytest.mark.unit
 class TestStepConversions:
     @pytest.fixture(autouse=True)
     def _needs_cascadio(self):
-        pytest.importorskip("cascadio")
+        # The real package, not a stand-in another test put in sys.modules: only an environment built
+        # with requirements-step.txt (the STEP image, or a local venv) converts STEP here. The CI
+        # pipeline suite installs requirements.txt only, so these skip there; the golden suite's STEP
+        # image cells (run_golden.sh with GOLDEN_STEP=1) are the coverage of the built image.
+        module = pytest.importorskip("cascadio", reason="cascadio (requirements-step.txt) is not installed")
+        if not isinstance(module, types.ModuleType) or not getattr(module, "__file__", None):
+            pytest.skip("cascadio in sys.modules is a test stand-in, not the installed package")
         pytest.importorskip("trimesh")
 
     @pytest.mark.parametrize("output,expected", [
