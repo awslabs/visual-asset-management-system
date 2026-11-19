@@ -1341,6 +1341,24 @@ export function applyZipDownloadsDefaults(config: ConfigPublic): void {
     config.app.pipelines.useZipDownloads = filled;
 }
 
+/**
+ * app.pipelines.useConversion3dBasic.enableStepInput: absent or null is false, so a config.json written
+ * before the key keeps an image without Open CASCADE; any other value must be a JSON boolean.
+ */
+export function resolveConversion3dBasicStepInput(config: { app: any }): void {
+    const block = config.app.pipelines.useConversion3dBasic;
+    const value = block.enableStepInput;
+    if (value === undefined || value === null) {
+        block.enableStepInput = false;
+        return;
+    }
+    if (typeof value !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.enableStepInput must be true or false (a JSON boolean). Leave it out to keep STEP input off."
+        );
+    }
+}
+
 /** Reject an app.pipelines.useZipDownloads value outside its type or bounds, and an invalid Fargate size. */
 export function validateZipDownloadsConfig(config: ConfigPublic): void {
     const block = config.app.pipelines.useZipDownloads;
@@ -2570,6 +2588,7 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS == undefined) {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
+    resolveConversion3dBasicStepInput(config);
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
         config.app.pipelines.useConversionCoordinateTransform = {
@@ -6420,6 +6439,10 @@ export interface ConfigPublic {
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                /** Read STEP (.step, .stp) input. The container image then includes cascadio (Open
+                 *  CASCADE, LGPL-2.1 with the OCCT exception); without it a STEP run is refused before
+                 *  download. Absent = false. */
+                enableStepInput: boolean;
             };
             useConversionCoordinateTransform: {
                 enabled: boolean;

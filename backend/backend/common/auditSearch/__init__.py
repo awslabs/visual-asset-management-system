@@ -6,7 +6,7 @@ The audit search library: building a safe CloudWatch Logs Insights query, parsin
 returns, redacting and encoding them, and rechecking every filter on the parsed row.
 
 It is a pure library. It calls no AWS service, reads no configuration and registers no route; the
-audit search handler (a later change) wires it to Logs Insights and to authorization.
+audit search handler (`handlers/audit/auditLogService.py`) wires it to Logs Insights and to authorization.
 
 * ``queryBuilder`` validates a request into enumerated filters and builds the query text from them.
 * ``containsFilter`` validates and evaluates the ``contains`` free-text terms.
