@@ -58,6 +58,10 @@ MANIFEST_PATH_PIPELINES = {
     "genAi/imageTo3d": {
         "vamsExecute": ["vamsExecuteImageTo3dPipeline.py"],
         "openPipeline": "openPipeline.py", "builder": "constructPipeline.py"},
+    "multi/modelOps": {
+        "vamsExecute": ["vamsExecuteModelOps.py"],
+        "openPipeline": "openPipeline.py", "builder": "constructPipeline.py",
+        "builderReads": ("inputRelativePath",)},
 }
 
 FIELDS = ("inputRelativePath", "inputAssetRootS3Key", "inputAssetRootBucket")
