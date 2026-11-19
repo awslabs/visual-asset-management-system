@@ -5,12 +5,13 @@
 
 /**
  * The Create Asset form's compliance schema field: it offers "Inherit from database" beside the
- * schemas, says when the schemas could not be read, drops the choice when the database changes,
- * and the bind sent after the upload reports a refusal instead of dropping it.
+ * schemas, says when the schemas could not be read, offers nothing before a database is chosen, drops
+ * the choice when the database changes, and the bind sent after the upload reports a refusal instead
+ * of dropping it.
  */
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import {
     AssetPrimaryInfo,
@@ -54,6 +55,9 @@ jest.mock("localforage", () => ({
 const { fetchComplianceSchemas, bindSchemaToAsset } = jest.requireMock(
     "../../services/ComplianceService"
 );
+const { fetchDatabase } = jest.requireMock("../../services/APIService");
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 const mount = (state: Record<string, unknown>) =>
     render(
@@ -108,6 +112,75 @@ describe("Create Asset compliance schema field", () => {
         await waitFor(() =>
             expect(schemaSelect().findTrigger().getElement()).toHaveTextContent("s1")
         );
+    });
+
+    it("offers no schema before a database is chosen", async () => {
+        fetchComplianceSchemas.mockResolvedValue([true, [{ schemaName: "s1" }]]);
+        mount({});
+        await settle();
+        expect(schemaSelect().findTrigger().getElement()).toBeDisabled();
+        expect(schemaSelect().findTrigger().getElement()).toHaveTextContent(
+            `Choose a ${Synonyms.database} first`
+        );
+        expect(fetchComplianceSchemas).not.toHaveBeenCalled();
+    });
+});
+
+describe("Create Asset compliance schema field at /upload/:databaseId", () => {
+    /** The form's own reducer behind the field, so the database and schema choices are real state. */
+    const Form = ({ onState }: { onState: (state: any) => void }) => {
+        const [state, dispatch] = React.useReducer(assetDetailReducer, {
+            isMultiFile: false,
+            isDistributable: true,
+        } as any);
+        onState(state);
+        return (
+            <AssetDetailContext.Provider
+                value={{ assetDetailState: state, assetDetailDispatch: dispatch }}
+            >
+                <AssetPrimaryInfo setValid={() => undefined} showErrors={false} />
+            </AssetDetailContext.Provider>
+        );
+    };
+
+    it("is offered once the route's database has loaded, and the schema picked then is kept", async () => {
+        let release: (value: unknown) => void = () => undefined;
+        fetchDatabase.mockReturnValue(new Promise((resolve) => (release = resolve)));
+        fetchComplianceSchemas.mockResolvedValue([true, [{ schemaName: "s1" }]]);
+        let latest: any = null;
+        render(
+            <MemoryRouter initialEntries={["/upload/db-r"]}>
+                <Routes>
+                    <Route
+                        path="/upload/:databaseId"
+                        element={<Form onState={(state) => (latest = state)} />}
+                    />
+                </Routes>
+            </MemoryRouter>
+        );
+
+        // While the route's database record loads there is no schema to choose.
+        await settle();
+        expect(schemaSelect().findTrigger().getElement()).toBeDisabled();
+        expect(fetchComplianceSchemas).not.toHaveBeenCalled();
+
+        await act(async () => {
+            release({ databaseId: "db-r" });
+            await settle();
+        });
+        await waitFor(() => expect(fetchComplianceSchemas).toHaveBeenCalledWith("db-r"));
+        await waitFor(() => expect(schemaSelect().findTrigger().getElement()).toBeEnabled());
+
+        schemaSelect().openDropdown();
+        await waitFor(() =>
+            expect(schemaSelect().findDropdown().findOptions().length).toBeGreaterThan(1)
+        );
+        act(() => {
+            schemaSelect().selectOptionByValue("s1");
+        });
+
+        expect(latest.databaseId).toBe("db-r");
+        expect(latest.complianceSchemaName).toBe("s1");
     });
 });
 

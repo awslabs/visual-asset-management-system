@@ -318,8 +318,9 @@ async def test_a_call_that_never_started_gives_its_slot_back_and_invites_a_retry
 
 
 async def test_a_call_cancelled_while_it_waits_for_a_worker_gives_its_slot_back(deployment, tmp_path, monkeypatch):
-    """A request cancelled from outside, as on a client disconnect, while its call waits for a worker
-    thread: the slot is freed at once, and the running call frees its own when it ends."""
+    """A call cancelled while it waits for a worker thread, the cancellation the time budget's
+    `move_on_after` delivers (sent directly here): the slot is freed at once, and the running call
+    frees its own when it ends."""
     import anyio
 
     env = {"VAMS_MCP_TOOL_TIMEOUT": "10", "VAMS_MCP_TOOLSETS": "all", "VAMS_ENABLE_WRITES": "true"}
