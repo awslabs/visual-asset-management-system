@@ -89,13 +89,14 @@ def _usd_bytes(geometry, extension):
     os.makedirs(export_dir)
     path = os.path.join(export_dir, "part" + extension)
     usd_io.write_usd(trimesh.Scene(geometry), path, 1.0, "y", extension)
-    files = {}
+    found = {}
     for root, _, names in os.walk(export_dir):
         for name in names:
             full = os.path.join(root, name)
             with open(full, "rb") as handle:
-                files[os.path.relpath(full, export_dir).replace(os.sep, "/")] = handle.read()
-    return files
+                found[os.path.relpath(full, export_dir).replace(os.sep, "/")] = handle.read()
+    # os.walk lists names in directory order, which differs between hosts: sort for a deterministic fixture.
+    return {name: found[name] for name in sorted(found)}
 
 
 def _fbx_box():
@@ -113,8 +114,14 @@ def _png_bytes():
     return buffer.getvalue()
 
 
+def _input_name(input_extension):
+    """The fixture file a cell hands to the converter: always ``part`` plus the cell's input extension."""
+    return "part" + input_extension
+
+
 def _fixture_files():
-    """``{input extension: ({name: bytes}, source geometry)}``; the first name is the input file."""
+    """``{input extension: ({name: bytes}, source geometry, has texture)}``; the input file is
+    ``_input_name(extension)``, never the first name of the map."""
     cube, sphere = _textured_cube(), _sphere()
     obj_text, obj_companions = trimesh.exchange.obj.export_obj(
         cube, include_texture=True, return_texture=True, mtl_name="part.mtl")
@@ -173,7 +180,8 @@ def _convert(s3, cell, input_extension, output_extension):
     folder = f"x{cell}"
     for name, data in names.items():
         s3.put_object(Bucket=ASSET_BUCKET, Key=f"{folder}/{name}", Body=data)
-    input_name = next(iter(names))
+    input_name = _input_name(input_extension)
+    assert input_name in names, f"fixture for {input_extension} has no {input_name}"
     prefix = f"{FILES_PREFIX}{cell}/"
     manifest = {"inputFiles": [{"relativePath": f"/{input_name}", "bucket": ASSET_BUCKET,
                                 "key": f"{folder}/{input_name}"}],
@@ -321,3 +329,35 @@ def test_the_cell_list_covers_every_accepted_input_and_every_written_output():
     outputs = set(re.findall(r"'(\.\w+)'", re.search(r"SUPPORTED_OUTPUT_FORMATS = \{([^}]*)\}", source).group(1)))
     assert inputs == set(INPUTS)
     assert outputs == set(OUTPUTS)
+
+
+def _fixture_map_for_unit_test():
+    pytest.importorskip("usd_io", reason="needs usd-core on the test host")
+    return _fixture_files()
+
+
+def test_every_fixture_names_an_input_with_the_cell_extension():
+    """Runs without the image: each fixture holds ``part`` + its extension, and only that file has it."""
+    fixtures = _fixture_map_for_unit_test()
+    for extension, (names, _, _) in fixtures.items():
+        name = _input_name(extension)
+        assert name.endswith(extension)
+        assert name in names, extension
+        assert os.path.splitext(name)[1] == extension
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_usd_fixture_is_deterministic_and_input_survives_any_walk_order(monkeypatch, descending):
+    """The texture can come before or after the layer (here: both orders); the input is named, not first."""
+    _fixture_map_for_unit_test()
+    real_walk = os.walk
+
+    def ordered_walk(top, *args, **kwargs):
+        for root, dirs, names in real_walk(top, *args, **kwargs):
+            yield root, dirs, sorted(names, reverse=descending)
+
+    monkeypatch.setattr(os, "walk", ordered_walk)
+    names = _usd_bytes(_textured_cube(), ".usda")
+    assert list(names) == sorted(names)
+    assert _input_name(".usda") == "part.usda" and "part.usda" in names
+    assert os.path.splitext(sorted(names)[0])[1] == ".png"  # the texture sorts first: the old first-entry rule broke here
