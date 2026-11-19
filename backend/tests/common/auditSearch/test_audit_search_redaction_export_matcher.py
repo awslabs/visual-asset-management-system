@@ -500,3 +500,23 @@ class TestBasicCredentialDecode:
         for text in hostile:
             redaction.redact_string_shapes(text)
         assert time.monotonic() - started < 3
+
+
+class TestRowTime:
+    """Legacy ingestion times and contract v1 event times become one UTC instant."""
+
+    @pytest.mark.parametrize("text,expected", [
+        ("2026-11-17 17:19:04.055", "2026-11-17T17:19:04.055Z"),
+        ("2026-11-17T17:18:38.386Z", "2026-11-17T17:18:38.386Z"),
+        ("2026-11-17T17:18:38Z", "2026-11-17T17:18:38.000Z"),
+        ("2026-11-17T17:18:38.1234567Z".replace("4567", ""), "2026-11-17T17:18:38.123Z"),
+    ])
+    def test_both_formats_normalize_to_iso_milliseconds(self, text, expected):
+        assert rowModel.normalize_time(text) == expected
+
+    def test_both_formats_of_one_instant_are_equal(self):
+        assert rowModel.time_ms("2026-11-17 17:19:04.055") == rowModel.time_ms("2026-11-17T17:19:04.055Z")
+
+    @pytest.mark.parametrize("text", [None, "", "yesterday", "2026-13-40 99:00:00", 5])
+    def test_an_unreadable_time_has_no_instant_and_is_kept_as_it_was(self, text):
+        assert rowModel.time_ms(text) is None and rowModel.normalize_time(text) == text

@@ -248,6 +248,12 @@ describe("CI workflow", () => {
     });
 
     describe("pipeline and VamsMCP suites", () => {
+        test("the 3D Basic golden job builds the image through its runner script", () => {
+            expect(runCommands(job("conversion-3dbasic-golden")).join("\n")).toContain(
+                "backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh"
+            );
+        });
+
         const job = (name: string): string =>
             new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
                 text
@@ -293,8 +299,8 @@ describe("CI workflow", () => {
             expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
         });
 
-        test("both jobs carry a timeout", () => {
-            ["pipelines-test", "vamsmcp-test"].forEach((name) => {
+        test("the suite jobs and the 3D Basic golden job carry a timeout", () => {
+            ["pipelines-test", "vamsmcp-test", "conversion-3dbasic-golden"].forEach((name) => {
                 expect(job(name)).toMatch(/^ {8}timeout-minutes: \d+$/m);
             });
         });

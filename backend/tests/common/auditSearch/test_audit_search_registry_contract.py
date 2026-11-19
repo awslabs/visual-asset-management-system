@@ -121,7 +121,9 @@ class TestGroupCoverage:
 
     def test_every_audit_resource_key_has_a_descriptor_and_back(self):
         resource_keys = {name: value.param_key for name, value in vars(resourceNames.ResourceKeys).items()
-                         if name.startswith("AUDIT_LOG_") and hasattr(value, "param_key")}
+                         if name.startswith("AUDIT_LOG_") and hasattr(value, "param_key")
+                         # AUDIT_LOG_QUERIES_STORAGE_TABLE is the search handle table, not a log group.
+                         and value.param_key.startswith("cloudwatchLogGroups/")}
         described = {group.resource_key_name for group in GROUPS.AUDIT_LOG_GROUPS}
         assert set(resource_keys) == described
 

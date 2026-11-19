@@ -352,7 +352,27 @@ function ViewFileForAsset() {
         isMultiFileMode ? `${currentFiles.length} Files` : singleFileInfo?.filename
     );
 
-    const [viewerOptions, setViewerOptions] = useState<ViewerOption[]>([]);
+    // Set once the asset's details have been read (the visualizer and its view selector wait for them).
+    const [assetDetailsLoaded, setAssetDetailsLoaded] = useState(false);
+    // The view choices follow the file the page holds, not the moment the asset details arrived: the
+    // file can be read before or after them, and a link to another version of the file carries the
+    // preview file only when the page that navigated knew it.
+    const defaultViewType = isMultiFileMode ? "files" : "file";
+    const viewerOptions = useMemo<ViewerOption[]>(() => {
+        if (!assetDetailsLoaded) return [];
+        if (isMultiFileMode) return [{ text: "Files", id: "files" }];
+        const options: ViewerOption[] = [];
+        if (singleFileInfo?.previewFile) options.push({ text: "Preview", id: "preview" });
+        options.push({ text: "File", id: "file" });
+        return options;
+    }, [assetDetailsLoaded, isMultiFileMode, singleFileInfo?.previewFile]);
+    // A choice the options no longer offer (the file changed to one without a preview) falls back to
+    // the default; a choice the user made and the options still offer is never changed.
+    useEffect(() => {
+        if (viewerOptions.length > 0 && viewType && !viewerOptions.some((o) => o.id === viewType)) {
+            setViewType(defaultViewType);
+        }
+    }, [viewerOptions, viewType, defaultViewType]);
     const [viewerMode, setViewerMode] = useState("collapse");
     const [showDeletePreviewModal, setShowDeletePreviewModal] = useState(false);
     const [isPreviewDeleting, setIsPreviewDeleting] = useState(false);
@@ -809,29 +829,8 @@ function ViewFileForAsset() {
                     setAssetLoadError(null);
                     setAsset(item);
 
-                    let defaultViewType: string;
-                    const newViewerOptions: ViewerOption[] = [];
-
-                    if (isMultiFileMode) {
-                        // Multi-file mode: simplified to just show Files tab
-                        defaultViewType = "files";
-                        newViewerOptions.push({ text: "Files", id: "files" });
-                    } else {
-                        // Single file mode: show Preview and File tabs
-                        defaultViewType = "file"; // Always default to file view
-
-                        // Add Preview tab if the file has a preview file
-                        if (singleFileInfo?.previewFile) {
-                            console.log("Using preview file:", singleFileInfo.previewFile);
-                            newViewerOptions.push({ text: "Preview", id: "preview" });
-                        }
-
-                        // Always add File tab for the actual file
-                        newViewerOptions.push({ text: "File", id: "file" });
-                    }
-
-                    setViewerOptions(newViewerOptions);
-                    setViewType(defaultViewType);
+                    setAssetDetailsLoaded(true);
+                    setViewType(isMultiFileMode ? "files" : "file");
                     setReload(false);
                 } else {
                     console.log("Asset details could not be loaded:", item);
@@ -1295,6 +1294,7 @@ function ViewFileForAsset() {
                                                     displayMode="container"
                                                     visible={true}
                                                     assetVersionId={effectiveAssetVersionId}
+                                                    previewFile={singleFileInfo.previewFile}
                                                 />
                                             )}
                                     </SpaceBetween>
