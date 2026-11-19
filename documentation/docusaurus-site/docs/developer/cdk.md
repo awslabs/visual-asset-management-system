@@ -94,7 +94,7 @@ A top-level Amazon EventBridge orchestration bus is also exposed through `storag
 
 ## Lambda Builder Pattern
 
-All Lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. There are approximately 17 builder files containing 40+ function builders.
+All Lambda builder files in `lib/lambdaBuilder/` follow a strict, consistent pattern. There are approximately 18 builder files containing 40+ function builders.
 
 ### Standard Function Signature
 
@@ -163,7 +163,8 @@ Missing `setupSecurityAndLoggingEnvironmentAndPermissions` breaks authorization 
 | `kmsKeyLambdaPermissionAddToResourcePolicy`        | Grants AWS KMS Decrypt, Encrypt, GenerateDataKey, ReEncrypt, ListKeys, CreateGrant, ListAliases                                                                                      |
 | `setupSecurityAndLoggingEnvironmentAndPermissions` | Adds env vars for auth tables and 9 audit log groups. Grants DynamoDB read on auth, constraints, userRoles, roles tables. Grants Amazon CloudWatch PutLogEvents on audit log groups. |
 | `globalLambdaEnvironmentsAndPermissions`           | Injects `VAMS_RESOURCE_PARAM_PREFIX` and grants AWS Systems Manager parameter read access for resource-name resolution                                                               |
-| `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards                                                                                                                    |
+| `suppressCdkNagErrorsByGrantReadWrite`             | Suppresses AwsSolutions-IAM5 for Amazon S3 and resource wildcards, on the IAM policies under the scope                                                                               |
+| `addIamNagSuppressions`                            | Adds AwsSolutions-IAM4 and AwsSolutions-IAM5 suppressions to the IAM roles and policies under a scope that each rule checks, and to no other resource. Throws on any other rule ID   |
 
 ## API Route Wiring
 
@@ -326,25 +327,34 @@ CDK Nag is always enabled with AWS Solutions checks. Every new resource must pas
 
 ### Adding Suppressions
 
-Every CDK Nag suppression requires a detailed justification:
+Every CDK Nag suppression requires a detailed justification. Add an IAM suppression (AwsSolutions-IAM4 or AwsSolutions-IAM5) with `addIamNagSuppressions` from `lib/helper/security.ts`. It writes the suppression only on the function's role and policies, the resources those rules check:
+
+```typescript
+import { addIamNagSuppressions } from "../helper/security";
+
+addIamNagSuppressions(myFunction, [
+    {
+        id: "AwsSolutions-IAM5",
+        reason: "Index ARNs of one named table: a table grant covers its global secondary indexes.",
+        appliesTo: [{ regex: "/^Resource::<.*Table.*\\.Arn>/index/\\*$/g" }],
+    },
+]);
+```
+
+Suppress any other rule with `NagSuppressions.addResourceSuppressions` on the resource the finding names:
 
 ```typescript
 import { NagSuppressions } from "cdk-nag";
 
-NagSuppressions.addResourceSuppressions(
-    resource,
-    [
-        {
-            id: "AwsSolutions-IAM5",
-            reason:
-                "Wildcard permissions required for dynamic S3 object " +
-                "access within VAMS asset buckets. Scope is limited " +
-                "to deployment-specific buckets.",
-        },
-    ],
-    true
-);
+NagSuppressions.addResourceSuppressions(deadLetterQueue, [
+    {
+        id: "AwsSolutions-SQS3",
+        reason: "This queue is the dead-letter queue of the processing queue, so it ends that queue's redrive chain.",
+    },
+]);
 ```
+
+Do not add an IAM suppression with `NagSuppressions.addResourceSuppressions(scope, [...], true)`. The `true` (apply to children) copies it onto every resource under the scope, such as the function itself, its security group and its permissions. CDK Nag never reads it there, and each copy counts toward the 1,000,000-byte CloudFormation template limit of the nested stack.
 
 :::warning[Suppressions Require Justification]
 Never add a suppression with a generic reason like "Suppressed" or "Not applicable". Explain why the suppression is acceptable in the VAMS security context.
@@ -375,6 +385,7 @@ enum VAMS_APP_FEATURES {
     AUTHPROVIDER_COGNITO_OIDC,
     AUTHPROVIDER_EXTERNALOAUTHIDP,
     DEADLINECLOUD_PIPELINES,
+    VECTORSEARCH,
     ZIPDOWNLOADS,
 }
 

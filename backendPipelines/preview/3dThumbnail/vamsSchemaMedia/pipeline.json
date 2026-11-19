@@ -1,6 +1,7 @@
 {
     "pipelineName": "Media Preview Thumbnail",
-    "category": "Preview",
+    "category": "SYSTEM - Preview",
+    "isSystem": true,
     "description": "Generate preview thumbnails (JPG/PNG/GIF) for images and video: an image the web already shows as its own preview is skipped, TGA and TIFF always get a JPG - .png, .jpg, .jpeg, .gif, .webp, .bmp, .tga, .tif, .tiff, .mp4, .m4v, .mov, .mkv, .webm, .avi, .wmv, .mpg, .mpeg, .mts, .m2ts",
     "executionConfig": {
         "executionType": "Lambda",

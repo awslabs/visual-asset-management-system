@@ -74,10 +74,20 @@ describe("ExecutionOutputTypeBadges", () => {
                 ),
         });
         renderBadges(["Result"]);
-        expect(screen.queryByRole("button", { name: "View execution result" })).toBeNull();
+        expect(screen.queryByRole("button", { name: /^Result: / })).toBeNull();
         expect(screen.getByTestId("output-type-badge-result")).toHaveTextContent("Result");
         expect(screen.getByTestId("output-type-badge-result").tagName).toBe("SPAN");
         expect(useExecutionResults).not.toHaveBeenCalledWith("e1", true);
+    });
+
+    it("names the Result button by the text it shows (#1592)", () => {
+        renderBadges(["Result"]);
+        expect(screen.getByRole("button", { name: /^Result: / })).toBe(
+            screen.getByTestId("output-type-badge-result")
+        );
+        expect(screen.getByTestId("output-type-badge-result")).toHaveAccessibleName(
+            "Result: view the execution result"
+        );
     });
 
     it("opens the result surface when the Result badge is clicked", async () => {

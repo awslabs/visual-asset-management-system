@@ -62,6 +62,12 @@ Add the route to `backend/backend/common/apiRoutes.py` — the single source of 
 API_MY_RESOURCE = ApiRoute("/myResource/{resourceId}", (GET, PUT), "myDomain")
 
 MY_DOMAIN_ROUTES: Tuple[ApiRoute, ...] = (API_MY_RESOURCE, ...)
+
+# A worked example: the natural-language search route lives under the existing search prefix so it
+# inherits the `starts_with "/search"` permission templates, and is added to the existing group.
+API_SEARCH_NLP = ApiRoute("/search/nlp", (POST,), "search")
+
+SEARCH_ROUTES: Tuple[ApiRoute, ...] = (API_SEARCH, API_SEARCH_SIMPLE, API_SEARCH_NLP)
 ```
 
 A route missing from the group arrays is invisible to constraint authoring and the CLI. Route templates MUST match the routes attached in the CDK api builder stacks.
@@ -165,7 +171,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 -   Dispatch on `ApiRoute.matches(path)` from `common/apiRoutes.py`, never `path.endswith(...)`.
 -   Two-tier auth: `enforceAPI` (Tier 1) in `lambda_handler`, then `casbin_enforcer.enforce(event, item)` (Tier 2) in method handlers with `item['object__type']` set first.
 -   Error handling: catch `ValidationError`, `VAMSGeneralErrorResponse`, generic `Exception`
--   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`
+-   Response helpers: `success()`, `validation_error()`, `general_error()`, `internal_error()`, `authorization_error()`, `service_unavailable()` (503 when a dependency cannot answer right now; generic try-again message)
 -   Never echo request input or internal details in client error messages — log specifics, return generic messages.
 -   **Audit every action.** Register each new route-method in `backend/backend/common/auditActions.py` (add-on: `common/addonAuditActions.py`; fork: `custom/customAuditActions.py`) with `route_entries(API_MY_RESOURCE, {PUT: spec("myResourceUpdate", "<entityType>"), GET: read("myResourceGet", "<entityType>")})`, or with a reason in the lane's exempt map; `tests/common/test_audit_registry.py` fails otherwise. Decorate the entrypoint with `@audited_handler` (the registry test fails on an entrypoint without it; the decorator records a failed request's outcome) and call `log_action(event, "myResourceUpdate", database_id=..., changes={field: new value})` after the write succeeds; for a read, pass what was asked in `request_parameters`, never what was returned. A read or search with a free-text parameter (a query, a filter text, typed tags) builds `request_parameters` with `search_text_parameters(parameters, text)` from `common/auditSearchText.py`, which records the text under the redacted `searchText` key; name the query keys you record instead of passing the raw query string. See `backend/CLAUDE.md` "Audit Logging".
 
@@ -302,7 +308,7 @@ export function buildMyFunction(
 
 ### Step 6: Add API Route Binding
 
-**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1 MB template body, which `apiBuilder` fills roughly twice as fast because its Lambdas carry long inline IAM policies). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
+**Prefer `infra/lib/nestedStacks/apiLambda/apiBuilder2-nestedStack.ts`** for new endpoints — it exists to keep both API stacks clear of the two per-template CloudFormation ceilings (500 resources, and a 1,000,000-byte template body, which fills well ahead of the resource count; see "API Stack Ceilings" in `infra/CLAUDE.md` for the current figures). Only place a function in `apiBuilder` if it must share a directly-referenced function instance defined there. Note the split does **not** relieve the API Gateway resources-per-REST-API quota: both stacks register into one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree is a whole-deployment figure. See "API Stack Ceilings" in `infra/CLAUDE.md`.
 
 1. Add import for the new builder function at the top
 2. Build the Lambda function in the constructor

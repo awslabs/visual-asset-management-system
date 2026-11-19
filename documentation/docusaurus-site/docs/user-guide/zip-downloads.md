@@ -10,6 +10,8 @@ Download as Zip is available when your administrator enables it for the deployme
 -   The current files, or the file versions recorded in an asset version.
 -   Only assets that are distributable and not archived.
 
+The archive holds the files the **File Manager** lists. The generated preview images of files (`{file}.previewFile.{ext}`, such as `model.glb.previewFile.png`), which the file list does not show, are left out of every zip download, under a folder, in the whole asset and in an asset version alike. A selection that holds nothing but such preview files is refused with **The selection has no files**.
+
 VAMS refuses the whole archive, rather than leaving files out, when a selected file is archived, a deleted version, in an archive storage class (Amazon S3 Glacier Flexible Retrieval or Glacier Deep Archive), or has a blocked executable file type, and when the selection exceeds the deployment's limits on file count or total size. The reason names the file, so you can adjust the selection and try again.
 
 ## Creating a zip download

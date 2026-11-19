@@ -58,7 +58,7 @@ from handlers.auth import request_to_claims
 from handlers.authz import CasbinEnforcer
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import (AUDIT_INTERNAL_CALL_KEY, audited_handler, internal_call_marker,
-                                        log_actions)
+                                        log_actions, skip_route_outcome)
 from common.workflows import executionRecords as er
 from common.workflows import executionValidation as ev
 from common.workflows import templateResolution as tres
@@ -78,6 +78,7 @@ from common.workflows.defaultBucket import (
 )
 from models.common import (
     APIGatewayProxyResponseV2,
+    commonHeaders,
     internal_error,
     success,
     validation_error,
@@ -104,6 +105,8 @@ _bucket_details_cache = {}
 GLOBAL_DATABASE = "GLOBAL"
 # The identity workflowTriggerDispatch launches fired triggers as (lambdaCrossCall userName).
 SYSTEM_USER = "SYSTEM_USER"
+# The answer to a request that names a trigger type other than "manual" without being a system launch.
+SYSTEM_TRIGGER_TYPE_MESSAGE = "triggerType must be 'manual' or omitted."
 OBJECT_TYPE_WORKFLOW = "workflow"
 OBJECT_TYPE_PIPELINE = "pipeline"
 OBJECT_TYPE_ASSET = "asset"
@@ -1847,14 +1850,15 @@ def _lock_keys_for_launch(workflow, selected_inputs, asset_records):
 
 def _build_input_manifest_entries(selected_inputs, asset_records):
     """Build pipeline 1's manifest input-file entries from the selected inputs. Each entry carries
-    its own asset bucket + full key + version + asset identity + per-file aux preview prefix, so a
-    multi-asset selection resolves each file from its own bucket."""
+    its own asset bucket (registration id + name) + full key + version + asset identity + per-file
+    aux preview prefix, so a multi-asset selection resolves each file from its own bucket."""
     entries = []
     for item in selected_inputs:
         database_id = item["databaseId"]
         asset_id = item["assetId"]
         asset = asset_records[(database_id, asset_id)]
-        bucket_details = _asset_bucket_details(asset.get("bucketId"))
+        bucket_id = asset.get("bucketId")
+        bucket_details = _asset_bucket_details(bucket_id)
         bucket = bucket_details["bucketName"]
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
@@ -1867,6 +1871,7 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,
             asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix,
+            bucket_id=bucket_id or "",
             bucket_region=bucket_details.get("bucketRegion", ""),
             bucket_account_id=bucket_details.get("bucketAccountId", "")))
     return entries
@@ -2186,7 +2191,7 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
                      output_location_type=OUTPUT_LOCATION_TYPE_ASSET, output_extension="/",
                      filtered_inputs_by_composite=None, metadata_source_assets=None,
                      metadata_source_database_id="", metadata_source_databases=None,
-                     run_prefix="", system_execution_context=""):
+                     run_prefix="", system_slot_keys=None, system_execution_context=""):
     """Build the first-pipeline manifest, start the Step Functions execution, and persist all V2
     records.
 
@@ -2390,6 +2395,24 @@ def _launch_workflow(workflow, pipeline_records, resolved_configs, selected_inpu
             el.lock_ttl_seconds(pipeline_records),
             stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
             holder_has_record=_holder_has_execution_record(workflow_database_id, workflow_id))
+    # A system-pipeline launch that asked for a concurrency slot also claims one of the workflow's slots,
+    # so at most the count it named of such runs hold one at a time. With every candidate held, the locks
+    # just taken are released and SystemSlotsBusy tells the launcher to wait. The slot then travels with
+    # the locks: released from memory below, or by the terminal steps through the holder index. Its row
+    # outlives the run's output-ingestion wait too, which the definition adds after the pipelines (#1141).
+    if system_slot_keys:
+        try:
+            slot_key = el.acquire_system_slot(
+                dynamodb.Table(workflow_execution_locks_table), system_slot_keys, execution_id,
+                el.system_slot_ttl_seconds(
+                    pipeline_records, ingestion_wait_seconds=workflowAsl._max_wait_hours() * 3600),
+                stranded_after_seconds=_launch_timeout_seconds() + el.LOCK_TAKEOVER_MARGIN_SECONDS,
+                holder_has_record=_holder_still_running(workflow_database_id, workflow_id))
+        except Exception:
+            if lock_keys:
+                el.release_locks(dynamodb.Table(workflow_execution_locks_table), lock_keys, execution_id)
+            raise
+        lock_keys = list(lock_keys or []) + [slot_key]
     keep_locks = False
     try:
         input_locations = _write_execution_input_files(
@@ -2529,6 +2552,64 @@ def _holder_has_execution_record(workflow_database_id, workflow_id):
     return _has_record
 
 
+# Main-row statuses a run has ended in; a slot holder in one of them runs no further.
+_HOLDER_ENDED_STATUSES = frozenset({"SUCCEEDED", "FAILED", "ABORTED", "TIMED_OUT", er.EXECUTION_STATUS_SKIPPED})
+
+
+def _holder_still_running(workflow_database_id, workflow_id):
+    """For the system slot acquire: whether a slot holder of this workflow may still be running. False
+    when it wrote no main execution row, when the row is in an ended status, or when its state machine
+    has ended (a run stopped outside VAMS). A failed read answers True, so the slot is not taken."""
+    main_table = dynamodb.Table(workflow_execution_database_v2)
+    sort_key = er.workflow_composite_key(workflow_database_id, workflow_id)
+
+    def _running(holder_execution_id):
+        try:
+            item = main_table.get_item(
+                Key={"workflowExecutionId": holder_execution_id, "workflowDatabaseId:workflowId": sort_key},
+                ConsistentRead=True,
+                ProjectionExpression="executionStatus, workflow_execution_arn").get("Item")
+        except Exception as error:
+            logger.warning(f"Could not read the execution record of slot holder {holder_execution_id}: {error}")
+            return True
+        if not item:
+            return False
+        if (item.get("executionStatus") or "") in _HOLDER_ENDED_STATUSES:
+            return False
+        arn = item.get("workflow_execution_arn") or ""
+        return not (arn and el.sfn_execution_has_ended(sfn_client, arn))
+
+    return _running
+
+
+def _system_slot_wait_response():
+    """The 429 a system-pipeline launch gets when every concurrency slot it named is held: the launcher's
+    cue to send it again later. No outcome of the launch, so it writes no audit record of any group (the
+    handler marks it with skip_route_outcome for the actions group, and does not go through
+    general_error, which writes one to the errors group)."""
+    return APIGatewayProxyResponseV2(
+        isBase64Encoded=False,
+        statusCode=429,
+        headers=commonHeaders(),
+        body=json.dumps({"message": el.SYSTEM_SLOTS_BUSY_MESSAGE}),
+    )
+
+
+def _system_slot_keys_for(event, workflow_database_id, workflow_id):
+    """The slot keys a system-pipeline launch may claim, in the order to try them; None for any other launch.
+
+    Only a marked system-pipeline cross-call names slots, in ``systemExecution.concurrencySlots``
+    (``count``, and the ``candidates`` it found free), which API Gateway cannot set
+    (systemPipelines.resolve_concurrency_slots validates both and raises SystemExecutionError for a
+    malformed field). With no candidates the first MAX_SYSTEM_SLOT_CANDIDATES slots are tried."""
+    slots = sp.resolve_concurrency_slots(event)
+    if slots is None:
+        return None
+    count, candidates = slots
+    order = candidates or list(range(min(count, el.MAX_SYSTEM_SLOT_CANDIDATES)))
+    return [el.system_slot_key(workflow_database_id, workflow_id, index) for index in order]
+
+
 def _stop_started_execution(workflow_execution_arn):
     """Best-effort Step Functions StopExecution for an execution whose records could not be written.
     Never raises: the caller is already surfacing the record-write failure, and an execution that
@@ -2658,7 +2739,10 @@ def _record_skipped_launch(workflow, conflict, selected_inputs, asset_records,
             execution_id=skip_id, workflow_database_id=workflow["databaseId"],
             workflow_id=workflow["workflowId"], workflow_arn=workflow.get("workflow_arn", ""),
             skipped_at=skipped_at, skip_scope=conflict.scope, skip_reason=conflict.message,
-            blocking_execution_id=holder, first_skipped_at=first_skip)
+            blocking_execution_id=holder, first_skipped_at=first_skip,
+            # A system workflow's skipped launch is hidden with its runs (the workflow row's isSystem,
+            # read strongly consistent at launch, as _persist_execution_records stamps a run).
+            is_system=workflow.get("isSystem") is True)
         row = dynamodb.Table(workflow_execution_database_v2).update_item(**update).get(
             "Attributes", {}) or {}
         logger.info(f"Recorded skipped trigger launch on skip record {skip_id} (refusal "
@@ -2938,6 +3022,9 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
     #    None here, whatever its body or event says, so the public request can never reach either.
     try:
         system_execution = sp.resolve_system_execution(event)
+        # The concurrency slots it may ask for (systemExecution.concurrencySlots), validated here too, so
+        # a malformed request is refused before any read; None for every launch that names none.
+        system_slot_keys = _system_slot_keys_for(event, workflow_database_id, workflow_id)
     except sp.SystemExecutionError as se:
         logger.error(f"Refused a system-pipeline launch of {workflow_database_id}:{workflow_id}: {se}")
         return validation_error(body={"message": sp.SYSTEM_EXECUTION_INVALID_MESSAGE}, event=event)
@@ -3223,7 +3310,19 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             metadata_source_assets=metadata_source_assets,
             metadata_source_database_id=metadata_source_database_id,
             metadata_source_databases=metadata_source_databases,
+            system_slot_keys=system_slot_keys,
             system_execution_context=system_execution_context)
+    except el.SystemSlotsBusy:
+        # Not a refusal: the launcher puts its message back and tries again later. So it is no outcome of
+        # the launch either: the attempt that claims a slot records workflowExecute, and one refused for
+        # good (a 400) records its failure, so a run of launches that waits writes no failed record per
+        # wait (skip_route_outcome).
+        # The answer is built here rather than by general_error, which would write an errors-group
+        # record with the request's action and outcome failed for every wait (D103); the INFO line
+        # below is the wait's only trace.
+        logger.info(f"System launch of workflow {workflow_database_id}:{workflow_id} waits for a slot")
+        skip_route_outcome(event)
+        return _system_slot_wait_response()
     except el.ExecutionLockConflict as conflict:
         # The key and the holder are for the log; the caller gets a fixed body naming only the scope
         # (asset / file / file version). The trigger dispatcher drops a 400, which for a repeated delivery
@@ -3270,6 +3369,14 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
 # Route handler
 #######################
 
+def _is_system_cross_call(event) -> bool:
+    """True for a direct invoke by another VAMS Lambda as SYSTEM_USER: the event carries a top-level
+    ``lambdaCrossCall`` whose ``userName`` is SYSTEM_USER. API Gateway cannot add a top-level key to the
+    proxy event it builds, so no API request is one (the same envelope rule as ``vamsInternalAction``)."""
+    cross_call = event.get("lambdaCrossCall") if isinstance(event, dict) else None
+    return isinstance(cross_call, dict) and cross_call.get("userName") == SYSTEM_USER
+
+
 def handle_post_request(event):
     """Validate path params + request body, then execute the workflow."""
     path_params = event.get("pathParameters", {}) or {}
@@ -3301,6 +3408,12 @@ def handle_post_request(event):
             body = raw
 
     request_model = parse(body, model=ExecuteWorkflowRequestV2Model)
+    # A trigger type records why a run started, and fileUpload is set only by the upload trigger
+    # dispatcher, which invokes this handler as SYSTEM_USER. Anyone else's request may only be a manual
+    # run. A system trigger value is never a request value (common.workflows.systemPipelines).
+    if request_model.triggerType != "manual" and not _is_system_cross_call(event):
+        logger.warning("Refused an execute request naming a system trigger type outside a system launch")
+        return validation_error(body={"message": SYSTEM_TRIGGER_TYPE_MESSAGE}, event=event)
     return execute_workflow(
         event, path_params["workflowDatabaseId"], path_params["workflowId"], request_model)
 

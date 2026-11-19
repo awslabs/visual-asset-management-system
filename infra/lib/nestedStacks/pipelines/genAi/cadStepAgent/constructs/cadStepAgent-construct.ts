@@ -169,13 +169,17 @@ export class CadStepAgentConstruct extends Construct {
         });
 
         // The model grant names the inference profile the agent invokes and the foundation model
-        // behind it. A cross-Region profile (global., us., eu., apac., us-gov.) routes requests to
-        // other Regions, and Amazon Bedrock authorizes the foundation-model ARN of the Region it
-        // routed to, so that case grants the model in every Region of the partition; a plain model id
-        // is invoked in the deployment Region only. Never foundation-model/*.
+        // behind it. A cross-Region profile (a Config.BEDROCK_INFERENCE_PROFILE_PREFIXES prefix such as
+        // global., us., eu., apac., au., jp., in. or us-gov.) routes requests to other Regions, and
+        // Amazon Bedrock authorizes the foundation-model ARN of the Region it routed to, so that case
+        // grants the model in every Region of the partition; a plain model id is invoked in the
+        // deployment Region only. Never foundation-model/*.
         const bedrockModelId = cad.bedrockModelId;
-        const crossRegionPrefix = /^(global|us-gov|us|eu|apac)\./.exec(bedrockModelId)?.[1];
-        const bedrockModelPermissions = bedrockModelId.replace(/^(global|us-gov|us|eu|apac)\./, "");
+        const crossRegionPrefix = Config.BEDROCK_INFERENCE_PROFILE_PREFIX.exec(bedrockModelId)?.[1];
+        const bedrockModelPermissions = bedrockModelId.replace(
+            Config.BEDROCK_INFERENCE_PROFILE_PREFIX,
+            ""
+        );
         const foundationModelRegion = crossRegionPrefix ? "*" : region;
         const bedrockPolicy = new iam.PolicyDocument({
             statements: [

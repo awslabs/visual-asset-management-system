@@ -5,6 +5,7 @@
 
 import { test, expect, Page } from "@playwright/test";
 import {
+    actionDisabledReason,
     apiContext,
     collectPageErrors,
     featureSwitches,
@@ -260,9 +261,13 @@ test.describe("Download as Zip", () => {
         }
 
         await expect(zipItem).toBeVisible();
-        if ((await zipItem.getAttribute("aria-disabled")) === "true") {
+        // The entry's reason, once the permission check settles, is hidden text named by
+        // aria-describedby (web/e2e/CLAUDE.md, gated actions), not visible text (#1634).
+        const reason = await actionDisabledReason(zipItem);
+        if (reason) {
             // The role may not create zip downloads: the entry stays listed with its reason.
-            await expect(page.getByText(/does not allow creating zip downloads/)).toBeVisible();
+            expect(reason).toMatch(/does not allow creating zip downloads/);
+            await expect(zipItem).toHaveAttribute("aria-disabled", "true");
         } else {
             await zipItem.click();
             const dialog = page.getByRole("dialog").filter({ hasText: "Download as Zip" });

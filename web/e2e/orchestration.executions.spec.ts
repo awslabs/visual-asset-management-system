@@ -895,10 +895,12 @@ test.describe("Executions board — partial detail responses", () => {
         test.skip(!opened, "No executions in this environment");
 
         await expect(page.getByText("Ingesting outputs (1 of 3)")).toBeVisible({ timeout: 20_000 });
+        // The bar follows the bytes copied, not the files done (#1634): the landed 1 GiB plus the
+        // running 2 GiB file's planned share at 2 of 8 parts (0.5 GiB) is 1.5 of 3 GiB, so 50.
         await expect(
             page.getByRole("progressbar", { name: "Ingesting outputs (1 of 3)" })
-        ).toHaveAttribute("aria-valuenow", "33");
-        await expect(page.getByText(/1 GiB of 3 GiB copied into the asset/)).toBeVisible();
+        ).toHaveAttribute("aria-valuenow", "50");
+        await expect(page.getByText(/1\.5 GiB of 3 GiB copied into the asset/)).toBeVisible();
         const table = page.getByRole("table", { name: "Output files being copied" });
         await expect(table.getByRole("row").filter({ hasText: "/e2e/copying.e57" })).toContainText(
             "25%"

@@ -176,14 +176,15 @@ export class VideoSopBomConstruct extends Construct {
             ],
         });
 
-        // The foundation-model id underneath any cross-Region inference-profile prefix. The Region
+        // The foundation-model id underneath any cross-Region inference-profile prefix
+        // (Config.BEDROCK_INFERENCE_PROFILE_PREFIXES). The Region
         // segment is a wildcard because geo and global inference profiles route a request to
         // destination Regions the caller cannot enumerate; the model id itself stays exact. The
         // inference-profile ARN names the configured id as-is: with a cross-Region prefix it is the
         // profile the container invokes, and a bare foundation-model id names no profile at all.
         const bedrockModelId = resolveVideoSopBomBedrockModelId(props.config);
         const bedrockFoundationModel = bedrockModelId.replace(
-            /^(global|us-gov|us|eu|apac|au|jp)\./,
+            Config.BEDROCK_INFERENCE_PROFILE_PREFIX,
             ""
         );
         const bedrockPolicy = new iam.PolicyDocument({

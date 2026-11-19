@@ -6,6 +6,7 @@ Core pipeline orchestrator for Preview 3D Thumbnail generation.
 Follows the pcPotreeViewer pipeline pattern: parse input, dispatch to handler, upload output.
 """
 
+import json
 import os
 import numpy as np
 from pathlib import Path
@@ -35,6 +36,7 @@ from . import renderer
 from . import resources
 from . import scene_parts
 from .utils.timing import PhaseTimer
+from .analysis import workdirs
 
 logger = get_logger()
 
@@ -483,11 +485,12 @@ def _run_preview_stage(
     if failure is not None:
         return failure
 
-    if incomplete is not None:
+    skipped_prims = usd_report.get("skippedPrims") if usd_report else None
+    if incomplete is not None or skipped_prims:
         _write_incomplete_result(
             results_location, incomplete,
-            dependencies.relative_to_root(stage_input.objectKey, reference_root_key))
-        return _success_response(stage, incomplete.message())
+            dependencies.relative_to_root(stage_input.objectKey, reference_root_key), skipped_prims)
+        return _success_response(stage, _incomplete_message(incomplete, skipped_prims))
     return _success_response(stage)
 
 
@@ -595,7 +598,25 @@ def _complete_without_preview(stage: PipelineStage, results_location: dict, name
     return _success_response(stage, message)
 
 
-def _write_incomplete_result(results_location: dict, incomplete, input_path: str):
+def _skipped_prims_sentence(skipped_prims: dict) -> str:
+    """'3 Points prims and 2 BasisCurves prims are not drawn by the 3D Preview Thumbnail.'"""
+    listed = usd_handler.describe_skipped(skipped_prims)
+    total = sum(entry["count"] for entry in skipped_prims.values())
+    return f"{listed} {'is' if total == 1 else 'are'} not drawn by the 3D Preview Thumbnail."
+
+
+def _incomplete_message(incomplete, skipped_prims) -> str:
+    """The completion message of a run that is incomplete: the fetched-files message, the skipped prim
+    types, or both. Unchanged from the fetched-files message when no prim was skipped."""
+    if not skipped_prims:
+        return incomplete.message()
+    sentence = _skipped_prims_sentence(skipped_prims)
+    if incomplete is None:
+        return f"Preview generated, but incomplete: {sentence} See the job log for the list."
+    return f"{incomplete.message()} {sentence}"
+
+
+def _write_incomplete_result(results_location: dict, incomplete, input_path: str, skipped_prims: dict = None):
     """Write the incomplete preview's result document under the execution's results folder, where the
     workflow's output step records it on the execution (Output Results). Best effort: a run with no
     results location, or a write that fails, keeps its preview and its outcome; the job log still
@@ -606,7 +627,23 @@ def _write_incomplete_result(results_location: dict, incomplete, input_path: str
         return
     key = results_location["objectDir"] + dependencies.INCOMPLETE_RESULT_FILENAME
     try:
-        body = dependencies.incomplete_result_document(incomplete, input_path)
+        body = dependencies.incomplete_result_document(
+            incomplete if incomplete is not None else
+            dependencies.IncompletePreview(geometry_layers=[], other_files=[], not_followed=[]),
+            input_path)
+        if skipped_prims:
+            document = json.loads(body)
+            document["message"] = _incomplete_message(incomplete, skipped_prims)
+            document["counts"]["skippedPrimTypes"] = {name: entry["count"] for name, entry in skipped_prims.items()}
+            document["skippedPrims"] = [{"type": name, "count": entry["count"], "paths": list(entry["paths"])}
+                                        for name, entry in skipped_prims.items()]
+            body = json.dumps(document, indent=2).encode("utf-8")
+            # The cap holds for the final document: the file list shrinks until it fits. A run without
+            # skipped prims never reaches this, so its document is unchanged.
+            while len(body) > dependencies.MAX_RESULT_DOCUMENT_BYTES and document["skippedFiles"]:
+                document["skippedFiles"] = document["skippedFiles"][:len(document["skippedFiles"]) // 2]
+                document["truncated"] = True
+                body = json.dumps(document, indent=2).encode("utf-8")
         if s3.put_json(results_location["bucketName"], key, body) is None:
             logger.warning("Could not write the incomplete-preview result; the summary is in the job "
                            "log")
@@ -798,6 +835,10 @@ def _normalize_up_axis(pv_data, ext: str):
     return pv_data
 
 
+# Public name for callers outside the Fargate runner.
+normalize_up_axis = _normalize_up_axis
+
+
 def _rotate_z_up_to_y_up(pv_data):
     """
     Rotate data from Z-up to Y-up by applying a -90 degree rotation around the X-axis.
@@ -853,8 +894,9 @@ def _check_existing_preview(stage_input: StageInput, input_basename: str, localT
 
 
 def _create_dir(parts: list) -> str:
-    """Create a directory from path parts if it doesn't exist."""
-    dir_path = os.path.join(*parts)
+    """Create a directory from path parts if it doesn't exist. Relative parts resolve against the
+    runtime's work root: ``/tmp`` in Lambda, the cwd in the Fargate container."""
+    dir_path = os.path.join(workdirs.work_root(), *parts)
     if not os.path.exists(dir_path):
         Path(dir_path).mkdir(parents=True)
     return dir_path

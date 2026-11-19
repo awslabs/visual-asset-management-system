@@ -109,7 +109,7 @@ describe("DatabaseCompliance overview filters", () => {
             ).toBe(true)
         );
         const before = service().fetchDatabaseComplianceOverview.mock.calls.length;
-        await userEvent.click(screen.getByRole("button", { name: /Show only quarantined/ }));
+        await userEvent.click(screen.getByRole("button", { name: /: show only quarantined/ }));
         await waitFor(() =>
             expect(service().fetchDatabaseComplianceOverview.mock.calls.length).toBe(before + 1)
         );
@@ -118,7 +118,7 @@ describe("DatabaseCompliance overview filters", () => {
         expect(last[2].state).toBe("quarantined");
         expect(window.location.hash).toContain("state=quarantined");
         // Clicking the active tile again clears the filter.
-        await userEvent.click(screen.getByRole("button", { name: /Show only quarantined/ }));
+        await userEvent.click(screen.getByRole("button", { name: /: show only quarantined/ }));
         await waitFor(() =>
             expect(service().fetchDatabaseComplianceOverview.mock.calls.length).toBe(before + 2)
         );
@@ -134,12 +134,35 @@ describe("DatabaseCompliance overview filters", () => {
                 filtersOf(service().fetchDatabaseComplianceOverview.mock.calls.length - 1)
             ).toEqual(expect.objectContaining({ evaluationError: "true" }))
         );
-        await userEvent.click(screen.getByRole("button", { name: /Show every tracked/ }));
+        await userEvent.click(screen.getByRole("button", { name: /: show every tracked/ }));
         await waitFor(() =>
             expect(
                 filtersOf(service().fetchDatabaseComplianceOverview.mock.calls.length - 1)
             ).toEqual(expect.objectContaining({ evaluationError: "", state: "" }))
         );
+    });
+
+    it("names each summary count by the count it shows, then what it lists (#1592)", async () => {
+        render(<DatabaseCompliancePage />);
+        await screen.findByText("Turbine Blade");
+        expect(
+            screen.getByRole("button", { name: "120: show every tracked asset" })
+        ).toHaveTextContent(/^120$/);
+        const quarantined = screen.getByRole("button", {
+            name: "2: show only quarantined assets",
+        });
+        expect(quarantined).toHaveTextContent(/^2$/);
+        expect(
+            screen.getByRole("button", {
+                name: "5: show only assets whose last evaluation errored",
+            })
+        ).toHaveTextContent(/^5$/);
+        // A tile that is filtering says so, in its text and its name alike.
+        await userEvent.click(quarantined);
+        const shown = await screen.findByRole("button", {
+            name: "2 (shown): show only quarantined assets",
+        });
+        expect(shown).toHaveTextContent(/^2 \(shown\)$/);
     });
 
     it("debounces the search into one request", async () => {

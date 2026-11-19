@@ -20,6 +20,9 @@ the workflow core never imports, names or calls the feature that uses them:
    to MAX_SYSTEM_EXECUTION_CONTEXT_BYTES. It is written to the first step's run manifest and to the
    main execution row only. It is never part of systemConfig / effectiveSystemConfig, the execution
    details or list projections, the Step Functions input (which the workflow lambdas log), or a re-run.
+3. **Concurrency slots** (optional). The same marked call may ask to hold one of N concurrency slots of
+   its workflow for the run's life (``systemExecution.concurrencySlots``, resolve_concurrency_slots), so
+   at most N such runs of the workflow run at once. Every other launch claims none.
 
 There is no terminal callback. A feature that launches a system run stores the returned
 workflowExecutionId on its own record and reads the run's status from the ordinary execution tracking
@@ -30,9 +33,11 @@ artefacts with S3 lifecycle rules. Core workflow code never names a specific pip
 Trust boundary: the launch path is gated by who can invoke the execute function (executeWorkflowV2)
 directly, not by the API. Any principal holding ``lambda:InvokeFunction`` on it can send the marked
 cross-call and so launch a system run under any well-formed system trigger, with any context. API
-Gateway invokes it too, but cannot place the top-level keys. Today only the execution service
-(re-run) and the workflow trigger dispatcher hold an invoke grant, and neither sends the marker. A new
-invoke grant on the execute function is a grant to launch system runs and must be reviewed as one.
+Gateway invokes it too, but cannot place the top-level keys. The execution service (re-run) and the
+workflow trigger dispatcher hold an invoke grant and never send the marker; each feature that launches
+system runs holds one for its launcher, scoped to the function's ARN, and sends it (backend/CLAUDE.md,
+"Trust boundary", names every holder). A new invoke grant on the execute function is a grant to launch
+system runs and must be reviewed as one.
 
 This module has NO import-time AWS or environment dependency, so it imports and unit-tests in isolation
 like the other ``common.workflows`` record helpers.
@@ -40,7 +45,7 @@ like the other ``common.workflows`` record helpers.
 
 import json
 import re
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from customLogging.logger import safeLogger
 
@@ -154,3 +159,51 @@ def resolve_system_execution(event) -> Optional[Tuple[str, str]]:
         raise SystemExecutionError(
             f"system execution context exceeds {MAX_SYSTEM_EXECUTION_CONTEXT_BYTES} bytes")
     return trigger_type, text
+
+
+# Optional field of the system execution object: the launch asks to hold one of `count` concurrency slots
+# of its workflow for the run's whole life ({"count": N, "candidates": [index, ...]}), so at most N such
+# runs of the workflow run at once (common.workflows.executionLocks, "Concurrency slots"). A feature that
+# needs no cap sends no field. The candidates are the slot indexes the launcher found free, tried in
+# their order; with none, the first MAX_CONCURRENCY_SLOT_CANDIDATES slots are tried.
+SYSTEM_EXECUTION_SLOTS_KEY = "concurrencySlots"
+MAX_CONCURRENCY_SLOTS = 1000
+MAX_CONCURRENCY_SLOT_CANDIDATES = 16
+
+
+def _slot_index(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def resolve_concurrency_slots(event) -> Optional[Tuple[int, List[int]]]:
+    """The (slot count, candidate indexes) a launch asks for, or None when it asks for none.
+
+    Read only from a marked system-pipeline cross-call (is_system_pipeline_call): any other event, the
+    public request included, gets None whatever it carries, so it never claims a slot. A marked call
+    whose system execution object has no SYSTEM_EXECUTION_SLOTS_KEY gets None too. A present field must
+    be an object whose `count` is an integer from 1 to MAX_CONCURRENCY_SLOTS and whose optional
+    `candidates` is a list of at most MAX_CONCURRENCY_SLOT_CANDIDATES distinct integers from 0 to
+    count - 1; otherwise SystemExecutionError is raised (the launch is refused like any malformed marked
+    call). Call it after resolve_system_execution, which has already refused a malformed object."""
+    if not is_system_pipeline_call(event):
+        return None
+    spec = event.get(SYSTEM_EXECUTION_EVENT_KEY)
+    if not isinstance(spec, dict) or SYSTEM_EXECUTION_SLOTS_KEY not in spec:
+        return None
+    slots = spec.get(SYSTEM_EXECUTION_SLOTS_KEY)
+    if not isinstance(slots, dict):
+        raise SystemExecutionError("system execution concurrency slots must be an object")
+    count = slots.get("count")
+    if not _slot_index(count) or not 1 <= count <= MAX_CONCURRENCY_SLOTS:
+        raise SystemExecutionError(
+            f"system execution slot count must be an integer from 1 to {MAX_CONCURRENCY_SLOTS}")
+    candidates = slots.get("candidates")
+    if candidates is None:
+        candidates = []
+    if (not isinstance(candidates, list) or len(candidates) > MAX_CONCURRENCY_SLOT_CANDIDATES
+            or not all(_slot_index(index) and 0 <= index < count for index in candidates)
+            or len(set(candidates)) != len(candidates)):
+        raise SystemExecutionError(
+            f"system execution slot candidates must be at most {MAX_CONCURRENCY_SLOT_CANDIDATES} distinct "
+            f"slot indexes below the count")
+    return count, list(candidates)

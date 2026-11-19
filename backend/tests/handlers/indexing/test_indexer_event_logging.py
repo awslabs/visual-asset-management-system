@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import json
 import pytest
 
-from tests.handlers.indexing.test_indexer_batch_failure_reporting import _load_indexer, _response
+from tests.handlers.osSemanticSearch.test_osIndexer_batch_failure_reporting import _load_indexer, _response
 from tests.handlers.indexing.test_sqsBucketSync_recreation_guard import _load as _load_bucket_sync
 
 ASSET_TABLE = "test-asset-table"
@@ -91,7 +91,7 @@ def _assert_no_values(text):
 @pytest.mark.unit
 class TestAssetIndexerLogsNoFieldValues:
     def _run(self, event):
-        m = _load_indexer("assetIndexer")
+        m = _load_indexer("osAssetIndexer")
         mock_logger = MagicMock()
         with patch.object(m, "logger", mock_logger), \
                 patch.object(m, "asset_storage_table_name", ASSET_TABLE), \
@@ -122,7 +122,7 @@ class TestAssetIndexerLogsNoFieldValues:
 @pytest.mark.unit
 class TestFileIndexerLogsNoFieldValues:
     def _run(self, event):
-        m = _load_indexer("fileIndexer")
+        m = _load_indexer("osFileIndexer")
         mock_logger = MagicMock()
         with patch.object(m, "logger", mock_logger), \
                 patch.object(m, "asset_storage_table_name", ASSET_TABLE), \
@@ -229,7 +229,7 @@ class TestIndexerSearchServiceErrorsCarryNoValues:
         return manager
 
     def test_asset_document_index_failure(self):
-        m = _load_indexer("assetIndexer")
+        m = _load_indexer("osAssetIndexer")
         mock_logger = MagicMock()
         document = MagicMock(str_databaseid="db1", str_assetid="x-asset1", bool_archived=False)
         document.dict.return_value = {"MD_note": VALUE_FRAGMENT}
@@ -241,7 +241,7 @@ class TestIndexerSearchServiceErrorsCarryNoValues:
         mock_logger.exception.assert_not_called()
 
     def test_file_document_index_failure(self):
-        m = _load_indexer("fileIndexer")
+        m = _load_indexer("osFileIndexer")
         mock_logger = MagicMock()
         document = MagicMock(str_databaseid="db1", str_assetid="x-asset1", str_key="/part.glb")
         document.dict.return_value = {"MD_note": VALUE_FRAGMENT}
@@ -253,9 +253,9 @@ class TestIndexerSearchServiceErrorsCarryNoValues:
         mock_logger.exception.assert_not_called()
 
     @pytest.mark.parametrize("module_name, function, document_kwargs", [
-        ("assetIndexer", "index_asset_document",
+        ("osAssetIndexer", "index_asset_document",
          {"str_databaseid": "db1", "str_assetid": "a1", "bool_archived": False}),
-        ("fileIndexer", "index_file_document", {"str_databaseid": "db1", "str_assetid": "a1", "str_key": "/p.glb"}),
+        ("osFileIndexer", "index_file_document", {"str_databaseid": "db1", "str_assetid": "a1", "str_key": "/p.glb"}),
     ])
     def test_rejected_geo_shape_is_not_echoed(self, module_name, function, document_kwargs):
         from opensearchpy.exceptions import RequestError

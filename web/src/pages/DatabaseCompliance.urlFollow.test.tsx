@@ -137,7 +137,7 @@ describe("DatabaseCompliance follows its URL", () => {
         render(<DatabaseCompliancePage />);
         await screen.findByText("Turbine Blade");
         const entries = window.history.length;
-        const quarantinedTile = screen.getByRole("button", { name: /Show only quarantined/ });
+        const quarantinedTile = screen.getByRole("button", { name: /: show only quarantined/ });
         act(() => {
             quarantinedTile.click();
         });
