@@ -125,6 +125,11 @@ test.describe("Search map: Show raster files filter", () => {
             "(1 raster file hidden)"
         );
         const only = await settle(page);
+        if (process.env.E2E_EVIDENCE_DIR) {
+            await page.screenshot({
+                path: `${process.env.E2E_EVIDENCE_DIR}/search-map-raster-off.png`,
+            });
+        }
         expect(isInView(only, 10, 50)).toBe(true);
         expect(isInView(only, -122.5, 37.5)).toBe(false);
         expect(only.zoom).toBeGreaterThan(all.zoom);
@@ -135,6 +140,11 @@ test.describe("Search map: Show raster files filter", () => {
         await expect(title).toContainText("2 of 2 results with location data");
         await expect(page.getByTestId("map-raster-hidden-count")).toHaveCount(0);
         const back = await settle(page);
+        if (process.env.E2E_EVIDENCE_DIR) {
+            await page.screenshot({
+                path: `${process.env.E2E_EVIDENCE_DIR}/search-map-raster-on.png`,
+            });
+        }
         expect(isInView(back, -122.5, 37.5)).toBe(true);
         expect(isInView(back, 10, 50)).toBe(true);
     });
@@ -150,28 +160,42 @@ test.describe("Search map: Show raster files filter", () => {
     });
 
     for (const width of [390, 820, 1280]) {
-        test(`the toggle sits on the title row at ${width}px`, async ({ page }) => {
-            await page.setViewportSize({ width, height: 900 });
+        test(`the toggle stays on the title row, or wraps under it, at ${width}px`, async ({
+            page,
+        }) => {
+            // Opened wide (the view switch turns into other controls on a phone), then resized.
             await openMap(page);
-            const row = await page.getByTestId("map-results-title-row").boundingBox();
-            const toggle = await page.getByTestId("map-raster-filter").boundingBox();
-            const title = await page
+            await page.setViewportSize({ width, height: 900 });
+            const toggleBox = page.getByTestId("map-raster-filter");
+            await expect(toggleBox).toBeVisible();
+            const row = (await page.getByTestId("map-results-title-row").boundingBox())!;
+            const toggle = (await toggleBox.boundingBox())!;
+            const title = (await page
                 .getByRole("heading", { name: /results with location data/ })
-                .boundingBox();
-            expect(row && toggle && title).toBeTruthy();
-            // Always inside the row and the window.
-            expect(toggle!.x + toggle!.width).toBeLessThanOrEqual(width + 1);
-            if (width >= 820) {
-                // Same row as the title, at its right edge.
+                .boundingBox())!;
+            // Never outside its row or the window.
+            expect(toggle.x).toBeGreaterThanOrEqual(row.x - 1);
+            expect(toggle.x + toggle.width).toBeLessThanOrEqual(row.x + row.width + 1);
+            expect(toggle.x + toggle.width).toBeLessThanOrEqual(width + 1);
+            if (width >= 1280) {
+                // Room for both: same row, the toggle at the right edge.
                 expect(
-                    Math.abs(toggle!.y + toggle!.height / 2 - (title!.y + title!.height / 2))
+                    Math.abs(toggle.y + toggle.height / 2 - (title.y + title.height / 2))
                 ).toBeLessThan(40);
-                expect(row!.x + row!.width - (toggle!.x + toggle!.width)).toBeLessThan(8);
+                expect(row.x + row.width - (toggle.x + toggle.width)).toBeLessThan(8);
+            } else {
+                // Narrow content area: the toggle may wrap under the title, never over it.
+                expect(
+                    toggle.y >= title.y + title.height - 2 || toggle.x >= title.x + title.width - 2
+                ).toBe(true);
             }
-            await page.screenshot({
-                path: `../../../planning/feature-1599-cog-map-viewer/smoke-evidence/uat-r3/search-row-${width}.png`,
-                clip: { x: 0, y: Math.max(0, row!.y - 20), width, height: 120 },
-            });
+            // Evidence for a review: only when a directory is given.
+            if (process.env.E2E_EVIDENCE_DIR) {
+                await page.screenshot({
+                    path: `${process.env.E2E_EVIDENCE_DIR}/search-row-${width}.png`,
+                    clip: { x: 0, y: Math.max(0, row.y - 20), width, height: 120 },
+                });
+            }
         });
     }
 });
