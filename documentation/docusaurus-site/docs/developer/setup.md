@@ -154,7 +154,7 @@ dependencies = [
 package = false                     # a dependency set, not an installable package (Lambda layers, containers)
 required-version = "==0.13.8"       # the uv version the lock was made with; the CI audit installs the same version
 exclude-newer = "7 days"            # only resolve releases at least seven days old, like npm's min-release-age
-environments = ["sys_platform == 'linux'"]   # deploy-path projects: lock only the Linux resolution
+environments = ["sys_platform == 'linux'"]   # deploy-path projects: lock only the Linux resolution (the 3D Basic image also locks macOS and Python 3.12 to 3.14, so its hashed export installs on a developer machine)
 ```
 
 Run the uv version the project requires, for example `uvx --from uv==0.13.8 uv lock`; another version stops with an error instead of rewriting the lock.
