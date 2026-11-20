@@ -43,6 +43,7 @@ CLASS_DOCUMENT = "document"
 CLASS_TEXT = "text"
 CLASS_DATA = "data"
 CLASS_TILES3D = "tiles3d"
+CLASS_RASTER = "raster"
 CLASS_MESH = "mesh"
 CLASS_USD = "usd"
 CLASS_CAD = "cad"
@@ -51,7 +52,7 @@ CLASS_SPLAT = "splat"
 CLASS_IFC = "ifc"
 CLASS_OTHER = "other"
 FILE_CLASSES = (CLASS_IMAGE, CLASS_VIDEO, CLASS_AUDIO, CLASS_DOCUMENT, CLASS_TEXT, CLASS_DATA,
-                CLASS_TILES3D, CLASS_MESH, CLASS_USD, CLASS_CAD, CLASS_POINTCLOUD, CLASS_SPLAT,
+                CLASS_TILES3D, CLASS_RASTER, CLASS_MESH, CLASS_USD, CLASS_CAD, CLASS_POINTCLOUD, CLASS_SPLAT,
                 CLASS_IFC, CLASS_OTHER)
 
 # The words a user types when asking for a kind of file, per class. Embedded in every file's source
@@ -64,6 +65,7 @@ FILE_CLASS_PHRASES: Dict[str, str] = {
     CLASS_TEXT: "text file",
     CLASS_DATA: "data table (spreadsheet)",
     CLASS_TILES3D: "3D Tiles tileset",
+    CLASS_RASTER: "georeferenced raster (GeoTIFF)",
     CLASS_MESH: "3D model (mesh)",
     CLASS_USD: "3D model (USD scene)",
     CLASS_CAD: "CAD model",
@@ -151,6 +153,9 @@ for _extension in (".csv", ".fcs", ".xlsx"):
 # ArcGIS Pro layer file a CIM JSON document. Both carry the data class so sys_geo.footprint promotes to `location`.
 for _extension in (".gpkg", ".lyrx"):
     EXTENSION_CLASSES[_extension] = (CLASS_DATA, BRANCH_MEDIA)
+# .tif and .tiff stay `image` here (the TIFF/TGA viewer serves them). The MEDIA branch reads a TIFF's header by
+# range first (no pixels) and promotes a georeferenced GeoTIFF to `raster`, which carries sys_raster and sys_geo;
+# any other TIFF keeps the `image` path.
 for _extension in (".glb", ".gltf", ".fbx", ".obj", ".stl"):
     EXTENSION_CLASSES[_extension] = (CLASS_MESH, BRANCH_BLENDER)
 # COLLADA renders in the 3D render image (its hardened COLLADA loader): Blender 5.0 removed its importer.
