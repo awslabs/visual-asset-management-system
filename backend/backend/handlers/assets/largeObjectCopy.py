@@ -52,7 +52,7 @@ from botocore.exceptions import ClientError
 
 from common import largeObjectCopy as loc
 from common import uploadStatus
-from common.assetLocations import contains
+from common.assetLocations import contains, normalize_location
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import (
     bucket_region_for_name,
@@ -606,14 +606,30 @@ def _determine_asset_type(bucket, prefix):
     return ("." + name.split(".")[-1].lower()) if "." in name else "unknown"
 
 
+def _asset_location(asset, job):
+    """The asset's stored location, or for a legacy row that has none, its folder
+    `{baseAssetsPrefix}{assetId}/` as it appears in the copy's destination key (the part of the key up
+    to and including the asset id segment). '' when neither is known."""
+    location = normalize_location((asset.get("assetLocation") or {}).get("Key"))
+    if location:
+        return location
+    dest_key = normalize_location((job.get("dest") or {}).get("key"))
+    folder = f"{job['assetId']}/"
+    if dest_key.startswith(folder):
+        return folder
+    index = dest_key.find("/" + folder)
+    return dest_key[:index + 1 + len(folder)] if index >= 0 else ""
+
+
 def _after_landing(job):
     """Asset type and subscription email for a landed file (once per job, claimed by _finish).
     Best-effort: the file is in the asset, so a failure here is logged and does not fail the job."""
     try:
         asset = asset_table.get_item(Key={"databaseId": job["databaseId"], "assetId": job["assetId"]}).get("Item")
         if asset:
-            prefix = (asset.get("assetLocation") or {}).get("Key", f"{job['assetId']}/")
-            asset_type = _determine_asset_type(job["dest"]["bucket"], prefix) or asset.get("assetType") or "none"
+            prefix = _asset_location(asset, job)
+            asset_type = (_determine_asset_type(job["dest"]["bucket"], prefix) if prefix else None) \
+                or asset.get("assetType") or "none"
             asset_table.update_item(
                 Key={"databaseId": job["databaseId"], "assetId": job["assetId"]},
                 UpdateExpression="SET assetType = :t",
