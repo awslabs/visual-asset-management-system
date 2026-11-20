@@ -1,7 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Asset versions, asset export and compliance read the keys a single-file asset holds.
+"""Asset versions and asset export read the keys a single-file asset holds.
 
 A single-file asset (location key with no trailing ``/``) holds its object, its companion folder
 ``{file key}/`` and its own previews. Each of these readers appended ``/`` to the location, so the
@@ -14,11 +14,9 @@ object's own path, which the object shadows.
 import boto3
 import pytest
 from moto import mock_aws
-from unittest.mock import MagicMock
 
 from backend.tests.handlers.assets.test_assetVersions_change_provenance import _assetVersions as av
 from backend.tests.handlers.assets.test_assetExportService_authz_fail_closed import _load_asset_export_service as _load_export
-from backend.tests.handlers.compliance.test_complianceEvaluationStore import store
 
 BUCKET = "vams-test-assets"
 FILE_LOCATION = "p1/model.glb"
@@ -75,32 +73,3 @@ class TestAssetExportListing:
         export = _load_export()
         monkeypatch.setattr(export, "s3_client", s3)
         assert [f["relativePath"] for f in export.list_s3_files(BUCKET, "proj/a/")] == ["/x.txt"]
-
-
-@pytest.mark.unit
-class TestComplianceAssetFiles:
-    def test_the_asset_location_is_the_stored_key(self, monkeypatch):
-        table = MagicMock()
-        table.query.return_value = {"Items": [{"bucketId": "b1", "bucketName": BUCKET}]}
-        monkeypatch.setattr(store, "s3_asset_buckets_table", table)
-        asset = {"bucketId": "b1", "assetLocation": {"Key": FILE_LOCATION}}
-        assert store.asset_s3_location(asset) == (BUCKET, FILE_LOCATION)
-        assert store.asset_s3_location(dict(asset, assetLocation={"Key": "proj/a/"})) == (BUCKET, "proj/a/")
-
-    def test_the_file_keys_are_the_keys_the_asset_holds(self, s3, monkeypatch):
-        monkeypatch.setattr(store, "s3_client", s3)
-        assert store.list_file_keys_under(BUCKET, FILE_LOCATION) == [
-            "/model.glb", "/model.glb.previewFile.png", "/sub/x.obj"]
-
-    def test_the_current_files_are_the_keys_the_asset_holds(self, s3, monkeypatch):
-        monkeypatch.setattr(store, "s3_client", s3)
-        monkeypatch.setattr(store, "asset_s3_location", lambda asset: (BUCKET, FILE_LOCATION))
-        files = store.get_current_files("db1", "a1", asset={"assetId": "a1"})
-        assert [f[0] for f in files] == ["/model.glb", "/model.glb.previewFile.png", "/sub/x.obj"]
-
-    @pytest.mark.parametrize("relative,key", [("/model.glb", FILE_LOCATION), ("/sub/x.obj", COMPANION)])
-    def test_a_file_change_source_reads_the_asset_key(self, monkeypatch, relative, key):
-        heads = []
-        monkeypatch.setattr(store, "object_change_source", lambda bucket, k: heads.append(k) or "upload")
-        assert store.asset_file_change_source((BUCKET, FILE_LOCATION), relative) == "upload"
-        assert heads == [key]

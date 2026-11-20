@@ -111,6 +111,8 @@ def svc(monkeypatch):
         history = MagicMock()
         monkeypatch.setattr(m, "s3", client)
         monkeypatch.setattr(m, "asset_file_version_history_table", history)
+        # moto serves one request at a time reliably; the handler's worker pool is not under test
+        monkeypatch.setattr(m, "MAX_PARALLEL_S3_WORKERS", 1)
         m.test_client = client
         yield m
 

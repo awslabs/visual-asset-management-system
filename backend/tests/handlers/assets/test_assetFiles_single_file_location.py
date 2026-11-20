@@ -81,6 +81,8 @@ def af(monkeypatch):
                             lambda bucket_id: {"bucketId": bucket_id, "bucketName": BUCKET,
                                                "baseAssetsPrefix": ""})
         monkeypatch.setattr(module, "asset_file_version_history_table", None)
+        # moto serves one request at a time reliably; the handler's worker pool is not under test
+        monkeypatch.setattr(module, "MAX_PARALLEL_S3_WORKERS", 1)
         for name in ("send_subscription_email", "delete_assetAuxiliary_files", "delete_file_metadata",
                      "delete_file_version_records", "move_auxiliary_files", "copy_auxiliary_files"):
             monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
