@@ -181,7 +181,7 @@ uv export --frozen --no-emit-project --only-group step --no-annotate -o requirem
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
 
-Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them (the GPU pipeline images and the published command-line packages) are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
 
 #### Shared packages across layers
 
@@ -211,7 +211,8 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
--   the files listed in `.github/python-lock-exemptions.json`, including the hash-locked `requirements*.lock` files that `uv pip compile` produces for some pipeline containers, until each moves to a uv project;
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
+-   packages a conda image installs from conda-forge (the Potree PDAL image's `conda-packages.txt`), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
 -   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
 -   packages that come with a container base image or the Lambda runtime;
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
