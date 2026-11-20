@@ -2618,16 +2618,23 @@ export const deleteAssetMetadata = async ({ databaseId, assetId, metadataKeys }:
  * @param {string} params.type - 'metadata' or 'attribute'
  * @returns {Promise<any>}
  */
-export const fetchFileMetadata = async ({ databaseId, assetId, filePath, type }: any) => {
+export const fetchFileMetadata = async ({
+    databaseId,
+    assetId,
+    filePath,
+    type,
+    assetVersionId,
+}: any) => {
     try {
         if (!databaseId || !assetId || !filePath || !type) {
             return { metadata: [], message: "Missing required parameters" };
         }
 
-        // Follow NextToken to aggregate all pages of metadata.
+        // Follow NextToken to aggregate all pages of metadata. An asset version id reads the
+        // snapshot taken with that asset version.
         return await fetchAllMetadataPages(
             `database/${databaseId}/assets/${assetId}/metadata/file`,
-            { filePath, type }
+            assetVersionId ? { filePath, type, assetVersionId } : { filePath, type }
         );
     } catch (error: any) {
         console.log("Error fetching file metadata:", error);

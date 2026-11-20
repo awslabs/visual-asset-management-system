@@ -44,6 +44,7 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/core                       | ^6.3.1        | MIT                     |
 | @dnd-kit/sortable                   | ^10.0.0       | MIT                     |
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
+| @geomatico/maplibre-cog-protocol    | ^0.10.0       | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
 | @monaco-editor/react                | ^4.7.0        | MIT                     |
@@ -69,6 +70,7 @@ This software includes third party software subject to the following copyrights:
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.12.0       | MIT                     |
 | fcs                                 | ^0.1.3        | MIT                     |
+| geotiff                             | ^3.0.5        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
@@ -76,6 +78,7 @@ This software includes third party software subject to the following copyrights:
 | pako                                | 1.0.11        | (MIT AND Zlib)          |
 | papaparse                           | ^5.7.0        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
+| proj4                               | ^2.22.0       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
@@ -99,6 +102,8 @@ This software includes third party software subject to the following copyrights:
 | utif2                               | 4.1.0         | MIT                     |
 | vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
+
+The GeoTIFF Map Viewer's raster libraries bring these transitive dependencies: `d3-scale` 4 and its `d3-*` and `internmap` dependencies (ISC), `quick-lru` (MIT), `@mapbox/sphericalmercator` 2 (BSD-3-Clause; its package.json declares only "BSD"), `pako` 2 (MIT AND Zlib), `lerc` 3 (Apache-2.0), `zstddec` (MIT AND BSD-3-Clause), `xml-utils` (CC0-1.0), `web-worker` (Apache-2.0), `parse-headers` (MIT), `@petamoriken/float16` (MIT), `wkt-parser` and `mgrs` (MIT).
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
 
