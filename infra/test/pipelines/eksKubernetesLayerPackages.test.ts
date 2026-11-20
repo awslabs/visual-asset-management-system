@@ -66,6 +66,16 @@ function pinnedPackages(requirements: string): string[] {
         .map((m) => normalize(m[1]));
 }
 
+/** {normalized name: version} for every `name==version` pin in an exported requirements file. */
+function pinnedVersions(requirements: string): Map<string, string> {
+    const versions = new Map<string, string>();
+    for (const line of requirements.split(/\r?\n/)) {
+        const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;]+)/.exec(line.trim());
+        if (m) versions.set(normalize(m[1]), m[2]);
+    }
+    return versions;
+}
+
 /** The keys of `[tool.poetry.dependencies]` in a pyproject.toml. */
 function declaredDependencies(pyproject: string): string[] {
     const section = /^\[tool\.poetry\.dependencies\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(
@@ -123,6 +133,18 @@ describe("RapidPipeline EKS Kubernetes layer: packages it shares with the base l
     test("the exported requirements.txt pins no AWS SDK package", () => {
         const pinned = pinnedPackages(readLayerFile("requirements.txt"));
         expect(SDK_PACKAGES.filter((p) => pinned.includes(p))).toEqual([]);
+    });
+
+    // The layer bundling command installs the committed requirements.txt and never re-exports the lock,
+    // so a stale export would ship silently. When this layer moves to uv, repoint `readLayerFile("poetry.lock")`
+    // below (and `kubernetesLock`) to `uv.lock`; the comparison itself does not change.
+    test("the committed requirements.txt pins exactly the versions poetry.lock locks", () => {
+        const exported = pinnedVersions(readLayerFile("requirements.txt"));
+        const locked = kubernetesLock();
+        // Control: both sides are read, so an empty comparison cannot pass.
+        expect(exported.size).toBeGreaterThan(5);
+        expect(exported.get("kubernetes")).toBeDefined();
+        expect(Array.from(exported.entries()).sort()).toEqual(Array.from(locked.entries()).sort());
     });
 
     test("the comparison reports a drifted pin (control)", () => {
