@@ -91,6 +91,8 @@ The same container also writes previews for images and video, through a second r
 
 Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
 
+The media pipeline skips `*.cog.tif`, the Cloud Optimized GeoTIFF that the [COG Conversion](cog-conversion.md) pipeline writes beside its source: the source `.tif` already has a preview, and a COG can exceed the pixel limit.
+
 ### What a run writes
 
 An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.

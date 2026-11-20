@@ -22,6 +22,8 @@ CHECKED = [
     "genAi/cadStepAgent/lambda",
     "genAi/videoSopBom/lambda",
     "utility/zipArchive/lambda",
+    "conversion/cogConvert/lambda",
+    "conversion/cogConvert/container/cog_convert_pipeline",
     "3dRecon/splatToolbox/container/__main__.py",
 ]
 

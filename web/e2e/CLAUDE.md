@@ -337,7 +337,7 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message, `raster-map` — the GeoTIFF Map Viewer's layer row for the file in the sample's `expect.mode` (`tile` or `placed`, with `expect.approximate` for the approximate-placement label) and a map canvas with content, `raster-refused` — its notice matching `expect.notice`), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disabled-by-default add-on
 serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,
@@ -385,6 +385,24 @@ distributable asset with a top-level file), skipping when the deployment has non
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
 | `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
+
+Map viewer spec. `viewers.cogmap.layout.spec.ts` lives in the `chromium` project, counts the frame's stripe pixels through
+`support/rasterViewerFixtures.ts`, and skips with a reason when location services are off. It opens a raster in the GeoTIFF Map Viewer on the View File page and in
+the File Viewer modal (the File Manager's Visualize File eye) and checks it fills its frame at 390,
+820 and 1280 px, and in fullscreen on the page: canvas equal to its column, map, list and the
+viewer's own map controls inside the frame, and none of the frame backdrop's stripe colours visible.
+A third case hides and shows a raster with its **Visible** switch (one name, `Show "<label>" on the map`, the checked state, Space, the status line,
+Zoom disabled while hidden). It waits on the picker's options and on the layout settling (two equal
+reads of the boxes, canvas equal to its column) rather than on fixed sleeps. It finds a `.tif` through
+the API and skips, with the reason, when the file is not a raster the viewer draws.
+
+| Helper (`support/rasterViewerFixtures.ts`) | Use for                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `stripePixels(page, png)`                  | Count of the visualizer frame backdrop's stripe colours in a screenshot |
+
+| Variable                              | Effect                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `E2E_COG_MAP_FILE=<db>/<asset>/<key>` | Names the georeferenced raster the layout spec opens, instead of the first `.tif` found |
 
 The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
 the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out

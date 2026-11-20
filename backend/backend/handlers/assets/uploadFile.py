@@ -1003,26 +1003,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_file_key)
-        filename = os.path.basename(base_file_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        # List objects in the directory
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_file_key}{PREVIEW_FILE_PATTERN}"
+
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
+                preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
@@ -1032,12 +1019,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     return preview_files
 
-def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
+def delete_existing_preview_files(bucket: str, base_file_key: str, keep: Optional[str] = None) -> List[str]:
     """Delete existing preview files for a base file
     
     Args:
         bucket: The S3 bucket name
         base_file_key: The base file key
+        keep: A preview key the caller is about to overwrite; it is not deleted
         
     Returns:
         List of deleted preview file keys
@@ -1049,6 +1037,11 @@ def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     # Delete each preview file
     for preview_file in preview_files:
+        if preview_file == keep:
+            # The copy that follows writes a new version of this key. A delete marker before it
+            # raises an S3 removal whose provenance cannot be read (a HEAD of a delete marker answers
+            # 405), which the compliance trigger would evaluate as a user change.
+            continue
         try:
             # Add delete marker (soft delete)
             s3.delete_object(Bucket=bucket, Key=preview_file)
@@ -2034,11 +2027,13 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
 
             logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
 
-            # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
+            # If this is a preview file in an assetFile upload, delete any existing preview files for
+            # the base file, except the key the copy below overwrites
             if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
                 base_file_path = get_base_file_path(file_detail['relativeKey'])
                 base_file_key = normalize_s3_path(asset_base_key, base_file_path)
-                deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
+                deleted_files = delete_existing_preview_files(bucket_name, base_file_key,
+                                                             keep=file_detail['final_s3_key'])
                 if deleted_files:
                     logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
 
