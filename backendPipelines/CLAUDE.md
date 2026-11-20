@@ -759,6 +759,16 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
     placeholder for token values — the resolved value still reaches CloudFormation via the
     `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
     `infra/test/pipelines/vamsSchemaRegistrationHash.test.ts`.
+-   **`executionConfigOverrides` is optional and additive.** A deployment registers an existing bundle
+    with a different `executionConfig` through `VamsSchemaRegistration`'s `executionConfigOverrides`
+    (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`). It reaches the import
+    lambda as one JSON property, and `vsi.apply_execution_config_overrides` applies it after the
+    resource injection (`lambdaName` here wins over `resourceOverrides.lambdaName`). Absent emits no
+    property and leaves `schemaHash` unchanged; set, it is mixed into the hash, so a change re-runs the
+    registration. The import's update goes through `pipelineService.update_pipeline`, so a change to a
+    state-machine-relevant value redeploys every referencing workflow (bundle and custom). Tests:
+    `infra/test/pipelines/vamsSchemaRegistrationExecutionConfigOverrides.test.ts`,
+    `backend/tests/handlers/workflows/test_importGlobalPipelineWorkflow_execution_config_overrides.py`.
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the

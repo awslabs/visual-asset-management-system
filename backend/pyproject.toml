@@ -18,23 +18,26 @@ dependencies = [
     "urllib3 (>=2.6.0,<3)"
 ]
 
-[tool.poetry]
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "flake8==6.0.0",
+    "coverage==7.17.2",
+    "pytest-mock==3.17.0",
+    "moto==5.2.5",
+    "pytest-watch==4.2.0",
+    "pytest-xdist==3.8.0",
+    "mypy==1.0",
+    "boto3==1.43.126",
+    "botocore==1.43.126",
+    "geojson==3.2.0",
+    "joserfc==1.7.6",
+    "pyjwt[crypto]==2.15.1",
+]
 
-[tool.poetry.group.dev.dependencies]
-pytest = "9.2.0"
-flake8 = "6.0.0"
-coverage = "7.17.2"
-pytest-mock = "3.17.0"
-moto = "5.2.5"
-pytest-watch = "4.2.0"
-pytest-xdist = "3.8.0"
-mypy = "1.0"
-boto3 = "1.43.126"
-botocore = "1.43.126"
-geojson = "3.2.0"
-joserfc = "1.7.6"
-pyjwt = { extras = ["crypto"], version = "2.15.1" }
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+# Test and tooling project only: nothing is built or installed as a package. requirements.txt and
+# requirements-dev.txt are exported from uv.lock (see backend/CLAUDE.md, Updating Python Dependencies).
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
