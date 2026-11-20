@@ -25,6 +25,7 @@ from common.s3PathPatterns import (
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
+from common.assetLocations import contains, is_folder_location, is_shadowed, relative_path_in
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
 from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
@@ -862,8 +863,10 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
     files = []
 
     try:
-        if not prefix.endswith('/'):
-            prefix = prefix + '/'
+        # The listing prefix is the location key itself; a single-file location also matches keys
+        # that only share its characters, so each listed key is kept only when the location holds it
+        location = prefix
+        single_file = not is_folder_location(location)
 
         list_kwargs = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': S3_LISTING_PAGE_SIZE}
         if start_after_key:
@@ -889,6 +892,9 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                 if start_after_key and key <= start_after_key:
                     continue
 
+                if single_file and (not contains(location, key) or is_shadowed(location, key)):
+                    continue
+
                 is_folder = key.endswith('/')
 
                 # Dropped before the row is built, so it is neither returned nor counted against
@@ -897,7 +903,9 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                     continue
 
                 relative_path = key
-                if relative_path.startswith(prefix):
+                if single_file:
+                    relative_path = relative_path_in(location, key)
+                elif relative_path.startswith(prefix):
                     relative_path = relative_path[len(prefix):]
                     if not relative_path.startswith('/'):
                         relative_path = '/' + relative_path
@@ -1576,7 +1584,9 @@ def process_asset_batch(
                 if not file['isFolder']:
                     base_file_key = file['key']
                     top_preview = select_newest_preview_file(preview_lookup.get(base_file_key, []))
-                    if top_preview:
+                    if top_preview and not is_folder_location(asset_location_key):
+                        preview_file_path = relative_path_in(asset_location_key, top_preview) or ''
+                    elif top_preview:
                         if top_preview.startswith(asset_location_key):
                             preview_relative = top_preview[len(asset_location_key):]
                             if not preview_relative.startswith('/'):

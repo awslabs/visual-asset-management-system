@@ -1,11 +1,12 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The copy engine's asset type for a single-file asset comes from its one object.
+"""The copy engine's asset type for a single-file asset comes from the keys it holds.
 
 After a large copy lands, the engine sets the asset type from the asset's location listing. A
-single-file location key (no trailing ``/``) listed as an S3 prefix also returns every longer key that
-starts with the same characters, which turned the asset into a ``folder``. A folder asset beside a
+single-file location key (no trailing ``/``) listed as an S3 prefix also returns keys that only share
+its characters (``model.glb.bak``, ``model.glbx/...``), which turned the asset into a ``folder``; a file
+in its companion folder ``{file key}/`` does make it one. A folder asset beside a
 sibling prefix is the control.
 """
 
@@ -33,7 +34,7 @@ def s3(monkeypatch):
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
         client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
-        for key in ("p1/model.glb", "p1/model.glb.bak", "p1/model.glb/inner.txt",
+        for key in ("p1/model.glb", "p1/model.glb.bak", "p1/model.glbx/inner.txt",
                     "proj/a/one.obj", "proj/a-other/two.txt"):
             client.put_object(Bucket=BUCKET, Key=key, Body=b"x")
         monkeypatch.setattr(engine, "s3", client)
@@ -44,6 +45,10 @@ def s3(monkeypatch):
 class TestAssetTypeAfterLanding:
     def test_a_single_file_asset_is_typed_by_its_object(self, s3):
         assert engine._determine_asset_type(BUCKET, "p1/model.glb") == ".glb"
+
+    def test_a_single_file_asset_with_a_companion_file_is_a_folder(self, s3):
+        s3.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/part.obj", Body=b"x")
+        assert engine._determine_asset_type(BUCKET, "p1/model.glb") == "folder"
 
     def test_control_a_folder_asset_ignores_a_sibling_prefix(self, s3):
         assert engine._determine_asset_type(BUCKET, "proj/a/") == ".obj"

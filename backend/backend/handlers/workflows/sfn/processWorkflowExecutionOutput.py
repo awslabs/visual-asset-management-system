@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
+from common.assetLocations import is_folder_location, object_key_for
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -638,8 +639,9 @@ def _destination_key(descriptor, asset, base_assets_prefix):
     if descriptor.get("fileType") == "preview":
         return f"{base_assets_prefix}{PREVIEW_PREFIX}{asset_id}/{os.path.basename(relative)}"
     base = (asset.get('assetLocation') or {}).get('Key') or f"{base_assets_prefix}{asset_id}/"
-    if not base.endswith('/'):
-        base += '/'
+    if not is_folder_location(base):
+        # A single-file asset (common.assetLocations), resolved as the upload handler resolves it
+        return object_key_for(base, relative) or base
     return relative if relative.startswith(base) else base + relative
 
 

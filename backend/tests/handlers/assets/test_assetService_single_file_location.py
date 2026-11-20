@@ -1,12 +1,13 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Asset archive, unarchive and permanent delete of a single-file asset touch its one object only.
+"""Asset archive, unarchive and permanent delete of a single-file asset touch the keys it holds only.
 
-A single-file asset's location key (no trailing ``/``) used as an S3 prefix also matches every longer
-key that starts with the same characters. Asset archive lists that prefix and archives what it finds,
-and permanent delete removes every version of every key it lists, so both reached objects outside the
-asset. The archive and unarchive paths run against a versioned moto bucket here; the permanent delete
+A single-file asset (location key with no trailing ``/``) holds its object, its companion folder
+``{file key}/`` and its own previews. Used as an S3 prefix, its key also matches keys that only share its
+characters (``model.glb.bak``, ``model.glbx/...``). Asset archive lists that prefix and archives what it
+finds, and permanent delete removes every version of every key it lists, so both reached objects outside
+the asset. The archive and unarchive paths run against a versioned moto bucket here; the permanent delete
 is checked at the boundary it hands the location to, ``delete_s3_prefix_all_versions``, whose own
 behaviour test_assetFiles_single_file_location.py covers.
 """
@@ -32,7 +33,9 @@ _ASSET_SERVICE_PATH = os.path.join(
 
 BUCKET = "vams-test-assets"
 FILE_LOCATION = "p1/model.glb"
-OUTSIDE_KEYS = ("p1/model.glb.bak", "p1/model.glb.previewFile.png", "p1/model.glb/inner.txt")
+OWN_PREVIEW = "p1/model.glb.previewFile.png"
+COMPANION = "p1/model.glb/inner.txt"
+OUTSIDE_KEYS = ("p1/model.glb.bak", "p1/model.glbx/inner.txt")
 FOLDER_LOCATION = "proj/a/"
 SIBLING_FOLDER_KEYS = ("proj/a-other/y.txt", "proj/a.bak")
 
@@ -103,7 +106,7 @@ def svc(monkeypatch):
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
         client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
-        for key in (FILE_LOCATION,) + OUTSIDE_KEYS + ("proj/a/", "proj/a/x.txt") + SIBLING_FOLDER_KEYS:
+        for key in (FILE_LOCATION, OWN_PREVIEW, COMPANION) + OUTSIDE_KEYS + ("proj/a/", "proj/a/x.txt") + SIBLING_FOLDER_KEYS:
             client.put_object(Bucket=BUCKET, Key=key, Body=b"content")
         history = MagicMock()
         monkeypatch.setattr(m, "s3", client)
@@ -118,15 +121,16 @@ def _history_items(history):
 
 @pytest.mark.unit
 class TestAssetArchive:
-    def test_archive_of_a_single_file_asset_archives_its_object_only(self, svc):
+    def test_archive_of_a_single_file_asset_archives_the_keys_it_holds_only(self, svc):
         svc.archive_multi_assetFiles({"Key": FILE_LOCATION}, BUCKET, "db1", "a1", "tester")
 
-        assert not _live(svc.test_client, FILE_LOCATION)
+        for key in (FILE_LOCATION, OWN_PREVIEW, COMPANION):
+            assert not _live(svc.test_client, key), key
         for key in OUTSIDE_KEYS:
             assert _live(svc.test_client, key), key
         items = _history_items(svc.asset_file_version_history_table)
-        assert [i["filePath"] for i in items] == ["/model.glb"]
-        assert items[0]["changeSource"] == "assetArchive"
+        assert sorted(i["filePath"] for i in items) == ["/inner.txt", "/model.glb", "/model.glb.previewFile.png"]
+        assert {i["changeSource"] for i in items} == {"assetArchive"}
 
     def test_control_a_folder_asset_archives_its_folder_and_no_sibling_prefix(self, svc):
         svc.archive_multi_assetFiles({"Key": FOLDER_LOCATION}, BUCKET, "db1", "a2", "tester")
@@ -147,18 +151,25 @@ class TestAssetUnarchive:
         svc.asset_file_version_history_table.query.return_value = {"Items": [
             {"changeSource": "assetArchive", "filePath": path, "versionId": version} for path, version in records]}
 
-    @pytest.mark.parametrize("recorded_path", ["/model.glb", "/"])
-    def test_unarchive_restores_the_object_however_its_archive_was_recorded(self, svc, recorded_path):
-        marker = self._archive(svc, FILE_LOCATION)
-        self._recorded(svc, [(recorded_path, marker)])
+    @pytest.mark.parametrize("own_path,preview_path", [
+        ("/model.glb", "/model.glb.previewFile.png"),
+        ("/", "/.previewFile.png"),  # recorded relative to the bare file key
+    ])
+    def test_unarchive_restores_the_object_and_preview_however_recorded(self, svc, own_path, preview_path):
+        own = self._archive(svc, FILE_LOCATION)
+        preview = self._archive(svc, OWN_PREVIEW)
+        companion = self._archive(svc, COMPANION)
+        self._recorded(svc, [(own_path, own), (preview_path, preview), ("/inner.txt", companion)])
 
         restored = svc.unarchive_multi_assetFiles({"Key": FILE_LOCATION}, BUCKET, "db1", "a1", "tester")
 
-        assert restored == 1
-        assert _live(svc.test_client, FILE_LOCATION)
+        assert restored == 3
+        for key in (FILE_LOCATION, OWN_PREVIEW, COMPANION):
+            assert _live(svc.test_client, key), key
         restored_items = [i for i in _history_items(svc.asset_file_version_history_table)
                           if i["changeSource"] == "assetUnarchive"]
-        assert [i["filePath"] for i in restored_items] == ["/model.glb"]
+        assert sorted(i["filePath"] for i in restored_items) == [
+            "/inner.txt", "/model.glb", "/model.glb.previewFile.png"]
 
     def test_unarchive_restores_no_key_outside_the_asset(self, svc):
         own = self._archive(svc, FILE_LOCATION)

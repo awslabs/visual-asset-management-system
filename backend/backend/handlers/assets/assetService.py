@@ -753,9 +753,10 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 relative_path = normalize_history_file_path(relative_path_in(prefix, key))
                 recorded = archive_markers.get(relative_path, set())
                 if not is_folder_location(prefix):
-                    # A single-file location's own object is also recorded as '/', its path
-                    # relative to the location key itself
-                    recorded = recorded | archive_markers.get('/', set())
+                    # A single-file location's archive may be recorded relative to the bare file
+                    # key ('/' for the object, '/.previewFile.png' for a preview)
+                    recorded = recorded | archive_markers.get(
+                        normalize_history_file_path(key[len(prefix):]), set())
                 if delete_marker['VersionId'] in recorded:
                     markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
 

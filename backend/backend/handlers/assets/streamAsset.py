@@ -13,7 +13,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import is_folder_location, object_key_for
+from common.assetLocations import is_folder_location, object_key_for, relative_path_in
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -284,9 +284,10 @@ def handle_head_request(event, claims_and_roles):
     if asset_version_id_alias or asset_version_id:
         # Compute relative key by stripping asset_base_key from resolved object_key
         relative_file_key = object_key
-        normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-        if relative_file_key.startswith(normalized_base):
-            relative_file_key = relative_file_key[len(normalized_base):]
+        if not is_folder_location(asset_base_key):
+            relative_file_key = relative_path_in(asset_base_key, object_key) or object_key
+        elif relative_file_key.startswith(asset_base_key):
+            relative_file_key = relative_file_key[len(asset_base_key):]
         relative_file_key = relative_file_key.lstrip('/')
 
         if asset_version_id_alias:
@@ -552,9 +553,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if asset_version_id_alias or asset_version_id:
                 # Compute relative key by stripping asset_base_key from resolved object_key
                 relative_file_key = object_key
-                normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-                if relative_file_key.startswith(normalized_base):
-                    relative_file_key = relative_file_key[len(normalized_base):]
+                if not is_folder_location(asset_base_key):
+                    relative_file_key = relative_path_in(asset_base_key, object_key) or object_key
+                elif relative_file_key.startswith(asset_base_key):
+                    relative_file_key = relative_file_key[len(asset_base_key):]
                 relative_file_key = relative_file_key.lstrip('/')
 
                 if asset_version_id_alias:

@@ -31,6 +31,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import stamp_asset_version_provenance
+from common.assetLocations import contains, is_shadowed, object_key_for, relative_path_in
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -414,9 +415,9 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
     result = []
 
     try:
-        # Ensure prefix ends with a slash if it doesn't already
-        if not prefix.endswith('/'):
-            prefix = prefix + '/'
+        # The listing prefix is the location key itself; a single-file location also matches keys
+        # that only share its characters, so each listed key is kept only when the location holds it
+        location = prefix
 
         # Use a single paginated list_object_versions walk rather than a
         # head_object per file. list_object_versions returns VersionId + IsLatest
@@ -435,10 +436,10 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
             key = version['Key']
             # Skip folder markers (keys ending with '/')
-            if key.endswith('/'):
+            if key.endswith('/') or not contains(location, key) or is_shadowed(location, key):
                 continue
 
-            relative_key = key[len(prefix):]
+            relative_key = relative_path_in(location, key).lstrip('/')
             result.append({
                 'relativeKey': relative_key,
                 'key': key,
@@ -468,10 +469,10 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
                 key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if key.endswith('/'):
+                if key.endswith('/') or not contains(location, key) or is_shadowed(location, key):
                     continue
 
-                relative_key = key[len(prefix):]
+                relative_key = relative_path_in(location, key).lstrip('/')
                 # Most recent content version behind the delete marker (if any).
                 candidates = content_versions_by_key.get(key, [])
                 latest_content = max(candidates, key=lambda v: v['LastModified'], default=None)
@@ -506,12 +507,8 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     """
     invalid_files = []
     
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
     for file in files:
-        full_key = prefix + file.relativeKey.lstrip('/')
+        full_key = object_key_for(prefix, file.relativeKey)
         
         try:
             # Check if file exists with specified version
@@ -1799,7 +1796,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
             if file.relativeKey not in invalid_files:
                 # Get additional metadata
                 try:
-                    full_key = prefix + file.relativeKey.lstrip('/')
+                    full_key = object_key_for(prefix, file.relativeKey)
                     response = s3_client.head_object(
                         Bucket=bucket,
                         Key=full_key,
@@ -1914,7 +1911,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
-        full_key = prefix + relative_key.lstrip('/')
+        full_key = object_key_for(prefix, relative_key)
 
         try:
             # Check if the file version still exists (wasn't permanently deleted)
@@ -2160,10 +2157,6 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     # Get asset location for checking file existence
     bucket, prefix = get_asset_s3_location(asset)
     
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
     # Resolve every file's existence and archive state from ONE paginated
     # list_object_versions walk of the asset prefix rather than two head_object calls
     # per file. The listing carries each version's id plus IsLatest inline, so both
@@ -2192,7 +2185,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     files = []
     for file in snapshot_files:
         # Construct full S3 key
-        full_key = prefix + file['relativeKey'].lstrip('/')
+        full_key = object_key_for(prefix, file['relativeKey'])
 
         files.append(AssetVersionFileModel(
             relativeKey=file['relativeKey'],

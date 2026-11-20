@@ -15,6 +15,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload, audited_handler
 from common.dynamodb import to_update_expr
+from common.assetLocations import contains
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
 from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
@@ -606,8 +607,8 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
+                # Skip folder markers and keys the location does not hold
                 continue
                 
             try:

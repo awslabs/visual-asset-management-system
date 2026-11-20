@@ -961,9 +961,9 @@ def create_job(event, database_id, asset_id):
         bucket = _bucket_details(asset.get("bucketId"))["bucketName"]
         base_key = asset_location.get("Key")
         if not is_folder_location(base_key):
-            # A location that names one object is a single-file asset, downloaded directly
-            raise ZipRefusal("A single-file asset is downloaded directly, not as a zip. "
-                             "Download its file instead.")
+            # A single-file asset: the archive job derives every member's path from a folder location
+            raise ZipRefusal("A single-file asset cannot be downloaded as a zip. "
+                             "Download its files directly instead.")
         if _cap_reached(user_id):
             return general_error(status_code=429, body={"message": zd.MSG_CAP_REACHED}, event=event)
         pinned, asset_version_id = [], None

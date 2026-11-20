@@ -9,7 +9,7 @@ Download as Zip is available when your administrator enables it for the deployme
 -   Any mix of files and folders from one asset, or the whole asset.
 -   The current files, or the file versions recorded in an asset version.
 -   Only assets that are distributable and not archived.
--   Only assets that hold files in a folder. An asset created from a single Amazon S3 object holds that one file; download it directly instead.
+-   Only assets whose location is a folder. Download the files of an asset created from a single Amazon S3 object directly instead.
 
 The archive holds the files the **File Manager** lists. The generated preview images of files (`{file}.previewFile.{ext}`, such as `model.glb.previewFile.png`), which the file list does not show, are left out of every zip download, under a folder, in the whole asset and in an asset version alike. A selection that holds nothing but such preview files is refused with **The selection has no files**.
 

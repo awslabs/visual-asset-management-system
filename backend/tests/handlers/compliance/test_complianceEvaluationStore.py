@@ -1122,12 +1122,18 @@ class TestAssetFileListing:
         assert tables.s3_client.get_paginator.return_value.paginate.call_args.kwargs == {
             "Bucket": BUCKET_NAME, "Prefix": ASSET_PREFIX}
 
-    def test_the_prefix_gains_a_trailing_slash(self):
+    def test_a_single_file_location_is_listed_by_its_own_key(self):
+        """A location without a trailing '/' is a single-file asset (common.assetLocations): it is
+        listed by its own key, and only the keys it holds are kept."""
         tables = Tables()
         tables.asset.get_item.return_value = {"Item": {
             "bucketId": BUCKET_ID, "assetLocation": {"Key": ASSET}}}
-        self._list(tables)
-        assert tables.s3_client.get_paginator.return_value.paginate.call_args.kwargs["Prefix"] == ASSET_PREFIX
+        tables.s3_client = MagicMock(name="s3_client")
+        tables.s3_client.get_paginator.return_value.paginate.return_value = [{"Contents": [
+            {"Key": ASSET}, {"Key": ASSET + ".bak"}, {"Key": ASSET + "/sub/a.obj"}]}]
+        keys = self._list(tables)
+        assert tables.s3_client.get_paginator.return_value.paginate.call_args.kwargs["Prefix"] == ASSET
+        assert keys == ["/" + ASSET.rsplit("/", 1)[-1], "/sub/a.obj"]
 
     @pytest.mark.parametrize("asset", [
         None, {"assetLocation": {"Key": ASSET_PREFIX}}, {"bucketId": BUCKET_ID},

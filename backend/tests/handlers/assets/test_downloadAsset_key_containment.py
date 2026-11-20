@@ -177,14 +177,36 @@ class TestPermittedKeyShapesUnchanged:
         assert _signed_keys(m) == [UNSLASHED_BASE]
         assert response.downloadUrl == f"https://signed.example/{UNSLASHED_BASE}"
 
-    @pytest.mark.parametrize("raw_key", ['/dir/f.glb', 'assets/pfx/dir/f.glb', '/pfx.bak'])
-    def test_a_single_file_asset_signs_no_other_key(self, raw_key):
+    @pytest.mark.parametrize("raw_key,expected_key", [
+        ('/dir/f.glb', 'assets/pfx/dir/f.glb'),            # companion folder, CLI shape
+        ('assets/pfx/dir/f.glb', 'assets/pfx/dir/f.glb'),  # companion folder, listFiles key
+        ('/pfx.previewFile.png', 'assets/pfx.previewFile.png'),
+    ])
+    def test_a_single_file_asset_signs_its_companion_folder_and_previews(self, raw_key, expected_key):
+        m = _wire(_load(), UNSLASHED_BASE)
+
+        m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': raw_key}))
+
+        assert _signed_keys(m) == [expected_key]
+
+    @pytest.mark.parametrize("raw_key", ['assets/pfx.bak', ESCAPE_KEY])
+    def test_a_single_file_asset_signs_no_key_that_only_shares_its_characters(self, raw_key):
         m = _wire(_load(), UNSLASHED_BASE)
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
             m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': raw_key}))
 
         assert m.s3.generate_presigned_url.call_count == 0
+
+    @pytest.mark.parametrize("raw_key,relative", [('/pfx', 'pfx'), ('/dir/f.glb', 'dir/f.glb')])
+    def test_a_single_file_asset_version_pin_uses_the_asset_relative_key(self, raw_key, relative):
+        m = _wire(_load(), UNSLASHED_BASE)
+        m.resolve_file_version_from_asset_version = MagicMock(return_value='v-pinned')
+
+        m.download_asset_file('db1', 'asset1', _parse(
+            {'downloadType': 'assetFile', 'key': raw_key, 'assetVersionId': '2'}))
+
+        m.resolve_file_version_from_asset_version.assert_called_once_with('db1', 'asset1', '2', relative)
 
 
 @pytest.mark.unit

@@ -187,12 +187,33 @@ class TestResolveAssetFileKey:
     def test_a_single_file_asset_resolves_its_one_object(self, raw_key):
         assert de.resolve_asset_file_key(UNSLASHED_BASE, raw_key) == UNSLASHED_BASE
 
-    @pytest.mark.parametrize("raw_key", ['/dir/f.glb', 'dir/f.glb', 'assets/pfx/dir/f.glb', '/pfx.bak',
-                                         'assets/pfx.bak', '/pfx/', '/assets/pfxOTHER/x', ESCAPE_KEY])
-    def test_a_single_file_asset_refuses_every_other_key(self, raw_key):
+    @pytest.mark.parametrize("raw_key,expected", [
+        ('/dir/f.glb', 'assets/pfx/dir/f.glb'),
+        ('dir/f.glb', 'assets/pfx/dir/f.glb'),
+        ('assets/pfx/dir/f.glb', 'assets/pfx/dir/f.glb'),
+        ('/pfx/', 'assets/pfx/pfx/'),
+        ('/pfx.bak', 'assets/pfx/pfx.bak'),
+        ('/assets/pfxOTHER/x', 'assets/pfx/assets/pfxOTHER/x'),
+        ('/pfx.previewFile.png', 'assets/pfx.previewFile.png'),
+        ('assets/pfx.previewFile.png', 'assets/pfx.previewFile.png'),
+    ])
+    def test_a_single_file_asset_resolves_its_companion_folder_and_previews(self, raw_key, expected):
+        assert de.resolve_asset_file_key(UNSLASHED_BASE, raw_key) == expected
+
+    @pytest.mark.parametrize("raw_key", ['assets/pfx.bak', 'assets/pfxx/y.glb', 'assets/pfx.previewFile.png/x',
+                                         ESCAPE_KEY])
+    def test_a_single_file_asset_refuses_a_bucket_root_key_that_only_shares_its_characters(self, raw_key):
         with pytest.raises(VAMSGeneralErrorResponse) as e:
             de.resolve_asset_file_key(UNSLASHED_BASE, raw_key)
         assert str(e.value) == _msg("Requested file is not part of this asset")
+
+    @pytest.mark.parametrize("final_key,expected", [
+        ('assets/pfx', 'pfx'),
+        ('assets/pfx/dir/f.glb', 'dir/f.glb'),
+        ('assets/pfx.previewFile.png', 'pfx.previewFile.png'),
+    ])
+    def test_a_single_file_asset_relative_key_for_version_snapshots(self, final_key, expected):
+        assert de.asset_relative_key(final_key, UNSLASHED_BASE) == expected
 
     def test_a_single_file_asset_download_heads_its_one_object(self):
         client = _s3()
