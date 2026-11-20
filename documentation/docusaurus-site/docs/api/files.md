@@ -73,7 +73,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 }
 ```
 
-`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) lists that object alone, at `relativePath` `/{file name}`, and its file routes accept that path, or the full key, and refuse every other path with `400` `Requested file is not part of this asset`.
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, uploads and workflow outputs at `/{file name}` are refused, its file cannot be moved or renamed, and a request for `/` alone answers `400` `Requested file is not part of this asset`.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 

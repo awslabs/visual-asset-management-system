@@ -155,7 +155,7 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 | `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                 |
 | `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted.                                                      |
 | `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's only file.                        |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews.         |
 
 **Response:**
 
