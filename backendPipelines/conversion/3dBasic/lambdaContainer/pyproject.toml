@@ -31,7 +31,7 @@ package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
 # Wide enough for the hashed exports to install on a developer machine as well as in the image: Linux
-# (x86_64 and aarch64) and macOS, CPython 3.12 to 3.14, the set the earlier Poetry export covered.
+# (x86_64 and aarch64) and macOS, CPython 3.12 to 3.14, the set the earlier export covered.
 environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
 default-groups = []
 
