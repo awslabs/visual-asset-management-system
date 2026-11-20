@@ -10157,7 +10157,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and nothing is handed over), or another start of it may still happen -- one handed over less than 7 minutes earlier -- or the reconciler revokes the stopped desktop's key, or a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted or handed over)."
+                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and nothing is handed over), EDH reports the stopped workstation in its `error` state (`code` `DESKTOP_ERROR`, as connect answers it; stop it, then start it again), or another start of it may still happen -- one handed over less than 7 minutes earlier -- or the reconciler revokes the stopped desktop's key, or a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted or handed over)."
                     content:
                         application/json:
                             schema:
@@ -10214,7 +10214,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id, the record is not ACTIVE, or EDH does not report the desktop running with a URL; or EDH reports the desktop running with a link that signs no user in, whose body carries `\"code\": \"DISPLAY_SESSION_ENDED\"` and the message `The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.` (the record then carries `connectionUnavailableReason`)."
+                    description: "The launch has no session id, the record is not ACTIVE, or EDH does not report the desktop running with a URL; or EDH reports the desktop running with a link that signs no user in, whose body carries `\"code\": \"DISPLAY_SESSION_ENDED\"` and the message `The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.` (the record then carries `connectionUnavailableReason`); or EDH reports the workstation in its `error` state, whose body carries `\"code\": \"DESKTOP_ERROR\"` and the message `The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.`."
                     content:
                         application/json:
                             schema:
@@ -10265,7 +10265,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or the desktop is not connectable (`Workstation is not ready for connection`), the desktop is running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), or EDH lists no password for a Windows desktop (`Windows password is not available yet`). For Windows, EDH's listing decides connectability; for Linux, the stored record does (`connectionAvailable` and `connectionUnavailableReason`)."
+                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or the desktop is not connectable (`Workstation is not ready for connection`), the desktop is running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), EDH reports the workstation in its `error` state (`code` `DESKTOP_ERROR`, as connect answers it), or EDH lists no password for a Windows desktop (`Windows password is not available yet`). For Windows, EDH's listing decides connectability; for Linux, the stored record does (`connectionAvailable` and `connectionUnavailableReason`)."
                     content:
                         application/json:
                             schema:
@@ -14123,9 +14123,10 @@ components:
                 connectionUnavailableReason:
                     type: string
                     nullable: true
-                    description: "Why an ACTIVE workstation EDH reports `running` cannot be connected to: `DISPLAY_SESSION_ENDED` when EDH lists the desktop with a connection link that signs no user in (no `authToken` or `username`), which it does when its Amazon DCV broker holds no session for the desktop. Recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. `connectionAvailable` is then false and `activity` null. Stop the workstation, then start it again, to reconnect. Null otherwise."
+                    description: "Why the workstation cannot be connected to. `DISPLAY_SESSION_ENDED`: an ACTIVE workstation EDH reports `running` whose connection link signs no user in (no `authToken` or `username`), which EDH lists when its Amazon DCV broker holds no session for the desktop; recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. Stop the workstation, then start it again, to reconnect. `DESKTOP_ERROR`: EDH reports a workstation that has run (ACTIVE, STOPPED, or CREATING after a start EDH accepted) in its `error` state, which EDH sets when the desktop's Amazon DCV health check fails; the workstation keeps its state, disk and credential, and EDH moves it on once the check passes, which clears the reason. Wait a few minutes, or stop it, then start it again. Only a new launch that never ran becomes ORPHANED for `error`. Either way `connectionAvailable` is false and `activity` null. Null otherwise."
                     enum:
                         - DISPLAY_SESSION_ENDED
+                        - DESKTOP_ERROR
                         - null
                 lastError:
                     type: string
@@ -20949,7 +20950,7 @@ components:
                     maxItems: 14
                     items:
                         type: string
-                        enum: [image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc, other]
+                        enum: [image, video, audio, document, text, data, tiles3d, raster, mesh, usd, cad, pointcloud, splat, ifc, other]
                     default: []
                     description: "fileClass ids to keep (case-insensitive, de-duplicated); any other value is refused with 400. 3D models are mesh, usd or cad. One value is pushed into the index filter; several are applied after the merge."
                 fileExtensions:

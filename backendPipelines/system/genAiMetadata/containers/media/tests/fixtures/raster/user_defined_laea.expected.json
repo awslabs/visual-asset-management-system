@@ -1,0 +1,30 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "user-defined",
+  "dataType": "uint8",
+  "file": "user_defined_laea.tif",
+  "footprint": null,
+  "footprintNote": "user-defined-crs",
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    -100000.0,
+    74400.0,
+    -74400.0,
+    100000.0
+  ],
+  "nodata": null,
+  "overviewCount": 1,
+  "pixelIsPoint": false,
+  "pixelSizeX": 100.0,
+  "pixelSizeY": 100.0,
+  "rotated": false,
+  "wgs84Bounds": null,
+  "width": 256
+}
