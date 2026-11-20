@@ -98,8 +98,12 @@ function presignFailure(result: unknown, subject: string): Error {
         downloadResponseStatus(result),
         downloadResponseApiMessage(result)
     );
-    if (refusal) return new ApiRefusalError(refusal);
-    return new Error(downloadFailureMessage(result, subject));
+    const status = downloadResponseStatus(result);
+    const error = refusal
+        ? new ApiRefusalError(refusal)
+        : new Error(downloadFailureMessage(result, subject));
+    // The status the API answered, for a caller that reports it (the Cesium request hook).
+    return Object.assign(error, { status });
 }
 
 /** A presigned URL for the file, from the authorized download route (cached while it is safe). */
@@ -111,7 +115,7 @@ export async function getPresignedFileUrl(
     return (await resolvePresignedFileUrl(request, subject, options)).url;
 }
 
-async function resolvePresignedFileUrl(
+export async function resolvePresignedFileUrl(
     request: PresignedFileRequest,
     subject: string,
     options: { fresh?: boolean } = {}
