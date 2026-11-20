@@ -32,7 +32,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.assetProvenance import asset_edit_provenance
-from common.assetLocations import contains, is_folder_location, relative_path_in
+from common.assetLocations import contains, is_folder_location, listing_prefixes, relative_path_in
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -608,11 +608,14 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
 
     paginator = s3.get_paginator('list_objects_v2')
     files = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    # A single-file location is listed by its own prefixes (its object, its previews, its companion
+    # folder), so keys that only share its characters are never read; contains() keeps the held keys
+    pages = (page for list_prefix, cap in listing_prefixes(prefix)
+             for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix,
+                                            PaginationConfig={'MaxItems': cap} if cap else {}))
+    for page in pages:
         if 'Contents' in page:
             for obj in page.get('Contents', []):
-                # The prefix also matches keys that only share its characters; a single-file
-                # location holds its own key alone
                 if contains(prefix, obj['Key']):
                     files.append(obj['Key'])
 

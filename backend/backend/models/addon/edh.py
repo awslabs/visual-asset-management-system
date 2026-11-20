@@ -64,8 +64,9 @@ WORKSTATION_ACTIVITIES = ('starting', 'stopping')
 # Why a workstation that asked for a capacity reservation runs on-demand: the reservation was full at launch, or
 # had ended when the stopped workstation was started.
 CAPACITY_RESERVATION_FALLBACK_REASONS = ('full', 'ended')
-# Why a workstation EDH reports running cannot be connected to: its remote display session has ended.
-CONNECTION_UNAVAILABLE_REASONS = ('DISPLAY_SESSION_ENDED',)
+# Why a workstation cannot be connected to: its remote display session has ended while EDH reports it running, or EDH
+# reports a desktop that has run in its error state (its Amazon DCV health check failed).
+CONNECTION_UNAVAILABLE_REASONS = ('DISPLAY_SESSION_ENDED', 'DESKTOP_ERROR')
 # What the owner signs in to a desktop's operating system with: the password EDH generated for a Windows local
 # account, the user's own directory password for a Windows directory account, or nothing (Amazon DCV signs a Linux
 # session in).
@@ -199,9 +200,12 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     createdAt: str
     updatedAt: str
     connectionAvailable: bool = False
-    # Why a workstation EDH reports running cannot be connected to: ``DISPLAY_SESSION_ENDED``, its remote display
-    # session has ended (a stop and a start recover it). Returned only while the row is ACTIVE and running and not
-    # connectable, never a stale value a stop or a delete left on the row; None otherwise.
+    # Why a workstation cannot be connected to: ``DISPLAY_SESSION_ENDED``, EDH reports it running but its remote display
+    # session has ended (a stop and a start recover it), returned only while the row is ACTIVE and running and not
+    # connectable; ``DESKTOP_ERROR``, EDH reports a workstation that has run in its error state (its Amazon DCV health
+    # check failed; it keeps its state, disk and credential), returned only while the row is ACTIVE, STOPPED or
+    # CREATING and not connectable. Never a stale value a stop, a delete or a later state left on the row; None
+    # otherwise.
     connectionUnavailableReason: Optional[str] = None
     # Launch bookkeeping kept by the launch worker: the generic error code of a definite refusal
     # and the number of launch starts made for the row.

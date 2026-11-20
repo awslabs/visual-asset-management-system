@@ -16,7 +16,9 @@ import pytest
 
 from backend.backend.handlers.addon.edh.common.edhClient import EdhUnavailableError
 from backend.backend.handlers.addon.edh.common.edhIdentity import edh_uid_for
-from backend.backend.handlers.addon.edh.common.edhSessionState import EDH_FIELD_INSTANCE_ID, EDH_SESSION_STATE_RUNNING
+from backend.backend.handlers.addon.edh.common.edhSessionState import (
+    DESKTOP_ERROR_MESSAGE, EDH_FIELD_INSTANCE_ID, EDH_SESSION_STATE_RUNNING,
+)
 from backend.tests.handlers.addon.edh.edhServiceTestSupport import (
     API_KEY_CLAIMS,
     BOOTSTRAP_OWN,
@@ -215,7 +217,7 @@ class TestConnect:
         fakes.client_factory.assert_not_called()
         fakes.table.update_item.assert_not_called()
 
-    def test_a_desktop_in_error_orphans_the_row_and_is_not_ready(self, monkeypatch):
+    def test_a_desktop_in_error_stays_active_and_is_refused_with_the_desktop_error(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(get_desktop_connection=_desktop(state="error")))
         fakes.table.query.return_value = {"Items": [own_row()]}
 
@@ -223,8 +225,10 @@ class TestConnect:
 
         assert response["statusCode"] == 409
         assert CONNECTION_URL not in response["body"]
+        assert response_body(response) == {"code": "DESKTOP_ERROR", "message": DESKTOP_ERROR_MESSAGE}
         values = _update_values(fakes)
-        assert {"ORPHANED", "LAUNCH_ERROR", False} <= set(values)
+        assert "ORPHANED" not in values and "LAUNCH_ERROR" not in values
+        assert {"error", "DESKTOP_ERROR", False} <= set(values)
         assert CONNECTION_URL not in json.dumps(values)
 
     def test_another_users_session_is_not_found_and_edh_is_not_asked(self, monkeypatch):

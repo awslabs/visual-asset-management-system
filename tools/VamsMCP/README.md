@@ -1148,6 +1148,11 @@ A running workstation whose remote display session has ended is refused with a
 `DISPLAY_SESSION_ENDED`: stop it, then start it again, to reconnect. Its record
 then carries `connectionUnavailableReason` `DISPLAY_SESSION_ENDED` (null
 otherwise), and its `activity` is null: it is running, not starting.
+A workstation that has run which EDH reports in its error state (its remote
+display stopped responding) keeps its state, disk and data; its record carries
+`connectionUnavailableReason` `DESKTOP_ERROR` and its connect (and a start of it)
+is refused with a 409 returned as `error_type` `EdhDesktopErrorError`, `code`
+`DESKTOP_ERROR`: wait a few minutes, or stop it, then start it again.
 Each call makes EDH issue at most one connection token per request EDH answers,
 for that desktop; VAMS repeats a read once after a transport failure or a gateway
 error, which can make a second. `list_edh_workstations` and `get_edh_workstation`

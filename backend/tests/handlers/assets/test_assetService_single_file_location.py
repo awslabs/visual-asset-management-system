@@ -134,6 +134,23 @@ class TestAssetArchive:
         assert sorted(i["filePath"] for i in items) == ["/inner.txt", "/model.glb", "/model.glb.previewFile.png"]
         assert {i["changeSource"] for i in items} == {"assetArchive"}
 
+    def test_archive_of_a_single_file_asset_reads_no_key_that_only_shares_its_characters(self, svc, monkeypatch):
+        listed = []
+        real = svc.test_client.get_paginator
+
+        class _Spy:
+            def __init__(self, name):
+                self.inner = real(name)
+
+            def paginate(self, **kwargs):
+                listed.append((kwargs["Prefix"], (kwargs.get("PaginationConfig") or {}).get("MaxItems")))
+                return self.inner.paginate(**kwargs)
+
+        monkeypatch.setattr(svc.test_client, "get_paginator", _Spy)
+        svc.archive_multi_assetFiles({"Key": FILE_LOCATION}, BUCKET, "db1", "a1", "tester")
+        assert listed == [(FILE_LOCATION, 1), (FILE_LOCATION + ".previewFile.", None), (FILE_LOCATION + "/", None)]
+        assert not _live(svc.test_client, FILE_LOCATION) and not _live(svc.test_client, COMPANION)
+
     def test_control_a_folder_asset_archives_its_folder_and_no_sibling_prefix(self, svc):
         svc.archive_multi_assetFiles({"Key": FOLDER_LOCATION}, BUCKET, "db1", "a2", "tester")
 

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Script to run the VAMS v2.6 to v2.7 migration (orphaned trigger cleanup, vector index backfill,
-# system-pipeline retirement report, asset location index backfill)
-# Usage: ./run_migration.sh [config_file] [--execute] [--clear-vectors] [--async]
+# Script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, orphaned trigger cleanup,
+# vector index backfill, system-pipeline retirement report, asset location index backfill)
+# Usage: ./run_migration.sh [config_file] [--execute] [--resume] [--clear-vectors] [--async]
 #                           [--generate-metadata-for-existing-files]
 #                           [--steps STEP] [--limit N] [--profile NAME] [--region NAME]
 #                           [--log-level LEVEL] [--confirm-account ID]
@@ -34,7 +34,7 @@ while [ $# -gt 0 ]; do
             EXTRA_ARGS+=("$1")
             shift
             ;;
-        --clear-vectors|--async|--generate-metadata-for-existing-files)
+        --resume|--clear-vectors|--async|--generate-metadata-for-existing-files)
             EXTRA_ARGS+=("$1")
             shift
             ;;
@@ -43,7 +43,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --*)
-            echo "Error: unknown flag '$1'. Supported: --execute --clear-vectors --async"
+            echo "Error: unknown flag '$1'. Supported: --execute --resume --clear-vectors --async"
             echo "       --generate-metadata-for-existing-files"
             echo "       --steps --limit --profile --region --log-level --confirm-account"
             exit 1

@@ -93,10 +93,13 @@ class TestOtherWritesOutOfCreatingDropTheStamp:
         assert fakes.stored.item["state"] == "DELETED"
         assert fakes.stored.item["startAcceptedAt"] is None
 
-    def test_a_desktop_edh_no_longer_has_is_a_failed_launch_not_a_stall(self, monkeypatch):
+    def test_a_started_desktop_edh_no_longer_has_is_left_to_the_sweep_not_orphaned(self, monkeypatch):
+        # A start EDH accepted is of a desktop that has run: the sweep records it DELETED once EDH confirms it gone,
+        # as it does an ACTIVE or STOPPED one; the list does not record it a failed launch.
         response, fakes = _run(monkeypatch, _stalled(), action="list", method="GET", desktop_states=[])
         assert response["statusCode"] == 200
         stored = fakes.stored.item
-        assert stored["state"] == "ORPHANED"
-        assert stored["lastError"] == "LAUNCH_ERROR"
-        assert stored["startFailure"] is None and stored["startAcceptedAt"] is None
+        assert stored["state"] == "CREATING"
+        assert stored["lastError"] == "START_STALLED"
+        assert stored["startAcceptedAt"] is not None
+        assert not fakes.revoked
