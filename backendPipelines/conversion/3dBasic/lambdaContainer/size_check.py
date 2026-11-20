@@ -19,6 +19,8 @@ output formats this pipeline writes and adding about 25%:
     .glb    5.5 - 21.8                       27
     .gltf   as .glb, over the glTF file plus its buffers      27
     .xyz    9.8 - 10.4                       13
+    .3mf    128 - 136 per zip byte           106 per zip byte before the download, and 26 per
+            (20.3 - 20.4 per uncompressed)   declared uncompressed byte after it
 
 The working disk holds the input, the files it references and the output; the output is at most 2.8
 times the input (a binary PLY or GLB written as OBJ text), so the disk need is the input plus 3.5 times
@@ -31,6 +33,7 @@ constant, so a change to the function's memory or ephemeral storage moves them w
 
 import os
 import shutil
+import zipfile
 
 MB = 1024 ** 2
 
@@ -230,6 +233,54 @@ def limits(extension, memory_bytes=None, disk_free_bytes=None, output_extension=
         usable = disk_free_bytes - DISK_HEADROOM_BYTES
         candidates.append((max(int(usable / (1 + OUTPUT_DISK_FACTOR)), 0), DISK_RESOURCE))
     return min(candidates) if candidates else (None, None)
+
+
+# Peak resident memory per UNCOMPRESSED byte of a package whose bytes on disk are compressed. A 3MF's
+# peak follows the XML it holds, not the zip: measured 20.3 to 20.4 per uncompressed byte (128 to 136
+# per zip byte at a 6.3 to 1 ratio, over 161 to 647 MB of zip), plus about 25%. The per-zip-byte
+# factors above stay as the estimate before the download, when only the zip's size is known; the
+# declared uncompressed size, read from the central directory after the download, is checked with
+# these. The COLLADA output's entry is the per-zip-byte pair factor (149) over the input's (106)
+# times the input's uncompressed factor, rounded up.
+UNCOMPRESSED_EXPANSION_FACTORS = {
+    '.3mf': {None: 26, '.dae': 37},
+}
+
+
+def uncompressed_expansion_factor(extension, output_extension=None):
+    """Peak memory per declared uncompressed byte for a compressed package, or None for a format
+    whose factor is per byte on disk."""
+    rows = UNCOMPRESSED_EXPANSION_FACTORS.get((extension or "").lower())
+    if not rows:
+        return None
+    return max(rows[None], rows.get((output_extension or "").lower(), 0))
+
+
+def declared_uncompressed_bytes(path):
+    """Total uncompressed size the zip's central directory declares, or None when the file is not a
+    zip (the format's own check reports that). Reads no member data."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return sum(info.file_size for info in archive.infolist())
+    except (zipfile.BadZipFile, OSError):
+        return None
+
+
+def check_uncompressed_size(name, extension, uncompressed_bytes, memory_bytes=None, output_extension=None):
+    """Raise ``InputTooLargeError`` when a compressed package's declared uncompressed size is over
+    what the function's memory can convert. The message has the shape of ``check_size``'s."""
+    factor = uncompressed_expansion_factor(extension, output_extension)
+    if factor is None or not memory_bytes or uncompressed_bytes is None:
+        return None
+    limit = max(int((memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES) / factor), 0)
+    if uncompressed_bytes > limit:
+        target = (f"converting {extension.lower()} to {output_extension.lower()}" if output_extension
+                  else f"{extension.lower()} inputs")
+        raise InputTooLargeError(
+            f"{name} is {_mb(uncompressed_bytes)} uncompressed, over the {_mb(limit)} uncompressed "
+            f"limit for {target}. The limit is set by the {MEMORY_RESOURCE}. Reduce the model's size "
+            f"and run the conversion again.")
+    return limit
 
 
 def _mb(value):

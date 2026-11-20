@@ -33,6 +33,7 @@ from .edh_exceptions import (
     EdhUnavailableError, EdhOutcomeUnknownError, EdhStartInProgressError,
     EdhContainerJobNotFoundError, EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError,
     EdhReservationFullError, EdhCapacityReservationNotFoundError, EdhDisplaySessionEndedError,
+    EdhDesktopErrorError,
 )
 
 
@@ -64,6 +65,9 @@ EDH_RESERVATION_FULL_CODE = "RESERVATION_FULL"
 # The code a connect or a desktop sign-in is refused with when the workstation is running but its remote
 # display session has ended.
 EDH_DISPLAY_SESSION_ENDED_CODE = "DISPLAY_SESSION_ENDED"
+# The code a connect, a desktop sign-in or a start is refused with when EDH reports a workstation that has run in its
+# error state (its remote display stopped responding; its disk is kept).
+EDH_DESKTOP_ERROR_CODE = "DESKTOP_ERROR"
 
 # The 503 a launch answers when VAMS could not read the capacity reservation from EC2: EDH was not
 # called, so the generic "the EDH cluster did not answer" would misname the cause.
@@ -194,6 +198,8 @@ class EdhAPIClientMixin:
                 return EdhReservationFullError(f"{operation} refused (409): {error_message}")
             if _edh_body_code(e.response) == EDH_DISPLAY_SESSION_ENDED_CODE:
                 return EdhDisplaySessionEndedError(f"{operation} refused (409): {error_message}")
+            if _edh_body_code(e.response) == EDH_DESKTOP_ERROR_CODE:
+                return EdhDesktopErrorError(f"{operation} refused (409): {error_message}")
             return EdhOperationError(f"{operation} refused (409): {error_message}")
         if list_command is not None and (
                 status_code == 504
@@ -337,6 +343,8 @@ class EdhAPIClientMixin:
         Raises:
             EdhWorkstationNotFoundError: When the workstation is not found or not the caller's
             EdhOperationError: When the workstation cannot be started from its current state
+            EdhDesktopErrorError: When EDH reports the stopped workstation in its error state (HTTP 409,
+                code DESKTOP_ERROR); stop it, then start it again
             EdhStartInProgressError: When an earlier start of the workstation may still be under way
             EdhOutcomeUnknownError: When the start was not confirmed; it may be in progress
             EdhUnavailableError: When the EDH cluster did not answer
@@ -455,6 +463,8 @@ class EdhAPIClientMixin:
                 (HTTP 409, "Workstation is not ready for connection")
             EdhDisplaySessionEndedError: When the workstation is running but its remote display
                 session has ended (HTTP 409, code DISPLAY_SESSION_ENDED); stop it, then start it again
+            EdhDesktopErrorError: When EDH reports the workstation in its error state (HTTP 409, code
+                DESKTOP_ERROR); its disk is kept: wait a few minutes, or stop it, then start it again
             EdhUnavailableError: When the EDH cluster did not answer
             AuthenticationError: When authentication fails
             APIError: When API call fails

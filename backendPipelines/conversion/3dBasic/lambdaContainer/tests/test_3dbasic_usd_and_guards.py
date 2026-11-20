@@ -235,7 +235,7 @@ def Scope "S" {
         _write_layer(directory / "root.usda", "#usda 1.0\n" + "".join(
             _MESH.replace('"M"', f'"M{i}"') for i in range(4)))
         limit = scene_limits.SceneLimit("root.usda", max_triangles=2)
-        with pytest.raises(ValueError, match="expands past"):
+        with pytest.raises(ValueError, match="expands to more nodes or geometry than this function converts"):
             usd_io.read_usd(str(directory / "root.usda"), str(directory), limit)
 
     def test_a_file_that_is_not_usd_fails_as_a_user_error(self, tmp_path):

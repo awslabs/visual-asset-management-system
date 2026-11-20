@@ -20,9 +20,11 @@ import posixpath
 import re
 import shutil
 import tempfile
+import time
 
 import numpy as np
 
+import expansion_bounds
 import scene_limits
 import vertex_normals
 from common.logger import safeLogger
@@ -336,10 +338,18 @@ def _is_layer_name(name):
     return str(name).lower().endswith((".usd", ".usda", ".usdc"))
 
 
-def read_usd(path, input_dir, limit=None):
-    """``(scene, meters_per_unit, up_axis)`` of a USD file. ``up_axis`` is 'y' or 'z'."""
+def read_usd(path, input_dir, limit=None, deadline=None):
+    """``(scene, meters_per_unit, up_axis)`` of a USD file. ``up_axis`` is 'y' or 'z'.
+
+    The scene's size is bounded twice. Before the stage is opened the prims its composition arcs
+    describe are counted from the layers (``expansion_bounds.usd_composed_prims``), so a file whose
+    references multiply does not compose; ``limit`` (default: ``CONVERSION_MAX_SCENE_NODES`` nodes)
+    is the bound of that count and of the walk below. ``deadline`` (a ``time.monotonic()`` value) ends
+    the walk with a refusal once it passes."""
     import trimesh
     Ar, Gf, Sdf, Tf, Usd, UsdGeom, UsdShade, UsdUtils, Vt = _import_pxr()
+    name = os.path.basename(path)
+    limit = limit or scene_limits.SceneLimit(name, max_nodes=expansion_bounds.CONVERSION_MAX_SCENE_NODES)
     skipped = []
     confine_dependencies(path, input_dir, skipped)
     if skipped:
@@ -347,22 +357,32 @@ def read_usd(path, input_dir, limit=None):
                        + "; ".join(f"{name[:100]} ({reason})" for name, reason, _ in skipped[:5]))
     allowed_root = os.path.realpath(input_dir)
     try:
+        prims = expansion_bounds.usd_composed_prims(path, limit.max_nodes)
+    except expansion_bounds.ExpansionCycle:
+        raise ValueError(f"{name}: a prim in the USD scene composes itself through its references, so the "
+                         f"scene cannot be converted.")
+    if not limit.expect(prims):
+        raise ValueError(f"{name}: the USD scene expands to more than {limit.max_nodes:,} prims through its "
+                         f"references, more than this function converts.")
+    try:
         stage = Usd.Stage.Open(path)
     except Exception as e:  # noqa: BLE001
-        raise ValueError(f"{os.path.basename(path)} could not be opened as USD: {e}")
+        raise ValueError(f"{name} could not be opened as USD: {e}")
     if stage is None:
-        raise ValueError(f"{os.path.basename(path)} could not be opened as USD")
+        raise ValueError(f"{name} could not be opened as USD")
     meters = UsdGeom.GetStageMetersPerUnit(stage) or USD_DEFAULT_METERS_PER_UNIT
     up = str(UsdGeom.GetStageUpAxis(stage)).lower()
     up = 'z' if up == 'z' else 'y'
-    limit = limit or scene_limits.SceneLimit(os.path.basename(path))
     scene = trimesh.Scene()
     cache = UsdGeom.XformCache()
     textures = {}
     count = 0
     for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
         if not limit.visit():
-            break
+            raise ValueError(_walk_refusal(name, limit))
+        if deadline is not None and time.monotonic() > deadline:
+            raise ValueError(f"{name}: the USD scene expands to too many nodes to read in the time this "
+                             f"function has; {limit.nodes:,} nodes were read before it ran out.")
         imageable = UsdGeom.Imageable(prim)
         if not imageable or not prim.IsActive():
             continue
@@ -384,9 +404,7 @@ def read_usd(path, input_dir, limit=None):
         faces = len(geometry.faces) if hasattr(geometry, "faces") else 0
         limit.add(len(geometry.vertices), faces)
         if limit.reached:
-            raise ValueError(
-                f"{os.path.basename(path)} expands past the size this function converts "
-                f"({limit.what}); reduce the scene's instancing or size.")
+            raise ValueError(_walk_refusal(name, limit))
         count += 1
         scene.add_geometry(geometry, node_name=str(prim.GetPath()).strip("/").replace("/", "_") or "geometry",
                            geom_name=str(prim.GetPath()).strip("/").replace("/", "_") or "geometry")
@@ -396,6 +414,11 @@ def read_usd(path, input_dir, limit=None):
                    if layers else "")
         raise ValueError(f"{os.path.basename(path)} contains no geometry, so there is nothing to convert.{missing}")
     return scene, float(meters), up
+
+
+def _walk_refusal(name, limit):
+    return (f"{name}: the USD scene expands to more nodes or geometry than this function converts "
+            f"(more than {limit.max_nodes:,} nodes, {limit.max_triangles:,} triangles).")
 
 
 # Segments around the axis of a tessellated Cylinder, Cone or Capsule and the subdivision of a

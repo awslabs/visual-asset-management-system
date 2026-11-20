@@ -161,7 +161,7 @@ class TestTriangleBudget:
             '    point3f[] points = [(0,0,0), (1,0,0), (0,1,0), (1,1,0)]\n}\n')
         job = {"input_file": str(layer), "input_dir": str(directory), "input_name": "m.usda",
                "input_relative_path": "m.usda", "by_reference": {}}
-        with pytest.raises(ValueError, match="expands past"):
+        with pytest.raises(ValueError, match="expands to more nodes or geometry than this function converts"):
             model_formats.load_model({**job, "max_triangles": 1}, trimesh)
         scene, _, _ = model_formats.load_model({**job, "max_triangles": 10}, trimesh)
         assert sum(len(g.faces) for g in scene.geometry.values()) == 2
