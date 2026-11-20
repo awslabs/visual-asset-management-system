@@ -1090,9 +1090,16 @@ null otherwise; and `startFailure`, why the last start left a STOPPED row stoppe
 `START_FAILED`), as `{errorCode, availabilityZone, observedAt}`, null when it did not.
 A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH
 accepted and has not finished after 30 minutes: EDH never reported the desktop
-ready, and VAMS does not stop it, so stop it with `stop_edh_workstation`, then
+ready, and VAMS does not stop it, so stop it with `stop_edh_workstation` (with
+`confirm=True`, once the user agrees), then
 start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
 when read) but no `errorCode`.
+A CREATING row with a `sessionId`, `activity` null and `lastError`
+`LAUNCH_STALLED` is a new launch EDH has not placed 3 hours after it was
+accepted. It never ran, so it is not a start to stop: `stop_edh_workstation`
+returns an `EdhOperationError` (HTTP 409) that says to delete it. Delete it with
+`delete_edh_workstation`, or wait, since EDH may still place it. Its
+`startFailure` carries `observedAt` only.
 They also name the image the workstation was launched from: `imageName` (the EDH
 image name), `recipeId` (the AMI recipe whose build produced it, null for a
 baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),
@@ -1176,7 +1183,11 @@ is billed until the desktop is stopped or deleted; `stop_edh_workstation` and
 form on ANOTHER user's); `renew_edh_workstation` extends a leased workstation's
 `leaseExpiresAt` to the full policy window from now, thereby extending the runtime
 of a GPU desktop. Keep all five out of `autoApprove` and confirm each with the user
-first, as for `execute_workflow`. `update_edh_admin_settings` is a partial patch of
+first, as for `execute_workflow`. `stop_edh_workstation` also takes `confirm`
+(default false): without `confirm=True` it returns an error (`error_type`
+`ValueError`) telling the agent to confirm with the user and call again, and
+stops nothing. Stopping closes the desktop's open applications; the disk is kept.
+`update_edh_admin_settings` is a partial patch of
 the lease policy: only the arguments you pass are changed.
 `create_edh_workstation` returns the record with `state` CREATING and `sessionId`
 null (HTTP 202), plus `sessionBootstrap` (`provisioned`, `skipped`, `unavailable`

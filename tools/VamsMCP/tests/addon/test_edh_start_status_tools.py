@@ -17,6 +17,7 @@ from vams_mcp import server
 from vams_mcp.addon_tools import edh
 from vams_mcp.client import VamsClient
 from vams_mcp.config import Config
+from vamscli.utils.addon import edh_exceptions
 
 README_TEXT = (Path(server.__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
 
@@ -72,7 +73,7 @@ def test_start_returns_the_accepted_record_unchanged(client, tools):
     ("list_edh_workstations", "list_edh_workstations", ()),
     ("get_edh_workstation", "get_edh_workstation", ("s-1",)),
     ("list_edh_admin_instances", "list_edh_admin_instances", ()),
-    ("stop_edh_workstation", "stop_edh_workstation", ("s-1",)),
+    ("stop_edh_workstation", "stop_edh_workstation", ("s-1", True)),
 ])
 def test_the_workstation_tools_pass_activity_and_start_failure_through(client, tools, tool, method, args):
     body = {"Items": [REFUSED, ACCEPTED]} if tool.startswith("list") else dict(REFUSED)
@@ -158,3 +159,55 @@ def test_the_readme_names_the_stalled_start():
     text = " ".join(README_TEXT.split())
     assert "`START_STALLED`" in text
     assert "30 minutes" in text
+
+
+# --- A new launch EDH never places -----------------------------------------------------------------
+
+LAUNCH_STALLED = {**ACCEPTED, "state": "CREATING", "edhState": "pending", "activity": None,
+                  "lastError": "LAUNCH_STALLED", "startFailure": {"observedAt": "2026-11-18T13:00:00Z"}}
+
+
+@pytest.mark.parametrize("tool", [
+    "list_edh_workstations", "get_edh_workstation", "stop_edh_workstation", "delete_edh_workstation",
+])
+def test_the_workstation_tool_descriptions_name_the_stalled_launch(tools, tool):
+    assert "LAUNCH_STALLED" in _doc(tools, tool), tool
+
+
+@pytest.mark.parametrize("tool", ["list_edh_workstations", "get_edh_workstation", "stop_edh_workstation"])
+def test_the_way_out_of_a_stalled_launch_is_the_delete_tool(tools, tool):
+    doc = _doc(tools, tool)
+    assert "with delete_edh_workstation, or wait" in doc, tool
+
+
+def test_the_get_description_says_a_stalled_launch_in_error_is_orphaned_not_a_desktop_error(tools):
+    """The precedence the service applies: EDH's error on a launch that never ran orphans it."""
+    doc = _doc(tools, "get_edh_workstation")
+    assert "once EDH reports such a launch in error it reads ORPHANED with LAUNCH_ERROR, never `DESKTOP_ERROR`" in doc
+    assert "a row carrying both is the launch stall" in doc
+
+
+@pytest.mark.parametrize("tool,method,args", [
+    ("list_edh_workstations", "list_edh_workstations", ()),
+    ("get_edh_workstation", "get_edh_workstation", ("s-1",)),
+])
+def test_the_workstation_reads_pass_a_stalled_launch_through(client, tools, tool, method, args):
+    body = {"Items": [LAUNCH_STALLED]} if tool.startswith("list") else dict(LAUNCH_STALLED)
+    getattr(client.api, method).return_value = body
+    assert tools[tool](*args) == body
+
+
+def test_a_confirmed_stop_of_a_stalled_launch_returns_the_refusal_that_names_delete(client, tools):
+    """The API refuses the stop (409); the agent gets the CLI client's error with the service's text."""
+    message = ("Workstation stop refused (409): EDH has not placed this new workstation, so it cannot be "
+               "stopped; delete it instead")
+    client.api.stop_edh_workstation.side_effect = edh_exceptions.EdhOperationError(message)
+    assert tools["stop_edh_workstation"]("s-1", confirm=True) == {
+        "error": message, "error_type": "EdhOperationError"}
+    client.api.stop_edh_workstation.assert_called_once_with("s-1")
+
+
+def test_the_readme_names_the_stalled_launch():
+    text = " ".join(README_TEXT.split())
+    assert "`LAUNCH_STALLED`" in text
+    assert "`delete_edh_workstation`, or wait" in text

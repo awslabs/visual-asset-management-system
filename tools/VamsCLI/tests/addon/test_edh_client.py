@@ -1227,3 +1227,26 @@ class TestAmiRecipeDelete:
         # Control: the reader finds a message the recipe service is known to write.
         assert RECIPE_NOT_FOUND["message"] in strings
         assert AMI_REMOVAL_PENDING in strings
+
+
+# --- A stop of a stalled launch -----------------------------------------------------------
+
+# The workstation service's 409 text for a stop of a new launch EDH has not placed (LAUNCH_STALLED).
+LAUNCH_STALLED_STOP_REFUSAL = "EDH has not placed this new workstation, so it cannot be stopped; delete it instead"
+
+
+class TestStalledLaunchStop:
+    def test_the_refusal_keeps_the_service_text_that_names_delete(self, monkeypatch):
+        client = _client()
+        seen = _capture(monkeypatch, client, "post",
+                        error=_http_error(409, {"message": LAUNCH_STALLED_STOP_REFUSAL}))
+        with pytest.raises(EdhOperationError) as excinfo:
+            client.stop_edh_workstation("s-1")
+        assert str(excinfo.value) == f"Workstation stop refused (409): {LAUNCH_STALLED_STOP_REFUSAL}"
+        assert seen["endpoint"] == "/addon/edh/workstations/s-1/stop"
+        assert seen["kwargs"]["raise_http_errors"] is True
+
+    def test_the_refusal_quoted_is_one_the_workstation_service_writes(self):
+        """The CLI help, the CLI pages and this test quote the refusal, so a reworded handler message
+        would leave them describing an error no request returns."""
+        assert LAUNCH_STALLED_STOP_REFUSAL in _handler_string_constants()

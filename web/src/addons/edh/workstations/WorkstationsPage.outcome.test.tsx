@@ -131,8 +131,9 @@ async function choose(user: ReturnType<typeof userEvent.setup>, action: Action) 
     screen.getByLabelText("Actions for Render box").focus();
     await user.keyboard("{Enter}");
     await user.click(await screen.findByRole("menuitem", { name: action }));
-    if (action === "Delete") {
-        await user.click(await screen.findByRole("button", { name: "Delete" }));
+    // Stop and Delete each ask first; Start does not.
+    if (action !== "Start") {
+        await user.click(await screen.findByRole("button", { name: action }));
     }
 }
 
