@@ -359,6 +359,12 @@ const NON_ROOT_IMAGES: {
         // The package the entrypoint imports at run time.
         readSources: ["./video_sop_bom_pipeline/"],
     },
+    {
+        label: "cogConvert",
+        file: COG_DOCKERFILE,
+        // The package the entrypoint imports at run time.
+        readSources: ["./cog_convert_pipeline/"],
+    },
 ];
 
 /**
