@@ -73,7 +73,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 }
 ```
 
-`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, uploads and workflow outputs at `/{file name}` are refused, its file cannot be moved or renamed, and a request for `/` alone answers `400` `Requested file is not part of this asset`.
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, an upload at `/{file name}` writes a new version of the object (a workflow output at that path is refused), its file cannot be moved or renamed, and a request for `/` alone answers `400` `Requested file is not part of this asset`.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -609,6 +609,10 @@ A request accepts at most 1,000 files and 1,500 total parts across all files, an
 
 :::info[Blocked File Types]
 For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
+:::
+
+:::info[Single-file assets]
+For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
 :::
 
 :::info[Preview File Extensions]
