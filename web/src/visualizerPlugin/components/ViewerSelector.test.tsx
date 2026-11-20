@@ -113,4 +113,20 @@ describe("ViewerSelector", () => {
         );
         expect(screen.getByText("Text Diff Viewer")).toBeInTheDocument();
     });
+
+    it("names files with no extension in words, never by the matching token", () => {
+        const viewer = plugin("text-viewer", "Text Viewer", {
+            supportedExtensions: [".txt", "(none)"],
+        });
+        render(
+            <ViewerSelector
+                viewers={[viewer]}
+                selectedViewerId="text-viewer"
+                onViewerChange={() => undefined}
+                mode="visualize"
+            />
+        );
+        expect(screen.getByText(/Extensions: \.txt, no extension$/)).toBeInTheDocument();
+        expect(screen.queryByText(/\(none\)/)).toBeNull();
+    });
 });

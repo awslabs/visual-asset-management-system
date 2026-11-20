@@ -950,6 +950,9 @@ const MyViewerComponent: React.FC<ViewerPluginProps> = (props) => {
 | `requiresPreprocessing`      | boolean           | ❌       | Needs preprocessing              |
 | `isPreviewViewer`            | boolean           | ❌       | Is preview viewer                |
 | `featuresEnabledRestriction` | string[]          | ❌       | Required feature flags           |
+| `customParameters`           | object            | ❌       | Passed to the viewer as a prop   |
+| `enabled`                    | boolean           | ❌       | `false` removes the viewer       |
+| `compareMode`                | object            | ❌       | Compare-mode capability (below)  |
 
 ### ViewerPluginProps Interface
 
@@ -968,8 +971,12 @@ interface ViewerPluginProps {
     onDeletePreview?: () => void;
     isPreviewFile?: boolean; // Is this a preview file (its entry carries no versionId: a preview is its own S3 object)
     customParameters?: Record<string, any>; // The entry's customParameters from viewerConfig.json
+    compareMode?: boolean; // Rendered in compare mode: read compareFiles instead of the single-file props
+    compareFiles?: FileInfo[]; // Compare mode only: ordered entries, index 0 is the base ("left") side
 }
 ```
+
+`compareMode` in the plugin configuration (`CompareModeConfig` in `core/types.ts`) offers the viewer in compare mode: `enabled`, `minFiles` and `maxFiles` (the number of entries it compares), `allowSameFileDifferentVersions`, `allowDifferentFiles`, `allowCrossAsset` (entries from different assets, each fetched and authorized under its own asset) and `compareOnly` (never offered for visualizing). A viewer without the block is never offered in compare mode. See `documentation/docusaurus-site/docs/developer/viewer-plugins.md` for the full contract.
 
 ## 🔄 Migration from Old System
 

@@ -23,7 +23,8 @@
  * is kept, and the remaining names are recorded so the viewer can say what was not loaded.
  */
 
-import { fetchPresignedFile } from "../../../core/presignedFetch";
+import { fetchPresignedFile, PresignedReadError } from "../../../core/presignedFetch";
+import { isApiRefusalError } from "../../../core/streamFailure";
 
 const MiB = 1024 * 1024;
 
@@ -62,6 +63,10 @@ export function placeholderImageBytes(): Uint8Array {
 /** Why a referenced file was not loaded. */
 export type UnloadedReason =
     | "not-found"
+    /** The API refused the file's download (401, 403, or a refusal with its own reason). */
+    | "refused"
+    /** The request failed for any other reason: a 5xx, a throttle, no response. */
+    | "failed"
     | "outside-asset"
     | "external"
     | "udim"
@@ -379,6 +384,23 @@ export class AssetDependencyResolver {
     }
 
     /**
+     * The key a percent-encoded name decodes to, when it decodes to another in-asset key. Decoded as
+     * the glTF rewrite decodes a URI (`decodeURIComponent`), so an encoded `#`, `?`, `&` or `,` is
+     * recorded under the same key as the name the rewrite asked for.
+     */
+    private decodedKey(url: string, baseFileKey: string): string | undefined {
+        try {
+            const decoded = decodeURIComponent(url);
+            if (decoded === url) return undefined;
+            const normalized = this.normalize(decoded, baseFileKey);
+            return normalized.kind === "key" ? normalized.key : undefined;
+        } catch {
+            // Not a valid escape sequence: the name is kept as written.
+            return undefined;
+        }
+    }
+
+    /**
      * URL modifier for a `LoadingManager`: a URL naming a resolved file returns its blob URL,
      * `blob:`/`data:` URLs pass through, and anything else returns the placeholder and is recorded.
      * Names resolve relative to `baseFileKey`.
@@ -435,7 +457,12 @@ export class AssetDependencyResolver {
 
             const normalized = this.normalize(url, baseFileKey);
             if (normalized.kind === "key") {
-                this.recordUnloaded(normalized.key, "not-found");
+                // A loader may ask for a name as it is written percent-encoded; the file it names
+                // (and any reason already recorded for it) is under the decoded key.
+                this.recordUnloaded(
+                    this.decodedKey(url, baseFileKey) ?? normalized.key,
+                    "not-found"
+                );
             } else if (normalized.kind === "rejected") {
                 this.recordUnloaded(url, normalized.reason);
             } else if (normalized.kind === "udim") {
@@ -502,7 +529,7 @@ export class AssetDependencyResolver {
             if (isAbortError(error)) {
                 throw error;
             }
-            this.recordUnloaded(key, "not-found");
+            this.recordUnloaded(key, failedReadReason(error));
             return null;
         }
 
@@ -520,7 +547,7 @@ export class AssetDependencyResolver {
             if (isAbortError(error)) {
                 throw error;
             }
-            this.recordUnloaded(key, "not-found");
+            this.recordUnloaded(key, "failed");
             return null;
         }
 
@@ -540,8 +567,30 @@ export class AssetDependencyResolver {
     }
 }
 
+/**
+ * Why a referenced file's read failed, from the answer the API or S3 gave. The API checks the
+ * object before it signs a URL, so a file missing from the asset is the API's own missing-file
+ * answer (a `400` naming it, flagged `fileNotFound`) or a 404; either is "not found", and so is
+ * S3's 404. S3's 403 on a URL the API just signed means S3 refused the read of a file that exists
+ * (bucket policy, KMS, expired signing credentials), so it is "failed". The API's own refusal (401,
+ * 403, or a refusal with its reason) is "refused". Anything else (a 5xx, a throttle, no response)
+ * is "failed".
+ */
+function failedReadReason(error: unknown): UnloadedReason {
+    const failure = error as { status?: unknown; fileNotFound?: unknown } | null;
+    const status = failure?.status;
+    if (error instanceof PresignedReadError) {
+        return status === 404 ? "not-found" : "failed";
+    }
+    if (status === 404 || failure?.fileNotFound === true) return "not-found";
+    if (status === 401 || status === 403 || isApiRefusalError(error)) return "refused";
+    return "failed";
+}
+
 const REASON_TEXT: Record<UnloadedReason, string> = {
     "not-found": "not found in this asset",
+    refused: "download refused",
+    failed: "could not be downloaded",
     "outside-asset": "outside this asset",
     external: "external URL, not fetched",
     udim: "UDIM texture sets are not supported",

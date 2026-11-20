@@ -50,6 +50,7 @@ interface MetadataTableProps {
     isFileAttribute?: boolean;
     refreshing?: boolean;
     restrictMetadata?: boolean;
+    canDelete?: boolean;
 }
 
 export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
@@ -76,6 +77,7 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
         isFileAttribute = false,
         refreshing = false,
         restrictMetadata = false,
+        canDelete = true,
     }) => {
         // Search and filter state
         const [searchTerm, setSearchTerm] = useState("");
@@ -462,6 +464,7 @@ export const MetadataTable: React.FC<MetadataTableProps> = React.memo(
                                                 }
                                                 readOnly={readOnly}
                                                 isFileAttribute={isFileAttribute}
+                                                canDelete={canDelete}
                                             />
                                         );
                                     })}

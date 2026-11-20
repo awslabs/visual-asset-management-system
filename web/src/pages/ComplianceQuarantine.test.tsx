@@ -173,7 +173,7 @@ describe("ComplianceQuarantine", () => {
 
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
-        await userEvent.click(screen.getByRole("button", { name: "Exception" }));
+        await userEvent.click(screen.getByRole("button", { name: /^Exception for / }));
 
         expect(screen.getByText("Grant exception for Name of asset-1")).toBeInTheDocument();
         await userEvent.type(
@@ -292,7 +292,7 @@ describe("ComplianceQuarantine release", () => {
         ]);
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
-        await userEvent.click(screen.getAllByRole("button", { name: "Release" })[0]);
+        await userEvent.click(screen.getAllByRole("button", { name: /^Release Name of / })[0]);
         expect(screen.getByText("Release Name of asset-1 from quarantine")).toBeInTheDocument();
 
         const confirm = () =>
@@ -362,5 +362,23 @@ describe("ComplianceQuarantine release", () => {
             )
         ).toBeInTheDocument();
         expect(screen.getByText("Name of asset-1")).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceQuarantine rows", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockAllowed = [];
+    });
+
+    it("lists the rows without a selection control, since no action reads a selection", async () => {
+        service().fetchQuarantinedAssets.mockResolvedValue([
+            true,
+            { quarantinedAssets: [quarantined("asset-1")], nextToken: undefined },
+        ]);
+        render(<ComplianceQuarantine />);
+        await screen.findByText("Name of asset-1");
+        expect(screen.queryAllByRole("radio")).toHaveLength(0);
+        expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     });
 });

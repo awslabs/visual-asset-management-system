@@ -237,14 +237,15 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
     authorized = _authorized_database_ids(cascade)
     authorized_assets = _authorized_asset_keys(cascade)
 
-    # Each node's compliance record is read once, up front, so the names are recorded with the
-    # nodes; the evaluation loop takes the bound schema from the same read. A node outside the
-    # starting caller's reach (its database, or, for a caller whose asset rules read asset fields,
-    # the asset itself) is not read: it is neither evaluated nor named.
+    # Each node's compliance record is read up front, so the names are recorded with the nodes; the
+    # evaluation loop reads it again, consistently, right before the node's evaluation, so a binding
+    # changed since the cascade started decides the schema. A node outside the starting caller's
+    # reach (its database, or, for a caller whose asset rules read asset fields, the asset itself)
+    # is not read: it is neither evaluated nor named.
     records = {}
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
-        if ((authorized is None or node["databaseId"] in authorized)
+        if (node["databaseId"] in authorized
                 and (authorized_assets is None or node_key in authorized_assets)):
             records[node_key] = store.get_compliance_record(node["databaseId"], node["assetId"]) or {}
     node_names = {key: record.get("assetName") or "" for key, record in records.items()}
@@ -269,7 +270,9 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
             _write_nodes(cascade_id, nodes)
             results.append({"node": node_key, "status": NODE_STATE_SKIPPED_NOT_AUTHORIZED})
             continue
-        schema_name = records[node_key].get("schemaName", "")
+        current = store.get_compliance_record(
+            node["databaseId"], node["assetId"], consistent_read=True) or {}
+        schema_name = current.get("schemaName", "")
         if not schema_name:
             nodes[node_key] = NODE_STATE_SKIPPED
             _write_nodes(cascade_id, nodes)
@@ -356,11 +359,12 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
 
 def _authorized_database_ids(cascade: Dict[str, Any]) -> Any:
     """The databases whose descendants this cascade may evaluate, as recorded when a caller started
-    it; None for a cascade without the record (one started before it was kept), whose descendants
-    are all evaluated as before. An unreadable record authorizes nothing."""
+    or approved it (both paths to `executing` record it). A cascade without the record, or with an
+    unreadable one, authorizes nothing."""
     raw = cascade.get("authorizedDatabaseIds")
     if raw is None:
-        return None
+        logger.warning("Cascade carries no authorizedDatabaseIds; no descendant is evaluated")
+        return set()
     try:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, ValueError):

@@ -223,8 +223,8 @@ def start_wait_outcome(record: Any) -> Optional[str]:
 def wait_for_start(api_client: APIClient, session_id: str, record: Dict[str, Any],
                    json_output: bool) -> Tuple[str, Dict[str, Any]]:
     """Read the workstation every START_WAIT_POLL_SECONDS until start_wait_outcome settles or
-    START_WAIT_TIMEOUT_SECONDS pass; returns the outcome (`active`, `failed` or `timedOut`) and the last
-    record read. A read the cluster did not answer is tried again at the next poll."""
+    START_WAIT_TIMEOUT_SECONDS pass; returns the outcome (`active`, `stalled`, `failed` or `timedOut`) and
+    the last record read. A read the cluster did not answer is tried again at the next poll."""
     deadline = _monotonic() + START_WAIT_TIMEOUT_SECONDS
     shown = state_label(record)
     output_status(f"  {shown}", json_output)

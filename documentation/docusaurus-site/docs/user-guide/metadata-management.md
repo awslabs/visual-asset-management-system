@@ -70,10 +70,10 @@ The bulk operation response indicates how many items succeeded and failed, with 
 
 VAMS supports two update modes for metadata:
 
-| Update mode          | Behavior                                                                                                                                                 |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **UPDATE** (default) | Updates only the specified metadata keys. Existing keys not included in the request are left unchanged.                                                  |
-| **REPLACE_ALL**      | Replaces the entire metadata set for the entity. All existing metadata keys not included in the request are deleted. Limited to 500 items per operation. |
+| Update mode          | Behavior                                                                                                                                                                                                                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **UPDATE** (default) | Updates only the specified metadata keys. Existing keys not included in the request are left unchanged.                                                                                                                                                                                                           |
+| **REPLACE_ALL**      | Replaces the entire metadata set for the entity. All existing metadata keys not included in the request are deleted. Removing keys also requires delete permission on the metadata (the `DELETE` method on its route); without it the save is refused and nothing is written. Limited to 500 items per operation. |
 
 To edit a metadata entry:
 
@@ -82,10 +82,12 @@ To edit a metadata entry:
 3. Choose **Save** to persist the change.
 
 :::warning
-The `REPLACE_ALL` mode permanently removes any metadata keys not included in the update request. Use this mode with caution.
+The `REPLACE_ALL` mode permanently removes any metadata keys not included in the update request, and needs delete permission on the metadata to do so. Use this mode with caution.
 :::
 
 ## Deleting metadata
+
+Delete appears only for a role that may delete that metadata, on an asset, a file or an asset link. Another role can still add and change fields, and in Bulk Edit a CSV import keeps every stored field the file leaves out.
 
 ### Single deletion
 

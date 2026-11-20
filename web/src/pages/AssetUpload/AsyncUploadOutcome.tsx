@@ -32,6 +32,8 @@ interface Props {
     pollIntervalMs?: number;
     pollLimitMs?: number;
     fetchStatus?: Fetcher;
+    /** Called once every large file of every upload is in the asset. */
+    onAllLanded?: () => void;
 }
 
 interface UploadView {
@@ -65,6 +67,7 @@ export default function AsyncUploadOutcome({
     pollIntervalMs = ASYNC_POLL_INTERVAL_MS,
     pollLimitMs = ASYNC_POLL_LIMIT_MS,
     fetchStatus = (u, a, d) => AssetUploadService.getUploadStatus(u, a, d),
+    onAllLanded,
 }: Props) {
     const [views, setViews] = useState<Record<string, UploadView>>({});
     const [timedOut, setTimedOut] = useState(false);
@@ -84,7 +87,13 @@ export default function AsyncUploadOutcome({
             await Promise.all(
                 pending.map(async (id) => {
                     try {
-                        updates[id] = { status: await fetchStatus(id, assetId, databaseId) };
+                        const status = await fetchStatus(id, assetId, databaseId);
+                        // A finished record that lists no large file keeps no outcome to show
+                        // (its tracking was not written), which is the same as no status at all.
+                        const noFiles =
+                            status.status !== "processing_async" &&
+                            (status.asyncFiles || []).length === 0;
+                        updates[id] = noFiles ? { status, unavailable: true } : { status };
                     } catch (error) {
                         // A final answer stops polling; a transient error (a 5xx, a network error)
                         // keeps the last status read and is retried on the next poll.
@@ -98,7 +107,15 @@ export default function AsyncUploadOutcome({
             const next = { ...viewsRef.current, ...updates };
             viewsRef.current = next;
             setViews(next);
-            if (!uploadIds.some((id) => isPending(next[id] || {}))) return;
+            if (!uploadIds.some((id) => isPending(next[id] || {}))) {
+                const landed = uploadIds.every(
+                    (id) =>
+                        !next[id]?.unavailable &&
+                        (next[id]?.status?.asyncFiles || []).every((f) => f.status === "SUCCEEDED")
+                );
+                if (landed) onAllLanded?.();
+                return;
+            }
             if (Date.now() - startedAt >= pollLimitMs) {
                 setTimedOut(true);
                 return;

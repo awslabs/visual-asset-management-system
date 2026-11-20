@@ -172,7 +172,7 @@ def _cascade_node(w):
         "triggeredByDatabaseId": DB, "triggeredByAssetId": "parent"})
     with patch.object(executor, "discover_all_descendants", return_value=[node]), \
             patch.object(executor, "topological_sort", return_value=[node]), \
-            patch.object(executor, "_authorized_database_ids", return_value=None), \
+            patch.object(executor, "_authorized_database_ids", return_value={DB}), \
             patch.object(executor, "_authorized_asset_keys", return_value=None), \
             patch.object(executor, "automatic_evaluation_target", return_value="evaluate"), \
             patch.object(executor, "_complete_cascade", MagicMock()):

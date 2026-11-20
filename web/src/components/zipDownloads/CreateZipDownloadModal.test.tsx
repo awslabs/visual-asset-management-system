@@ -14,6 +14,7 @@ const mockCreate = jest.fn();
 const mockVersions = jest.fn();
 jest.mock("../../services/APIService", () => ({
     createZipDownload: (...args: any[]) => mockCreate(...args),
+    ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE: "The zip download may have been created.",
 }));
 jest.mock("../../services/AssetVersionService", () => ({
     fetchAllAssetVersions: (...args: any[]) => mockVersions(...args),
@@ -178,6 +179,19 @@ describe("CreateZipDownloadModal", () => {
         expect(
             await screen.findByText("You already have the maximum number of active zip downloads")
         ).toBeInTheDocument();
+        expect(onCreated).not.toHaveBeenCalled();
+    });
+
+    it("shows a create that got no reply as a warning, not a failure", async () => {
+        const { ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE } = jest.requireMock(
+            "../../services/APIService"
+        );
+        mockCreate.mockResolvedValue([false, ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE, undefined]);
+        const { onCreated } = renderModal();
+        await userEvent.click(screen.getByRole("button", { name: "Create zip download" }));
+        expect(await screen.findByText(ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE)).toBeInTheDocument();
+        expect(screen.getByLabelText("Warning")).toBeInTheDocument();
+        expect(screen.queryByLabelText("Error")).toBeNull();
         expect(onCreated).not.toHaveBeenCalled();
     });
 

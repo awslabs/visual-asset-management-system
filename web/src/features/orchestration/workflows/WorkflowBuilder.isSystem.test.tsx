@@ -223,4 +223,32 @@ describe("WorkflowBuilder for a system workflow", () => {
         expect(handle).toHaveClass("cursor-grab");
         expect(handle).not.toHaveClass("opacity-50");
     });
+
+    it("offers Enabled and Save only to a role that may update the workflow", async () => {
+        // A role from the database-readonly template lists the workflow routes for GET only.
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        useAllowedRoutes.mockReturnValue({
+            loading: false,
+            failed: false,
+            can: (method: string) => method === "GET",
+        });
+        const user = userEvent.setup();
+        renderBuilder(systemWorkflow);
+        await waitFor(() => expect(screen.getByLabelText("Enabled")).toBeChecked());
+
+        const reason = "Your role does not allow changing this workflow.";
+        const enabled = screen.getByLabelText("Enabled");
+        expect(enabled).toHaveAttribute("aria-disabled", "true");
+        expect(enabled).toHaveAttribute("aria-description", reason);
+        await user.click(enabled);
+        expect(screen.getByLabelText("Enabled")).toBeChecked();
+
+        await openStep(user, 4);
+        const save = screen.getByRole("button", { name: "Save" });
+        expect(save).toHaveAttribute("aria-disabled", "true");
+        expect(save).toHaveAttribute("aria-description", reason);
+        await user.click(save);
+        expect(mockUpdate).not.toHaveBeenCalled();
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+    });
 });

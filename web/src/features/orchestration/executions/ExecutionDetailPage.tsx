@@ -927,7 +927,9 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
         );
     }
 
-    if (error || !execution) {
+    // A failed poll keeps the last answer in `execution` and sets `error`: the page stays and says
+    // it could not be refreshed. The error screen is for a run with no answer at all.
+    if (!execution) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-surface text-text-primary">
                 <div className="text-center">
@@ -939,6 +941,7 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
             </div>
         );
     }
+    const refreshError = error ? toastErrorMessage(error).replace(/\.$/, "") : null;
 
     const stillRunningSubs = stillRunningSubProcessCount(execution);
 
@@ -975,6 +978,12 @@ const ExecutionDetailPage: React.FC<ExecutionDetailPageProps> = ({ executionId }
                     { label: execution.workflowExecutionId },
                 ]}
             />
+
+            {refreshError && (
+                <p role="status" className="text-vams-error text-sm">
+                    Could not refresh: {refreshError}. The page shows the last answer.
+                </p>
+            )}
 
             {/* Header card */}
             <Card>

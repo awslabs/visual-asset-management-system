@@ -2,9 +2,9 @@
 #  SPDX-License-Identifier: Apache-2.0
 
 """Quarantine-blocks-download guard shared by every handler that hands out asset file bytes:
-downloadAsset, streamAsset, assetExportService and streamAuxiliaryPreviewAsset.
+downloadAsset, streamAsset, assetExportService, streamAuxiliaryPreviewAsset and zipDownloadService.
 
-The guard is switched on by ``COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`` (set on those four Lambdas
+The guard is switched on by ``COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`` (set on those five Lambdas
 from ``app.compliance.quarantineBlocksDownload``). The compliance asset-state table is resolved at
 import only when the switch is on, so a deployment with the block off resolves no extra resource
 name and reads no extra table.

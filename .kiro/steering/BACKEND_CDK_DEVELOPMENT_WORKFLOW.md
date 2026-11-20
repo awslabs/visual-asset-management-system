@@ -125,7 +125,7 @@ The process-output state is retried on `States.Timeout` and transient Lambda fau
 
 A workflow's Step Functions definition encodes each referenced pipeline's execution settings, so it is rebuilt whenever one changes (mirrors `backend/CLAUDE.md` "Workflow State Machine Deployment" and "Internal Actions"):
 
--   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which writes `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted), `jobNames` (reused while the steps are unchanged), `pipelineFingerprints` (sha256 of `workflowAsl.to_asl_pipeline_dict` minus `name`, keyed `pipelineDatabaseId:pipelineId`) and `deploymentRevision` together. The refresh writes conditionally on the revision it read.
+-   **One deploy routine.** Create, update, the pipeline-change refresh and the launch-time check all deploy through `workflowService._deploy_fields`, which writes `workflow_arn`, `workflowVersionArn` (every deploy publishes a version; older ones past `MAX_RETAINED_STATE_MACHINE_VERSIONS` are deleted, but only those older than the version the record named when the deploy read it), `jobNames` (reused while the steps are unchanged), `pipelineFingerprints` (sha256 of `workflowAsl.to_asl_pipeline_dict` minus `name`, keyed `pipelineDatabaseId:pipelineId`) and `deploymentRevision` together. The refresh writes conditionally on the revision it read.
 -   **Everything the ASL builders read from a pipeline record goes through `to_asl_pipeline_dict`**, because that dict is what is fingerprinted.
 -   **A pipeline change refreshes its workflows.** `pipelineService.update_pipeline` invokes the workflow service's `refreshPipelineReferences` internal action asynchronously when the fingerprint changes; the service walks every non-archived referencing workflow to exhaustion and records a failed redeploy as `deploymentStale` + `deploymentStaleReason`.
 -   **The redeploy path reads strongly consistent.** `workflowService.redeploy_workflow` (behind both internal actions) reads the workflow and each pipeline with `ConsistentRead=True` via the `consistent_read` parameter of `get_workflow_item`, `_get_pipeline_record` and `_resolve_snapshot_pipeline_records`: the refresh runs right after the pipeline write, and the re-read after a lost conditional write must see the other writer's deployment. API reads keep the default.
@@ -1172,6 +1172,65 @@ manager, so a shared cache would evaluate one user's role links for another.
 `tests/handlers/authz/test_casbin_expression_cache.py` pins the instance-level shape, decision
 parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA freshness.
 
+#### **Authorizer 401 versus 403**
+
+Mirrors `backend/CLAUDE.md` "Key Concepts", "Authorizer 401 versus 403".
+
+`authenticate_request` (`common/auth/authorizerCore.py`) tags every unauthorized result with a `failure` kind:
+
+-   **`FAILURE_UNAUTHENTICATED` answers 401.** A missing or malformed header; a JWT that is malformed, expired, badly signed, or has the wrong aud/iss/token_use or an unknown kid; an API key that is unknown, disabled, expired, has an unreadable expiry or no userId. `apiGatewayAuthorizerRest.lambda_handler` writes the audit record and then raises `Exception("Unauthorized")` outside its catch-all, which API Gateway answers with 401.
+-   **Everything else stays a Deny policy (403)**, `FAILURE_FORBIDDEN` or no kind at all: IP not allowed, an API key whose user has no roles, a misconfigured `AUTH_MODE` or verifier, a JWKS/discovery outage (`TokenVerificationUnavailableError`), an API key table outage (`ApiKeyLookupUnavailableError`), any unexpected error.
+
+Keep three rules:
+
+1. Every API-key "not usable" case gets the same kind as an unknown key (no existence leak).
+2. An outage or configuration fault is never `FAILURE_UNAUTHENTICATED`; it must not tell clients to sign in again.
+3. The raised message is exactly `Unauthorized` (anything else is a 500), and the internal reason never reaches the client.
+
+Tests: `tests/common/auth/test_authorizerCore_failure_kinds.py`, `tests/handlers/auth/test_apiGatewayAuthorizerRest_unauthorized.py`.
+
+#### **Policy Lines as Data (Search Authorization Filters)**
+
+Mirrors `backend/CLAUDE.md` "Key Concepts", "Policy lines as data".
+
+-   `CasbinEnforcer.effective_object_policies(object_type, action)` returns the caller's applicable lines (`effect`, usable `criteriaAnd`/`criteriaOr`), built by the same `_usable_criteria` filter as the policy text, or `None` when the enforcer was not built from them (shared-cache hit, failed build, unloadable text).
+-   Search turns them into OpenSearch filters with `common/searchAuthzFilter.py`: an `upper` bound that fetches every readable document, and a `lower` bound for totals and aggregations that cannot be exact, so counts never include a record the caller cannot open. The per-hit `enforce()` stays authoritative.
+-   **A new operator, constraint field, or change to a rule's regex shape must be mirrored in `searchAuthzFilter.py`.** `tests/handlers/authz/test_search_authz_filter.py` compares both bounds with `enforce()` over every field, operator and value shape and fails otherwise.
+-   A future search mode (for example vector search) reuses `build_search_authz_filters` / `apply_search_authz_filter` in `handlers/osSemanticSearch/search.py`; never compute counts from unfiltered results.
+
+#### **Search Fills the Page**
+
+Mirrors `backend/CLAUDE.md` "Key Concepts", "Search fills the page".
+
+-   `_search_until_page_full` in `handlers/osSemanticSearch/search.py` wraps every dual-index search (POST and simple search). While fewer than `from + size` hits pass the per-hit check and OpenSearch holds more candidates, it fetches a window up to `SEARCH_FILL_GROWTH_FACTOR` times larger, bounded by `OPENSEARCH_MAX_RESULT_WINDOW` per index and by `SEARCH_FILL_MAX_SECONDS`. The window count is not a bound (each window is at least twice the last).
+-   The time bound covers the fetches and every per-hit check: `DualIndexResponseProcessor.decide_in_order` stops at the deadline, and `_affordable_window` sizes the next window from the measured fetch and check time per hit. A search stopped by a bound answers with the hits checked so far and reports `relation: gte`.
+-   Over both indexes only the merged prefix in true order is answered (`_ordered_prefix_length`), so pages neither skip nor repeat records. Larger windows drop `aggs` and keep the first window's aggregations; per-hit decisions are cached per request in `DualIndexResponseProcessor._decide`.
+-   Both keyword search handlers and natural-language search (`vectorSearchService.handle_nlp_search`) run inside `deferred_authorization_audit()`, so refused-hit audit entries are written in batches when the search ends.
+-   A new search mode that post-filters hits routes through `_search_until_page_full`; never slice one window.
+
+#### **System Workflow Runs in the Execution Lists**
+
+Mirrors `backend/CLAUDE.md` "System Workflow Runs in the Execution Lists".
+
+`executeWorkflow._persist_execution_records` copies the workflow row's stored `isSystem` onto the execution main row (`build_workflow_execution_record(is_system=)`; only a boolean `True` marks a run). Both list routes in `executionService` hide those rows unless `includeSystem` applies (`INCLUDE_SYSTEM_PARAM`; `vamscli.constants.EXECUTION_LIST_INCLUDE_SYSTEM_PARAM` mirrors the name and a CLI contract test pins it).
+
+-   **Default.** `_resolve_include_system`: an explicit `true`/`false` wins (anything else is `400`); otherwise system runs are hidden, except in a listing scoped to ONE workflow (both halves of its key) that is a system workflow the caller may GET. The applied value is echoed as `includeSystem`.
+-   **Fail-visible.** `er.execution_row_is_system` is the one reader: a missing attribute (older rows, no migration) or any non-boolean reads as a user run. The global list's `FilterExpression` term is `attribute_not_exists(isSystem) OR isSystem <> true` for the same reason, and `_global_list_matches_filters` (`excludeSystem`) is the safety net.
+-   **Paging.** A hidden row is a fully evaluated row: on the global list it advances the cursor like any filtered row; on the asset list it is a post-filter after `build_execution_items`, so short or empty pages with a `NextToken` are possible. The token format is unchanged.
+-   **Not authorization.** It only chooses which rows a page includes; every row still passes `_execution_access_check`. Details, logs, abort, group abort and re-run do not read it.
+
+#### **Workflow Execution Input Metadata: Opt-in Sections**
+
+Mirrors `backend/CLAUDE.md` "Workflow Execution Input Metadata: Opt-in Sections".
+
+`metadataInputs` carries the four metadata types (default ON) and two opt-in keys (default OFF): `assetFileMetadata` and `metadataSchema`. `METADATA_INPUT_DEFAULTS` and `METADATA_INPUT_OPT_IN_KEYS` in `common/workflows/executionRecords.py` define what an omitted key means; `models/pipelines._METADATA_INPUT_KEYS` and `executionValidation._METADATA_KEYS` list all six. A new key goes into all three in the same change.
+
+-   **Off means unchanged.** With both keys absent or `false` the grouped envelope is byte-identical to the one built before they existed (`tests/handlers/workflows/golden/`). Never default an opt-in key ON.
+-   **Gathered only when some step asks.** `executeWorkflow._intake_metadata_inputs` turns an opt-in key on at intake only when the workflow enables it AND a step's effective gate (systemConfig + chosen template overrides) does. `narrow_metadata_envelope` drops the section per step on the step's own gate.
+-   **`assetFileMetadata`** (`_expand_asset_selections`): a `/` or folder selection is listed with `ListObjectsV2` (current objects only, so archived files never appear), skipping folder markers and `PREVIEW_FILE_PATTERN`; at most `MAX_ASSET_FILE_EXPANSION_PER_SELECTION` (500) per selection, explicit plus expanded file records within `MAX_INPUT_FILES_PER_EXECUTION`, and the listing stops counting at `MAX_ASSET_FILE_EXPANSION_SCAN_KEYS`. Each file's reads go through `_fetch_file_metadata` with the request's identity (`_metadata_service_payload`). Records carry `"expanded": true` and the group carries `fileExpansion`; the persisted input-metadata row stores `expanded: True` only on such a row (`build_input_metadata_record(expanded=)`).
+-   **`metadataSchema`** (`_build_metadata_schemas`): Tier-1 on `GET /metadataschema` for the request's identity, Tier-2 on a provisional schema object (no name, no entity type) in the database and in `GLOBAL`, then the per-schema GET the list endpoint filters by. A database left out for any reason gets one generic warning whose text does not depend on whether a schema exists. The schema records come from `metadataSchemaValidation.load_enabled_schemas` (uncached, so a per-caller filtered aggregate is never cached) and `aggregate_schema_field_catalog`, which reports a conflict only for files that two differing schemas both reach. The execute role's reads sit in their own `MetadataSchemaReadPolicy`.
+-   Every cut or omission is an execute warning; neither section ever fails a launch.
+
 #### **Keyword search: sorts, index writes and query text** (`handlers/osSemanticSearch/`)
 
 -   **Search sorts are total.** Every keyword search sort, each larger fill window included, ends
@@ -1237,7 +1296,7 @@ An endpoint that answers "may this user do X" (a permission check, as opposed to
 
 The check identifies the user from the token, loads the object itself from the identifiers it is given, and evaluates the same Tier 1 and Tier 2 checks as the endpoint it answers for.
 
-**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule '<name>'`, `ruleName`) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. Follow the same shape for any new field that makes the system act later on an object the saver names.
+**A stored reference that the system later acts on is authorized when it is saved.** A compliance pipeline rule names a workflow that every evaluation launches as the system user, so `complianceSchemaService.pipeline_rules_refused` decides each new or changed `pipelineRef` on schema create and update the way the execute route decides a run (`may_run_workflow`: Tier 1 `POST` on `/workflows/{databaseId}/{workflowId}/execute` through `enforcer.enforce` on an `api` object, Tier 2 `GET` on the workflow, its pipelines and the rule's own pipeline, each row read with one `GetItem`). It is deny by default: a missing workflow or pipeline answers the same `403` (`Not authorized to run the workflow of pipeline rule rules[<n>]`, `rulePosition`: the rule's position in the body's `rules`, never its caller-chosen name) as a refused one and is logged through `log_authorization`. Unchanged rules are not re-checked and `SYSTEM_USER` is not checked. Follow the same shape for any new field that makes the system act later on an object the saver names.
 
 #### **Single-asset routes: Tier 2 before existence**
 
@@ -1298,6 +1357,8 @@ Prefer `apiBuilder2-nestedStack.ts` for new endpoints. Place a function in `apiB
 **Do not consolidate the API stacks.** They stay split so each carries its own budget against the two per-template CloudFormation ceilings — 500 resources and a 1,000,000-byte template body, neither adjustable. In the worst-case commercial cell (customer managed key, every Lambda in the VPC, Deadline Cloud, Download as Zip) `apiBuilder` emits 150 resources in a ~0.45 MB template and `apiBuilder2` emits 235 in ~0.68 MB, so body size fills well ahead of resource count and is what the split buys headroom against. `apiBuilder3` holds the audit log search and its five `/audit` routes (3 resources, ~0.02 MB), and `infra/test/api/nestedTemplateSizeGuard.test.ts` fails when a shipped or standard worst-case template (commercial, GovCloud, EU Sovereign) exceeds 940,000 bytes (960,000 with a long base stack name); put new functions in `apiBuilder3` when it does. Shared IAM suppressions go through `addIamNagSuppressions`, which writes them on the IAM resources alone; copied onto every resource, they put `apiBuilder2` over the body limit in that cell.
 
 A third limit is not relieved by the split: **API Gateway resources per REST API** (300 by default, adjustable). Routes from all the API stacks land in one `RouteRegistry` and are materialized on one `SpecRestApi`, so the path tree — 165 nodes from 132 OpenAPI paths — is a whole-deployment figure. It counts nodes, not routes: `/database/{databaseId}/assets` is three nodes, and a sibling path sharing that prefix adds only its own leaf. `infra/test/api/apiStackCeilings.test.ts` asserts every figure here against the synthesized templates.
+
+A fourth ceiling governs the storage stack: **200 Outputs per template**, not adjustable. `StorageResourcesBuilder` emits 153 of them (commercial template), because every table a sibling nested stack references contributes a `tableName` Output for its SSM parameter, plus a `tableArn` where a cross-stack grant needs one. Exceeding 200 is rejected at ValidateTemplate, so roughly 45 more cross-stack-referenced storage resources would hit it. `apiStackCeilings.test.ts` fails above 170, which leaves room to design a split rather than meet the limit at the deploy that crosses it. Counted from a fresh synth, not from `cdk.out`.
 
 ```typescript
 // ✅ CORRECT - Register API routes
@@ -2694,6 +2755,20 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 **A multipart file completed with no parts is cancelled.** `complete_upload` (`uploadFile.py`) aborts that file's multipart upload, stores nothing and reports the file with `success=False`; `sqsUploadFileLarge.py` `complete_multipart_upload_for_large_file` does the same and returns `False`. Only a file initialized as `zero-byte` completes with an empty `parts` list.
 
 **Upload records expire on `expiresAt`.** `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt` (epoch seconds, set by every writer: 7 days from upload initialize, 1 day for workflow-output records). TTL removes an expired record only some time after it expires, so `complete_upload` still refuses a record whose `expiresAt` has passed. A new writer to the table sets `expiresAt` as a Number.
+
+### **Compliance Handler Environment Variables and Resource Keys**
+
+Mirrors `backend/CLAUDE.md` "Common Environment Variables" (the compliance paragraph). Each variable is set only on the Lambdas named:
+
+-   `EXECUTE_WORKFLOW_FUNCTION_NAME`: the evaluate-service, cascade-service and trigger Lambdas. `complianceEvaluationStore` reads it to launch a pipeline rule's workflow execution through a `lambdaCrossCall`.
+-   `COMPLIANCE_TRIGGER_QUEUE_URL`: the trigger's own queue. On it the trigger holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once; unset, completions are evaluated at once. It is also set on `complianceSchemaBindingService`, which queues an asset override's `{databaseId, assetId}` evaluation under `complianceAutoEval`, and on `complianceJobs`, which queues a database binding change's evaluations there, paced by the apply record's own counts of evaluations sent and taken, never by the queue's approximate message count; unset, nothing is queued.
+-   `COMPLIANCE_JOB_QUEUE_URL`: the compliance job queue. `databaseService` queues a delete's `moveDeletedDatabaseCompliance` message, `complianceSchemaBindingService` a binding change's first `applyDatabaseBinding` message, and `complianceJobs` each continuation. `complianceTrigger` does not have it: a job message found on its own queue is logged with one WARNING and dropped (`drop_job_message`).
+-   `COMPLIANCE_JOB_DLQ_URL`: the job queue's dead-letter queue, from which a redrive resumes a move. `complianceJobs` puts a move stopped at its run limit there, and `databaseService` a delete's move message the job queue did not take.
+-   `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`: the five asset download Lambdas (`downloadAsset`, `streamAsset`, `assetExportService`, `streamAuxiliaryPreviewAsset`, `zipDownloadService`), set from `app.compliance.quarantineBlocksDownload`. The shared `common/compliance/quarantineGuard.py` reads it, resolves the compliance asset-state table only when it is `true`, and the handlers call its `check_quarantine_block()` only after Tier-1 and Tier-2 authorization.
+-   `ORCHESTRATION_BUS_ARN` and `ORCHESTRATION_EVENT_SOURCE_PREFIX`: set on the workflow Lambdas by `workflowFunctions.ts`. `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set.
+-   No table-name variables: every compliance table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket variable.
+
+A compliance pipeline rule that names a system record is refused after the run-rights check ("A stored reference that the system later acts on is authorized when it is saved"): `system_pipeline_rule_refused` answers `400` with `systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE` and `ruleName` for a new or changed rule whose workflow, own pipeline or a pipeline its workflow runs is a system record (`systemRecords.names_system_record`), for every caller including `SYSTEM_USER`. `complianceEvaluationStore` never launches such a rule from a schema stored before the check: the result is an error with the same message, and a waiting one is closed.
 
 ### **AWS Client Configuration Pattern**
 

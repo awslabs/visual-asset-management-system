@@ -3137,6 +3137,19 @@ const CORE_RULES: Rule[] = [
 
     // ----- IP ranges (config.ts: "Validate IP ranges configuration") -----
     {
+        // An unset value is backfilled to []; any other value that is not an array is rejected,
+        // since the authorizer refuses every request for a list it cannot read as an array.
+        id: "ip-ranges-array",
+        severity: "error",
+        fieldPaths: ["app.authProvider.authorizerOptions.allowedIpRanges"],
+        appliesWhen: (c) => {
+            const ranges = g(c, "app.authProvider.authorizerOptions.allowedIpRanges");
+            return ranges !== undefined && ranges !== null && !Array.isArray(ranges);
+        },
+        message:
+            "app.authProvider.authorizerOptions.allowedIpRanges must be an array of [min, max] IP address ranges ([] for no restriction).",
+    },
+    {
         id: "ip-range-shape",
         severity: "error",
         fieldPaths: ["app.authProvider.authorizerOptions.allowedIpRanges"],
@@ -4516,9 +4529,10 @@ const CORE_RULES: Rule[] = [
     // The seeded compliance schema's only rule references the GLOBAL `defaultAsset` metadata schema,
     // which is seeded by `autoLoadDefaultAssetSchema` alone. Without it the rule cannot be checked
     // (a tooling error, "Metadata schema not found"), so every evaluation under the schema ends in an
-    // error with no verdict. Absence follows `getConfig()`'s backfills: a missing
-    // `autoLoadDefaultSchema` is true, a missing `metadataSchema` BLOCK is every flag true, and a
-    // missing flag inside a present block is false (the seeding construct tests it for truthiness).
+    // error with no verdict. Absence follows `getConfig()`'s backfills: a missing `metadataSchema`
+    // BLOCK is every flag true, a missing flag inside a present block is false (the seeding construct
+    // tests it for truthiness), and a missing `autoLoadDefaultSchema` (or `compliance` block) follows
+    // `autoLoadDefaultAssetSchema`, so only an explicit `true` can break the rule.
     {
         id: "compliance-default-schema-requires-default-asset-metadata-schema",
         severity: "error",
@@ -4528,12 +4542,12 @@ const CORE_RULES: Rule[] = [
         ],
         appliesWhen: (c) => {
             const autoLoadDefaultSchema = g(c, "app.compliance.autoLoadDefaultSchema");
-            const seedsComplianceSchema = isAbsent(autoLoadDefaultSchema)
-                ? true
-                : !!autoLoadDefaultSchema;
             const seedsDefaultAssetSchema = isAbsent(g(c, "app.metadataSchema"))
                 ? true
                 : !!g(c, "app.metadataSchema.autoLoadDefaultAssetSchema");
+            const seedsComplianceSchema = isAbsent(autoLoadDefaultSchema)
+                ? seedsDefaultAssetSchema
+                : !!autoLoadDefaultSchema;
             return seedsComplianceSchema && !seedsDefaultAssetSchema;
         },
         message:

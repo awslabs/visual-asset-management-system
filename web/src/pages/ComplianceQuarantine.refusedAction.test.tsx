@@ -80,7 +80,9 @@ describe("ComplianceQuarantine after a refused action (D162)", () => {
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
         await userEvent.click(
-            within(rowOf("Name of asset-1")).getByRole("button", { name: "Release" })
+            within(rowOf("Name of asset-1")).getByRole("button", {
+                name: "Release Name of asset-1",
+            })
         );
         await confirmIn(
             "Release Name of asset-1 from quarantine",
@@ -105,7 +107,9 @@ describe("ComplianceQuarantine after a refused action (D162)", () => {
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
         await userEvent.click(
-            within(rowOf("Name of asset-1")).getByRole("button", { name: "Exception" })
+            within(rowOf("Name of asset-1")).getByRole("button", {
+                name: "Exception for Name of asset-1",
+            })
         );
         await confirmIn(
             "Grant exception for Name of asset-1",
@@ -127,7 +131,9 @@ describe("ComplianceQuarantine after a refused action (D162)", () => {
         render(<ComplianceQuarantine />);
         await screen.findByText("Name of asset-1");
         await userEvent.click(
-            within(rowOf("Name of asset-1")).getByRole("button", { name: "Release" })
+            within(rowOf("Name of asset-1")).getByRole("button", {
+                name: "Release Name of asset-1",
+            })
         );
         await confirmIn(
             "Release Name of asset-1 from quarantine",
@@ -140,7 +146,9 @@ describe("ComplianceQuarantine after a refused action (D162)", () => {
             await screen.findByText(`Name of asset-1 was not released: ${RECORD_CHANGED}`)
         ).toBeInTheDocument();
         expect(
-            within(rowOf("Name of asset-1")).getByRole("button", { name: "Release" })
+            within(rowOf("Name of asset-1")).getByRole("button", {
+                name: "Release Name of asset-1",
+            })
         ).toBeEnabled();
     });
 });

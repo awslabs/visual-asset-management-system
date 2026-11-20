@@ -624,21 +624,23 @@ const PlayCanvasGaussianSplatViewerComponent: React.FC<PlayCanvasGaussianSplatVi
             {/* Loading overlay */}
             {isLoading && <LoadingSpinner message={loadingMessage} />}
 
-            {/* Download the API refused or that failed */}
+            {/* Download the API refused or that failed: on a theme panel, readable over the dark scene */}
             {downloadError && (
                 <div
                     role="alert"
                     style={{
-                        color: "#d13212",
+                        color: "var(--vams-color-error)",
+                        background: "var(--vams-bg-primary)",
+                        borderRadius: "8px",
                         fontSize: "1.2em",
                         lineHeight: "1.5",
-                        width: "100%",
+                        maxWidth: "80%",
                         position: "absolute",
                         top: "50%",
                         left: "50%",
                         transform: "translate(-50%, -50%)",
                         textAlign: "center",
-                        padding: "20px",
+                        padding: "12px 16px",
                         boxSizing: "border-box",
                         zIndex: VIEWER_LAYER.cover,
                     }}

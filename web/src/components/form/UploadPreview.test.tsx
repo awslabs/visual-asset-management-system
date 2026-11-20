@@ -110,4 +110,11 @@ describe("UploadPreview", () => {
         expect(screen.getByRole("button", { name: `Remove /${name}` })).toBeTruthy();
         expect(screen.getAllByRole("button", { name: "Remove /a.txt" })).toHaveLength(2);
     });
+
+    it("says no file has an error, not that none is selected, on an empty Errors view", () => {
+        renderPreview(looseFiles(2));
+        fireEvent.click(screen.getByText(/^Errors \(0\)/));
+        expect(screen.getByText("No files with errors")).toBeTruthy();
+        expect(screen.queryByText("No files selected")).toBeNull();
+    });
 });

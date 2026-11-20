@@ -36,13 +36,15 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                                                                                         | **Ad-hoc specs (untracked)**                                |
-| --------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component                                                           | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes                                                               | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                                                                               | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `search.spec.ts`, `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                                                                              | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                                                                                                                                                                                                                                                                                                                      | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No — keep out of git                                        |
+
+A `seeded.` spec still hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`, written by `tools/VamsCLI/examples/seed_compare_smoke.py`). A spec's other opt-in variables are listed in its header comment.
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -119,7 +121,9 @@ await deleteButton.click();
 await expect.poll(() => confirmText).toMatch(/cannot be undone/i);
 ```
 
-An ad-hoc spec may create and clean up its own throwaway data. A core spec may not.
+An ad-hoc spec may create and clean up its own throwaway data. A core spec may not, with one exception:
+`zipdownloads.spec.ts` creates one zip job and deletes it again, only behind `E2E_ZIP_CREATE=1`, and
+skips that case with the reason without it (see "Running the suite").
 
 ---
 
@@ -132,7 +136,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | Helper                                                        | Use for                                                                                                              |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                                  |
-| `cachedFeaturesEnabled(page)`                                 | The deployment's feature flags, read from the app's own cache; `test.skip` on an absent flag                         |
+| `cachedFeaturesEnabled(page)`                                 | Same as `featureSwitches(page)` (older name); `test.skip` on an absent flag                                          |
 | `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                                     |
 | `searchBox(page)`                                             | The orchestration filter-bar search input                                                                            |
 | `facet(page, label)`                                          | A native `<select>` filter                                                                                           |
@@ -147,6 +151,9 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                                                |
 | `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                                                |
 | `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does                                 |
+| `openFileManager(page, databaseId, assetId)`                  | Land on an asset's File Manager tab with its tree rendered (the first half of `openAssetFile`)                       |
+| `selectTreePath(page, filename, { modifiers })`               | Select a file in the File Manager tree by path, expanding each folder by its caret as needed                         |
+| `compareSeed()`                                               | The `E2E_COMPARE_SEED` seed fixture of `seeded.compare.spec.ts`, or `null` when unset                                |
 | `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                                    |
 | `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied                                 |
 | `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator                           |
@@ -173,7 +180,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected                               |
 | `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                                              |
 | `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                                       |
-| `featuresEnabled(page)` / `missingFeatures(list, req)`        | The deployment's `featuresEnabled` list / the required features it lacks                                             |
+| `featuresEnabled(page)` / `missingFeatures(list, req)`        | Same as `featureSwitches(page)` (older name) / the required features it lacks                                        |
 | `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)                           |
 | `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                                         |
 | `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box                              |
@@ -187,7 +194,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                                                |
 | `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's                             |
 | `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                                         |
-| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, as the running app cached them (assert the right side)                           |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, from the app's own cache: the harness's one feature reader                       |
 | `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                                   |
 
 **Selector facts worth not rediscovering:**
