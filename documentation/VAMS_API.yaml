@@ -12913,7 +12913,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /audit/log-groups:
         get:
             summary: "List the audit log groups the caller may search."
-            description: "The /audit routes exist only while app.auditLogging.search.enabled is true (the default; false in the EU Sovereign template, where Amazon CloudWatch Logs Insights is not available); otherwise API Gateway answers them as unknown routes. Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. Core capability with no feature switch."
+            description: "The /audit routes exist only while app.auditLogging.search.enabled is true (the default; false in the EU Sovereign template, where Amazon CloudWatch Logs Insights is not available); otherwise API Gateway answers them as unknown routes. Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. The routes carry the `AUDITLOGSEARCH` feature switch, so `GET /auth/routes/api` lists them only while search is on."
             responses:
                 "200":
                     description: Log groups retrieved successfully.
