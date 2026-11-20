@@ -239,6 +239,15 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see [Sizing a Container's Work to Its Task](#sizing-a-containers-work-to-its-task). The SYSTEM GenAI media image, which has no `xml_mesh_handler`, parses the XML parts of Office files and of the generic zip probe with `defusedxml` and reads every zip member through `media_extractors/common.read_zip_member`, which refuses, without decompressing it, a member whose central-directory size is above `ZIP_MEMBER_READ_MAX_BYTES` (4 MiB).
 
+## Reading a File's Header, Not the File
+
+A pipeline whose facts all live in a file's header (a TIFF's directories) reads that header by ranged GETs of the S3 object at the run's version, never the whole file and never a pixel. `media_extractors/raster.py` is the worked example, over `media_extractors/s3_ranged.RangedS3Reader` (a seekable file object that serves a read from the bytes a previous GET returned and refuses a read past its byte or request bound):
+
+-   Walk the structure with `struct` under limits before a library decodes anything: a directory count, the entries in one directory, the bytes of any single array the library loads whole (tifffile loads the strip and tile offset arrays, strings and `SubIFDs` eagerly), and a total for all of them. Compare every declared count and offset with the object's size before reading or allocating, so a tag that claims gigabytes is refused by arithmetic and not by running out of memory.
+-   A header past a limit is described from what the walk read and flagged (`offsetsTruncated: true`), not failed; a file that is not the format falls back to the `other` class with a warning that names the reason.
+-   Decode the first image with the library only when the walk passed, and hand the library the reader positioned at 0 (tifffile takes a file object's current position as the start of the file). A library's convenience default can invent a value (tifffile reports `nodata` 0 for a file with no `GDAL_NODATA` tag): read the tag itself.
+-   A footprint comes from one shared helper (`media_extractors/geo_reproject.py`): longitude-first axis order, edges densified, an antimeridian crossing cut into a `MultiPolygon`, no footprint for an extent containing a pole, and no footprint (never an assumed WGS84) for a CRS that does not resolve.
+
 ## Sizing a Container's Work to Its Task
 
 A Batch/Fargate container sizes its work to the limits of the task it runs in rather than to a tier name or a constant, so it stays inside whichever job size started it. `preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
@@ -309,14 +318,15 @@ The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logge
 in the `customLogging/logger.py` byte-identity set and redacts only `authorization`. Its handler
 therefore checks `TaskToken` before it logs anything and never logs the event
 (`tests/test_3dbasic_task_token_logging.py`). The 3dBasic
-`.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
+`.dockerignore` keeps `tests/`, the lock and project files and caches out of its `COPY . .`.
 
 **3D Basic Conversion image: how a model is read and written.** `lambdaContainer/lambda.py` is the handler
 and does all Amazon S3 traffic; the parsing runs elsewhere:
 
--   `requirements.txt` is `poetry export -f requirements.txt` of `poetry.lock` **with hashes** (the export needs
-    `poetry-plugin-export`), and the Dockerfile installs it with `pip install --require-hashes`. Re-lock with
-    `poetry update`, re-export, and bump the base image digest as the Dockerfile comment says.
+-   `requirements.txt` is the export of the image's lock **with hashes**, and the Dockerfile installs it with
+    `pip install --require-hashes`. The image is one of the two projects not yet on uv: re-lock and re-export it
+    as the developer guide's "Projects not yet on uv" section says (Managing Python Dependencies in
+    `developer/setup.md`), and bump the base image digest as the Dockerfile comment says.
     `tests/test_3dbasic_image_build_inputs.py` holds the two files, the hashes and the install flag together.
 -   `size_check.py` refuses an input before it is downloaded. The handler reads the size with `HeadObject` at
     the launch version and compares it with a limit derived from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and the
@@ -409,9 +419,24 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
     environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
     the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.
+-   COLLADA and USD scenes are sized from the file before their loader expands them
+    (`lambdaContainer/expansion_bounds.py`, container-only). `model_formats.check_collada_scene` counts the
+    nodes, vertices and triangles `trimesh` places for `instance_node` and nested `node` elements (one node and
+    one mesh for each primitive element of each geometry placed), from the
+    hardened XML parse and a memoised count over the node graph, and refuses a scene over the bound or one
+    that places a node inside itself. `usd_io.read_usd` counts the prims `Usd.Stage.Open` composes from the
+    layers' prim specs and arcs (references, payloads, inherits, specializes, sublayers, variants; an
+    instanceable prim counts once, its shared content once per prototype) before it opens the stage, and
+    refuses a scene over the bound or one whose prim composes itself. Both use
+    `expansion_bounds.max_scene_nodes(memory)` (1,000,000 on the 10,240 MB function, in proportion above
+    that, from the same memory input as the input size limits), the value of `scene_limits.MAX_SCENE_NODES`;
+    the job carries it as `max_scene_nodes` and the conversion passes it as `SceneLimit(max_nodes=...)`.
+    `read_usd` also takes a `deadline` (a share, `model_formats.USD_READ_TIME_SHARE`, of the job's
+    `tool_timeout_seconds`) checked for every prim of the walk. A refusal names nodes or prims, not memory. `model_formats.apply_plan` transforms a scene through
+    `_apply_scene_transform` (trimesh's `Scene.apply_transform` rebuilds its graph cache per node).
 -   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
-    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the `step` Poetry
-    group, `poetry export --only step`). `lambda.py` refuses a STEP run before any S3 call when the variable is
+    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the export of the
+    lock's `step` group). `lambda.py` refuses a STEP run before any S3 call when the variable is
     not `true`. `step_limits.py` is the thumbnail CAD handler's placement count, vendored with a drift test in
     `tests/test_3dbasic_step_input.py`. cascadio writes metres and keeps Z up. `run_golden.sh` with
     `GOLDEN_STEP=1` builds and tests the STEP image and asserts the default image holds no Open CASCADE files.
@@ -1937,3 +1962,5 @@ What an upstream tool writes is a second thing to read from its source rather th
     honest alternative is to scope the rule that flags it (see
     `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`, whose exemption is a
     DENY list precisely so a future upstream file turns the rule red instead of vanishing from it).
+
+22. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`.

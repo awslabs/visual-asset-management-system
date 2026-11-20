@@ -395,7 +395,7 @@ describe("EDH capacity reservation IAM", () => {
         );
     });
 
-    test("the three reader roles' own policies hold no EC2 action but the reservation and subnet reads, and the worker's instance read and move", () => {
+    test("the three reader roles' own policies hold no EC2 action but the reservation and subnet reads, the worker's and the workstation service's instance read, and the worker's move", () => {
         const s = allFeaturesSynth();
         const ec2Actions = Object.fromEntries(
             edhFunctions(s)
@@ -414,7 +414,8 @@ describe("EDH capacity reservation IAM", () => {
         // The launch worker also reads a stopped desktop's instance, for the Availability Zone a
         // refused start names, and moves one off an ended reservation; the workstation and admin
         // services also read the zones of EDH's private subnets, and the workstation service the
-        // facts of the instance types its catalog lists.
+        // facts of the instance types its catalog lists and the state reason of a start EC2 returned
+        // to stopped.
         const expected: Record<string, string[]> = {
             edhAdminService: [DESCRIBE_CAPACITY_RESERVATIONS, DESCRIBE_SUBNETS],
             edhLaunchWorker: [
@@ -426,6 +427,7 @@ describe("EDH capacity reservation IAM", () => {
                 DESCRIBE_CAPACITY_RESERVATIONS,
                 DESCRIBE_SUBNETS,
                 DESCRIBE_INSTANCE_TYPES,
+                "ec2:DescribeInstances",
             ],
         };
         expect(

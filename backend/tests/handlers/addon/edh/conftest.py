@@ -102,6 +102,14 @@ def _fresh_edh_module_state(monkeypatch):
 
     root_key_sync = sys.modules.get("backend.backend.handlers.addon.edh.common.edhRootKeySyncTrigger")
     workstation_service = sys.modules.get("backend.backend.handlers.addon.edh.edhWorkstationService")
+    # The session sweep reads an instance's EC2 state reason for a start EC2 returned to stopped; a test that does
+    # not install its own stand-in reads an answer naming no instance, never EC2 itself.
+    reconciler = sys.modules.get("backend.backend.handlers.addon.edh.edhSessionReconciler")
+    if reconciler is not None:
+        from unittest.mock import MagicMock
+        no_instance = MagicMock()
+        no_instance.describe_instances.return_value = {"Reservations": []}
+        monkeypatch.setattr(reconciler, "ec2", no_instance)
 
     def reset():
         ec._reset_client_state_for_tests()
