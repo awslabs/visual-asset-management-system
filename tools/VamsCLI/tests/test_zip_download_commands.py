@@ -195,6 +195,102 @@ class TestCreate:
         assert len(archive_requests) == 2
         assert all("Authorization" not in r.headers for r in archive_requests)
 
+    def test_a_failure_after_the_job_exists_names_its_request_id(self, cli_runner, generic_command_mocks, tmp_path):
+        """A retry must download the existing job, not create a second one."""
+        from vamscli.utils.exceptions import ZipDownloadTransferError
+
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.create_zip_download.return_value = JOB
+            api.get_zip_download.return_value = {**JOB, "status": "SUCCEEDED", "archiveSizeBytes": 4}
+            api.get_zip_download_url.return_value = {"url": PRESIGNED, "archiveFileName": "Asset.zip"}
+            api.download_zip_archive.side_effect = ZipDownloadTransferError("connection reset")
+
+            result = _invoke(cli_runner, "create", *SCOPE, "--whole-asset", "--download-to", str(tmp_path),
+                             "--json-output")
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["requestId"] == "r1" and data["error_type"] == "ZipDownloadTransferError"
+
+            text = _invoke(cli_runner, "create", *SCOPE, "--whole-asset", "--download-to", str(tmp_path))
+            assert text.exit_code == 1
+            assert "vamscli zip-download download -d db -a a -r r1" in text.output
+
+    def test_a_failure_before_the_job_exists_names_no_request_id(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("zip_download") as mocks:
+            mocks["api_client"].create_zip_download.side_effect = ZipDownloadLimitError(
+                "You already have the maximum number of active zip downloads")
+            result = _invoke(cli_runner, "create", *SCOPE, "--whole-asset", "--json-output")
+            assert result.exit_code == 1
+            assert "requestId" not in json.loads(result.output)
+
+    def test_the_destination_check_does_not_guess_the_archive_name(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        """A file named like the --name (or 'archive') is not the archive the server names: the job is
+        created, and an existing file of the real name is caught once the name is known."""
+        (tmp_path / "archive").write_text("unrelated")
+        (tmp_path / "out").write_text("unrelated")
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.create_zip_download.return_value = JOB
+            api.get_zip_download.return_value = {**JOB, "status": "SUCCEEDED", "archiveSizeBytes": 4}
+            api.get_zip_download_url.return_value = {"url": PRESIGNED, "archiveFileName": "out.zip"}
+            api.download_zip_archive.return_value = 4
+            for name in ([], ["--name", "out"]):
+                result = _invoke(cli_runner, "create", *SCOPE, "--whole-asset", *name,
+                                 "--download-to", str(tmp_path), "--json-output")
+                assert result.exit_code == 0, result.output
+            (tmp_path / "out.zip").write_text("already here")
+            result = _invoke(cli_runner, "create", *SCOPE, "--whole-asset", "--name", "out",
+                             "--download-to", str(tmp_path), "--json-output")
+            assert result.exit_code == 1
+            assert "already exists" in json.loads(result.output)["error"]
+            assert json.loads(result.output)["requestId"] == "r1"
+
+    def test_a_destination_directory_that_does_not_exist_is_refused_before_the_job(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        with generic_command_mocks("zip_download") as mocks:
+            result = _invoke(cli_runner, "create", *SCOPE, "--whole-asset",
+                             "--download-to", str(tmp_path / "missing" / "a.zip"), "--json-output")
+            assert result.exit_code == 1
+            mocks["api_client"].create_zip_download.assert_not_called()
+
+    def test_download_wait_fetches_another_users_finished_archive(self, cli_runner, generic_command_mocks, tmp_path):
+        """The job read answers only your own jobs; the URL route answers for a shared one."""
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.get_zip_download.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            api.get_zip_download_url.return_value = {"url": PRESIGNED, "archiveFileName": "Asset.zip",
+                                                     "archiveSizeBytes": 4}
+            api.download_zip_archive.return_value = 4
+            result = _invoke(cli_runner, "download", *SCOPE, "-r", "r1", "-o", str(tmp_path), "--wait",
+                             "--json-output")
+            assert result.exit_code == 0, result.output
+            assert json.loads(result.output)["localPath"] == str(tmp_path / "Asset.zip")
+
+    def test_download_wait_of_a_job_it_cannot_read_says_it_may_not_exist(self, cli_runner, generic_command_mocks,
+                                                                         tmp_path):
+        """The job read answers not found alike for another user's job and for a mistyped id."""
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.get_zip_download.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            api.get_zip_download_url.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            result = _invoke(cli_runner, "download", *SCOPE, "-r", "r1", "-o", str(tmp_path), "--wait")
+            assert result.exit_code == 1
+            assert "is not one of your jobs or does not exist" in result.output
+
+    def test_download_wait_of_another_users_unfinished_job_is_refused_by_the_url_route(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        with generic_command_mocks("zip_download") as mocks:
+            api = mocks["api_client"]
+            api.get_zip_download.side_effect = ZipDownloadNotFoundError("Zip download not found")
+            api.get_zip_download_url.side_effect = ZipDownloadNotReadyError("The archive is not ready for download")
+            result = _invoke(cli_runner, "download", *SCOPE, "-r", "r1", "-o", str(tmp_path), "--wait",
+                             "--json-output")
+            assert result.exit_code == 1
+            assert json.loads(result.output)["error"] == "The archive is not ready for download"
+            api.download_zip_archive.assert_not_called()
+
     def test_active_cap(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("zip_download") as mocks:
             mocks["api_client"].create_zip_download.side_effect = ZipDownloadLimitError(

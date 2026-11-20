@@ -4,23 +4,20 @@
  */
 
 import React, { useEffect, useRef, useState } from "react";
-import {
-    Box,
-    Button,
-    Container,
-    Header,
-    SpaceBetween,
-    Table,
-    TextFilter,
-    Modal,
-    FormField,
-    Input,
-    Select,
-    Flashbar,
-    FlashbarProps,
-    RadioGroup,
-    SelectProps,
-} from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
+import Button from "@cloudscape-design/components/button";
+import Container from "@cloudscape-design/components/container";
+import Header from "@cloudscape-design/components/header";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import Table from "@cloudscape-design/components/table";
+import TextFilter from "@cloudscape-design/components/text-filter";
+import Modal from "@cloudscape-design/components/modal";
+import FormField from "@cloudscape-design/components/form-field";
+import Input from "@cloudscape-design/components/input";
+import Select, { SelectProps } from "@cloudscape-design/components/select";
+import Flashbar, { FlashbarProps } from "@cloudscape-design/components/flashbar";
+import RadioGroup from "@cloudscape-design/components/radio-group";
+import Badge from "@cloudscape-design/components/badge";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Pagination from "@cloudscape-design/components/pagination";
 import { usePageTitle } from "../hooks/usePageTitle";
@@ -68,6 +65,13 @@ export const SCHEMA_ACTIONS_COLUMN_WIDTH = 150;
 
 /** Shown on a schema row whose body is not a vams-rules-v1 document. */
 export const LEGACY_SCHEMA_LABEL = "Legacy — cannot be bound or evaluated";
+
+/** Why a legacy schema's Edit and Sweep are unavailable, shown beneath them in its row. */
+export const LEGACY_SCHEMA_ACTION_REASON = "A legacy schema cannot be updated or swept.";
+
+/** The line a system schema's dialog shows (it opens read-only for every caller but the system). */
+export const SYSTEM_SCHEMA_NOTE =
+    "This schema is registered by the system; only the system updates it.";
 
 /** What a schema row's Format column shows, which the column sorts by. */
 const schemaFormatLabel = (schema: ComplianceSchema): string => {
@@ -460,6 +464,8 @@ export const sweepMessage = (schemaName: string, result: any): string => {
 // The id of the flash a failed listing load raises: a later failure replaces it, a later load
 // that succeeds removes it.
 const LOAD_FAILURE_FLASH_ID = "compliance-schemas-load-failure";
+// The id of the flash shown while a sweep runs.
+const SWEEP_RUNNING_FLASH_ID = "compliance-schemas-sweep-running";
 
 export default function ComplianceSchemas() {
     const { can: canCallRoute } = useAllowedRoutes();
@@ -483,6 +489,11 @@ export default function ComplianceSchemas() {
     const flashSequence = useRef(0);
     // The NextToken of each schema's last sweep while assets remained (see handleSweep).
     const sweepTokens = useRef<Record<string, string>>({});
+    // The schema whose sweep is running. A sweep can run for about 20 seconds and start up to 200
+    // evaluations, so a second one (of any schema) is refused until it answers; the ref closes the
+    // gap between a click and the render that shows the sweep as busy.
+    const [sweepingSchema, setSweepingSchema] = useState<string | null>(null);
+    const sweepRunning = useRef(false);
 
     // Modal state
     const [modalVisible, setModalVisible] = useState(false);
@@ -501,6 +512,9 @@ export default function ComplianceSchemas() {
     const [formError, setFormError] = useState<string | null>(null);
     // The rule-name problem the editor's Visual Builder shows; saving is refused while it is set.
     const [rulesProblem, setRulesProblem] = useState<string | null>(null);
+    // Counts the times the modal opened. The editor stays mounted while the modal is closed, so it
+    // is keyed by this count: each open starts it afresh (JSON tab, no builder state or problem).
+    const [editorSession, setEditorSession] = useState(0);
     const [saving, setSaving] = useState(false);
     const formErrorRef = useRef<HTMLDivElement>(null);
 
@@ -572,6 +586,8 @@ export default function ComplianceSchemas() {
         setSelectedTemplate(DEFAULT_TEMPLATE_OPTION);
         setFormBody(DEFAULT_TEMPLATE_BODY);
         setFormError(null);
+        setRulesProblem(null);
+        setEditorSession((session) => session + 1);
         setModalVisible(true);
     };
 
@@ -626,6 +642,8 @@ export default function ComplianceSchemas() {
         setFormDatabaseId(schema.databaseId || GLOBAL_SCOPE);
         setFormBody(JSON.stringify(schema.schemaBody, null, 2));
         setFormError(null);
+        setRulesProblem(null);
+        setEditorSession((session) => session + 1);
         setModalVisible(true);
     };
 
@@ -700,8 +718,17 @@ export default function ComplianceSchemas() {
     };
 
     const handleSweep = async (schemaName: string) => {
+        if (sweepRunning.current) return;
+        sweepRunning.current = true;
+        setSweepingSchema(schemaName);
         // A sweep that left assets unreached is continued by the next Sweep of the same schema.
-        const [success, result] = await sweepSchema(schemaName, sweepTokens.current[schemaName]);
+        const [success, result] = await sweepSchema(
+            schemaName,
+            sweepTokens.current[schemaName]
+        ).finally(() => {
+            sweepRunning.current = false;
+            setSweepingSchema(null);
+        });
         if (success) {
             if (result?.NextToken) {
                 sweepTokens.current[schemaName] = result.NextToken;
@@ -755,7 +782,23 @@ export default function ComplianceSchemas() {
                     Compliance Schemas
                 </Header>
 
-                <Flashbar items={flashMessages} />
+                {/* While a sweep runs, the page says which one: the other Sweep links wait for it
+                    (an inline link shows no disabled reason of its own). */}
+                <Flashbar
+                    items={
+                        sweepingSchema
+                            ? [
+                                  {
+                                      type: "info",
+                                      loading: true,
+                                      id: SWEEP_RUNNING_FLASH_ID,
+                                      content: `Sweeping schema "${sweepingSchema}". Another sweep can start when it answers.`,
+                                  },
+                                  ...flashMessages,
+                              ]
+                            : flashMessages
+                    }
+                />
 
                 <Container>
                     <Table
@@ -832,9 +875,12 @@ export default function ComplianceSchemas() {
                                 id: "schemaName",
                                 header: "Schema Name",
                                 cell: (item) => (
-                                    <Button variant="link" onClick={() => openEditModal(item)}>
-                                        {item.schemaName}
-                                    </Button>
+                                    <SpaceBetween direction="horizontal" size="xs">
+                                        <Button variant="link" onClick={() => openEditModal(item)}>
+                                            {item.schemaName}
+                                        </Button>
+                                        {item.isSystem && <Badge>System</Badge>}
+                                    </SpaceBetween>
                                 ),
                                 sortingField: "schemaName",
                                 sortingComparator: byText((item) => item.schemaName),
@@ -890,29 +936,67 @@ export default function ComplianceSchemas() {
                                           minWidth: SCHEMA_ACTIONS_COLUMN_WIDTH,
                                           cell: (item: ComplianceSchema) => {
                                               // A legacy schema cannot be updated or evaluated.
+                                              // Cloudscape shows no disabled reason on an inline
+                                              // link, so the row says why beneath its links, and
+                                              // the links name that line as their description.
                                               const legacy =
                                                   complianceSchemaFormat(item) === "legacy";
+                                              const offerEdit =
+                                                  canUpdate && itemAllows(item, "edit");
+                                              const legacyReasonId = `schema-legacy-reason-${encodeURIComponent(
+                                                  item.schemaName
+                                              )}`;
+                                              const describedBy = legacy
+                                                  ? legacyReasonId
+                                                  : undefined;
                                               return (
-                                                  <SpaceBetween direction="horizontal" size="s">
-                                                      {canUpdate && itemAllows(item, "edit") && (
-                                                          <Button
-                                                              variant="inline-link"
-                                                              disabled={legacy}
-                                                              onClick={() => openEditModal(item)}
+                                                  <SpaceBetween size="xxs">
+                                                      <SpaceBetween direction="horizontal" size="s">
+                                                          {offerEdit && (
+                                                              <Button
+                                                                  variant="inline-link"
+                                                                  ariaLabel={`Edit ${item.schemaName}`}
+                                                                  ariaDescribedby={describedBy}
+                                                                  disabled={legacy}
+                                                                  onClick={() =>
+                                                                      openEditModal(item)
+                                                                  }
+                                                              >
+                                                                  Edit
+                                                              </Button>
+                                                          )}
+                                                          {canSweep && (
+                                                              <Button
+                                                                  variant="inline-link"
+                                                                  ariaLabel={`Sweep ${item.schemaName}`}
+                                                                  ariaDescribedby={describedBy}
+                                                                  disabled={
+                                                                      legacy ||
+                                                                      (sweepingSchema !== null &&
+                                                                          sweepingSchema !==
+                                                                              item.schemaName)
+                                                                  }
+                                                                  loading={
+                                                                      sweepingSchema ===
+                                                                      item.schemaName
+                                                                  }
+                                                                  onClick={() =>
+                                                                      handleSweep(item.schemaName)
+                                                                  }
+                                                              >
+                                                                  Sweep
+                                                              </Button>
+                                                          )}
+                                                      </SpaceBetween>
+                                                      {legacy && (offerEdit || canSweep) && (
+                                                          <Box
+                                                              variant="small"
+                                                              color="text-body-secondary"
                                                           >
-                                                              Edit
-                                                          </Button>
-                                                      )}
-                                                      {canSweep && (
-                                                          <Button
-                                                              variant="inline-link"
-                                                              disabled={legacy}
-                                                              onClick={() =>
-                                                                  handleSweep(item.schemaName)
-                                                              }
-                                                          >
-                                                              Sweep
-                                                          </Button>
+                                                              <span id={legacyReasonId}>
+                                                                  {LEGACY_SCHEMA_ACTION_REASON}
+                                                              </span>
+                                                          </Box>
                                                       )}
                                                   </SpaceBetween>
                                               );
@@ -948,6 +1032,9 @@ export default function ComplianceSchemas() {
                     }
                 >
                     <SpaceBetween size="m">
+                        {viewOnly && editingSchema?.isSystem && (
+                            <Box variant="p">{SYSTEM_SCHEMA_NOTE}</Box>
+                        )}
                         {formError && (
                             <div ref={formErrorRef} role="alert">
                                 <Box color="text-status-error">{formError}</Box>
@@ -1035,6 +1122,7 @@ export default function ComplianceSchemas() {
                             description="A vams-rules-v1 rule set: pipeline, metadata, relationship, file structure, version coverage and asset attributes rules with an enforcement level each. Use the JSON editor for full control or the Visual Builder for guided editing."
                         >
                             <ComplianceSchemaEditor
+                                key={editorSession}
                                 value={formBody}
                                 onChange={setFormBody}
                                 readOnly={viewOnly}

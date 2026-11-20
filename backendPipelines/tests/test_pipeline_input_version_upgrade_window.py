@@ -3,7 +3,7 @@
 
 """A run launched during an upgrade still starts on an image built before the input-version field (#994).
 
-The Batch images of 3dThumbnail, pcPotreeViewer (PDAL and Potree) and coordinateTransform parse their
+The Batch images of 3dThumbnail, pcPotreeViewer (PDAL and Potree), coordinateTransform and cogConvert parse their
 definition into plain dataclasses, so an image built before the field rejects a definition carrying ``inputFile.versionId`` (``TypeError: ... unexpected keyword argument
 'versionId'``). During an upgrade the new ``constructPipeline`` can run while the state machine still
 submits the old job definition, so those pipelines name the launch version in a second Batch command
@@ -38,6 +38,9 @@ STRICT_IMAGES = {
     "backendPipelines/preview/pcPotreeViewer/container/utils/pipeline/objects.py": (
         "backendPipelines/preview/pcPotreeViewer/container/__main__.py",
         "backendPipelines/preview/pcPotreeViewer/lambda/constructPipeline.py"),
+    "backendPipelines/conversion/cogConvert/container/cog_convert_pipeline/utils/pipeline/objects.py": (
+        "backendPipelines/conversion/cogConvert/container/cog_convert_pipeline/__main__.py",
+        "backendPipelines/conversion/cogConvert/lambda/constructPipeline.py"),
     "backendPipelines/conversion/coordinateTransform/container/coord_transform_pipeline/utils/pipeline/objects.py": (
         "backendPipelines/conversion/coordinateTransform/container/coord_transform_pipeline/__main__.py",
         "backendPipelines/conversion/coordinateTransform/lambda/constructPipeline.py"),

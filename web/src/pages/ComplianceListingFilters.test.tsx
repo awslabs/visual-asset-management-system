@@ -190,7 +190,7 @@ describe("ComplianceAuditLog filters", () => {
                 assetId: "a1",
                 text: "reviewer",
                 startDate: "2026-10-01T00:00:00Z",
-                endDate: "2026-10-02T23:59:59Z",
+                endDate: "2026-10-02T23:59:59.999999Z",
             })
         );
     });
@@ -226,7 +226,17 @@ describe("ComplianceAuditLog filters", () => {
 
     it("bounds a day filter to the whole day", () => {
         expect(dayBound("2026-10-01", false)).toBe("2026-10-01T00:00:00Z");
-        expect(dayBound("2026-10-01", true)).toBe("2026-10-01T23:59:59Z");
+        expect(dayBound("2026-10-01", true)).toBe("2026-10-01T23:59:59.999999Z");
         expect(dayBound("", true)).toBeUndefined();
+    });
+
+    // The route compares the bound with stored timestamps as UTC isoformat() strings, which carry
+    // microseconds; an entry from the day's last second must still sort inside the bound.
+    it("keeps an entry from the last second of the end day inside the end bound", () => {
+        const asStored = (bound: string) => bound.replace(/Z$/, "+00:00");
+        const end = asStored(dayBound("2026-10-01", true) as string);
+        expect("2026-10-01T23:59:59.500000+00:00" <= end).toBe(true);
+        expect("2026-10-01T23:59:59+00:00" <= end).toBe(true);
+        expect("2026-10-02T00:00:00+00:00" <= end).toBe(false);
     });
 });

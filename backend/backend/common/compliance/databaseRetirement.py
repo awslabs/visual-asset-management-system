@@ -21,8 +21,10 @@ it, and its key is not a UUID, so no route addresses it):
 (`moving`), closes the database's cascades awaiting approval (`aborted`, `abortReason` "The database
 was deleted", a `cascade_database_deleted` audit entry each) and ends its pipeline rules that wait
 for a running execution of their workflow (`completed` with an error result, the evaluation
-`error`), so nothing of the deleted database can be approved or launched later. `run` moves rows,
-phase by phase (`PHASES`), one page at a time, saving the phase and cursor on the record after each
+`error`), so nothing of the deleted database can be approved or launched later. A delete that
+fails after `begin`, while moving the database row, puts back the record `begin` replaced
+(`cancel`), so the database, still live, is not left `moving`. `run` moves rows, phase by phase
+(`PHASES`), one page at a time, saving the phase and cursor on the record after each
 page, until the deadline it is given; it is resumable and idempotent (a row is moved conditionally
 on still carrying the database id, so a page read twice moves nothing twice). The delete request
 queues `move_message` on the compliance job queue; the compliance job Lambda (`complianceJobs`)
@@ -64,7 +66,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
-from common.compliance.auditRecord import AUDIT_LIST_PARTITION, build_audit_item
+from common.compliance.auditRecord import build_audit_item
 
 DELETED_SUFFIX = "#deleted"
 RECORD_PREFIX = "databaseRetirement#"
@@ -111,6 +113,8 @@ AUDIT_DATABASE_COMPLIANCE_MOVED = "database_compliance_moved"
 SYSTEM_ACTOR = "SYSTEM_USER"
 
 PIPELINE_WAIT_INDEX = "PipelineRuleWaitIndex"
+# The audit table's index of one database's entries (partition `databaseId`, sort `timestamp`).
+AUDIT_DATABASE_INDEX = "DatabaseIndex"
 WAITING_RULE_CLOSED_MESSAGE = "Not started: the database was deleted"
 EVALUATION_CLOSED_MESSAGE = "Not completed: the database was deleted"
 
@@ -414,10 +418,7 @@ def begin(tables: Tables, database_id: str, actor: str,
         closed_cascades = close_pending_cascades(tables, database_id, now)
     except Exception:
         # The delete fails; the database stays live, so its record must not hide its data.
-        if previous:
-            tables.evaluation.put_item(Item=previous)
-        else:
-            tables.evaluation.delete_item(Key=record_key(database_id))
+        cancel(tables, database_id, previous)
         raise
     tables.evaluation.update_item(
         Key=record_key(database_id),
@@ -429,6 +430,17 @@ def begin(tables: Tables, database_id: str, actor: str,
                          "waitingPipelineRulesClosed": closed_rules})
     record.update(closedCascades=closed_cascades, closedWaitingRules=closed_rules)
     return record
+
+
+def cancel(tables: Tables, database_id: str, previous: Optional[Dict[str, Any]]) -> None:
+    """Undo `begin`'s record when the delete fails after it, so the database, which stays live,
+    shows and changes its compliance data again: the record `begin` replaced (`previous`, from
+    `get_record` before `begin`) is written back, or the record is removed when there was none. The
+    cascades and waiting pipeline rules `begin` closed stay closed."""
+    if previous:
+        tables.evaluation.put_item(Item=previous)
+    else:
+        tables.evaluation.delete_item(Key=record_key(database_id))
 
 
 def close_pending_cascades(tables: Tables, database_id: str,
@@ -648,10 +660,13 @@ def _phase_read(tables: Tables, phase: str, database_id: str) -> Dict[str, Any]:
                 "kwargs": {"IndexName": "DatabaseIdIndex",
                            "KeyConditionExpression": Key("databaseId").eq(database_id)},
                 "move": _move_schema}
+    # shortcut: a DatabaseIndex still backfilling (an update that adds it to an existing audit
+    # table) fails the run, so the move ends in the job DLQ until a redrive after the index is
+    # active; read the date-ordered trail meanwhile if that window ever matters.
     return {"table": tables.audit, "method": "query",
-            "kwargs": {"IndexName": "AuditByDateGSI",
-                       "KeyConditionExpression": Key("allListPartition").eq(AUDIT_LIST_PARTITION),
-                       "FilterExpression": Attr("databaseId").eq(database_id)},
+            "kwargs": {"IndexName": AUDIT_DATABASE_INDEX,
+                       "KeyConditionExpression": Key("databaseId").eq(database_id)},
+            "cursorKeys": ("entryId", "databaseId", "timestamp"),
             "move": _move_audit}
 
 
@@ -749,6 +764,10 @@ def run(tables: Tables, database_id: str, deadline: float,
         pages += 1
         spec = _phase_read(tables, phase, database_id)
         kwargs = dict(spec["kwargs"], Limit=page_size)
+        if cursor and not set(spec.get("cursorKeys", ())) <= set(cursor):
+            # A cursor of another index (saved by an earlier version of the phase's read) starts
+            # the phase again; it reads only the rows that still carry the id, so none moves twice.
+            cursor = None
         if cursor:
             kwargs["ExclusiveStartKey"] = cursor
         response = getattr(spec["table"], spec["method"])(**kwargs)

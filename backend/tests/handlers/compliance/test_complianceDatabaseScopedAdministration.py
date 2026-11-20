@@ -426,11 +426,10 @@ class TestTheExecutorStaysWithinTheRecordedReach:
         assert {r["status"] for r in result["results"]} == {"skipped_not_authorized"}
         mocks["run_evaluation"].assert_not_called()
 
-    def test_a_cascade_without_a_recorded_reach_evaluates_every_descendant(self):
-        # A cascade started before the reach was recorded keeps its earlier behaviour.
+    def test_a_cascade_without_a_recorded_reach_evaluates_no_descendant(self):
         result, mocks = _run_executor(self._CrossDatabaseGraph(), _cascade(DB, state="executing"))
-        assert {r["status"] for r in result["results"]} == {"compliant"}
-        assert mocks["run_evaluation"].call_count == 2
+        assert {r["status"] for r in result["results"]} == {"skipped_not_authorized"}
+        mocks["run_evaluation"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------------------------

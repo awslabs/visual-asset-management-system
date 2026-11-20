@@ -52,8 +52,9 @@ PROGRESS_EVERY_SECONDS = 30
 # Heartbeat interval of both task tokens: the VAMS workflow's (externalSfnTaskToken) and the zipArchive
 # state machine's own (TASK_TOKEN). The ZipArchiveBatchJob state's heartbeat timeout
 # (infra zipArchive-construct.ts ZIP_ARCHIVE_BATCH_HEARTBEAT) is several intervals longer, so a
-# container killed without a SIGTERM (out of memory, host loss) ends its run with
-# States.HeartbeatTimeout instead of holding the job until the 11-hour task timeout (#1125 D26).
+# container killed without a SIGTERM (out of memory, host loss) ends its run within that timeout
+# instead of holding the job until the 11-hour task timeout (#1125 D26). Step Functions records the
+# expiry as States.Timeout; the zipArchive pipelineEnd reports it as ZipArchiveHeartbeatLost.
 HEARTBEAT_SECONDS = 120
 # The error the container answers its own task token with when it is stopped (SIGTERM) and no VAMS
 # stopper recorded the stop: a Batch terminate outside VAMS. The run then ends FAILED and the API's
@@ -389,7 +390,8 @@ class Job:
                                                    include_preview_files(manifest))
             check_members(self.clients.for_bucket, members,
                           tuple(manifest.get("blockedExtensions") or CORE_BLOCKED_EXTENSIONS),
-                          tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES))
+                          tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES),
+                          empty_dirs)
             limits = manifest.get("limits") or {}
             total = enforce_limits(members, limits.get("maxFiles"), limits.get("maxTotalBytes"))
             check_archive_fits(members, empty_dirs, manifest["archiveFormat"],
@@ -457,7 +459,10 @@ class Job:
         pinned = []
         for item in items:
             rel = "/" + (item.get("fileKey") or "").lstrip("/")
-            if not item.get("versionId") or not any(rel.startswith(p) or rel == p for p in prefixes):
+            # A prefix ending in '/' selects a folder (or, as '/', the whole asset); any other selects
+            # that one file.
+            if not item.get("versionId") or not any(rel == p or (p.endswith("/") and rel.startswith(p))
+                                                    for p in prefixes):
                 continue
             pinned.append({"key": run["assetBaseKey"] + rel.lstrip("/"), "versionId": item["versionId"],
                            "size": int(item.get("size") or 0)})
@@ -525,7 +530,7 @@ class Job:
                                                        include_preview_files=include_previews)
             members = filter_patterns(members, config.get("includePatterns"), config.get("excludePatterns"))
             check_members(self.clients.for_bucket, members, CORE_BLOCKED_EXTENSIONS,
-                          CORE_BLOCKED_CONTENT_TYPES)
+                          CORE_BLOCKED_CONTENT_TYPES, empty_dirs)
             enforce_limits(members, None, S3_MAX_OBJECT_BYTES)
             check_archive_fits(members, empty_dirs, archive_format, compression)
         except Refusal as r:

@@ -1,5 +1,6 @@
 """Setup command for VamsCLI."""
 
+import ipaddress
 import re
 from urllib.parse import urlparse
 
@@ -13,16 +14,36 @@ from ..utils.json_output import output_status, output_result, output_error, outp
 from ..version import get_version
 
 
+def is_loopback_host(host: str) -> bool:
+    """Whether ``host`` names only this machine (``localhost`` or a loopback address)."""
+    value = (host or "").strip().strip("[]").lower()
+    if value == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
+# Why validate_base_url refused a URL, for the messages that report it.
+BASE_URL_RULE = "an https URL (plain http is accepted only for localhost or a loopback address)"
+
+
 def validate_base_url(url: str) -> bool:
-    """Validate base URL format - accepts any HTTP/HTTPS URL."""
+    """Whether ``url`` is a deployment URL the CLI may use: https, or http for a loopback host only.
+
+    Every later request carries the bearer token to the API URL read from this one, so a plain http
+    URL to another host is refused.
+    """
     try:
         parsed = urlparse(url)
         # Must have scheme and netloc
-        if not parsed.scheme or not parsed.netloc:
+        if not parsed.scheme or not parsed.netloc or not parsed.hostname:
             return False
-
-        # Must be HTTP or HTTPS
-        return parsed.scheme.lower() in ['http', 'https']
+        scheme = parsed.scheme.lower()
+        if scheme == 'https':
+            return True
+        return scheme == 'http' and is_loopback_host(parsed.hostname)
     except Exception:
         return False
 
@@ -137,8 +158,10 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
     Setup VamsCLI with VAMS base URL.
     
     This command configures VamsCLI to work with your VAMS deployment.
-    It accepts any HTTP/HTTPS base URL (CloudFront, ALB, API Gateway, or custom domain),
+    It accepts an HTTPS base URL (CloudFront, ALB, API Gateway, or custom domain),
     fetches the Amplify configuration, and extracts the API Gateway URL for storage.
+    Plain HTTP is accepted only for localhost or a loopback address, for both the base
+    URL and the API URL the deployment publishes.
     
     Examples:
         # Setup with CloudFront distribution
@@ -184,9 +207,7 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
     
     # Validate URL format
     if not validate_base_url(base_url):
-        error = click.BadParameter(
-            "Invalid base URL. Please provide a valid HTTP/HTTPS URL."
-        )
+        error = click.BadParameter(f"Invalid base URL. Please provide {BASE_URL_RULE}.")
         output_error(error, json_output, error_type="Invalid URL")
         raise error
     
@@ -253,7 +274,8 @@ def setup(ctx: click.Context, base_url: str, force: bool, skip_version_check: bo
         # Validate extracted API Gateway URL
         if not validate_base_url(api_gateway_url):
             raise ConfigurationError(
-                f"Invalid API Gateway URL extracted from amplify config: {api_gateway_url}"
+                f"Invalid API Gateway URL extracted from amplify config: {api_gateway_url}. "
+                f"The deployment must publish {BASE_URL_RULE}."
             )
         
         # Ensure extracted API Gateway URL doesn't end with slash

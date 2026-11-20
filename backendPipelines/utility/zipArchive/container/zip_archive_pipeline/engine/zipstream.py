@@ -63,6 +63,16 @@ def dos_datetime(epoch_seconds):
     return dos_time, dos_date
 
 
+def check_member_name(name):
+    """Raise ValueError unless ``name`` is a relative POSIX path with no backslash, NUL, '.' or '..'
+    segment. Both archive writers apply it to every member, and the checks before the first byte
+    apply it to the whole selection."""
+    if not name or name.startswith("/") or "\\" in name or "\x00" in name:
+        raise ValueError("archive member names are relative POSIX paths")
+    if any(part in ("..", ".") for part in name.rstrip("/").split("/")):
+        raise ValueError("archive member names must not contain '.' or '..' segments")
+
+
 class _Entry:
     __slots__ = ("name", "flags", "method", "dos_time", "dos_date", "crc", "compressed",
                  "uncompressed", "offset", "is_dir", "zip64_local")
@@ -100,10 +110,7 @@ class ZipStreamWriter:
 
     @staticmethod
     def _encode_name(name):
-        if not name or name.startswith("/") or "\\" in name or "\x00" in name:
-            raise ValueError("archive member names are relative POSIX paths")
-        if any(part in ("..", ".") for part in name.rstrip("/").split("/")):
-            raise ValueError("archive member names must not contain '.' or '..' segments")
+        check_member_name(name)
         try:
             return name.encode("ascii"), 0
         except UnicodeEncodeError:

@@ -22,7 +22,7 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import ASSET, DB as EVAL_DB
 from backend.tests.handlers.compliance.test_compliancePipelineRuleSaveAuthorization import (
-    DB, REFUSED, World, _body, _rule, _stand_in,
+    CONVERT_POSITION, DB, REFUSED, World, _body, _rule, _stand_in,
 )
 from handlers.compliance import complianceEvaluationStore as store
 from models.compliance import PipelineRule
@@ -55,7 +55,7 @@ SYSTEM_BUNDLES = _shipped_system_bundles()
 # The one message every refusal and every error result carries (pinned here, not read from the code).
 MESSAGE = ("A pipeline rule cannot use a system pipeline. To require the generated metadata, add a "
            "metadata rule on its genai_* fields.")
-REFUSAL = {"message": MESSAGE, "ruleName": "convert"}
+REFUSAL = {"message": MESSAGE, "rulePosition": CONVERT_POSITION}
 
 
 def _bundle_id(bundle):

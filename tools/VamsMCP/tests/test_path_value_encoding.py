@@ -100,3 +100,20 @@ def test_server_endpoints_are_built_with_route_path():
                 offenders.append(f"{source.relative_to(package)}:{node.lineno}")
     assert any(source.name == "server.py" for source in sources), "control: the walk sees the server"
     assert offenders == []
+
+
+COMPLIANCE_TOOLS = [
+    # (tool, arguments, method, path): each id reaches the API as typed, in its own segment
+    ("get_compliance_schema", ("s/x#1%",), "GET", "/compliance/schemas/s%2Fx%231%25"),
+    ("get_asset_compliance_state", ("db/a1", "a#1"), "GET", "/compliance/state/db%2Fa1/a%231"),
+    ("unbind_compliance_schema", ("db/a1",), "DELETE", "/compliance/bind/db%2Fa1"),
+    ("unbind_compliance_schema", ("db#deleted", "a/1"), "DELETE", "/compliance/bind/db%23deleted/a%2F1"),
+    ("evaluate_database_compliance", ("db/a1",), "POST", "/compliance/evaluate/db%2Fa1"),
+]
+
+
+@pytest.mark.parametrize("tool,arguments,method,path", COMPLIANCE_TOOLS)
+def test_a_compliance_id_stays_in_its_own_segment(server_and_sent, tool, arguments, method, path):
+    server, sent = server_and_sent
+    getattr(server, tool)(*arguments)
+    assert [(m, url.split("?", 1)[0]) for m, url in sent] == [(method, f"https://api.example.com{path}")]

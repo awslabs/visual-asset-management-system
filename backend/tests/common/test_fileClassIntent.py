@@ -92,6 +92,12 @@ def test_document_type_words_still_detect(intent):
         assert intent.detect(query) == ["document"]
 
 
+def test_raster_words_detect_the_raster_class(intent):
+    for query in ("geotiff of the coastline", "raster tiles near Berlin", "cloud optimized geotiff from the survey"):
+        assert intent.detect(query) == ["raster"]
+    assert "raster" in intent.FILE_CLASSES
+
+
 @pytest.mark.skipif(not os.path.exists(_CLASSIFIER), reason="fileClassifier.py not in the tree")
 def test_class_ids_and_phrases_match_the_classifier(intent):
     classifier = _load("fileClassifier_for_intent", _CLASSIFIER)

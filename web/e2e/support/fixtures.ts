@@ -59,34 +59,9 @@ export async function gotoOrchestration(
     await page.waitForLoadState("networkidle").catch(() => undefined);
 }
 
-/**
- * The deployment's feature list, read from the app's own cached config (localStorage
- * `vams_cache_config`) — what the running application itself reads. Not `/api/secure-config` through
- * `page.request`: that carries no bearer token, answers 401, and every feature then reads as disabled.
- * The entry is written after the app boots, later than `page.goto` resolving, so it is polled to a
- * short deadline; an empty list after the deadline is returned as such.
- */
+/** The deployment's feature list: the same reader as `featureSwitches`, under its older name. */
 export async function cachedFeaturesEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                if (!raw) return null;
-                const parsed = JSON.parse(raw);
-                const config = parsed?.value ?? parsed ?? {};
-                return (config.featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
+    return featureSwitches(page);
 }
 
 /**
@@ -1529,9 +1504,9 @@ export async function expectNoNewCspViolations(
 /**
  * Records the host of every request the page, its frames and its workers make. `thirdParty()`
  * lists the hosts outside the deployment: anything but the app origin, the API host, Amazon S3,
- * Amazon Cognito and other `amazonaws.com` endpoints. That is how a viewer that reaches out to a
- * public CDN at run time (unpkg, jsDelivr) fails, which air-gapped and GovCloud deployments cannot
- * serve. `options.extraHosts` adds hosts a case legitimately reaches, and `E2E_EXTRA_HOSTS`
+ * Amazon Cognito and other AWS endpoints (`amazonaws.com`, `amazonaws.com.cn`, `amazonaws.eu`).
+ * That is how a viewer that reaches out to a public CDN at run time (unpkg, jsDelivr) fails, which
+ * air-gapped and GovCloud deployments cannot serve. `options.extraHosts` adds hosts a case legitimately reaches, and `E2E_EXTRA_HOSTS`
  * (comma-separated) adds a deployment's own custom domains.
  */
 export function watchRequestHosts(page: Page, options: { extraHosts?: string[] } = {}) {
@@ -1555,7 +1530,9 @@ export function watchRequestHosts(page: Page, options: { extraHosts?: string[] }
                 .map((host) => host.trim())
                 .filter(Boolean)
                 .forEach((host) => allowed.add(host));
-            const awsEndpoint = /(^|\.)(amazonaws\.com|amazonaws\.com\.cn|amazoncognito\.com)$/i;
+            // amazonaws.eu is the AWS European Sovereign Cloud partition (aws-eusc).
+            const awsEndpoint =
+                /(^|\.)(amazonaws\.com|amazonaws\.com\.cn|amazonaws\.eu|amazoncognito\.com)$/i;
             return [...hosts]
                 .filter((host) => !allowed.has(host) && !awsEndpoint.test(host.split(":")[0]))
                 .sort();
@@ -1650,26 +1627,9 @@ export async function openViewerFile(
     }
 }
 
-/** The deployment's feature list, read from the app's cached config (as security.spec.ts does). */
+/** The deployment's feature list: the same reader as `featureSwitches`, under its older name. */
 export async function featuresEnabled(page: Page): Promise<string[]> {
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                const parsed = raw ? JSON.parse(raw) : null;
-                return ((parsed?.value ?? parsed ?? {}).featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
+    return featureSwitches(page);
 }
 
 /** The entries of `required` (one feature or a list) that `features` lacks. */
@@ -1938,9 +1898,13 @@ export async function expectSuperSplatRendered(
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The deployment's feature switches (`featuresEnabled`), as the running app cached them from
- * secure-config. The app holds its shell until the switches arrive, so once the app has rendered
- * they are present; this polls briefly for a page that is still starting.
+ * The deployment's feature switches (`featuresEnabled`, a list or a comma-separated string), read
+ * from the app's own cached config (localStorage `vams_cache_config`): what the running application
+ * itself reads. Not `/api/secure-config` through `page.request`: that carries no bearer token,
+ * answers 401, and every feature then reads as disabled. The entry is written after the app boots,
+ * later than `page.goto` resolving, so it is polled to a short deadline while it is absent or
+ * empty; an empty list after the deadline is returned as such. The harness's one reader of the
+ * cached switches (`cachedFeaturesEnabled` and `featuresEnabled` call it).
  */
 export async function featureSwitches(page: Page): Promise<string[]> {
     if (!page.url().startsWith("http")) {
@@ -1956,14 +1920,18 @@ export async function featureSwitches(page: Page): Promise<string[]> {
                 const value = config.featuresEnabled;
                 if (Array.isArray(value))
                     return value.filter((v: unknown) => typeof v === "string");
-                if (typeof value === "string") return value.split(",").map((v) => v.trim());
+                if (typeof value === "string")
+                    return value
+                        .split(",")
+                        .map((v) => v.trim())
+                        .filter(Boolean);
                 return null;
             } catch {
                 return null;
             }
         });
-        if (switches) return switches;
-        if (Date.now() > deadline) return [];
+        if (switches && switches.length) return switches;
+        if (Date.now() > deadline) return switches ?? [];
         await page.waitForTimeout(1000);
     }
 }

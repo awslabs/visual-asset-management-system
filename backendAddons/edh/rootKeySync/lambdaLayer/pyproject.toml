@@ -1,19 +1,24 @@
-[tool.poetry]
+[project]
 name = "edh-root-key-sync-layer"
 version = "0.1.0"
 description = "cryptography for the EDH Workstations add-on's root key sync Lambda function"
-authors = ["VAMS Team"]
-package-mode = false
-
+authors = [
+    {name = "VAMS Team"}
+]
+requires-python = ">=3.12,<3.13"
 # Only cryptography and its runtime dependencies, at the versions the core authorizer layer pins
 # (backend/lambdaLayers/authorizer). The sync function carries this layer beside the base layer, which
 # ships none of these packages, so no file or package metadata of the two layers overlaps.
-[tool.poetry.dependencies]
-python = "^3.12"
-cryptography = "50.0.2"
-cffi = { version = "2.0.0", markers = "platform_python_implementation != \"PyPy\"" }
-pycparser = { version = "2.22", markers = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\"" }
+dependencies = [
+    "cryptography==50.0.2",
+    "cffi==2.0.0; platform_python_implementation != 'PyPy'",
+    "pycparser==2.22; platform_python_implementation != 'PyPy' and implementation_name != 'PyPy'",
+]
 
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+# The layer is installed by pip from the committed requirements.txt, which is exported from uv.lock
+# (uv lock && uv export --frozen --no-hashes --no-emit-project --no-dev -o requirements.txt).
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+environments = ["sys_platform == 'linux'"]

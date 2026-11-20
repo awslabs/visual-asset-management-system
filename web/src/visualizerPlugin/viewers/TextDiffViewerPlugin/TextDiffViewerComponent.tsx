@@ -20,7 +20,7 @@ import htmlbars from "react-syntax-highlighter/dist/esm/languages/hljs/htmlbars"
 import yaml from "react-syntax-highlighter/dist/esm/languages/hljs/yaml";
 import ini from "react-syntax-highlighter/dist/esm/languages/hljs/ini";
 import { downloadAsset } from "../../../services/APIService";
-import { loadTextFile, TextFetchError } from "../../core/textContent";
+import { loadTextFile, textReadFailureMessage } from "../../core/textContent";
 import { fetchFileVersions } from "../../../services/AssetVersionService";
 import { ViewerPluginProps, FileInfo } from "../../core/types";
 import { fileIdentity } from "../../core/fileIdentity";
@@ -117,7 +117,9 @@ type SideErrorKind =
     /** The side's first bytes are binary: never downloaded whole, never diffed. */
     | "binary"
     /** UTF-32, or UTF-16 without a byte-order mark. */
-    | "encoding";
+    | "encoding"
+    /** Text larger than the text viewers read whole: read no further than its first bytes. */
+    | "too-large";
 
 interface SideError {
     kind: SideErrorKind;
@@ -157,9 +159,15 @@ class DownloadFailure extends Error {
 
 /** A side whose bytes were read but are not text the differ can show. */
 class SideContentRefused extends Error {
-    kind: "binary" | "encoding";
-    constructor(kind: "binary" | "encoding") {
-        super(kind === "binary" ? "binary content" : "unsupported text encoding");
+    kind: "binary" | "encoding" | "too-large";
+    constructor(kind: "binary" | "encoding" | "too-large") {
+        super(
+            kind === "binary"
+                ? "binary content"
+                : kind === "too-large"
+                ? "text too large"
+                : "unsupported text encoding"
+        );
         this.name = "SideContentRefused";
         this.kind = kind;
     }
@@ -170,6 +178,13 @@ class SideContentRefused extends Error {
  *  echoed. */
 const classifyFailure = (error: unknown): SideError => {
     if (error instanceof SideContentRefused) {
+        if (error.kind === "too-large") {
+            return {
+                kind: "too-large",
+                message:
+                    "This file is larger than 20 MB, so the Text Diff Viewer does not compare it.",
+            };
+        }
         return error.kind === "binary"
             ? {
                   kind: "binary",
@@ -222,14 +237,17 @@ const fetchSideText = async (file: FileInfo, signal: AbortSignal): Promise<strin
     try {
         result = await loadTextFile(response[1], signal);
     } catch (error) {
-        // The presigned URL itself was refused (expired, object gone); classify like the API would.
-        if (error instanceof TextFetchError) throw new DownloadFailure(error.message, error.status);
+        // The presigned URL is the storage's, not the API's: a 403 there is an expired link, not a
+        // permission answer, so the side keeps no status and shows the read failure's own wording.
+        const message = textReadFailureMessage(error);
+        if (message) throw new DownloadFailure(message);
         throw error;
     }
     // A binary side (or one in an encoding the viewer cannot read) is that side's state: its first
     // bytes were read and nothing more, and the other side still renders.
     if (result.kind === "binary") throw new SideContentRefused("binary");
     if (result.kind === "unsupported-encoding") throw new SideContentRefused("encoding");
+    if (result.kind === "too-large") throw new SideContentRefused("too-large");
     return result.text;
 };
 
@@ -631,8 +649,13 @@ const TextDiffViewerComponent: React.FC<ViewerPluginProps> = ({
                     ? "Binary file"
                     : state.error.kind === "encoding"
                     ? "Unsupported text encoding"
+                    : state.error.kind === "too-large"
+                    ? "File too large"
                     : "Could not load file";
-            const informational = state.error.kind === "binary" || state.error.kind === "encoding";
+            const informational =
+                state.error.kind === "binary" ||
+                state.error.kind === "encoding" ||
+                state.error.kind === "too-large";
             return (
                 <Box padding="m" data-testid={`text-diff-side-${state.error.kind}`}>
                     <Alert

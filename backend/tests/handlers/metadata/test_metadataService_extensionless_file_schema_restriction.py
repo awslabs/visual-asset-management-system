@@ -324,7 +324,8 @@ class TestRestrictMetadataOutsideSchemasOnAnExtensionlessFile:
         with _Harness(restrict_outside_schemas=True) as harness:
             message = _refusal(lambda: _update(README, [_item(GLB_REQUIRED, "g")]))
 
-        assert f"Field '{GLB_REQUIRED}' is not defined in the metadata schema" in message, message
+        assert "A field is not defined in the metadata schema" in message, message
+        assert GLB_REQUIRED not in message, message
         assert not harness.wrote
 
     def test_the_same_field_is_accepted_on_a_glb_file(self):
@@ -364,7 +365,8 @@ class TestRestrictMetadataOutsideSchemasOnAnExtensionlessFile:
         with _Harness(existing_rows=(_stored(EVERY_FILE_NUMBER, "5", "number"),),
                       restrict_outside_schemas=True) as harness:
             message = _refusal(lambda: _update(README, [_item(GLB_REQUIRED, "g")]))
-        assert f"Field '{GLB_REQUIRED}' is not defined in the metadata schema" in message, message
+        assert "A field is not defined in the metadata schema" in message, message
+        assert GLB_REQUIRED not in message, message
         assert not harness.wrote
 
         with _Harness(existing_rows=stored, restrict_outside_schemas=True) as harness:
