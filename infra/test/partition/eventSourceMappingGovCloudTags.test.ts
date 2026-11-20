@@ -206,7 +206,9 @@ describe("workflowTriggerDispatch SQS event source mapping", () => {
         for (const govCloud of [true, false]) {
             const mappings = eventSourceMappings(synthDispatchFunction(govCloud));
             expect(mappings).toHaveLength(1);
-            expect(mappings[0].Properties.FunctionResponseTypes).toContain("ReportBatchItemFailures");
+            expect(mappings[0].Properties.FunctionResponseTypes).toContain(
+                "ReportBatchItemFailures"
+            );
         }
     });
 
