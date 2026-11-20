@@ -186,14 +186,14 @@ The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS
 
 #### New layer, pipeline or package
 
-A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails a `pyproject.toml` that declares dependencies, or a requirements file with requirement lines, that has no `uv.lock` beside it. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
+A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails any Python dependency file the audit does not cover: a `pyproject.toml` that declares dependencies or a top-level `requirements*.txt` with no `uv.lock` beside it, and, anywhere, a `Pipfile`, a `setup.py` or `setup.cfg` with `install_requires`, an `*.in` file, a pip-compile `requirements*.lock`, a `constraints*.txt`, or a file in a `requirements/` folder. It also fails a `requirements*.txt` beside a `uv.lock` that does not start with the uv export header. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
 
 #### The CI dependency audit
 
 The `python-dependency-audit` job in `.github/workflows/ci.yml` runs `.github/scripts/python_dependency_audit.py`. For every directory with a tracked `uv.lock` it:
 
 1. runs `uv lock --check`, which fails when `pyproject.toml` changed without a re-lock;
-2. regenerates every committed export from its header command and fails when the result differs from the committed file;
+2. requires every top-level `requirements*.txt` in the directory to be a uv export (a file without the `uv export` header fails), regenerates each one from its header command, and fails when the result differs from the committed file;
 3. audits the exports with [pip-audit](https://pypi.org/project/pip-audit/) against the PyPI advisory database, and fails on every advisory not on the allowlist. A run that cannot reach the advisory service fails as well.
 
 Run the same checks locally from the repository root, with the pinned uv on `PATH` (for example installed with `uv self update 0.13.8`, or the standalone installer for that version):
@@ -204,9 +204,37 @@ PIP_AUDIT_VERSION=2.10.1 python3 .github/scripts/python_dependency_audit.py
 
 The script regenerates stale exports in place, so `git diff` afterwards shows the fix to commit. `PIP_AUDIT_VERSION` is the version the workflow sets.
 
-#### Allowlisting an advisory
+The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
-Fix an advisory by moving the package to a fixed version (steps above). When the fix is younger than seven days, `exclude-newer` hides it; take it with `uv lock --upgrade-package <package> --exclude-newer-package <package>=<date>` after checking the release. Allowlist it only when no fixed release is usable yet, for example when the fix is younger than the seven-day release-age rule or the package has no fixed release. Add an entry to `.github/python-audit-allowlist.json`:
+-   the files listed in `.github/python-lock-exemptions.json`, including the hash-locked `requirements*.lock` files that `uv pip compile` produces for some pipeline containers, until each moves to a uv project;
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
+-   packages that come with a container base image or the Lambda runtime;
+-   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
+
+The release-time image scan remains the record for a full container image.
+
+#### Fixing or allowlisting an advisory
+
+Fix an advisory by moving the package to a fixed version (steps above). A security fix does not wait for the seven-day release-age rule. When the fixed release is younger than seven days, `exclude-newer` hides it, so take it with a per-package override in the project's `pyproject.toml`:
+
+1. Add the package under `[tool.uv]`, with a comment naming the advisory and the date to remove the override (seven days after the release):
+
+    ```toml
+    [tool.uv]
+    exclude-newer = "7 days"
+    # PYSEC-2026-0000: take the fixed examplepkg release before the 7-day window. Remove after 2026-12-01.
+    exclude-newer-package = { examplepkg = "2026-11-24T00:00:00Z" }
+    ```
+
+    The date is the newest upload time allowed for that package; use the fixed release's upload time or later. When the fixed release requires newer releases of other packages (`boto3` pins its `botocore`, for example), add those packages to the same table.
+
+2. Re-resolve with `uv lock --upgrade-package <package>` (one `--upgrade-package` per package in the override), then re-export the requirements file(s) with the command in their header.
+3. Confirm `uv lock --check` passes in the project directory, and commit `pyproject.toml`, `uv.lock` and the export(s) together.
+4. After the removal date, when the release is older than seven days, delete the override line and its comment, run `uv lock`, and check that `uv.lock` keeps the same versions.
+
+Do not pass `--exclude-newer-package` on the `uv lock` command line instead: the override is then recorded in `uv.lock` but not in `pyproject.toml`, and the next `uv lock --check`, which the CI audit runs, fails.
+
+Allowlist an advisory only when no fixed release exists, or when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime). Add an entry to `.github/python-audit-allowlist.json`:
 
 ```json
 {
@@ -221,7 +249,7 @@ Fix an advisory by moving the package to a fixed version (steps above). When the
 }
 ```
 
-`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
 
 #### Projects not yet on uv
 
