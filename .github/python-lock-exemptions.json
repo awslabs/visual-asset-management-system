@@ -12,11 +12,6 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
-            "path": "backendPipelines/genAi/cadStepAgent/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
             "path": "backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt",
             "reason": "Ranged requirements of the RapidPipeline EKS Lambda code.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"

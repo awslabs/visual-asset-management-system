@@ -1,0 +1,20 @@
+[project]
+name = "cad-step-agent-pipeline"
+version = "0.1.0"
+description = "CAD STEP agent pipeline container image"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "strands-agents[openai]==1.57.0",
+    "bedrock-agentcore==1.23.1",
+    "cadquery==2.8.0",
+    "ddgs==9.16.0",
+    "httpx==0.28.1",
+    "boto3==1.43.100",
+]
+
+# The image installs the committed requirements.txt with pip. It is exported from uv.lock; uv is a
+# development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
