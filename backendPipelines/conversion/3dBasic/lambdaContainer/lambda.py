@@ -275,7 +275,7 @@ def relative_subdir_from_manifest_path(relative_path):
 
 
 # The mesh formats this pipeline accepts as input: every one is a format trimesh loads with the
-# container's pinned dependencies (requirements.txt / poetry.lock). COLLADA (`.dae`) needs pycollada
+# container's pinned dependencies (requirements.txt / uv.lock). COLLADA (`.dae`) needs pycollada
 # and `.3mf` / `.xaml` / `.3dxml` need lxml and networkx; with none of those installed trimesh
 # registers an exception wrapper in place of each loader. The registered inputFileFilters in
 # vamsSchema/pipeline.json declare this same set to VAMS.
