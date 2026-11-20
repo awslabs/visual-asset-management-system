@@ -137,7 +137,7 @@ VAMS manages its Python dependencies with [uv](https://docs.astral.sh/uv/). Each
 | `uv.lock`          | Every package the constraints resolve to, direct and transitive, at an exact version           | `uv lock` only   |
 | `requirements.txt` | The pinned export of `uv.lock` that pip installs at build time (the backend also has a `-dev`) | `uv export` only |
 
-uv is a developer and CI tool only. Deploys never run it: Lambda layer bundling and the pipeline Dockerfiles install the committed `requirements.txt` with pip, so customer pip settings (a corporate index, certificates in `infra/config/docker/Dockerfile-customDependencyBuildConfig`) keep working, and a layer ships exactly what its committed export names. A layer directory without a `requirements.txt` fails the build with a message. The uv-locked projects today are `backend/`, `backend/lambdaLayers/base/` and `backend/lambdaLayers/authorizer/`, and an add-on's own layer project follows the same rule; `.github/python-lock-exemptions.json` lists the dependency files that do not have a lock yet.
+uv is a developer and CI tool only. Deploys never run it: Lambda layer bundling and the pipeline Dockerfiles install the committed `requirements.txt` with pip, so customer pip settings (a corporate index, certificates in `infra/config/docker/Dockerfile-customDependencyBuildConfig`) keep working, and a layer ships exactly what its committed export names. A layer directory without a `requirements.txt` fails the build with a message. The uv-locked projects today include `backend/`, the Lambda layers under `backend/lambdaLayers/`, the RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) and the 3D Basic Conversion image (`backendPipelines/conversion/3dBasic/lambdaContainer/`), and an add-on's own layer project follows the same rule; `.github/python-lock-exemptions.json` lists the dependency files that do not have a lock yet.
 
 #### Project settings
 
@@ -172,6 +172,11 @@ uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requi
 # backend/ exports two files (main and dev)
 uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
+
+# The 3D Basic Conversion image installs with `pip --require-hashes`, so its exports keep the hashes;
+# the optional STEP input (cascadio) is the `step` dependency group, exported to its own file
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt
+uv export --frozen --no-emit-project --only-group step --no-annotate -o requirements-step.txt
 ```
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
@@ -250,10 +255,6 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
 ```
 
 `id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
-
-#### Projects not yet on uv
-
-Two projects still use Poetry until they move to uv: the RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) and the 3D Basic Conversion image (`backendPipelines/conversion/3dBasic/lambdaContainer/`). This is a transitional state and the only place Poetry applies. Until they move, re-lock them with `poetry lock` and re-export the committed requirements file with `poetry export` (the 3D Basic image exports with hashes, and its `requirements-step.txt` is the `step` group); do not start new projects on Poetry.
 
 ## Infrastructure Setup
 
