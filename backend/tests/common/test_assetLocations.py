@@ -294,14 +294,34 @@ def _fresh_caches():
 @pytest.mark.unit
 class TestIndexAttributes:
     @pytest.mark.parametrize("key,expected", [
-        ("a/b/c.glb", ["a/b/c.glb", "a/b/", "a/"]),
-        ("a/b/", ["a/b/", "a/"]),
-        ("/a/b", ["a/b", "a/"]),
+        # each ancestor folder X/ and the single file X whose companion folder it is
+        ("a/b/c.glb", ["a/b/c.glb", "a/b/", "a/b", "a/", "a"]),
+        # a folder marker is also a single file's companion folder marker
+        ("a/b/", ["a/b/", "a/b", "a/", "a"]),
+        ("/a/b", ["a/b", "a/", "a"]),
+        ("a//b", ["a//b", "a//", "a/", "a"]),
         ("x", ["x"]),
         ("", []),
+        # an own preview names its base file
+        ("p/m.glb.previewFile.png", ["p/m.glb.previewFile.png", "p/m.glb", "p/", "p"]),
+        ("a.previewFile.b.previewFile.c", ["a.previewFile.b.previewFile.c", "a.previewFile.b", "a"]),
+        # an extension with a slash is no preview
+        ("p/m.glb.previewFile.x/y", ["p/m.glb.previewFile.x/y", "p/m.glb.previewFile.x/",
+                                     "p/m.glb.previewFile.x", "p/", "p"]),
+        ("p/m.glb/sub/x.obj", ["p/m.glb/sub/x.obj", "p/m.glb/sub/", "p/m.glb/sub", "p/m.glb/",
+                               "p/m.glb", "p/", "p"]),
     ])
     def test_candidate_locations_deepest_first(self, key, expected):
         assert al.candidate_locations(key) == expected
+
+    @pytest.mark.parametrize("key", ["a/b/c.glb", "p/m.glb.previewFile.png", "p/m.glb/sub/x.obj", "a/b/"])
+    def test_every_candidate_that_could_hold_the_key_is_listed(self, key):
+        # Every prefix of the key that holds it as a location is a candidate (the candidates are
+        # complete), and every candidate is a prefix of the key.
+        candidates = al.candidate_locations(key)
+        holders = [key[:i] for i in range(1, len(key) + 1) if al.contains(key[:i], key)]
+        assert set(holders) <= set(candidates)
+        assert all(key.startswith(c) for c in candidates)
 
     @pytest.mark.parametrize("prefix", ["", "/", "assets", "assets/", "/assets/", "/assets", "a/b", "a/b/"])
     def test_base_prefix_normalizer_matches_the_create_path(self, prefix):
@@ -339,8 +359,48 @@ class TestResolveOwner:
         table = FakeLocationTable([_row("db1", "a1", "projects/alpha/")])
         al.resolve_owner(table, BUCKET, "projects/alpha/sub/model.glb")
         asked = sorted(q["ExpressionAttributeValues"][":k"] for q in table.queries)
-        assert asked == sorted(["projects/alpha/sub/model.glb", "projects/alpha/sub/",
-                                "projects/alpha/", "projects/"])
+        assert asked == sorted(["projects/alpha/sub/model.glb", "projects/alpha/sub/", "projects/alpha/sub",
+                                "projects/alpha/", "projects/alpha", "projects/", "projects"])
+
+    @pytest.mark.parametrize("key", [
+        "projects/model.glb",                        # the object
+        "projects/model.glb/",                       # the companion folder marker
+        "projects/model.glb/textures/a.png",         # a companion entry
+        "projects/model.glb.previewFile.png",        # an own preview
+        "projects/model.glb/sub/n.obj.previewFile.png",  # a companion entry's preview
+    ])
+    def test_single_file_location_owns_its_object_companion_and_previews(self, key):
+        table = FakeLocationTable([_row("db1", "f1", "projects/model.glb")])
+        result = al.resolve_owner(table, BUCKET, key)
+        assert result.status == al.RESOLVED_FOUND and result.entry.asset_id == "f1"
+
+    @pytest.mark.parametrize("key", [
+        "projects/model.glb.bak",
+        "projects/model.glbx/a.png",
+        "projects/model.glb.previewFile.x/y.png",    # an extension with a slash is no preview
+        "projects/other.glb.previewFile.png",
+    ])
+    def test_single_file_location_owns_nothing_else(self, key):
+        table = FakeLocationTable([_row("db1", "f1", "projects/model.glb")])
+        assert al.resolve_owner(table, BUCKET, key).status == al.RESOLVED_NOT_FOUND
+
+    def test_a_single_file_inside_a_folder_wins_for_its_companion(self):
+        table = FakeLocationTable([
+            _row("db1", "outer", "projects/"),
+            _row("db2", "file", "projects/model.glb"),
+            _row("db3", "inner", "projects/model.glb/sub/n.glb"),
+        ])
+        assert al.resolve_owner(table, BUCKET, "projects/model.glb/textures/a.png").entry.asset_id == "file"
+        assert al.resolve_owner(table, BUCKET, "projects/model.glb.previewFile.png").entry.asset_id == "file"
+        assert al.resolve_owner(table, BUCKET,
+                                "projects/model.glb/sub/n.glb.previewFile.png").entry.asset_id == "inner"
+        assert al.resolve_owner(table, BUCKET, "projects/other.glb").entry.asset_id == "outer"
+
+    def test_a_key_with_too_many_candidates_is_not_resolved(self):
+        key = "/".join(f"d{i}" for i in range(al.MAX_CANDIDATE_LOCATIONS)) + "/x.glb"
+        table = FakeLocationTable([_row("db1", "a1", "d0/")])
+        assert al.resolve_owner(table, BUCKET, key).status == al.RESOLVED_TOO_DEEP
+        assert table.queries == []
 
     def test_path_boundary(self):
         table = FakeLocationTable([_row("db1", "a1", "projects/alpha/")])
@@ -464,10 +524,10 @@ class TestResolveOwnerCache:
         first = len(table.queries)
         clock["t"] += al.LOOKUP_HIT_TTL_SECONDS - 1
         al.resolve_owner(table, BUCKET, "projects/alpha/y.glb")
-        # The hit on the owning folder came from the cache; the new key and the expired miss on
-        # `projects/` were read again.
+        # The hit on the owning folder came from the cache; the new key and the expired misses were
+        # read again.
         assert sorted(q["ExpressionAttributeValues"][":k"] for q in table.queries[first:]) == [
-            "projects/", "projects/alpha/y.glb"]
+            "projects", "projects/", "projects/alpha", "projects/alpha/y.glb"]
         # The confirmation runs on every call.
         assert len(table.get_item_calls) == 2
 
@@ -525,6 +585,18 @@ class TestFindConflicts:
         ("projects/alpha", "projects/alpha/"),          # the same name as an object
         ("projects/model.glb/", "projects/model.glb"),  # a folder named like the object
         ("projects", "projects/alpha/"),                # an object named like an ancestor folder
+        # a new single-file location
+        ("projects/", "projects/model.glb"),                  # a folder above it
+        ("projects/model.glb", "projects/model.glb"),          # the same single file
+        ("projects/model.glb/sub/", "projects/model.glb"),     # a folder in its companion folder
+        ("projects/model.glb/sub/n.glb", "projects/model.glb"),  # a single file in its companion folder
+        ("projects/model.glb.previewFile.png", "projects/model.glb"),  # a single file at its own preview
+        ("projects/model.glb", "projects/model.glb.previewFile.png"),  # at the existing file's preview
+        ("projects/model.glb", "projects/model.glb/sub/n.glb"),  # in the existing file's companion
+        # a new folder location
+        ("projects/model.glb", "projects/"),                  # a single file under it
+        ("projects/model.glb", "projects/model.glb/sub/"),     # inside a single file's companion
+        ("projects/sub/model.glb", "projects/sub/"),           # a single file whose companion is under it
     ])
     def test_conflict(self, existing, target):
         table = FakeLocationTable([_row("db1", "a1", existing)])
@@ -537,6 +609,11 @@ class TestFindConflicts:
         ("projects/model.glb.bak", "projects/model.glb"),
         ("projects/model.glb", "projects/model.glb.bak"),
         ("other/alpha/", "projects/alpha/"),
+        ("projects/model.glbx/", "projects/model.glb"),
+        ("projects/model.glb", "projects/model.glbx/"),
+        ("projects/model.glb.previewFile.x/", "projects/model.glb"),  # a slash: no preview
+        ("projects/model.glb", "projects/model.glb.previewFile.x/"),
+        ("projects/model.glb.previewFile.png", "projects/other.glb"),
     ])
     def test_no_conflict(self, existing, target):
         table = FakeLocationTable([_row("db1", "a1", existing)])
@@ -592,21 +669,68 @@ class TestFindConflicts:
         with pytest.raises(RuntimeError):
             al.find_conflicts(table, BUCKET, "projects/alpha/", max_descendant_pages=3)
 
-    def test_matches_the_create_paths_ownership_rule(self):
-        # find_conflicts is non-empty exactly when createAsset.keys_conflict flags a stored row, and
-        # every ancestor or equal row it flags is returned.
-        keys_conflict = _load_create_asset(fresh=True).keys_conflict
-        stored = ["projects/", "projects/alpha/", "projects/alpha/deep/", "projects/model.glb",
-                  "projects/beta", "shared/x/", "z"]
-        targets = ["projects/alpha/", "projects/alpha/deep/more/", "projects/alphabet/",
-                   "projects/model.glb", "projects/model.glb.bak", "projects/model.glb/",
-                   "projects/beta/", "shared/", "shared/x/y.glb", "z/", "zz/", "new/"]
-        for existing in stored:
+    def test_preview_lookup_pages_past_locations_that_are_no_previews(self):
+        # Folder locations named like previews sort before the real preview and are not previews.
+        rows = [_row("db1", f"n{i:02d}", f"projects/model.glb.previewFile.a{i:02d}/") for i in range(30)]
+        rows.append(_row("db2", "preview", "projects/model.glb.previewFile.png"))
+        table = FakeLocationTable(rows)
+        conflicts = al.find_conflicts(table, BUCKET, "projects/model.glb")
+        assert [c.asset_id for c in conflicts] == ["preview"]
+        preview_reads = [q for q in table.queries
+                         if q["ExpressionAttributeValues"].get(":p") == "projects/model.glb.previewFile."]
+        assert len(preview_reads) >= 2
+        assert {q["Limit"] for q in preview_reads} == {al.PREVIEW_LOOKUP_PAGE_SIZE}
+
+    def test_a_location_with_too_many_candidates_is_refused(self):
+        location = "/".join(f"d{i}" for i in range(al.MAX_CANDIDATE_LOCATIONS)) + "/"
+        with pytest.raises(al.LocationTooDeepError):
+            al.find_conflicts(FakeLocationTable([]), BUCKET, location)
+
+    GRID = ["projects/", "projects/alpha/", "projects/alpha/deep/", "projects/alphabet/",
+            "projects/model.glb", "projects/model.glb/", "projects/model.glb/sub/",
+            "projects/model.glb/sub/n.glb", "projects/model.glb/model.glb", "projects/model.glb.previewFile.png",
+            "projects/model.glb.previewFile.x/", "projects/model.glb.bak", "projects/model.glbx/",
+            "projects/beta", "projects/beta/", "projects", "shared/x/", "shared/x/y.glb", "z", "zz/"]
+
+    @staticmethod
+    def _shared_key(a, b):
+        """A key both locations hold, searched over keys built from the grid, or None."""
+        sample = set()
+        for location in TestFindConflicts.GRID:
+            for key in (location, location + "f", location + "/f", location + ".previewFile.png",
+                        location + ".previewFile.q/r", location.rstrip("/"), location + "/model.glb"):
+                sample.add(key)
+        return next((k for k in sorted(sample) if al.contains(a, k) and al.contains(b, k)), None)
+
+    def test_two_locations_share_a_key_exactly_when_one_contains_the_other(self):
+        for a in self.GRID:
+            for b in self.GRID:
+                expected = al.contains(a, b) or al.contains(b, a)
+                assert (a, b, self._shared_key(a, b) is not None) == (a, b, expected)
+
+    def test_matches_the_shared_key_rule_on_every_pair(self):
+        for existing in self.GRID:
             table = FakeLocationTable([_row("db1", "a1", existing)])
-            for target in targets:
-                expected = keys_conflict(existing, target)
+            for target in self.GRID:
+                expected = al.contains(existing, target) or al.contains(target, existing)
                 found = bool(al.find_conflicts(table, BUCKET, target))
                 assert (existing, target, found) == (existing, target, expected)
+
+    def test_flags_everything_the_create_paths_ownership_rule_flags(self):
+        # createAsset.keys_conflict compares folder forms only; every pair it flags is a conflict here
+        # too, and the only pairs added are a single file and one of its own previews.
+        keys_conflict = _load_create_asset(fresh=True).keys_conflict
+        added = set()
+        for existing in self.GRID:
+            table = FakeLocationTable([_row("db1", "a1", existing)])
+            for target in self.GRID:
+                found = bool(al.find_conflicts(table, BUCKET, target))
+                if keys_conflict(existing, target):
+                    assert (existing, target, found) == (existing, target, True)
+                elif found:
+                    added.add((existing, target))
+        assert added == {("projects/model.glb", "projects/model.glb.previewFile.png"),
+                         ("projects/model.glb.previewFile.png", "projects/model.glb")}
 
 
 @pytest.mark.unit

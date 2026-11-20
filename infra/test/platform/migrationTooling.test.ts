@@ -585,6 +585,17 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
         ["ASSET_LOCATION_INDEX_STATUS_COMPLETE", "INDEX_READY_STATUS_COMPLETE"],
     ];
 
+    it("names the same preview pattern as the backend's single-file rule", () => {
+        const patterns = fs.readFileSync(
+            path.join(__dirname, "..", "../../backend/backend/common/s3PathPatterns.py"),
+            "utf8"
+        );
+        expect(pyConstant(script, "ASSET_LOCATION_PREVIEW_FILE_PATTERN")).toBe(
+            pyConstant(patterns, "PREVIEW_FILE_PATTERN")
+        );
+        expect(backend).toContain("from common.s3PathPatterns import PREVIEW_FILE_PATTERN");
+    });
+
     it.each(PAIRS)("%s equals the backend's %s", (migrationName, backendName) => {
         expect(pyConstant(script, migrationName)).toBe(pyConstant(backend, backendName));
     });

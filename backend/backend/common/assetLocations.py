@@ -50,11 +50,10 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 import boto3
 from botocore.config import Config
+from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from customLogging.logger import safeLogger
 
 logger = safeLogger()
-
-from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
 
 def normalize_location(key: Optional[str]) -> str:
@@ -172,6 +171,7 @@ ARCHIVED_DATABASE_SUFFIX = "#deleted"
 RESOLVED_FOUND = "found"
 RESOLVED_NOT_FOUND = "notFound"
 RESOLVED_AMBIGUOUS = "ambiguous"
+RESOLVED_TOO_DEEP = "tooDeep"
 
 # Per-container cache of one index lookup (bucket, candidate location) -> the index rows there.
 LOOKUP_HIT_TTL_SECONDS = 60
@@ -182,6 +182,11 @@ LOOKUP_POOL_SIZE = 8
 # Pages read for one exact-location query before it is treated as unreadable. One location holds
 # one row in a consistent table; a few more exist only while an asset is archived or unarchived.
 MAX_PAGES_PER_LOOKUP = 5
+# Candidate locations one key may have (two per folder level, plus the key and its preview bases).
+# A key with more is not resolved: resolve_owner answers TOO_DEEP and find_conflicts refuses it.
+MAX_CANDIDATE_LOCATIONS = 64
+# Rows read per page while looking for a location among a single file's own previews.
+PREVIEW_LOOKUP_PAGE_SIZE = 25
 
 # The completion marker the v2.6-to-v2.7 `assetLocationIndex` migration step writes last: an SSM
 # String parameter under the deployment's resource-name prefix, so every Lambda can read it with
@@ -229,19 +234,43 @@ def location_attributes(bucket_name: Optional[str], location_key: Optional[str])
 
 
 def candidate_locations(object_key: Optional[str]) -> List[str]:
-    """The locations that could own `object_key`, deepest first: the key itself, then each
-    ancestor folder up to the first segment (`a/b/c.glb` gives `a/b/c.glb`, `a/b/`, `a/`)."""
+    """The stored locations that could contain `object_key`, deepest first.
+
+    - the key itself;
+    - for a key ending in `/`, the single-file location whose companion folder marker it is
+      (`a/b/` gives `a/b`);
+    - for an own-preview key `{base}.previewFile.{ext}`, its base `{base}`;
+    - each ancestor folder `X/`, and the single-file location `X` whose companion folder it is.
+
+    `a/b/c.glb` gives `a/b/c.glb`, `a/b/`, `a/b`, `a/`, `a`. Every candidate is a prefix of the key,
+    so longest first is deepest first. Whether a stored location there really holds the key is
+    decided by `contains`.
+    """
     key = normalize_location(object_key)
     if not key:
         return []
-    candidates = [key]
-    position = len(key.rstrip('/'))
+    candidates = {key}
+    if key.endswith('/'):
+        candidates.add(key[:-1])
+    last_segment_start = key.rfind('/', 0, len(key) - 1) + 1
+    position = key.find(PREVIEW_FILE_PATTERN, last_segment_start)
+    while position > 0:
+        if _is_preview_of(key[:position], key):
+            candidates.add(key[:position])
+        position = key.find(PREVIEW_FILE_PATTERN, position + 1)
+    position = len(key) - 1 if key.endswith('/') else len(key)
     while True:
         position = key.rfind('/', 0, position)
         if position <= 0:
             break
-        candidates.append(key[:position + 1])
-    return candidates
+        candidates.add(key[:position + 1])
+        candidates.add(key[:position])
+    candidates.discard('')
+    return sorted(candidates, key=lambda c: (-len(c), c))
+
+
+class LocationTooDeepError(ValueError):
+    """A key or location has more candidate locations than MAX_CANDIDATE_LOCATIONS."""
 
 
 #######################
@@ -312,38 +341,48 @@ def _entry_from_item(item: Dict[str, Any]) -> LocationEntry:
     )
 
 
-def _query_index(client, table_name: str, key_condition: str, values: Dict[str, Any],
-                 limit: Optional[int] = None, max_pages: int = MAX_PAGES_PER_LOOKUP) -> List[LocationEntry]:
-    """Every index row the key condition selects, paged on the presence of LastEvaluatedKey. With
-    `limit`, stop once that many rows are in hand.
-
-    `client` is the asset table's `meta.client`, which takes and returns plain Python values (the
-    resource layer serializes them), so it is safe to share across the lookup threads."""
-    query_kwargs = {
+def _index_query_kwargs(table_name: str, key_condition: str, values: Dict[str, Any]) -> Dict[str, Any]:
+    """`client` below is the asset table's `meta.client`, which takes and returns plain Python values
+    (the resource layer serializes them), so it is safe to share across the lookup threads."""
+    return {
         'TableName': table_name,
         'IndexName': LOCATION_INDEX_NAME,
         'KeyConditionExpression': key_condition,
         'ExpressionAttributeNames': {'#b': LOCATION_BUCKET_ATTRIBUTE, '#k': LOCATION_KEY_ATTRIBUTE},
         'ExpressionAttributeValues': values,
     }
-    if limit is not None:
-        query_kwargs['Limit'] = limit
-    entries: List[LocationEntry] = []
-    for _ in range(max_pages):
-        response = client.query(**query_kwargs)
-        entries.extend(_entry_from_item(item) for item in response.get('Items', []))
-        if limit is not None and len(entries) >= limit:
-            return entries[:limit]
-        if 'LastEvaluatedKey' not in response:
-            return entries
-        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
-    raise RuntimeError(f"Location index query did not finish within {max_pages} pages")
 
 
 def _lookup_exact(client, table_name: str, bucket: str, location: str) -> Tuple[LocationEntry, ...]:
-    return tuple(_query_index(
-        client, table_name, '#b = :b AND #k = :k',
-        {':b': bucket, ':k': location}))
+    """Every index row at exactly `location`, paged on the presence of LastEvaluatedKey."""
+    query_kwargs = _index_query_kwargs(table_name, '#b = :b AND #k = :k', {':b': bucket, ':k': location})
+    entries: List[LocationEntry] = []
+    for _ in range(MAX_PAGES_PER_LOOKUP):
+        response = client.query(**query_kwargs)
+        entries.extend(_entry_from_item(item) for item in response.get('Items', []))
+        if 'LastEvaluatedKey' not in response:
+            return tuple(entries)
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    raise RuntimeError(f"Location index query did not finish within {MAX_PAGES_PER_LOOKUP} pages")
+
+
+def _first_under(client, table_name: str, bucket: str, prefix: str, accept: Callable[[LocationEntry], bool],
+                 page_size: int, max_pages: int) -> Optional[LocationEntry]:
+    """The first index row whose location begins with `prefix` and that `accept` admits, or None.
+    Pages on the presence of LastEvaluatedKey; a walk still unfinished after `max_pages` raises."""
+    query_kwargs = _index_query_kwargs(table_name, '#b = :b AND begins_with(#k, :p)',
+                                       {':b': bucket, ':p': prefix})
+    query_kwargs['Limit'] = page_size
+    for _ in range(max_pages):
+        response = client.query(**query_kwargs)
+        for item in response.get('Items', []):
+            entry = _entry_from_item(item)
+            if accept(entry):
+                return entry
+        if 'LastEvaluatedKey' not in response:
+            return None
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    raise RuntimeError(f"Location index query did not finish within {max_pages} pages")
 
 
 def _lookup_all(table, bucket: str, locations: List[str], use_cache: bool) -> Dict[str, Tuple[LocationEntry, ...]]:
@@ -389,22 +428,31 @@ def resolve_owner(table, bucket: str, object_key: str, include_archived: bool = 
                   use_cache: bool = True) -> Resolution:
     """The asset whose stored location contains `object_key` in `bucket`.
 
-    Candidates are the key itself and each ancestor folder, deepest first; one exact Query each
-    on the location index, run in parallel; the deepest candidate holding a row wins (longest
-    match). Archived rows count only with `include_archived`, and a live row at a location wins
-    over an archived one there. Two live rows on one location answer AMBIGUOUS and attribute
-    nothing. A FOUND entry is confirmed with a ConsistentRead GetItem on the asset row: a row that
-    is gone or no longer holds the location answers NOT_FOUND, and that lookup is dropped from
-    the cache.
+    Candidates are `candidate_locations(object_key)`: the key, its ancestor folders, and the
+    single-file locations whose companion folder or own previews would hold it, deepest first; one
+    exact Query each on the location index, run in parallel; the deepest candidate holding a row
+    that `contains` the key wins (longest match). Archived rows count only with `include_archived`,
+    and a live row at a location wins over an archived one there. Two live rows on one location
+    answer AMBIGUOUS and attribute nothing. A key with more than MAX_CANDIDATE_LOCATIONS
+    candidates answers TOO_DEEP without a read. A FOUND entry is confirmed with a ConsistentRead
+    GetItem on the asset row: a row that is gone or no longer holds the location answers NOT_FOUND,
+    and that lookup is dropped from the cache.
 
     Callers must not act on the answer before `index_ready()` is True.
     """
     bucket = bucket or ''
-    candidates = candidate_locations(object_key)
+    key = normalize_location(object_key)
+    candidates = candidate_locations(key)
     if not bucket or not candidates:
         return Resolution(RESOLVED_NOT_FOUND)
+    if len(candidates) > MAX_CANDIDATE_LOCATIONS:
+        logger.warning(f"Key in bucket {bucket} has {len(candidates)} candidate locations, more than "
+                       f"{MAX_CANDIDATE_LOCATIONS}; nothing is attributed")
+        return Resolution(RESOLVED_TOO_DEEP)
     lookups = _lookup_all(table, bucket, candidates, use_cache)
     for location in candidates:
+        if not contains(location, key):
+            continue
         entries = [e for e in lookups.get(location, ()) if include_archived or not e.archived]
         if not entries:
             continue
@@ -424,43 +472,49 @@ def resolve_owner(table, bucket: str, object_key: str, include_archived: bool = 
     return Resolution(RESOLVED_NOT_FOUND)
 
 
-def _conflict_candidates(location: str) -> List[str]:
-    """Every stored location that equals or contains `location` in the sense of a folder: each
-    ancestor folder and the location itself, each in its folder form and its single-object form
-    (`a/b/` and `a/b`), the same sets an existing-key ownership check compares."""
-    folder_form = location if location.endswith('/') else location + '/'
-    forms: List[str] = []
-    for candidate in candidate_locations(folder_form):
-        for form in (candidate, candidate.rstrip('/')):
-            if form and form not in forms:
-                forms.append(form)
-    return forms
-
-
 def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int = MAX_PAGES_PER_LOOKUP
                    ) -> List[LocationEntry]:
-    """Index rows, live and archived, whose location equals, contains or lies under `location` in
-    `bucket`: the ancestors (exact lookups, uncached) plus the first row a `begins_with` query
-    finds under the location's folder form. An empty list means no conflict.
+    """Index rows, live and archived, that share a key with `location` in `bucket`. An empty list
+    means no conflict.
 
-    Callers must not act on the answer before `index_ready()` is True.
+    Two locations share a key exactly when one contains the other's own key (`contains(stored,
+    location)` or `contains(location, stored)`), so this reads:
+
+    - the stored locations that contain the new one: exact lookups of `candidate_locations(location)`
+      (uncached), kept where `contains` holds. For a single file `S` that is a folder above it, a
+      single file whose companion folder or previews hold it, and `S` itself;
+    - one stored location inside the new one: the first row under its folder form (`F/`, or the
+      companion folder `S/` of a single file) and, for a single file, the first of its own previews
+      `S.previewFile.{ext}` stored as a location. So a new folder conflicts with a single file whose
+      object, companion folder or previews fall under it, and a new single file with anything under
+      `S/` or at one of its preview keys.
+
+    A location with more than MAX_CANDIDATE_LOCATIONS candidates raises LocationTooDeepError, so a
+    caller refuses it. Callers must not act on the answer before `index_ready()` is True.
     """
     location = normalize_location(location)
     if not bucket or not location:
         return []
-    lookups = _lookup_all(table, bucket, _conflict_candidates(location), use_cache=False)
+    candidates = candidate_locations(location)
+    if len(candidates) > MAX_CANDIDATE_LOCATIONS:
+        raise LocationTooDeepError(
+            f"Location has {len(candidates)} candidate locations, more than {MAX_CANDIDATE_LOCATIONS}")
+    lookups = _lookup_all(table, bucket, candidates, use_cache=False)
     conflicts: List[LocationEntry] = []
-    for entries in lookups.values():
-        for entry in entries:
-            if entry not in conflicts:
+    for candidate in candidates:
+        for entry in lookups.get(candidate, ()):
+            if contains(entry.location, location) and entry not in conflicts:
                 conflicts.append(entry)
+    client, table_name = table.meta.client, table.name
     folder_form = location if location.endswith('/') else location + '/'
-    descendants = _query_index(
-        table.meta.client, table.name, '#b = :b AND begins_with(#k, :p)',
-        {':b': bucket, ':p': folder_form},
-        limit=1, max_pages=max_descendant_pages)
-    for entry in descendants:
-        if entry not in conflicts:
+    inside = [_first_under(client, table_name, bucket, folder_form, lambda entry: True,
+                           page_size=1, max_pages=max_descendant_pages)]
+    if not location.endswith('/'):
+        inside.append(_first_under(client, table_name, bucket, location + PREVIEW_FILE_PATTERN,
+                                   lambda entry: contains(location, entry.location),
+                                   page_size=PREVIEW_LOOKUP_PAGE_SIZE, max_pages=max_descendant_pages))
+    for entry in inside:
+        if entry is not None and entry not in conflicts:
             conflicts.append(entry)
     return conflicts
 

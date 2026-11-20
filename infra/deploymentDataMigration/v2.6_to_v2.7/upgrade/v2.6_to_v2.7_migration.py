@@ -1169,6 +1169,8 @@ ASSET_LOCATION_KEY_ATTRIBUTE = 'locationKey'
 ASSET_LOCATION_INDEX_MARKER_SUFFIX = 'dataMigrations/assetLocationIndex'
 ASSET_LOCATION_INDEX_MARKER_VERSION = 1
 ASSET_LOCATION_INDEX_STATUS_COMPLETE = 'complete'
+# common.s3PathPatterns.PREVIEW_FILE_PATTERN: a single-file location also holds `{key}.previewFile.{ext}`.
+ASSET_LOCATION_PREVIEW_FILE_PATTERN = '.previewFile.'
 ARCHIVED_ASSET_DATABASE_SUFFIX = '#deleted'
 
 ASSET_LOCATION_CHECKPOINT_VERSION = 1
@@ -1228,6 +1230,53 @@ def normalize_base_prefix(base_assets_prefix: Optional[str]) -> str:
     return base_assets_prefix
 
 
+def _is_preview_of(base_key: str, object_key: str) -> bool:
+    """`object_key` is `{base_key}.previewFile.{ext}` with no `/` in the extension
+    (common.assetLocations._is_preview_of)."""
+    stem = base_key + ASSET_LOCATION_PREVIEW_FILE_PATTERN
+    if not object_key.startswith(stem):
+        return False
+    extension = object_key[len(stem):]
+    return bool(extension) and '/' not in extension
+
+
+def location_contains(location: str, object_key: str) -> bool:
+    """Whether a stored location holds a key (common.assetLocations.contains): a folder holds every key
+    under it; a single file holds its object, everything under `{key}/` and its own previews."""
+    if not location or not object_key:
+        return False
+    if location.endswith('/'):
+        return object_key.startswith(location)
+    return object_key == location or object_key.startswith(location + '/') or _is_preview_of(location, object_key)
+
+
+def candidate_locations(object_key: str) -> List[str]:
+    """The stored locations that could hold a key, deepest first (common.assetLocations.candidate_locations):
+    the key, the single file whose companion marker a `.../` key is, an own preview's base, and each
+    ancestor folder `X/` with the single file `X`."""
+    key = normalize_location(object_key)
+    if not key:
+        return []
+    candidates = {key}
+    if key.endswith('/'):
+        candidates.add(key[:-1])
+    last_segment_start = key.rfind('/', 0, len(key) - 1) + 1
+    position = key.find(ASSET_LOCATION_PREVIEW_FILE_PATTERN, last_segment_start)
+    while position > 0:
+        if _is_preview_of(key[:position], key):
+            candidates.add(key[:position])
+        position = key.find(ASSET_LOCATION_PREVIEW_FILE_PATTERN, position + 1)
+    position = len(key) - 1 if key.endswith('/') else len(key)
+    while True:
+        position = key.rfind('/', 0, position)
+        if position <= 0:
+            break
+        candidates.add(key[:position + 1])
+        candidates.add(key[:position])
+    candidates.discard('')
+    return sorted(candidates, key=lambda c: (-len(c), c))
+
+
 def _plain_attr(item: Dict, name: str):
     value = (item or {}).get(name)
     if value is None:
@@ -1268,9 +1317,12 @@ def find_location_overlaps(entries: List[Dict]) -> Dict[str, List[Dict]]:
     """Shared and nested locations among the indexed rows, per bucket.
 
     `sharedLocation`: one location held by two or more assets (`ambiguous` when two of them are live:
-    the resolver attributes nothing there). `nestedLocation`: a row whose location lies under another
-    asset's folder, or names the same place in the other form (`x` and `x/`). Live and archived rows
-    both count, as for an ownership check; the live and archived copies of one asset are one asset."""
+    the resolver attributes nothing there). `nestedLocation`: a row whose location another asset's
+    location holds: under its folder, or in a single file's companion folder `{key}/` or among its own
+    previews `{key}.previewFile.{ext}` (so `x` and `x/` are a nested pair too). Two locations share a
+    key exactly when one holds the other, so every overlapping pair is listed once. Live and archived
+    rows both count, as for an ownership check; the live and archived copies of one asset are one
+    asset."""
     by_location: Dict[Tuple[str, str], List[Dict]] = {}
     for entry in entries:
         by_location.setdefault((entry['bucket'], entry['location']), []).append(entry)
@@ -1283,17 +1335,9 @@ def find_location_overlaps(entries: List[Dict]) -> Dict[str, List[Dict]]:
     nested = []
     for entry in entries:
         location = entry['location']
-        folder_form = location if location.endswith('/') else location + '/'
-        candidates = [location[:-1] if location.endswith('/') else folder_form]
-        position = len(folder_form) - 1
-        while True:
-            position = folder_form.rfind('/', 0, position)
-            if position <= 0:
-                break
-            ancestor = folder_form[:position + 1]
-            candidates.extend([ancestor, ancestor[:-1]])
-        owners = [r for candidate in candidates for r in by_location.get((entry['bucket'], candidate), [])
-                  if _asset_of(r) != _asset_of(entry)]
+        owners = [r for candidate in candidate_locations(location) if candidate != location
+                  for r in by_location.get((entry['bucket'], candidate), [])
+                  if _asset_of(r) != _asset_of(entry) and location_contains(r['location'], location)]
         if owners:
             nested.append({'bucket': entry['bucket'], 'location': location,
                            'asset': dict(_entry_identity(entry), archived=entry['archived']),
