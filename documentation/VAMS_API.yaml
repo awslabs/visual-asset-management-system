@@ -10106,7 +10106,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id."
+                    description: "The launch has not received a session id (`Workstation has no EDH session`), or it is a new launch recorded `LAUNCH_STALLED` that EDH, read before the stop, still has not placed (`EDH has not placed this new workstation, so it cannot be stopped; delete it instead`); nothing reaches EDH's stop and the record is unchanged."
                     content:
                         application/json:
                             schema:
@@ -14145,7 +14145,7 @@ components:
                 lastError:
                     type: string
                     nullable: true
-                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full), `RESERVATION_ENDED` (the capacity reservation it was launched into has ended, and VAMS could not move it to on-demand capacity, so the start was not sent; ask an administrator) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). Null otherwise."
+                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full), `RESERVATION_ENDED` (the capacity reservation it was launched into has ended, and VAMS could not move it to on-demand capacity, so the start was not sent; ask an administrator) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start EDH accepted that Amazon EC2 then returned to stopped is read from the instance's EC2 state reason: `Server.InsufficientInstanceCapacity` records `CAPACITY_UNAVAILABLE` (`RESERVATION_FULL` for a workstation launched into a capacity reservation), any other code, or a reason VAMS could not read, `START_FAILED`, and a stop or hibernation a user or the instance initiated (`Client.UserInitiatedShutdown`, `Client.InstanceInitiatedShutdown`, `Client.UserInitiatedHibernate`) records nothing. A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). `LAUNCH_STALLED` on a `CREATING` workstation: EDH still reports a new launch `pending` or `placing` 3 hours after it; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state (delete it, or wait). A stalled launch EDH then reports in `error` never ran, so it becomes `ORPHANED` with `LAUNCH_ERROR`, never `DESKTOP_ERROR`. Null otherwise."
                     enum:
                         - USER_NOT_PROVISIONED
                         - QUOTA_EXCEEDED
@@ -14159,6 +14159,7 @@ components:
                         - RESERVATION_ENDED
                         - START_FAILED
                         - START_STALLED
+                        - LAUNCH_STALLED
                         - null
                 launchAttempts:
                     type: integer
@@ -14214,12 +14215,12 @@ components:
                         - starting
                         - stopping
                         - null
-                    description: "What the workstation is doing between two states, derived when the record is read so every client shows the same: `starting` while a start handed over less than 7 minutes ago is unresolved (`state` STOPPED), while EDH boots a desktop it has accepted (`state` CREATING), or while a running desktop is not yet connectable (`state` ACTIVE); `stopping` while EDH reports the desktop stopping, or for 5 minutes after a stop through VAMS while EDH still reports it running; null otherwise. Clients show it in place of `state`."
+                    description: "What the workstation is doing between two states, derived when the record is read so every client shows the same: `starting` while a start handed over less than 7 minutes ago is unresolved (`state` STOPPED), while EDH boots a desktop it has accepted (`state` CREATING, unless `lastError` is `START_STALLED` or `LAUNCH_STALLED`), or while a running desktop is not yet connectable (`state` ACTIVE); `stopping` while EDH reports the desktop stopping, or for 5 minutes after a stop through VAMS while EDH still reports it running; null otherwise. Clients show it in place of `state`."
                 startFailure:
                     allOf:
                         - $ref: "#/components/schemas/edhStartFailure"
                     nullable: true
-                    description: "What the last start that did not happen recorded, beside its `lastError`, while the workstation stays `STOPPED`; null otherwise."
+                    description: "What the last start that did not happen recorded, beside its `lastError`, while the workstation stays `STOPPED`, or beside `START_STALLED` or `LAUNCH_STALLED` while it stays `CREATING`; null otherwise."
                 imageName:
                     type: string
                     nullable: true
@@ -14246,7 +14247,7 @@ components:
                     description: "`true` when `recipeVersion` equals `latestRecipeVersion`; `false` only when a newer AVAILABLE build of the recipe exists (`latestRecipeVersion` greater than `recipeVersion`) -- the workstation keeps the image it was launched from, and a new launch gets the newer build; null whenever either version is null or `recipeVersion` is the greater."
         edhStartFailure:
             type: object
-            description: "What VAMS recorded when a start of a stopped workstation did not happen. EDH's text is never returned."
+            description: "What VAMS recorded when a start of a stopped workstation did not happen, or, with `observedAt` only, when the session sweep recorded a start or a new launch stalled (`START_STALLED`, `LAUNCH_STALLED`). EDH's text is never returned."
             required:
                 - observedAt
             properties:

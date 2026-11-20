@@ -88,11 +88,18 @@ LAST_ERROR_START_FAILED = "START_FAILED"
 # desktop pending or placing ``START_STALL_SECONDS`` after the start. Kept while the row stays CREATING; the desktop
 # is neither stopped, deleted nor orphaned for it, and its key is kept, since the desktop may still finish starting.
 LAST_ERROR_START_STALLED = "START_STALLED"
+# A new launch EDH has not placed: the row is still CREATING, has a session id, carries no accepted start and no
+# start mark, and EDH still lists the desktop pending or placing ``LAUNCH_STALL_SECONDS`` after the launch. Kept
+# while the row stays CREATING, like a stalled start's; the desktop is neither stopped, deleted nor orphaned for it,
+# since EDH may still place it, and its owner's way out is Delete.
+LAST_ERROR_LAUNCH_STALLED = "LAUNCH_STALLED"
+# The codes the session sweep records on a row that stays CREATING; the record reports no activity for them.
+STALLED_LAST_ERRORS = frozenset({LAST_ERROR_START_STALLED, LAST_ERROR_LAUNCH_STALLED})
 LAST_ERROR_CODES = frozenset({
     LAST_ERROR_USER_NOT_PROVISIONED, LAST_ERROR_QUOTA_EXCEEDED, LAST_ERROR_IMAGE_UNAVAILABLE,
     LAST_ERROR_CAPACITY_UNAVAILABLE, LAST_ERROR_EDH_REFUSED, LAST_ERROR_LAUNCH_ERROR,
     LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_RESERVATION_FULL, LAST_ERROR_RESERVATION_ENDED,
-    LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED,
+    LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED, LAST_ERROR_LAUNCH_STALLED,
 })
 # The codes a STOPPED row keeps for as long as it stays stopped: the lease expiry, and why the last start of
 # the desktop did not happen. The next start EDH accepts, or EDH reporting the desktop past stopped, clears them.
@@ -114,7 +121,8 @@ CAPACITY_RESERVATION_FALLBACK_REASONS = (CAPACITY_RESERVATION_FALLBACK_FULL, CAP
 START_FAILURE_FIELD = "startFailure"
 # Amazon EC2's state reason codes (``StateReason.Code`` of a DescribeInstances answer) that decide what a start EDH
 # accepted records when EC2 returns the instance to stopped: no capacity for the instance type in its Availability
-# Zone, and the shutdowns a user (a stop through EC2 or EDH) or the instance itself initiated, which are no failure.
+# Zone, and the stops and the hibernation a user (a stop through EC2 or EDH) or the instance itself initiated, which
+# are no failure.
 # Any other code records the start failed with that code.
 EC2_STATE_REASON_INSUFFICIENT_CAPACITY = "Server.InsufficientInstanceCapacity"
 EC2_STATE_REASONS_NOT_A_FAILURE = frozenset({
@@ -244,6 +252,14 @@ START_ACCEPTED_FIELD = "startAcceptedAt"
 # install a GPU driver, legitimately takes well over an hour, and a new launch never carries the stamp.
 START_STALL_SECONDS = 1800
 START_STALL_EDH_STATES = frozenset({EDH_SESSION_STATE_PENDING, EDH_SESSION_STATE_PLACING})
+# How old a new launch (``createdAt``) is when the session sweep records it LAUNCH_STALLED, provided the row is still
+# CREATING and EDH still lists the desktop in one of ``START_STALL_EDH_STATES``. Three hours, because a first boot can
+# install a GPU driver and legitimately take well over an hour. A desktop that has run never counts
+# (``desktop_has_run``): it carries ``startAcceptedAt``, which a start from EDH's own console gets too, or the start
+# mark (``activity``) until the desktop runs. EDH's own report of a stalled launch wins over this bound: once EDH
+# lists the desktop in ``error``, the launch, which never ran, is ORPHANED (``state_for_edh_desktop``), never
+# ``DESKTOP_ERROR``.
+LAUNCH_STALL_SECONDS = 10800
 
 # How long a credential claim on a row holds: a renew's key re-issue -- the mint, the row settle and the
 # secret write, each bounded by its client's timeouts -- several times over. While a claim is fresh the
@@ -332,10 +348,10 @@ def start_accepted_cleared(row):
 
 def start_stall_cleared(row):
     """The write a stop makes to clear what an accepted start left on the row: the start's stamp and, on a row that
-    records the start stalled, its ``lastError`` and ``startFailure``; nothing the row does not carry. Any other
-    code is left as it is."""
+    records a stall (``STALLED_LAST_ERRORS``: a stalled start or launch), its ``lastError`` and ``startFailure``;
+    nothing the row does not carry. Any other code is left as it is."""
     cleared = start_accepted_cleared(row)
-    if row.get('lastError') == LAST_ERROR_START_STALLED:
+    if row.get('lastError') in STALLED_LAST_ERRORS:
         cleared['lastError'] = None
         if row.get(START_FAILURE_FIELD) is not None:
             cleared[START_FAILURE_FIELD] = None
@@ -343,9 +359,10 @@ def start_stall_cleared(row):
 
 
 def orphaned_last_error(stored_last_error) -> str:
-    """The ``lastError`` a row moving to ORPHANED holds: the code it holds already, save a stalled start's, which
-    says nothing about why the desktop failed, and ``LAUNCH_ERROR`` in its place or when it holds none."""
-    if stored_last_error and stored_last_error != LAST_ERROR_START_STALLED:
+    """The ``lastError`` a row moving to ORPHANED holds: the code it holds already, save a stalled start's or
+    launch's, which says nothing about why the desktop failed, and ``LAUNCH_ERROR`` in its place or when it holds
+    none."""
+    if stored_last_error and stored_last_error not in STALLED_LAST_ERRORS:
         return stored_last_error
     return LAST_ERROR_LAUNCH_ERROR
 
@@ -531,9 +548,9 @@ def observed_row_attributes(row, desktop, now=None):
     new launch that never ran), connectability and the reason a desktop is not connectable (``connection_verdict``),
     the EC2 instance the desktop is placed on (left as stored
     while EDH reports none), the launch-error code an ``error`` state carries when the row holds none (a
-    code the launch recorded is kept, a stalled start's is not; as is, while the state stays stopped, a code of
-    ``STOPPED_ROW_LAST_ERRORS`` with the ``startFailure`` beside it, and, while the state stays CREATING, a stalled
-    start's ``START_STALLED`` with its ``startFailure``; either is cleared again when the state moves on), the
+    code the launch recorded is kept, a stalled start's or launch's is not; as is, while the state stays stopped, a
+    code of ``STOPPED_ROW_LAST_ERRORS`` with the ``startFailure`` beside it, and, while the state stays CREATING, a
+    code of ``STALLED_LAST_ERRORS`` with its ``startFailure``; either is cleared again when the state moves on), the
     clearing of the lease-stop stamp from a desktop seen running or starting, since a desktop EDH reports in either
     state is not lease-stopped and the stamp is what ages a stopped one toward deletion, the clearing of the
     start-in-progress stamp from a desktop seen past stopped, which has taken the start that stamp holds a second
@@ -549,15 +566,15 @@ def observed_row_attributes(row, desktop, now=None):
     if edh_state is not None:
         attributes['edhState'] = str(edh_state)
         attributes['state'] = state_for_edh_desktop(row, edh_state)
-        stalled = row.get('lastError') == LAST_ERROR_START_STALLED
+        stalled = row.get('lastError') in STALLED_LAST_ERRORS
         if attributes['state'] == STATE_ORPHANED:
             attributes['lastError'] = orphaned_last_error(row.get('lastError'))
         elif row.get('lastError') is not None and not (
                 (attributes['state'] == STATE_STOPPED and row.get('lastError') in STOPPED_ROW_LAST_ERRORS)
                 or (attributes['state'] == STATE_CREATING and stalled)):
             attributes['lastError'] = None
-        # The failure stays beside the code it was recorded with: a stalled start's while the row stays CREATING,
-        # any other while it stays STOPPED.
+        # The failure stays beside the code it was recorded with: a stall's while the row stays CREATING, any other
+        # while it stays STOPPED.
         keeps_failure = attributes['state'] == (STATE_CREATING if stalled else STATE_STOPPED)
         if not keeps_failure and row.get(START_FAILURE_FIELD) is not None:
             attributes[START_FAILURE_FIELD] = None
@@ -600,8 +617,8 @@ def workstation_activity(row, now=None) -> Optional[str]:
     reports the desktop stopping, or while a stop through VAMS is younger than ``STOP_SETTLE_SECONDS`` and EDH
     still reports it running; ``starting`` for a STOPPED row marked with a start the owner asked for whose stamp
     is still inside ``START_IN_PROGRESS_SECONDS``, for a CREATING row with a session id (a stopped desktop EDH
-    has taken a start of, or a new one EDH has placed) unless it records the start stalled (``START_STALLED``: the
-    start is stuck, no longer under way) or the desktop in error (``DESKTOP_ERROR``), and for an ACTIVE row whose
+    has taken a start of, or a new one EDH has placed) unless it records a stall (``STALLED_LAST_ERRORS``: the start
+    or launch is stuck, no longer under way) or the desktop in error (``DESKTOP_ERROR``), and for an ACTIVE row whose
     desktop is not connectable yet, unless it records why (``connection_unavailable_reason``: the desktop is
     running, not starting); None otherwise, and always for a DELETED or ORPHANED row. Pure: it reads only the row and
     ``now``."""
@@ -621,7 +638,7 @@ def workstation_activity(row, now=None) -> Optional[str]:
             return ACTIVITY_STARTING
         return None
     if state == STATE_CREATING and row.get('sessionId'):
-        if row.get('lastError') == LAST_ERROR_START_STALLED or connection_unavailable_reason(row) is not None:
+        if row.get('lastError') in STALLED_LAST_ERRORS or connection_unavailable_reason(row) is not None:
             return None
         return ACTIVITY_STARTING
     if (state == STATE_ACTIVE and not row.get('connectionAvailable')
@@ -730,10 +747,22 @@ def start_stall_due(row, now=None) -> bool:
     takes. A row without the stamp (a new launch, or a row some write has moved out of CREATING since), with an
     unreadable one, or in any other state is never due. Whether EDH still lists the desktop pending or placing is
     the caller's to check."""
-    if row.get('state') != STATE_CREATING or row.get('lastError') == LAST_ERROR_START_STALLED:
+    if row.get('state') != STATE_CREATING or row.get('lastError') in STALLED_LAST_ERRORS:
         return False
     age = _stamp_age(row.get(START_ACCEPTED_FIELD), now or datetime.now(timezone.utc))
     return age is not None and age >= timedelta(seconds=START_STALL_SECONDS)
+
+
+def launch_stall_due(row, now=None) -> bool:
+    """True when the row is a new launch EDH has a desktop for that is at least ``LAUNCH_STALL_SECONDS`` old at
+    ``now`` (the current instant when not given): CREATING with a session id, without an accepted start's stamp
+    (``startAcceptedAt``) or the start mark (``activity``), with a readable ``createdAt`` that old, and not recorded
+    stalled already. Whether EDH still lists the desktop pending or placing is the caller's to check."""
+    if (row.get('state') != STATE_CREATING or not row.get('sessionId') or row.get(START_ACCEPTED_FIELD) is not None
+            or row.get(ACTIVITY_FIELD) is not None or row.get('lastError') in STALLED_LAST_ERRORS):
+        return False
+    age = _stamp_age(row.get('createdAt'), now or datetime.now(timezone.utc))
+    return age is not None and age >= timedelta(seconds=LAUNCH_STALL_SECONDS)
 
 
 def start_failure(error_text, availability_zone, now, error_code=None) -> Dict[str, str]:
@@ -779,8 +808,9 @@ def start_return_attributes(row, state_reason_code, availability_zone, now) -> D
     instance's state reason: ``CAPACITY_UNAVAILABLE`` for ``Server.InsufficientInstanceCapacity``
     (``RESERVATION_FULL`` on a row launched into a capacity reservation, ``capacityReservationId``, as a failed
     launch of one is classified), ``START_FAILED`` for any other code and when the reason could not be read, each
-    with a ``startFailure`` naming the code and the Availability Zone when known; nothing for a shutdown a user or the
-    instance initiated (``EC2_STATE_REASONS_NOT_A_FAILURE``). The desktop keeps its disk and may be started again."""
+    with a ``startFailure`` naming the code and the Availability Zone when known; nothing for a stop or hibernation a
+    user or the instance initiated (``EC2_STATE_REASONS_NOT_A_FAILURE``). The desktop keeps its disk and may be started
+    again."""
     code = (state_reason_code if isinstance(state_reason_code, str)
             and AWS_ERROR_CODE_PATTERN.fullmatch(state_reason_code) else None)
     if code in EC2_STATE_REASONS_NOT_A_FAILURE:

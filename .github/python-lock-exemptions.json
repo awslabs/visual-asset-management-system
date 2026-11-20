@@ -97,6 +97,16 @@
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
         },
         {
+            "path": "tools/VamsCLI/requirements-build.txt",
+            "reason": "Input of requirements.lock: the setuptools and wheel that pyproject.toml's [build-system] requires, locked together with requirements.txt so the EDH AMI recipes can build the CLI with --no-build-isolation. Ranged like the other VamsCLI inputs; it has no lock of its own.",
+            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+        },
+        {
+            "path": "tools/VamsCLI/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes --only-binary :all:` for Python 3.12 on x86_64 manylinux_2_34) that the EDH al2023-desktop and isaacsim AMI recipes install with --require-hashes before building the CLI offline. It is not a uv.lock, so the CI audit does not read it until VamsCLI gets its development uv.lock and this file is generated from that lock.",
+            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+        },
+        {
             "path": "tools/VamsCLI/setup.py",
             "reason": "setuptools install_requires of the published VamsCLI package, mirroring its ranged pyproject dependencies.",
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"

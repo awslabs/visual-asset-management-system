@@ -265,6 +265,9 @@ asymmetry other callers rely on):
     destructive gate (which `Config.from_env()` additionally requires
     `enable_writes` for), the tool name, the docstring, and keeping them out of
     `autoApprove`.
+    `stop_edh_workstation` is the one tool with an optional interlock, which the owner chose for it
+    (2026-11-18): it takes `confirm` (default false) and sends nothing until it is true (see the EDH
+    Workstations subsection of "Add-on Tools").
     Because the tools are module-level `def`s, misplacement fails **silently**: a
     duplicate name shadows the earlier definition, and a `def` after the
     `if __name__` entrypoint or outside its gate block never executes, so the tool
@@ -712,7 +715,12 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     tools' descriptions name them.
     A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH accepted and
     has not finished after 30 minutes; the list, get, admin-instances, start and stop
-    descriptions name the code, and stop's says it accepts that row.
+    descriptions name the code, and stop's says it accepts that row. A CREATING row with
+    `lastError` `LAUNCH_STALLED` is a new launch EDH has not placed after 3 hours; the list, get,
+    stop and delete descriptions name it and its way out, `delete_edh_workstation` (or waiting), and
+    stop's says the API refuses its stop (`EdhOperationError`, 409, naming Delete).
+    The get description adds that such a launch EDH then reports in error reads `ORPHANED` with
+    `LAUNCH_ERROR`, never `DESKTOP_ERROR`, and that a row carrying both is the launch stall.
 -   Image name: every workstation record and admin instance item also carries `imageName`,
     `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`
     (`false` only when a newer AVAILABLE build of the recipe exists; each null when not known). The
@@ -729,6 +737,13 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     Batch/EKS job, `start_edh_ami_recipe_build` (write tier) starts an EC2 Image Builder build
     instance, and `deactivate_edh_admin_instance` and `kill_edh_container_job` (destructive tier)
     terminate one — all nine stay out of `autoApprove`.
+-   Stop confirmation: `stop_edh_workstation(session_id, confirm=False)` raises `ValueError` (returned
+    as `error` and `error_type` by `@tool_result`) and makes no request until `confirm=True`; the
+    error tells the agent to confirm with the user and call again. This is a client-side interlock
+    the owner chose for this tool (2026-11-18): the stop request has no confirmation field, unlike
+    the required-true request fields of Mandatory Rule 4, which are sent and never exposed. The
+    feature pre-flight still runs first. `vamscli edh workstation stop` asks the same question
+    (`--yes` skips it); `stop_edh_admin_instance` takes no `confirm`.
 -   `get_edh_workstation_connect` changes no stored data but issues a DCV `connectionUrl` carrying
     a session auth token — the same class as the presigned-URL tools — so it is the one read
     placed in the write tier (behind `VAMS_ENABLE_WRITES`, not always available), it never enters
