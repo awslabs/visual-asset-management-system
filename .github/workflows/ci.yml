@@ -567,10 +567,20 @@ jobs:
               working-directory: web
               run: npm ci --ignore-scripts
 
+            # Only the Cesium viewer's install script (the other viewer postinstall builds are not needed
+            # by the unit tests): it installs the lockfile-pinned @cesium/engine under the 7-day
+            # min-release-age rule (customInstalls/cesium/.npmrc) and bundles public/viewers/cesium/Cesium.js,
+            # which the real-Cesium request hook tests load.
+            - name: Install the Cesium bundle
+              working-directory: web
+              run: node ./customInstalls/cesium/cesiumInstall.js
+
             - name: Web test
               working-directory: web
               env:
                   CI: "true"
+                  # A missing Cesium bundle fails the real-Cesium suite instead of skipping it.
+                  REQUIRE_CESIUM_BUNDLE: "1"
               run: npx jest --ci --coverage
 
     # The backend suite, on every push and pull request the workflow runs for.
