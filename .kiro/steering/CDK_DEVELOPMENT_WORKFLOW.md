@@ -824,7 +824,7 @@ backend/
 backend/backend/handlers/assets/
 ├── __init__.py
 ├── createAsset.py              # POST /assets
-├── assetService.py             # GET/PUT/DELETE /assets/{id}
+├── assetService.py             # GET /assets; /database/{databaseId}/assets (list, get, update, archiveAsset, deleteAsset, unarchiveAsset)
 ├── assetFiles.py               # File operations
 ├── uploadFile.py               # File upload handling
 ├── downloadAsset.py            # Asset download
@@ -3564,9 +3564,9 @@ The docs-site config generator is a hand-maintained mirror of `config.ts` — it
     - `schema.ts` — add a `FIELDS` entry (path + label + input kind + section).
     - `defaults.ts` — add the default (kept deep-equal to all three of `config.template.commercial.json` / `config.template.govcloud.json` / `config.template.eusovereign.json`).
     - `validation.ts` — add a `Rule` mirroring any new `throw new Error(...)` / `console.warn(...)` you added in `getConfig()`. Each rule section anchors to the `getConfig()` block it mirrors by quoting that block's leading comment or error-message text, not by line number.
-    - `derived.ts` — mirror any `getConfig()` auto-mutation you added or changed (an assignment that rewrites the operator's config), and **delete** any that `getConfig()` does not perform. The core `getConfig()` performs none today, so the core part of `applyDerived()` is a pass-through; a feature added to a `getConfig()` constraint list such as the VPC-requiring set belongs in `validation.ts`'s `VPC_REQUIRING_FEATURES` table instead.
+    - `derived.ts` — mirror any `getConfig()` auto-mutation you added or changed (an assignment that rewrites the operator's config), and **delete** any that `getConfig()` does not perform. The core `getConfig()` rewrites some operator values that `derived.ts` does not mirror (`infra/CLAUDE.md`, ConfigBuilder rule 9, lists them; the builder warns about the two it can see), so the core part of `applyDerived()` is a pass-through; a feature added to a `getConfig()` constraint list such as the VPC-requiring set belongs in `validation.ts`'s `VPC_REQUIRING_FEATURES` table instead.
     - An add-on field in the add-on config lane goes in its module `ConfigBuilder/addon/<addon>.ts` instead of the four files above (fields, presets, rules, VPC-requiring features and normalizations, joined by `ConfigBuilder/addon/index.ts`); `applyDerived()` runs its normalizations through `applyAddonDerived()`.
-3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field. **Note:** the test covers only `schema.ts` (fields) and `defaults.ts` (presets); it validates neither `validation.ts` nor `derived.ts` against `getConfig()`. Keeping those two in step with `getConfig()`'s `throw`/`warn` logic and its auto-mutations is a manual, review-enforced task — a stale, missing, or leftover rule will not be caught by any test.
+3. Run `cd infra && npm test` — the `configBuilderSync.test.ts` drift check deep-equals `defaults.ts` against the templates and asserts every `ConfigPublic` leaf has a form field. **Note:** the test covers only `schema.ts` (fields) and `defaults.ts` (presets); it validates neither `validation.ts` nor `derived.ts` against `getConfig()`, except that `configBuilderVpcRequiringFeatures.test.ts` holds the core `VPC_REQUIRING_FEATURES` labels to the ones `getConfig()` pushes. Keeping those two in step with `getConfig()`'s `throw`/`warn` logic and its auto-mutations is a manual, review-enforced task — a stale, missing, or leftover rule will not be caught by any test.
 
 ### **Creating New Nested Stacks**
 

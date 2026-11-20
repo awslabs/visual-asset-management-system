@@ -20,7 +20,7 @@ VAMS frontend is a **React 18.3 + TypeScript ^5.0.0** single-page application bu
 -   React Context API + useReducer for shared state
 -   Custom apiClient (fetch-based) for API calls, AWS Amplify v6 for authentication
 -   HashRouter (`#/` URLs) for all routing
--   Plugin-based 3D viewer architecture (22 viewer plugin directories)
+-   Plugin-based 3D viewer architecture (22 viewer plugin directories, 24 registered viewers)
 -   `lazyWithRetry` (React.lazy plus chunk-download retry) + Suspense for route-level code splitting
 
 ---
@@ -624,9 +624,10 @@ Backend API endpoints follow REST conventions:
 ```
 GET    /database/{databaseId}/assets              # List assets
 GET    /database/{databaseId}/assets/{assetId}     # Get single asset
-POST   /database/{databaseId}/assets               # Create asset
+POST   /assets                                      # Create asset
 PUT    /database/{databaseId}/assets/{assetId}      # Update asset
-DELETE /database/{databaseId}/assets/{assetId}      # Delete asset
+DELETE /database/{databaseId}/assets/{assetId}/archiveAsset  # Archive asset
+DELETE /database/{databaseId}/assets/{assetId}/deleteAsset   # Permanently delete asset
 POST   /database/{databaseId}/assets/{assetId}/download  # Download
 POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
@@ -1113,6 +1114,30 @@ export const VIEWER_COMPONENTS = {
 
 **Add-on and fork viewers.** (Add-on as defined in `documentation/docusaurus-site/docs/developer/addons-overview.md`.) An add-on's viewer, and a licensed viewer that ships disabled (VNTANA, VEERUM), is registered in `config/addonViewerConfig.json` + `viewers/addonManifest.ts`, never in the core files; its plugin directory stays under `viewers/`. To enable a licensed viewer, set `"enabled": true` on its entry in `config/addonViewerConfig.json`; its install script (`web/customInstalls/vntana/`, `web/customInstalls/veerum/`, unchanged in `postinstall`) checks the core, add-on and custom config files through `web/customInstalls/utility/checkViewerEnabled.js`. A fork's viewer lives in `viewers/custom/<Name>Plugin/` and is registered in `config/customViewerConfig.json` + `viewers/custom/customManifest.ts` (fork extension point, shipped empty); its install steps go in `web/customInstalls/custom/customInstall.js`, which `postinstall` already runs. `core/viewerSources.ts` merges core, add-on and custom in that order, so a priority tie between a core and an add-on viewer resolves to the core one; a custom entry whose `id` repeats a shipped `id` is skipped with a console error and a shipped manifest key always wins. Ids prefixed `custom-` are recommended, not enforced.
 
+### 8.3.1 Stacking Over the Scene
+
+`core/viewerLayers.ts` holds the one stacking scale for what a viewer draws over its scene, `VIEWER_LAYER`, lowest first: `info` (1000, the read-only box with the viewer name, controls hint and scene stats), `panel` (1010, the side panel with its tabs, buttons, scene tree and resize handle, and the Panel button that shows it again), `notice` (1020, dismissible notices across the top, such as files that failed to load) and `cover` (1030, the shared `LoadingSpinner` and a message that replaces the scene). A viewer with a side panel takes each such element's `zIndex` from it and writes no number of its own; at an equal z-index the element later in the document is drawn above. The scale mirrors `features/orchestration/components/zLayers.ts`.
+
+-   **Local to the viewer.** `DynamicViewer` mounts every viewer inside `.visualizer-container-canvases`, whose `transform` (`web/src/styles/index.scss`) makes it a stacking context and the containing block of a panel's `position: fixed`. The values order one viewer's elements only: they cannot rise above the application header (1002), toasts (4000) or Cloudscape modals, and the host's wide and fullscreen controls (`.visualizer-footer`, painted after that container) stay above the whole viewer. Do not raise a viewer value to win against something outside the viewer.
+-   **Inside a panel.** The panel is a stacking context of its own, so a menu opened in it (the material dropdown in `ObjectMaterialAssignment.tsx` / `NeedleUSDObjectMaterialAssignment.tsx`) is ordered within the panel and keeps its own value.
+-   **The info box beside the open panel.** On a narrow container the open panel covers the info box, whose text would show through the panel's translucent background. `useInfoBoxClearOfPanel()` (`core/useOverlap.ts`) measures the two elements' rectangles (after every render of the viewer, when either element or its container changes size, and when the window does) and gives the info box `visibility: hidden` while they overlap: it keeps its place in the layout, so it is still measured, and takes no clicks. It shows when there is room beside the panel (a wide window, wide or fullscreen mode) and while the panel is hidden. A viewer passes `panelRef` to its panel's root element, and `infoBoxRef` and `infoBoxVisibility` to its info box. `useOverlap(a, b)` is the measurement on its own.
+-   **Who uses it.** The Three.js, Needle USD, BabylonJS and PlayCanvas Gaussian splat, ThatOpen IFC and VEERUM viewers, and `LoadingSpinner`. `core/viewerLayers.test.ts` fails when one of those files writes a z-index number; each of the six viewers' `*ViewerComponent.stacking.test.tsx` renders it with its real panel and checks the rendered order and the info box beside the open panel. A new viewer with a side panel uses the scale and `useInfoBoxClearOfPanel()`, gets a stacking test, and joins that list. The Cesium viewer still writes its own values: its controls hint and measurement instructions sit over the bottom of its panel at every width, and its picked-feature box, which has a Close button, overlaps the panel on a narrow window, so it needs a layout decision rather than a z-index. The Potree, VNTANA and Online 3D viewers have no side panel and info box pair.
+-   **Prove it with a click.** A z-index alone does not prove an element is clickable (`web/e2e/CLAUDE.md` Rule 4): hit-test the target with `document.elementFromPoint` at a narrow width (414 px) as well as a wide one.
+-   **The error panel of a viewer that appends its canvas outside React.** The Three.js (#832) and Needle USD (D176) viewers append the renderer's canvas to their scene container themselves. Their error root carries a `key` apart from the viewer root's (`threejs-viewer-error` / `threejs-viewer`, `usd-viewer-error` / `usd-viewer`), so React unmounts the scene container, and the canvas with it, instead of reusing that node for the message, where the canvas pushed the text out of the panel. The message is centred with flex and scrolls (`maxHeight: 100%`, `overflowY: auto`), so a narrow panel never clips it. A new viewer that appends a canvas follows the same pattern and pins it with a test that the canvas is outside the panel and detached (`ThreeJSViewerComponent.test.tsx`, `NeedleUSDViewerComponent.errorPanel.test.tsx`).
+
+Source: `web/src/visualizerPlugin/CLAUDE.md`, "Stacking Over the Scene".
+
+### 8.3.2 CSP / `unsafe-eval`
+
+Some viewers require the `ALLOWUNSAFEEVAL` feature flag because their loaders (WASM or JIT) use `eval`. Five carry the gate in `viewerConfig.json` (`featuresEnabledRestriction: ["ALLOWUNSAFEEVAL"]`), so the registry does not offer them at all when the deployment has not enabled `allowUnsafeEvalFeatures`: Needle USD Viewer, SuperSplat Editor (also iframe-embedded), ThatOpen IFC BIM Viewer (web-ifc), Robotics Data Viewer (Lichtblick, also iframe-embedded) and Online 3D Viewer (Rhinoceros 3D, rhino3dm).
+
+-   **The Three.js viewer is deliberately not gated.** Its mesh formats (.glb, .obj, .stl, …) and USD (.usd/.usda/.usdc/.usdz, parsed by three.js's pure-JavaScript `USDLoader`) need no `eval`, and gating the whole plugin would remove them too. So a deployment without `allowUnsafeEvalFeatures` still opens USD; with it, Needle and Three.js both match USD at priority 1 and the user picks. Only its OCCT CAD path (.stp/.step/.iges/.igs/.brep) has the heavier requirements, and `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports them as a message on the file rather than hiding the viewer: it checks for `SharedArrayBuffer` (the COI headers) and for the OCCT bundle before loading.
+-   **`cesium-viewer` is not gated either.** The viewer builds a `CesiumWidget` from the widget-less `@cesium/engine` (`CesiumViewerComponent.tsx`), which drops the `@cesium/widgets` Knockout layer whose `new Function` binding compiler was what required `unsafe-eval`; `'wasm-unsafe-eval'` in the base CSP covers what remains. See `web/customInstalls/cesium/README.md` for the build. KTX2/Basis textures and `.spz` splats are the known content types that still need the broader directive.
+-   **The Online 3D Viewer is registered twice for this reason (#921).** `online3d-viewer` offers .amf/.bim/.off/.wrl ungated, and `online3d-viewer-rhino` offers .3dm only under the gate, both rendering `Online3dViewerComponent` from the one bundle `web/customInstalls/online3dviewer/` builds when either is enabled. If eval is refused anyway, `Online3dViewerPlugin/utils/evalBlocked.ts` replaces the viewer's "Failed to load rhino3dm" with a message naming `app.webUi.allowUnsafeEvalFeatures`.
+-   **A new viewer that needs `eval`.** Add the feature-flag gate and update the deployment configuration reference in `documentation/docusaurus-site/docs/deployment/configuration-reference.md`.
+
+Source: `web/src/visualizerPlugin/CLAUDE.md`, "CSP / `unsafe-eval`".
+
 ### 8.4 Plugin Config Fields
 
 | Field                        | Type              | Description                                                                   |
@@ -1234,6 +1259,23 @@ at its root) or its lines render centered and stop wrapping. The differ also pas
 `pre` margin reset covers only the table, and the UA `1em` margin on the title `<pre>` pushed the
 labels down and clipped them inside the fixed-height title block.
 
+### 8.5.1 Text Diff Viewer Controls
+
+`TextDiffViewerPlugin/TextDiffViewerComponent.tsx` exposes the `react-diff-viewer-continued` modes as compact controls (`data-testid="text-diff-controls"`):
+
+-   **Layout**: Side-by-side / Inline → `splitView`.
+-   **Granularity**: Line / Word / Character → `compareMethod` `DiffMethod.LINES` / `WORDS` / `CHARS`. Line also sets `disableWordDiff`, since the library keeps marking words inside a changed line under any `compareMethod`; without it "Line" still shows word-level marks.
+-   **Line numbers** toggle → `hideLineNumbers`.
+-   **Collapse unchanged** toggle → `showDiffOnly`, with a context-lines picker (`extraLinesSurroundingDiff`, `data-testid="text-diff-context-lines"`) shown only while collapsing.
+
+The per-side labels (`text-diff-side-label-{left,right}`) and the titles handed to the library (`text-diff-title-{left,right}`) are single-line, ellipsis-truncated elements with the full label as a tooltip: the library's title block is a fixed 2.4em with a wrapping `<pre>`, so a long "name @ version · asset" label was otherwise cut off. In inline layout only the left title block renders, so it carries both names ("left → right").
+
+When both sides hold identical text the viewer shows an info notice (`data-testid="text-diff-identical-notice"`, "No differences to show — the selected versions are identical") above the diff: with **Collapse unchanged** on, the library folds an identical file into a single `@@ -0,N +0,N @@` expander and the pane otherwise reads as empty. This is the state a lone file's Compare seed (latest vs latest) starts in; the fold row stays so the content can be expanded.
+
+The `styles={{ titleBlock: { pre: { margin: 0 } } }}` object (8.5, "Differ inside `DynamicViewer`") is hoisted, because the library memoizes on the reference. `renderContent` highlights each line with react-syntax-highlighter's `Light` build as an INLINE run: `PreTag`/`CodeTag` spans, `display: inline`, every metric (font, size, line-height, colour, wrapping) inherited from the cell, the code tag's `white-space: pre` overridden to `inherit` so long lines wrap with the row, and the hljs theme passed explicitly (`Light` ships none; without it the tokens carry no colour). Do not give the per-line highlighter block metrics of its own.
+
+Source: `web/src/visualizerPlugin/CLAUDE.md`, "Text Diff Viewer controls".
+
 ### 8.6 A Framed Viewer Must Not Receive a Signed URL in the Query String
 
 A presigned Amazon S3 URL is a bearer credential: anyone holding it can read the object until it
@@ -1345,7 +1387,7 @@ interface VAMSConfig {
 Configuration is loaded at startup in this order:
 
 1. `GET /api/amplify-config` --> Cached in appCache, configures Amplify v6
-2. `GET /api/secure-config` --> Additional config requiring auth
+2. `GET /secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
 When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
@@ -1471,6 +1513,16 @@ When adding new styles, use CSS custom properties from `theme.css` or Cloudscape
     color: #16191f;
 }
 ```
+
+### 10.5 A Resizable Table Column's Width Is Seeded Once
+
+With `resizableColumns`, Cloudscape stores column widths in state and seeds each column **once**: on the render in which that column id first becomes visible. Its follow-up effect only seeds ids missing from both the stored widths and the previous visible list, so once an id has been rendered with one declared `width`, later changes to that declaration are **silently ignored**. The header keeps the first-seeded width, and the first resize drag makes it jump to the value you expected.
+
+Raising `width` in `columnDefinitions` therefore appears to do nothing. The symptom looks like CSS compressing the column toward its `minWidth`, so the tempting fix is to raise `minWidth`, but that is not the lever. Cloudscape applies `table-layout: fixed` with `width: 100%` and `overflow-x: auto` on the wrapper, and the browser honors an over-budget column sum by widening the table and scrolling: a declared 700px column measures 700px even when the declared widths total more than the viewport.
+
+The practical rule: **the value that selects the visible column set and the value that selects a column's declared width must come from one source, resolved in the same render.** A set chosen from component state while the width branch reads a value written from a `useEffect` leaves one render in which the column is visible under the wrong declaration, and that is the one that sticks. This is why `SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the `_rectype` filter.
+
+Source: `web/CLAUDE.md`, "10.5 A Resizable Table Column's Width Is Seeded Once".
 
 ---
 
