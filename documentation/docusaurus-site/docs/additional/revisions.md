@@ -513,6 +513,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Home-page carousel works from the keyboard** — Tab reaches the "How it works" carousel's slide controls, the arrow keys change the slide, the focused slide's dot is outlined, and each control is named after its slide; the other slides could be shown only with a pointer. (issue #1573)
 -   **Uninstall log group cleanup stays within the deployment** — Step 4 of the uninstall guide reads the log groups to delete from the deleted stack's AWS CloudFormation record, leaves out those of a current stack of the same name and lists them for review first, so it no longer deletes the groups of other VAMS deployments that share the `/aws/vendedlogs/` prefixes; it also covers the API Gateway execution log group. (issue #1572)
 -   **Single-file assets** — File operations on an asset created from a single Amazon S3 object act on its own file, its previews and its companion folder only, and its file can be listed, downloaded and opened again; a prefix delete or archive names a folder; uploads at the asset's own file path are refused, and Download as Zip refuses such an asset. (PR #1767)
+-   **Permanent delete stops when Amazon S3 keeps files** — An asset permanent delete, or a prefix file delete, fails with an error when Amazon S3 does not delete every object version, and keeps the asset and its remaining files so the delete can be retried; it no longer reports success while the files stay in the bucket. (issue #1768)
 
 **Documentation:**
 

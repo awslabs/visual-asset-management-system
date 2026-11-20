@@ -1608,6 +1608,8 @@ except Exception as e:
 
 The best-effort helpers `common.assetHistory` and `common.syncTracking` are the deliberate exceptions: they catch and log their own failures so a history-write failure never breaks the primary operation. New handlers should not replicate that shape without an equally explicit rationale.
 
+A delete whose result decides whether records are removed reports a failure rather than an empty result. `assetFiles.delete_s3_prefix_all_versions` raises `S3PrefixDeleteIncomplete`, naming the keys it deleted and the keys it kept, when it cannot list the prefix or a key keeps a version or delete marker. The asset permanent delete deletes the asset's S3 objects before any record and stops on it: the files that are gone lose their file records, and the asset keeps the rest for a retry (`tests/handlers/assets/test_permanent_delete_s3_failures.py`).
+
 ---
 
 ## Development Checklist

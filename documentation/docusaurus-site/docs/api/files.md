@@ -252,6 +252,8 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 Permanently deletes a file from the asset. This removes all versions of the file from S3, and every version of the auxiliary data derived from it, such as previews and viewer files.
 
+When Amazon S3 does not delete every version of every file under a prefix, the request returns `400`. The files that were deleted lose their metadata, attributes and version records, and the remaining files keep theirs and their auxiliary data, so the delete can be retried.
+
 :::danger[Irreversible Operation]
 This permanently deletes the file and all its versions. Consider using [Archive File](#archive-file) for soft-deletion instead.
 :::
@@ -291,11 +293,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. |
-| `403`  | Not authorized to delete files in this asset.                                      |
-| `500`  | Internal server error.                                                             |
+| Status | Description                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, file not found, or Amazon S3 did not delete every version of the file or of every file under the prefix. |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                            |
+| `500`  | Internal server error.                                                                                                                                                   |
 
 ---
 

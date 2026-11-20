@@ -546,6 +546,8 @@ Permanently deletes an asset, including all associated files, metadata, versions
 
 Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
 
+The asset's Amazon S3 objects are deleted before any of its records. When Amazon S3 does not delete every object version (for example, access to the bucket is denied), the request returns `400` and the asset keeps its records and its remaining files, so the delete can be retried. The files that were deleted lose their metadata, attributes and version records.
+
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
 :::
@@ -587,12 +589,12 @@ A body is required; `confirmPermanentDelete` must be `true`. An empty body retur
 
 **Error Responses:**
 
-| Status | Description                                                 |
-| ------ | ----------------------------------------------------------- |
-| `400`  | Missing body or `confirmPermanentDelete` not set to `true`. |
-| `403`  | Not authorized to delete this asset.                        |
-| `404`  | Asset not found.                                            |
-| `500`  | Internal server error.                                      |
+| Status | Description                                                                                                                                   |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Missing body or `confirmPermanentDelete` not set to `true`, or Amazon S3 did not delete every object version of the asset; the asset is kept. |
+| `403`  | Not authorized to delete this asset.                                                                                                          |
+| `404`  | Asset not found.                                                                                                                              |
+| `500`  | Internal server error.                                                                                                                        |
 
 ---
 
