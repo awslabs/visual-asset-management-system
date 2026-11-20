@@ -478,6 +478,47 @@ describe("PipelineForm DeadlineCloud job template", () => {
         );
     });
 
+    // The API stores a whole-number string count as given, so an untouched stored "50" must still
+    // save, and it is sent as the number the input shows.
+    it("saves a stored DeadlineCloud pipeline whose counts are whole-number strings", async () => {
+        enableDeadlineCloud();
+        const mutateAsync = mockUpdate();
+        const stored = storedPipeline({
+            executionConfig: {
+                executionType: "DeadlineCloud" as const,
+                waitForCallback: "Enabled" as const,
+                taskTimeout: "",
+                taskHeartbeatTimeout: "",
+                lambda: {},
+                sqs: {},
+                eventBridge: {},
+                deadlineCloud: {
+                    farmId: "farm-9",
+                    queueId: "queue-9",
+                    template: "specificationVersion: stored",
+                    templateType: "YAML",
+                    priority: "50",
+                    maxRetriesPerTask: "3",
+                    maxFailedTasksCount: "0",
+                },
+            },
+        });
+
+        render(<PipelineForm mode="edit" databaseId="db1" initial={stored} onDone={jest.fn()} />, {
+            wrapper: createWrapper(),
+        });
+
+        await waitFor(() => expect(screen.getByLabelText(/^Priority$/)).toHaveValue(50));
+        submit();
+
+        await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+        expect(screen.queryByText(/Must be a whole number/)).not.toBeInTheDocument();
+        const deadlineCloud = mutateAsync.mock.calls[0][0].body.executionConfig.deadlineCloud;
+        expect(deadlineCloud.priority).toBe(50);
+        expect(deadlineCloud.maxRetriesPerTask).toBe(3);
+        expect(deadlineCloud.maxFailedTasksCount).toBe(0);
+    });
+
     // A free-text box let "yaml" through to a 400; the backend accepts only ("JSON", "YAML").
     it("offers only the template types the backend accepts, plus its own default", async () => {
         const user = userEvent.setup();

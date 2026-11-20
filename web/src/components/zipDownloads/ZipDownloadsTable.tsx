@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
@@ -25,6 +25,7 @@ import {
     fetchZipDownloads,
     getZipDownloadUrl,
 } from "../../services/APIService";
+import ListToolbar from "../list/ListToolbar";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
 import { routeDisabledReason } from "../../features/orchestration/permissions/routeDisabledReason";
 import Synonyms from "../../synonyms";
@@ -155,7 +156,12 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     const navigate = useNavigate();
     const assetScoped = !!(databaseId && assetId);
     const documentVisible = useDocumentVisible();
-    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
+    const {
+        loading: permissionsLoading,
+        failed: permissionsFailed,
+        retry: retryPermissions,
+        can,
+    } = useAllowedRoutes();
 
     const canList = can("GET", assetScoped ? ZIP_ROUTES.asset : ZIP_ROUTES.global);
     // "Show all users" is offered only when the API's route listing allows the all-users route; the
@@ -184,6 +190,10 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     const [loadingMore, setLoadingMore] = useState(false);
     const [loaded, setLoaded] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
+    // Polls that failed in a row, and the last one's message. A poll is re-armed after a failure
+    // too, so a job's status keeps updating once the service answers again.
+    const [pollFailures, setPollFailures] = useState(0);
+    const [pollError, setPollError] = useState("");
     const [disabled, setDisabled] = useState(false);
     const [notice, setNotice] = useState<Notice | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
@@ -197,6 +207,30 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             mounted.current = false;
         };
     }, []);
+
+    // The list the rows, the page token and every answer in flight belong to: the scope toggle and
+    // the asset. A reused asset page hands the table another asset without remounting it. When the
+    // list changes, the rows, token and the previous list's messages go, and an answer sent for the
+    // previous list is dropped, so a late answer never replaces the rows or sends another route's
+    // token with Load more.
+    const listKey = `${showAllUsers ? "all" : "mine"}|${databaseId ?? ""}|${assetId ?? ""}`;
+    const [shownListKey, setShownListKey] = useState(listKey);
+    if (shownListKey !== listKey) {
+        setShownListKey(listKey);
+        setJobs([]);
+        setNextToken(null);
+        setLoaded(false);
+        setLoading(false);
+        setLoadingMore(false);
+        setPollFailures(0);
+        setLoadError(null);
+        setPollError("");
+        setNotice(null);
+    }
+    const currentListKey = useRef(listKey);
+    useLayoutEffect(() => {
+        currentListKey.current = listKey;
+    }, [listKey]);
 
     const fetchPage = useCallback(
         (startingToken?: string | null) =>
@@ -229,7 +263,7 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         async (quiet = false) => {
             if (!quiet) setLoading(true);
             const result: any = await fetchPage(null);
-            if (!mounted.current) return;
+            if (!mounted.current || currentListKey.current !== listKey) return;
             if (!quiet) setLoading(false);
             if (!Array.isArray(result) || result[0] !== true) {
                 const message = (Array.isArray(result) && result[1]) || "";
@@ -237,6 +271,9 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                     setDisabled(true);
                 } else if (!quiet) {
                     setLoadError(message || "The Download Queue could not be loaded.");
+                } else {
+                    setPollError(message);
+                    setPollFailures((count) => count + 1);
                 }
                 return;
             }
@@ -244,14 +281,20 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
             setLoadError(null);
             setDisabled(false);
             setLoaded(true);
+            setPollFailures(0);
             if (quiet) {
-                setJobs((current) => mergeZipJobs(current, page.Items));
+                // A poll reads the first page again: a row it no longer lists within that page
+                // has gone from the list, and a first page with no token is the whole list.
+                setJobs((current) =>
+                    mergeZipJobs(current, page.Items, { hasMore: !!page.NextToken })
+                );
+                if (!page.NextToken) setNextToken(null);
             } else {
                 setJobs(page.Items);
                 setNextToken(page.NextToken);
             }
         },
-        [fetchPage]
+        [fetchPage, listKey]
     );
 
     // Load when the surface becomes active, and again when the parent asks.
@@ -261,18 +304,20 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
     }, [isActive, permissionsLoading, canList, load, refreshToken]);
 
     // Poll only while a job is queued or running, the surface is active and the tab is visible.
+    // Each answer re-arms the timer: a success changes `jobs`, a failure `pollFailures`.
     const interval = zipRefetchInterval(jobs, isActive && canList, documentVisible);
     useEffect(() => {
         if (interval === null) return;
         const timer = setTimeout(() => load(true), interval);
         return () => clearTimeout(timer);
-    }, [interval, jobs, load]);
+    }, [interval, jobs, pollFailures, load]);
 
     const loadMore = async () => {
         if (!nextToken) return;
+        const sentFor = listKey;
         setLoadingMore(true);
         const result: any = await fetchPage(nextToken);
-        if (!mounted.current) return;
+        if (!mounted.current || currentListKey.current !== sentFor) return;
         setLoadingMore(false);
         if (!Array.isArray(result) || result[0] !== true) {
             setNotice({
@@ -509,7 +554,23 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
         },
     ];
 
-    if (!permissionsLoading && !permissionsFailed && !canList) {
+    // A failed check leaves the role's routes unknown: nothing is listed, so say so and offer the
+    // check again rather than show the list as loading.
+    if (!permissionsLoading && permissionsFailed) {
+        return (
+            <Alert
+                type="error"
+                statusIconAriaLabel="Error"
+                header="Your permissions could not be checked"
+                action={<Button onClick={() => retryPermissions()}>Retry</Button>}
+            >
+                The check for what your role may do did not complete, so the Download Queue is not
+                shown.
+            </Alert>
+        );
+    }
+
+    if (!permissionsLoading && !canList) {
         return (
             <Alert
                 type="info"
@@ -552,6 +613,18 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                     {notice.text}
                 </Alert>
             )}
+            {pollFailures >= 2 && !loadError && (
+                <Alert
+                    type="warning"
+                    statusIconAriaLabel="Warning"
+                    header="Could not refresh the Download Queue"
+                    action={<Button onClick={() => load(true)}>Retry</Button>}
+                >
+                    {`${
+                        pollError ? `${pollError.replace(/\.$/, "")}. ` : ""
+                    }The list shows the last answer and keeps trying.`}
+                </Alert>
+            )}
             {loadError && (
                 <Alert
                     type="error"
@@ -570,51 +643,45 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                 loadingText="Loading download jobs"
                 wrapLines
                 variant={assetScoped ? "embedded" : "container"}
-                // Filter row layout (web/CLAUDE.md "Table filter row"): search and refresh on the
-                // left in the filter slot, view toggles right-aligned in the tools slot, as the
-                // Versions tab (AssetVersionList) does.
+                // The list toolbar (web/CLAUDE.md "List Toolbar"): the search with the refresh beside
+                // it on the left, and the whose-jobs toggle in the filters group on the right.
                 filter={
-                    <SpaceBetween direction="horizontal" size="xs">
-                        <TextFilter
-                            filteringText={filterText}
-                            filteringPlaceholder="Find by asset ID, request ID or archive name"
-                            filteringAriaLabel="Search download jobs"
-                            filteringClearAriaLabel="Clear search text"
-                            onChange={({ detail }) => setFilterText(detail.filteringText)}
-                            countText={
-                                filtering
-                                    ? `${shownJobs.length} ${
-                                          shownJobs.length === 1 ? "match" : "matches"
-                                      }`
-                                    : undefined
-                            }
-                        />
-                        <Button
-                            iconName="refresh"
-                            variant="icon"
-                            ariaLabel="Refresh download queue"
-                            onClick={() => load(false)}
-                            loading={loading}
-                        />
-                    </SpaceBetween>
-                }
-                pagination={
-                    canListAllUsers ? (
-                        <SegmentedControl
-                            selectedId={scope}
-                            label="Whose download jobs to show"
-                            onChange={({ detail }) => {
-                                setScope(detail.selectedId === "all" ? "all" : "mine");
-                                setLoaded(false);
-                                setJobs([]);
-                                setNextToken(null);
-                            }}
-                            options={[
-                                { id: "mine", text: "My jobs" },
-                                { id: "all", text: "Show all users" },
-                            ]}
-                        />
-                    ) : undefined
+                    <ListToolbar
+                        search={
+                            <TextFilter
+                                filteringText={filterText}
+                                filteringPlaceholder="Find by asset ID, request ID or archive name"
+                                filteringAriaLabel="Search download jobs"
+                                filteringClearAriaLabel="Clear search text"
+                                onChange={({ detail }) => setFilterText(detail.filteringText)}
+                                countText={
+                                    filtering
+                                        ? `${shownJobs.length} ${
+                                              shownJobs.length === 1 ? "match" : "matches"
+                                          }`
+                                        : undefined
+                                }
+                            />
+                        }
+                        onRefresh={() => load(false)}
+                        refreshing={loading}
+                        refreshLabel="Refresh download queue"
+                        filters={
+                            canListAllUsers ? (
+                                <SegmentedControl
+                                    selectedId={scope}
+                                    label="Whose download jobs to show"
+                                    onChange={({ detail }) =>
+                                        setScope(detail.selectedId === "all" ? "all" : "mine")
+                                    }
+                                    options={[
+                                        { id: "mine", text: "My jobs" },
+                                        { id: "all", text: "Show all users" },
+                                    ]}
+                                />
+                            ) : undefined
+                        }
+                    />
                 }
                 header={
                     <Header
@@ -648,6 +715,15 @@ export const ZipDownloadsTable: React.FC<ZipDownloadsTableProps> = ({
                                 {`No loaded job matches "${filterText.trim()}".`}
                             </Box>
                             <Button onClick={() => setFilterText("")}>Clear search</Button>
+                        </Box>
+                    ) : nextToken ? (
+                        // The API's page held only jobs it does not list (expired, or on an asset
+                        // the caller can no longer read); older pages may still hold some.
+                        <Box textAlign="center" color="inherit" padding="m">
+                            <b>No download jobs on the pages loaded so far</b>
+                            <Box variant="p" color="inherit">
+                                Choose Load more to keep looking.
+                            </Box>
                         </Box>
                     ) : (
                         <Box textAlign="center" color="inherit" padding="m">

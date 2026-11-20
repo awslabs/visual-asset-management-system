@@ -43,6 +43,8 @@ Add `--verbose` to any command for detailed console output, including the active
 vamscli --verbose assets get my-asset -d my-db
 ```
 
+Verbose output shows each request and response as the CLI sends and receives it, except for credentials, which appear as `***REDACTED***`. That covers credential headers such as `Authorization`; credential-named command arguments, configuration entries, and request and response fields (passwords, tokens, API keys, and connection URLs); values shaped like a VAMS API key, a JSON Web Token, or a `Bearer` value; and the `X-Amz-Signature` and `X-Amz-Security-Token` parameters of a presigned Amazon S3 URL. Each header, field, and parameter keeps its name, so the output still shows which ones were present, and an error traceback shown with `--verbose` is masked the same way. Masking works by name and shape, so review verbose output before you share it.
+
 :::tip
 Verbose log messages are written to the rotating log file and do not interfere with `--json-output`, so both flags can be combined safely in scripts.
 :::

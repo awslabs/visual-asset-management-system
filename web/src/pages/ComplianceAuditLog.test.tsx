@@ -6,7 +6,7 @@
 import React from "react";
 import fs from "fs";
 import path from "path";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ComplianceAuditLog, { auditDetailLines, eventTypeOptions } from "./ComplianceAuditLog";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
@@ -309,6 +309,56 @@ describe("ComplianceAuditLog asset links", () => {
             "href",
             "#/databases/db1/assets/asset-e1"
         );
+    });
+    it("shows an entry of a deleted database's history as text, since no asset page opens", async () => {
+        mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            {
+                entries: [{ ...entry("e1", "someone"), databaseId: "db1#deleted" }],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceAuditLog />);
+        const asset = await screen.findByText("asset-e1");
+        expect(asset.closest("a")).toBeNull();
+    });
+
+    it("encodes the database id in the asset link", async () => {
+        mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            {
+                entries: [{ ...entry("e1", "someone"), databaseId: "db 1" }],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceAuditLog />);
+        expect(await screen.findByRole("link", { name: "asset-e1" })).toHaveAttribute(
+            "href",
+            "#/databases/db%201/assets/asset-e1"
+        );
+    });
+});
+
+describe("ComplianceAuditLog asset ID filter", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        service().fetchAuditLog.mockResolvedValue([true, { entries: [], nextToken: undefined }]);
+    });
+    afterEach(() => window.history.replaceState(null, "", "/"));
+
+    it("shows the asset ID of the URL after the URL changes", async () => {
+        window.history.replaceState(null, "", "/#/compliance/audit?databaseId=db1&assetId=a1");
+        render(<ComplianceAuditLog />);
+        const box = await screen.findByLabelText(/Filter by .* ID/);
+        expect(box).toHaveValue("a1");
+
+        act(() => {
+            window.history.pushState(null, "", "/#/compliance/audit?databaseId=db1");
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+        });
+        await waitFor(() => expect(screen.getByLabelText(/Filter by .* ID/)).toHaveValue(""));
     });
 });
 

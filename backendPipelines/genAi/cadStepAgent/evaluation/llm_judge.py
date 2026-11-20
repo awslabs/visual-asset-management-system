@@ -10,7 +10,8 @@ the measured geometry, and a rationale of at most 600 characters. A run PASSES t
 The judge sees a bounded view of one run: the instruction, the agent's status and report (without the
 per-attempt script output), the measured geometry, and the geometry and honesty verdicts. It is told that the
 measured figures are facts and that it grades intent only, never the measurement. One Converse call per run,
-temperature 0, model from ``--model-id`` else ``BEDROCK_MODEL_ID`` (the deployment setting the agent uses). An
+with no temperature (some models, such as global.anthropic.claude-sonnet-5-5, refuse the parameter), model from
+``--model-id`` else ``BEDROCK_MODEL_ID`` (the deployment setting the agent uses). An
 answer that is not the requested JSON is a scoring ERROR, never a PASS. Every call records its tokens and an
 estimated cost at the ``--price-in`` / ``--price-out`` rates (USD per million tokens). ``--out`` is rewritten
 after every call, so a run that stops part-way keeps the verdicts already paid for; a call that raises is
@@ -192,7 +193,7 @@ def judge_run(client, model_id: str, case: Dict, run: Dict, quality: Dict, price
         modelId=model_id,
         system=[{"text": system}],
         messages=[{"role": "user", "content": [{"text": user}]}],
-        inferenceConfig={"temperature": 0, "maxTokens": MAX_TOKENS},
+        inferenceConfig={"maxTokens": MAX_TOKENS},
     )
     usage = response.get("usage") or {}
     tokens_in, tokens_out = int(usage.get("inputTokens", 0) or 0), int(usage.get("outputTokens", 0) or 0)

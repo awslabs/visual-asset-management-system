@@ -11,7 +11,11 @@
 
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
-import TextViewerComponent, { TEXT_NOTICE_COPY } from "./TextViewerComponent";
+import TextViewerComponent, {
+    TEXT_HIGHLIGHT_MAX_CHARS,
+    TEXT_NOTICE_COPY,
+} from "./TextViewerComponent";
+import { TEXT_VIEWER_MAX_BYTES } from "../../core/textContent";
 
 const mockDownloadAsset = jest.fn();
 jest.mock("../../../services/APIService", () => ({
@@ -146,7 +150,60 @@ describe("TextViewerComponent", () => {
         renderViewer("README");
 
         await waitFor(() => expect(screen.getByText("Error loading file")).toBeInTheDocument());
-        expect(screen.getByText("HTTP error! status: 403")).toBeInTheDocument();
+        // The storage link refused the read: an expired link, not a VAMS permission answer.
+        expect(
+            screen.getByText("The file could not be read. Open it again to refresh the link.")
+        ).toBeInTheDocument();
         errors.mockRestore();
+    });
+
+    it("says the file could not be downloaded when the read gets no response", async () => {
+        global.fetch = jest.fn(async () => {
+            throw new TypeError("Failed to fetch");
+        }) as any;
+        const errors = jest.spyOn(console, "error").mockImplementation(() => undefined);
+
+        renderViewer("README");
+
+        await waitFor(() => expect(screen.getByText("Error loading file")).toBeInTheDocument());
+        expect(
+            screen.getByText(
+                "The file could not be downloaded. Check your connection and open it again."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText("Failed to fetch")).toBeNull();
+        errors.mockRestore();
+    });
+
+    it("shows the too-large notice for a text file above the cap, without a full GET", async () => {
+        global.fetch = jest.fn(async () => ({
+            ok: true,
+            status: 206,
+            headers: {
+                get: (name: string) =>
+                    name === "Content-Range" ? `bytes 0-8191/${TEXT_VIEWER_MAX_BYTES + 1}` : null,
+            },
+            arrayBuffer: async () => new TextEncoder().encode("x".repeat(8192)).buffer,
+        })) as any;
+
+        renderViewer("huge.log");
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-viewer-too-large-notice")).toBeInTheDocument()
+        );
+        expect(screen.getByText(TEXT_NOTICE_COPY["too-large"].header)).toBeInTheDocument();
+        expect(screen.queryByTestId("highlighted")).toBeNull();
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a large text file as plain text, without the highlighter", async () => {
+        const text = "x".repeat(TEXT_HIGHLIGHT_MAX_CHARS) + "\n";
+        serve(new TextEncoder().encode(text));
+
+        renderViewer("big.log");
+
+        await waitFor(() => expect(screen.getByTestId("text-viewer-plain")).toBeInTheDocument());
+        expect(screen.getByTestId("text-viewer-plain").textContent).toBe(text);
+        expect(screen.queryByTestId("highlighted")).toBeNull();
     });
 });

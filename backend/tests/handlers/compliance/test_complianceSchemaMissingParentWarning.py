@@ -3,8 +3,8 @@
 
 """A schema whose `extends` names a parent the evaluation would not find saves with a warning (D150).
 
-A schema extending a missing schema used to save silently and then evaluate with its own rules only
-(`evaluationEngine.resolve_rules`). Create and update now answer an `extendsSchemaNotFound` warning
+A schema extending a missing schema used to save silently, and its evaluation reaches no verdict
+(`evaluationEngine.unreadable_rule_results`). Create and update now answer an `extendsSchemaNotFound` warning
 in `warnings` when the parent is missing or not vams-rules-v1, as the evaluation would find it (the
 parent's latest version), and the save still succeeds. The warning is decided only from what the
 caller may read through the API: a parent that exists but the caller may not read (Tier 1 GET on
@@ -84,7 +84,7 @@ def _create(body, **kwargs):
 
 def _expected(name=PARENT):
     return [{"code": "extendsSchemaNotFound",
-             "message": svc.MISSING_PARENT_WARNING_MESSAGE.format(name=name), "extends": name}]
+             "message": svc.MISSING_PARENT_WARNING_MESSAGE, "extends": name}]
 
 
 @pytest.mark.unit
@@ -95,7 +95,8 @@ class TestTheMissingParentWarning:
         assert response["statusCode"] == 200, response
         assert json.loads(put_items(schema_table)[0]["schemaBody"])["extends"] == PARENT
         assert body_of(response)["warnings"] == _expected()
-        assert "evaluated with its own rules only" in body_of(response)["warnings"][0]["message"]
+        assert "an evaluation under this schema reaches no verdict" in body_of(response)["warnings"][0]["message"]
+        assert PARENT not in body_of(response)["warnings"][0]["message"]
 
     def test_a_parent_of_another_format_warns(self):
         response, _, _, _ = _create(_child(), rows_by_name={

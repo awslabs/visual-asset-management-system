@@ -41,7 +41,7 @@ def _run(rows, database_item=None, casbin=None, registered=0, result=RESULT, clo
         patch(f"{STORE}.get_database_item",
               return_value={"databaseId": DB, "complianceSchemaName": SCHEMA}
               if database_item is None else database_item),
-        patch(f"{STORE}.register_unrecorded_assets", return_value=registered),
+        patch(f"{STORE}.register_unrecorded_assets_page", return_value=(registered, None)),
         patch(f"{STORE}.run_evaluation", return_value=result),
         # Every asset exists: a sweep evaluates it rather than removing its record.
         patch(f"{TRIGGER}.asset_row_exists", return_value=True),
@@ -88,7 +88,7 @@ class TestEvaluateDatabase:
 
     def test_unrecorded_assets_of_a_bound_database_are_registered_first(self):
         response, mocks = _run([_row("a")], registered=2)
-        mocks["register"].assert_called_once_with(DB, SCHEMA)
+        mocks["register"].assert_called_once_with(DB, SCHEMA, None)
         assert body_of(response)["registered"] == 2
 
     def test_an_unbound_database_registers_nothing(self):
@@ -109,7 +109,8 @@ class TestEvaluateDatabase:
         assert body_of(response)["assetsRemaining"] == 5
 
     def test_no_launch_after_the_time_budget(self):
-        readings = iter([0.0, 0.0, 1.0, 25.0, 25.0, 25.0])
+        # The call's start, the check before its first page, then one per evaluation.
+        readings = iter([0.0, 0.0, 0.0, 1.0, 25.0, 25.0, 25.0])
         response, mocks = _run([_row("a"), _row("b"), _row("c"), _row("d")],
                                clock=lambda: next(readings))
         assert mocks["run"].call_count == 2

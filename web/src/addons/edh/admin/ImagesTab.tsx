@@ -34,6 +34,7 @@ import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useRemovedRowRef } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
+import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import { osFamilyLabel } from "../labels";
 import ConfirmActionDialog, {
     controlNamed,
@@ -387,9 +388,11 @@ const ImagesTab: React.FC<ImagesTabProps> = ({ can }) => {
                 </div>
             </div>
 
+            {!isLoading && error && data && <RefreshFailedNotice error={error} />}
+
             {isLoading ? (
                 <div className="p-8 text-center text-text-secondary">Loading images...</div>
-            ) : error ? (
+            ) : error && !data ? (
                 <div className="p-4 text-vams-error">
                     Error loading images: {toastErrorMessage(error)}
                 </div>

@@ -2657,7 +2657,7 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterAutoTriggerOnFileUpload: false,
             bedrockModelId: GENAI_DEFAULT_BEDROCK_MODEL_ID,
             openAi: { modelId: "", apiKeySecretArn: "" },
-            allowInternetResearch: true,
+            allowInternetResearch: false,
             bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
             agentCore: {
                 warmSessionSlots: 0,
@@ -2675,7 +2675,8 @@ export function getConfig(app: cdk.App): Config {
         if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
         if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
         if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
-        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = true;
+        // Off unless the operator turns it on: research sends queries to third-party search engines.
+        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = false;
         if (cad.bedrockGuardrail == undefined)
             cad.bedrockGuardrail = { guardrailId: "", guardrailVersion: "" };
         if (cad.bedrockGuardrail.guardrailId == undefined) cad.bedrockGuardrail.guardrailId = "";
@@ -2999,15 +3000,19 @@ export function getConfig(app: cdk.App): Config {
     applyZipDownloadsDefaults(config);
     validateZipDownloadsConfig(config);
 
-    // Initialize compliance configuration if undefined (backward compatibility)
+    // Initialize compliance configuration if undefined (backward compatibility). An unset
+    // autoLoadDefaultSchema follows autoLoadDefaultAssetSchema: the default compliance schema needs
+    // the default asset metadata schema (checked below), so a config that turned that one off and
+    // predates the compliance block keeps deploying.
     if (config.app.compliance == undefined) {
         config.app.compliance = {
-            autoLoadDefaultSchema: true,
+            autoLoadDefaultSchema: !!config.app.metadataSchema.autoLoadDefaultAssetSchema,
             quarantineBlocksDownload: false,
         };
     }
     if (config.app.compliance.autoLoadDefaultSchema == undefined) {
-        config.app.compliance.autoLoadDefaultSchema = true;
+        config.app.compliance.autoLoadDefaultSchema =
+            !!config.app.metadataSchema.autoLoadDefaultAssetSchema;
     }
     if (config.app.compliance.quarantineBlocksDownload == undefined) {
         config.app.compliance.quarantineBlocksDownload = false;
@@ -3196,7 +3201,7 @@ export function getConfig(app: cdk.App): Config {
     if (!codeBuildSupportedPartitions.includes(resolvedPartition)) {
         const pipelines = config.app.pipelines as unknown as Record<
             string,
-            { useCodeBuild?: boolean } | undefined
+            { enabled?: boolean; useCodeBuild?: boolean } | undefined
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
@@ -3210,8 +3215,10 @@ export function getConfig(app: cdk.App): Config {
             "useGenAiVideoSopBom",
             "useImageTo3d",
         ];
+        //A disabled pipeline builds nothing, so only enabled ones are named (an upgraded config's
+        //backfilled blocks carry useCodeBuild true with the pipeline off).
         const enabledOutsideSupport = codeBuildPipelinePaths
-            .filter((name) => pipelines[name]?.useCodeBuild === true)
+            .filter((name) => !!pipelines[name]?.enabled && pipelines[name]?.useCodeBuild === true)
             .map((name) => `app.pipelines.${name}`);
         if (
             config.app.pipelines.useZipDownloads?.enabled &&
@@ -4005,6 +4012,24 @@ export function getConfig(app: cdk.App): Config {
                     JSON.stringify(maxTotalDurationMinutes)
             );
         }
+    }
+
+    // GenAI CAD STEP agent internet research sends search queries, written by the model from a run's
+    // design prompt, to third-party web search engines and fetches public web pages, so the data
+    // leaves AWS and the partition. It is always off in the GovCloud and EU Sovereign partitions (and
+    // the ISO partitions), whether or not the pipeline is enabled yet, so a value set here cannot turn
+    // live later. Like the partition checks above, it does not depend on app.govCloud.enabled.
+    if (
+        config.app.pipelines.useGenAiCadStepAgent?.allowInternetResearch === true &&
+        (resolvedPartition === "aws-us-gov" || resolvedPartition === "aws-eusc" || isIsoPartition)
+    ) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useGenAiCadStepAgent.allowInternetResearch is true " +
+                `while deploying to the '${resolvedPartition}' partition. Internet research sends the ` +
+                "agent's search queries to third-party web search engines and fetches public web " +
+                "pages, outside AWS and outside the partition, so it is always off in the GovCloud " +
+                "and EU Sovereign partitions. Set it to false."
+        );
     }
 
     // GenAI CAD STEP agent pipeline. The AgentCore runtime exists only in the commercial partition
@@ -5296,6 +5321,13 @@ export function getConfig(app: cdk.App): Config {
     // `ipaddress` module, so an IPv6 range is expressible and matches. Both endpoints of one
     // entry must be the same family — a mixed pair has no meaningful ordering, and the authorizer
     // skips it rather than allowing it, so rejecting it here is what surfaces the mistake.
+    // The list itself must be an array: the authorizer refuses every request when the value it
+    // receives is not a JSON array, so another shape is rejected here rather than deployed.
+    if (!Array.isArray(config.app.authProvider.authorizerOptions.allowedIpRanges)) {
+        throw new Error(
+            "Configuration Error: app.authProvider.authorizerOptions.allowedIpRanges must be an array of [min, max] IP address ranges ([] for no restriction)."
+        );
+    }
     if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
         for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
             const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];

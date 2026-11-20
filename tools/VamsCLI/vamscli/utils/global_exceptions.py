@@ -88,7 +88,7 @@ def handle_global_exceptions():
             # Import logging utilities
             from .logging import (
                 get_logger, log_command_start, log_command_end,
-                log_error, log_debug, redact_to_text, _is_verbose_mode
+                log_error, log_debug, redact_to_text, _is_verbose_mode, mask_console_text
             )
             
             logger = get_logger()
@@ -140,7 +140,7 @@ def handle_global_exceptions():
                     click.echo("\n" + "="*60, err=True)
                     click.echo("VERBOSE ERROR DETAILS:", err=True)
                     click.echo("="*60, err=True)
-                    click.echo(traceback.format_exc(), err=True)
+                    click.echo(mask_console_text(traceback.format_exc()), err=True)
                     click.echo("="*60 + "\n", err=True)
                 # Import here to avoid circular imports
                 from .exceptions import (
@@ -202,7 +202,7 @@ def handle_global_exceptions():
                         error_data = {"error": f"Unexpected error: {e}"}
                         if '--debug' in sys.argv:
                             import traceback
-                            error_data["traceback"] = traceback.format_exc()
+                            error_data["traceback"] = mask_console_text(traceback.format_exc())
                         click.echo(json.dumps(error_data, indent=2))
                     else:
                         click.echo(
@@ -211,7 +211,7 @@ def handle_global_exceptions():
                         )
                         if '--debug' in sys.argv:
                             import traceback
-                            traceback.print_exc()
+                            click.echo(mask_console_text(traceback.format_exc()), err=True, nl=False)
                     sys.exit(1)
         return wrapper
     return decorator

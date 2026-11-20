@@ -98,15 +98,16 @@ def _s3_head(change_source=None):
 def _run(event, database_item=None, compliance_record=None, children=(), asset_rows=None,
          evaluation=EVALUATION, evaluation_rows=None, head=None, cascade_table=None,
          compliance_records=None, run_evaluation_effect=None, database_effect=None,
-         asset_query_effect=None, asset_item=None):
+         asset_query_effect=None, asset_item=None, real_location_check=False):
     """Run the handler against stand-ins. `asset_rows` answers every assetIdGSI query; a dict maps an
     assetId to its own rows. `compliance_records` maps `databaseId:assetId` to a state row and
     takes precedence over `compliance_record`. `cascade_table` replaces the MagicMock cascade table
     (a moto-backed table for the dedup tests). `run_evaluation_effect` / `database_effect` become
     the side effect of `run_evaluation` / the database row read (an exception to raise, or a
     callable), `asset_query_effect` that of the assetIdGSI query. `asset_item`, when given, is the
-    asset row a strongly consistent read by key returns. The handler's response is returned under
-    `response`."""
+    asset row a strongly consistent read by key returns. Every asset row holds the file event's
+    object (`asset_row_holds_object`) unless `real_location_check` runs the real check. The
+    handler's response is returned under `response`."""
     database_table = MagicMock(name="database_table")
     database_table.get_item.return_value = {"Item": database_item} if database_item else {}
     if database_effect is not None:
@@ -151,7 +152,11 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             return compliance_records.get(f"{database_id}:{asset_id}")
         return compliance_record
 
+    holds_object = (patch(f"{MOD}.asset_row_holds_object", wraps=trigger.asset_row_holds_object)
+                    if real_location_check
+                    else patch(f"{MOD}.asset_row_holds_object", return_value=True))
     with patch(f"{MOD}.database_table", database_table), \
+            holds_object, \
             patch(f"{MOD}.cascade_table", cascade_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{STORE}.asset_state_table", state_table), \
@@ -164,7 +169,10 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             patch(f"{STORE}.get_child_links", return_value=list(children)), \
             patch(f"{STORE}.run_evaluation", return_value=evaluation,
                   side_effect=run_evaluation_effect) as run_evaluation, \
-            patch(f"{STORE}.write_audit") as write_audit:
+            patch(f"{STORE}.write_audit") as write_audit, \
+            patch(f"{STORE}.EVALUATION_CLAIM_STALE_SECONDS", 10 ** 9):
+        # The records' fixed timestamps are months old, so no pending claim is judged stale here
+        # (`claim_orphaned` is tested in test_complianceEvaluationRetriesAndFences).
         response = trigger.lambda_handler(event, MagicMock())
     return {"database": database_table, "cascade": cascade_table, "state": state_table,
             "asset": asset_table, "s3": s3_client, "get_evaluation": get_evaluation,
@@ -1516,6 +1524,7 @@ class TestAnInvocationOverlappingARunningEvaluation:
         stream = _sns_event(_stream_message(change_source="upload", change_at=COLD_UPLOAD_STAMP))
         with patch(f"{MOD}.database_table", database_table), \
                 patch(f"{MOD}.asset_table", asset_table), \
+                patch(f"{MOD}.asset_row_holds_object", return_value=True), \
                 patch(f"{MOD}.cascade_table", MagicMock(name="cascade_table")), \
                 patch(f"{MOD}.s3_client", s3_client), \
                 patch(f"{MOD}.logger", logger), \

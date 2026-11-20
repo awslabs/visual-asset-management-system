@@ -200,12 +200,15 @@ test.describe("Download as Zip", () => {
             // entry), not the side navigation.
             await expect(page.getByRole("link", { name: "My Download Queue" })).toHaveCount(0);
             await openProfileMenu(page);
-            // On its own page the entry is the menu's checked current-page item (#1232), not a link.
+            // On its own page the entry stays a menu item link, marked as the current page in its
+            // accessible name and by a "Current page" tag.
             const current = page
-                .getByRole("menuitemcheckbox", { name: "My Download Queue" })
+                .getByRole("menuitem", { name: "My Download Queue, current page" })
                 .filter({ visible: true });
             await expect(current).toBeVisible();
-            await expect(current).toHaveAttribute("aria-checked", "true");
+            await expect(current).toHaveAttribute("href", /#\/zipdownloads/);
+            await expect(current).toContainText("Current page");
+            await expect(page.getByRole("menuitemcheckbox")).toHaveCount(0);
             await page.keyboard.press("Escape");
             // The search and the refresh button sit together in the table's filter row.
             const search = page.getByRole("searchbox", { name: "Search download jobs" });
@@ -497,7 +500,7 @@ test.describe("Download as Zip (second user)", () => {
     const username = process.env.E2E_SECOND_USERNAME;
     const password = process.env.E2E_SECOND_PASSWORD;
     // The shared view's URL refusal: a member of the archive is no longer downloadable.
-    const NO_LONGER_DOWNLOADABLE = "The selection includes an archived or deleted item";
+    const NO_LONGER_DOWNLOADABLE = "A file in this archive has since been archived or deleted";
 
     test("another user reads the admin's zip download only as the API's shared view allows", async ({
         browser,

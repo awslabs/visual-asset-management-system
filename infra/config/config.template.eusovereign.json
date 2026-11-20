@@ -38,7 +38,7 @@
             "enabled": true,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
-            "addCrossRegionS3Endpoints": true,
+            "addCrossRegionS3Endpoints": false,
             "optionalExternalVpcId": null,
             "optionalExternalIsolatedSubnetIds": null,
             "optionalExternalPrivateSubnetIds": null,
@@ -182,7 +182,7 @@
                     "modelId": "",
                     "apiKeySecretArn": ""
                 },
-                "allowInternetResearch": true,
+                "allowInternetResearch": false,
                 "bedrockGuardrail": {
                     "guardrailId": "",
                     "guardrailVersion": ""

@@ -52,7 +52,7 @@ def _manifest(e):
 def _pin(monkeypatch, files):
     fake = types.ModuleType("handlers.assets.assetVersions")
     fake.validate_asset_version_exists = lambda db, a, v: True
-    fake.get_asset_file_versions = lambda db, a, v: {"files": files}
+    fake.get_asset_file_versions = lambda db, a, v, **_kw: {"files": files}
     fake.resolve_asset_version_id_from_alias = lambda db, a, alias: alias
     monkeypatch.setitem(sys.modules, "handlers.assets.assetVersions", fake)
 

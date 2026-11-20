@@ -238,4 +238,74 @@ describe("AsyncUploadOutcome", () => {
         expect(service.getUploadStatus).toHaveBeenCalledWith("u9", "a9", "db9");
         expect(screen.getByText("/x.las")).toBeInTheDocument();
     });
+
+    it("says the status is not available when the upload record lists no large files", async () => {
+        const fetchStatus = jest.fn().mockResolvedValue(status({ status: "completed" }));
+        render(
+            <AsyncUploadOutcome
+                uploadIds={["u1"]}
+                assetId="a1"
+                databaseId="db"
+                pollIntervalMs={1000}
+                fetchStatus={fetchStatus}
+            />
+        );
+        await flush();
+        expect(
+            screen.getByText(/The status of some large files is not available here/)
+        ).toBeInTheDocument();
+        expect(fetchStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells the page once every large file has landed", async () => {
+        const onAllLanded = jest.fn();
+        const fetchStatus = jest
+            .fn()
+            .mockResolvedValueOnce(pending)
+            .mockResolvedValueOnce(
+                status({
+                    status: "completed",
+                    asyncFiles: [{ relativeKey: "/big.e57", status: "SUCCEEDED" }],
+                })
+            );
+        render(
+            <AsyncUploadOutcome
+                uploadIds={["u1"]}
+                assetId="a1"
+                databaseId="db"
+                pollIntervalMs={1000}
+                fetchStatus={fetchStatus}
+                onAllLanded={onAllLanded}
+            />
+        );
+        await flush();
+        expect(onAllLanded).not.toHaveBeenCalled();
+        await act(async () => {
+            jest.advanceTimersByTime(1000);
+        });
+        await flush();
+        expect(onAllLanded).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not say every large file landed when one failed", async () => {
+        const onAllLanded = jest.fn();
+        const fetchStatus = jest.fn().mockResolvedValue(
+            status({
+                status: "completed_with_errors",
+                asyncFiles: [{ relativeKey: "/big.e57", status: "FAILED", error: "copy failed" }],
+            })
+        );
+        render(
+            <AsyncUploadOutcome
+                uploadIds={["u1"]}
+                assetId="a1"
+                databaseId="db"
+                fetchStatus={fetchStatus}
+                onAllLanded={onAllLanded}
+            />
+        );
+        await flush();
+        expect(screen.getByText("Large files that did not reach the asset")).toBeInTheDocument();
+        expect(onAllLanded).not.toHaveBeenCalled();
+    });
 });

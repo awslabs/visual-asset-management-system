@@ -28,6 +28,7 @@ import {
 } from "../../../../../helper/security";
 import { suppressCdkNagLambda } from "../../../../../helper/security";
 import * as s3AssetBuckets from "../../../../../helper/s3AssetBuckets";
+import { pipelineJobLabels, VAMS_PIPELINE_TAG_VALUES } from "../../../constructs/pipelineJobTags";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 
@@ -296,6 +297,11 @@ export function buildConsolidatedHandlerFunction(
             ),
             EKS_JOB_TTL_SECONDS_AFTER_FINISHED: String(
                 config.app.pipelines.useRapidPipeline.useEks.jobTTLSecondsAfterFinished
+            ),
+            // Labels for the Job and its pods, naming the pipeline (vams/pipeline), as the other
+            // pipelines tag their AWS Batch jobs and ECS tasks.
+            PIPELINE_JOB_LABELS: JSON.stringify(
+                pipelineJobLabels(VAMS_PIPELINE_TAG_VALUES.rapidPipelineEks)
             ),
 
             // Allowed file extensions

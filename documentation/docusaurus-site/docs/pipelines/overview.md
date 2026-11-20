@@ -228,6 +228,26 @@ The workflow orchestrator generates specific S3 paths for each pipeline step. Un
 `outputS3AssetFilesPath` is for file-level outputs, including `.previewFile.gif/.jpg/.png` thumbnails tied to specific files. `outputS3AssetPreviewPath` is reserved for asset-level preview images that represent the asset as a whole. Most pipelines producing per-file previews write to `outputS3AssetFilesPath`. The auxiliary path is used only for temporary files or special non-versioned data such as Potree octree viewer files.
 :::
 
+## Job Tags
+
+Every job a VAMS-deployed pipeline starts carries two tags:
+
+| Tag key          | Value                                                                                                                      |
+| :--------------- | :------------------------------------------------------------------------------------------------------------------------- |
+| `vams:stackname` | The deployment's core stack name (`<name>-core-<baseStackName>`), the same value the stack tags its own AWS resources with |
+| `vams:pipeline`  | The pipeline that started the job, for example `preview3dThumbnail`, `zipArchive` or `isaacLabTraining`                    |
+
+-   **AWS Batch jobs** get both tags when they are submitted, whether a pipeline's AWS Step Functions state machine or one of its Lambda functions submits them. The role that submits holds `batch:TagResource` for this, limited to these two tags with its own pipeline's values.
+-   **Amazon ECS tasks** (RapidPipeline and ModelOps) take both tags from their task definition, which the RunTask state propagates to each task it starts.
+-   **Kubernetes Jobs** (RapidPipeline on Amazon EKS) and their pods carry the label `vams/pipeline` with the pipeline value. Kubernetes label keys cannot contain `:`. Each deployment has its own cluster, so no stack label is needed.
+
+These tags are for permissions, not cost reporting. Today every pipeline role that can end an AWS Batch job may end any job in the account and Region. A later release limits each role's `batch:TerminateJob` (and `ecs:StopTask`) to jobs whose `vams:stackname` and `vams:pipeline` tags match its own deployment and pipeline, using the `aws:ResourceTag` condition key. Nothing is limited yet, so no existing job or permission stops working.
+
+-   Keep these tag keys off resources you manage yourself, and do not remove them from VAMS jobs.
+-   A custom pipeline you deploy yourself is not affected by the later change. It may use the same tags if you want its roles scoped the same way.
+-   Tag keys must not start with `aws:`, which AWS reserves. The `vams:` prefix is not reserved.
+-   Tagging an Amazon ECS task requires the account's long task ARN format (the `taskLongArnFormat` account setting).
+
 ## Custom Pipelines
 
 In addition to the built-in pipelines, you can register custom pipelines through the VAMS API or web interface. Custom pipelines can use any of the four execution types (Lambda, SQS, EventBridge, Deadline Cloud) and can target any compute resource accessible from your AWS account.

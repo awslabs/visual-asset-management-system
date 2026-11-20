@@ -39,14 +39,15 @@ VamsCLI uses AWS Cognito User Pools for secure authentication with the following
 
 ```bash
 vamscli auth login -u john.doe@example.com
-vamscli auth login -u john.doe@example.com -p mypassword
+printf '%s\n' "$VAMS_PASSWORD" | vamscli auth login -u john.doe@example.com --password-stdin
 vamscli auth login -u john.doe@example.com --save-credentials
 ```
 
 **Options:**
 
 -   `-u, --username`: Username (email address) - required
--   `-p, --password`: Password (prompts securely if not provided)
+-   `--password-stdin`: Read the password from standard input (recommended for scripts)
+-   `-p, --password`: Password on the command line. Not recommended: every argument of a running process is readable from the OS process table. Omit both to be prompted
 -   `--save-credentials`: Save username/password for automatic re-authentication
 
 **Authentication Flow:**
@@ -63,14 +64,15 @@ vamscli auth login -u john.doe@example.com --save-credentials
 
 ```bash
 vamscli auth change-password -u john.doe@example.com
-vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
+printf '%s\n%s\n' "$OLD_PASSWORD" "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --old-password-stdin --new-password-stdin
 ```
 
 **Options:**
 
 -   `-u, --username`: Username (email address) - required
--   `--old-password`: Current password (prompts securely if not provided)
--   `--new-password`: New password to set (prompts securely if not provided)
+-   `--old-password-stdin`: Read the current password from standard input (prompts securely if neither form is given)
+-   `--new-password-stdin`: Read the new password from standard input (prompts securely if neither form is given). With both stdin flags, standard input carries two lines: the current password, then the new one
+-   `--old-password`, `--new-password`: The same passwords on the command line. Not recommended: every argument of a running process is readable from the OS process table
 -   `--json-output`: Output raw JSON response
 
 **Behavior:**
@@ -78,29 +80,29 @@ vamscli auth change-password -u john.doe@example.com --old-password old --new-pa
 -   **Use when you know your current password.** If you have forgotten it, use [Forgot Password](#forgot-password) instead.
 -   Signs in with the current password and sets the new one in Cognito.
 -   Available only for Cognito authentication; deployments using external authentication return a configuration error.
--   In interactive mode, prompts for any password not provided (the new password is confirmed). With `--json-output`, both `--old-password` and `--new-password` are required.
+-   In interactive mode, prompts for any password not provided (the new password is confirmed). With `--json-output`, both passwords are required, from standard input or the command line.
 -   Also satisfies a forced password change when the account requires one.
 
 #### Forgot Password
 
 ```bash
 vamscli auth forgot-password -u john.doe@example.com
-vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
+printf '%s\n' "$NEW_PASSWORD" | vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password-stdin
 ```
 
 **Options:**
 
 -   `-u, --username`: Username (email address) - required
 -   `--code`: Verification code emailed by Cognito (confirm step)
--   `--new-password`: New password to set (confirm step)
+-   `--new-password-stdin`: Read the new password from standard input (confirm step; `--new-password <password>` is accepted but exposes the password in the process table)
 -   `--json-output`: Output raw JSON response
 
 **Behavior:**
 
 -   **Use when you have forgotten your current password.** If you know it and simply want to change it, use [Change Password](#change-password) instead.
 -   Self-service reset that does not require the current password; available only for Cognito authentication.
--   Run with `--username` only to email a verification code, then run again with `--code` and `--new-password` to set the new password.
--   In interactive mode, prompts for the code and new password after the code is requested, completing both steps in one invocation. With `--json-output`, provide `--code` and `--new-password` together to confirm, or neither to only request a code.
+-   Run with `--username` only to email a verification code, then run again with `--code` and `--new-password-stdin` to set the new password.
+-   In interactive mode, prompts for the code and new password after the code is requested, completing both steps in one invocation. With `--json-output`, provide `--code` and a new password together to confirm, or neither to only request a code.
 -   A successful reset does not sign you in; authenticate afterward with `vamscli auth login`.
 
 #### Status Check
@@ -168,14 +170,14 @@ VamsCLI handles various password challenges:
 
 Cognito can require a password change before the first successful sign-in (for example, for a newly created account or after an administrator resets the password). VamsCLI handles this during `vamscli auth login`:
 
-1. Provide the new password with `--new-password`, or let VamsCLI prompt for it in interactive mode
+1. Provide the new password with `--new-password-stdin`, or let VamsCLI prompt for it in interactive mode (`--new-password <password>` is accepted but exposes the password in the process table)
 2. The new password is set in Cognito while satisfying the sign-in challenge
 3. Authentication continues and tokens are stored
 
-With `--json-output`, prompts are not possible: supply `--new-password`. If a change is required and `--new-password` is not provided, the command returns a JSON error.
+With `--json-output`, prompts are not possible: supply `--new-password-stdin`. If a change is required and no new password is provided, the command returns a JSON error. With both `--password-stdin` and `--new-password-stdin`, standard input carries two lines: the current password, then the new one.
 
 ```bash
-vamscli auth login -u john.doe@example.com -p temporary-password --new-password new-password
+printf '%s\n%s\n' "$TEMP_PASSWORD" "$NEW_PASSWORD" | vamscli auth login -u john.doe@example.com --password-stdin --new-password-stdin
 ```
 
 #### Changing a Password
@@ -187,9 +189,9 @@ Use `vamscli auth change-password` to change a Cognito user's password by signin
 When the current password is unknown, use `vamscli auth forgot-password` for a self-service reset using a verification code emailed by Cognito (see [Forgot Password](#forgot-password)).
 
 1. Run with `--username` only to email a verification code
-2. Run again with `--code` and `--new-password` to set the new password
+2. Run again with `--code` and `--new-password-stdin` to set the new password
 
-In interactive mode, VamsCLI prompts for the code and new password after the code is requested. With `--json-output`, provide `--code` and `--new-password` together to confirm, or neither to only request a code.
+In interactive mode, VamsCLI prompts for the code and new password after the code is requested. With `--json-output`, provide `--code` and a new password together to confirm, or neither to only request a code.
 
 ## Override Token Authentication
 
@@ -207,14 +209,14 @@ Override tokens allow integration with external authentication systems that are 
 #### Persistent Override Token
 
 ```bash
-vamscli auth set-override -u user@example.com --token "your_token"
-vamscli auth set-override -u user@example.com --token "your_token" --expires-at "2024-12-31T23:59:59Z"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "2024-12-31T23:59:59Z"
 ```
 
 **Options:**
 
 -   `-u, --user-id`: User ID associated with the token (required)
--   `--token`: The override token (required)
+-   `--token-stdin`: Read the override token from standard input (recommended; `--token <token>` is accepted but exposes the token in the process table). One of the two is required
 -   `--expires-at`: Token expiration time (optional)
 
 #### Override Token via `auth login`
@@ -251,19 +253,19 @@ Override tokens support flexible expiration time formats:
 #### Unix Timestamp
 
 ```bash
-vamscli auth set-override -u user@example.com --token "token" --expires-at "1735689599"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "1735689599"
 ```
 
 #### ISO 8601 Format
 
 ```bash
-vamscli auth set-override -u user@example.com --token "token" --expires-at "2024-12-31T23:59:59Z"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "2024-12-31T23:59:59Z"
 ```
 
 #### Relative Time
 
 ```bash
-vamscli auth set-override -u user@example.com --token "token" --expires-at "+3600"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin --expires-at "+3600"
 ```
 
 ### Clearing Override Tokens
@@ -278,19 +280,20 @@ This removes the override token and returns to Cognito authentication mode.
 
 ### Storage Locations
 
-Authentication data is stored in OS-appropriate secure locations:
+Each profile keeps its sign-in in `auth_profile.json` in its own directory, `<config>/profiles/<profile>/`, where `<config>` is:
 
--   **Windows**: `%APPDATA%\vamscli\auth_profile.json`
--   **macOS**: `~/Library/Application Support/vamscli/auth_profile.json`
--   **Linux**: `~/.config/vamscli/auth_profile.json`
+-   **Windows**: `%APPDATA%\vamscli`
+-   **macOS**: `~/Library/Application Support/vamscli`
+-   **Linux**: `~/.config/vamscli`
 
-### Security Features
+`--save-credentials` writes the username and password to `credentials.json` in the same directory.
 
--   **Secure Storage**: Uses OS-appropriate secure storage mechanisms
--   **Token Encryption**: Sensitive data is protected
--   **HTTPS Only**: All authentication communication uses HTTPS
--   **No Plaintext Passwords**: Passwords are not stored unless explicitly requested
--   **Automatic Cleanup**: Expired tokens are automatically removed
+### How the Files Are Protected
+
+-   **Owner-only plain JSON**: Both files are plain JSON written with mode `0600`. The CLI uses no OS keychain and does not encrypt them. On Windows the mode has no effect, so the permissions of the folder apply
+-   **Passwords**: A password is stored only with `--save-credentials`, and then in plain text
+-   **Transport**: `vamscli setup` accepts an `https` deployment URL, or plain `http` only for `localhost` or a loopback address
+-   **Expired tokens**: Nothing removes an expired token from the file. `vamscli auth logout` deletes both files
 
 ### Token Types Stored
 
@@ -379,7 +382,7 @@ This shows:
 **Solutions:**
 
 -   Provide a new override token with `vamscli auth set-override`
--   Use one-time override with `--token-override`
+-   Sign in with a new token: `echo "$VAMS_TOKEN" | vamscli auth login --user-id <user-id> --token-override-stdin` (this saves the token; there is no one-time override)
 -   Clear override and use Cognito: `vamscli auth clear-override`
 
 ### MFA Errors
@@ -437,7 +440,7 @@ This shows:
 ```bash
 #!/bin/bash
 # Set override token from environment variable
-vamscli auth set-override -u "$VAMS_USER_ID" --token "$VAMS_TOKEN" --expires-at "+3600"
+echo "$VAMS_TOKEN" | vamscli auth set-override -u "$VAMS_USER_ID" --token-stdin --expires-at "+3600"
 
 # Use CLI commands
 vamscli assets create -d "$DATABASE_ID" --json-input @asset-config.json --json-output
@@ -453,13 +456,13 @@ import subprocess
 import json
 import os
 
-# Set override token
+# Set override token, passed on stdin so it is not in the process's arguments
 subprocess.run([
     'vamscli', 'auth', 'set-override',
     '-u', os.environ['VAMS_USER_ID'],
-    '--token', os.environ['VAMS_TOKEN'],
+    '--token-stdin',
     '--expires-at', '+7200'
-])
+], input=os.environ['VAMS_TOKEN'], text=True, check=True)
 
 # Use CLI with JSON output
 result = subprocess.run([
@@ -489,8 +492,8 @@ vamscli --profile production auth status
 vamscli --profile staging auth status
 
 # Set override tokens for different profiles
-vamscli --profile production auth set-override -u user@example.com --token "prod_token"
-vamscli --profile staging auth set-override -u user@example.com --token "staging_token"
+echo "$PROD_TOKEN" | vamscli --profile production auth set-override -u user@example.com --token-stdin
+echo "$STAGING_TOKEN" | vamscli --profile staging auth set-override -u user@example.com --token-stdin
 ```
 
 ### Profile Authentication Features

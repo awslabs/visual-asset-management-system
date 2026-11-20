@@ -37,8 +37,14 @@ jest.mock("../../services/ComplianceService", () => ({
 // The compliance schema field gates on this hook. The outcome tests deny it to stay on the save; the
 // binding tests allow the schema list and the asset binding route.
 let mockCanBind = false;
+// Routes refused even when mockCanBind allows the others, as "METHOD path-template".
+let mockRefused: string[] = [];
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => mockCanBind }),
+    useAllowedRoutes: () => ({
+        loading: false,
+        can: (method: string, path: string) =>
+            mockCanBind && !mockRefused.includes(`${method} ${path}`),
+    }),
 }));
 
 const { updateAsset } = jest.requireMock("../../services/APIService");
@@ -104,12 +110,19 @@ const chooseSchema = (index: number) => {
     });
 };
 
-const schemaOptionsLoaded = () =>
-    waitFor(() => expect(compliance.fetchComplianceSchemas).toHaveBeenCalled());
+// The schemas and the asset's override are read; the field is offered once both answered.
+const schemaOptionsLoaded = async () => {
+    await waitFor(() => expect(compliance.fetchComplianceSchemas).toHaveBeenCalled());
+    await waitFor(() => expect(compliance.fetchComplianceState).toHaveBeenCalled());
+    await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+};
 
 beforeEach(() => {
     jest.clearAllMocks();
     mockCanBind = false;
+    mockRefused = [];
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     compliance.fetchComplianceSchemas.mockResolvedValue([
         true,
@@ -376,5 +389,106 @@ describe("Update Asset of an archived asset", () => {
         await waitFor(() => expect(onComplete).toHaveBeenCalled());
         expect(compliance.bindSchemaToAsset).toHaveBeenCalledWith("db1", "asset1", "std");
         expect(requestedDatabaseIds()).not.toContain("db1#deleted");
+    });
+});
+
+describe("Update Asset when a compliance read fails", () => {
+    beforeEach(() => {
+        mockCanBind = true;
+    });
+
+    const schemaSelect = () =>
+        present(formField("Compliance Schema").findControl()?.findSelect(), "schema select");
+
+    it("does not offer the schema while the override is unknown, and saves the fields only", async () => {
+        compliance.fetchComplianceState.mockResolvedValue([false, "Not Authorized"]);
+        updateAsset.mockResolvedValue([true, "Asset updated"]);
+        const { onComplete } = mount();
+        expect(
+            await screen.findByText(
+                `Could not load the ${Synonyms.asset}'s compliance schema: Not Authorized`
+            )
+        ).toBeInTheDocument();
+        expect(schemaSelect().isDisabled()).toBe(true);
+
+        editDescription("an edited description");
+        submit();
+        await waitFor(() => expect(onComplete).toHaveBeenCalled());
+        expect(updateAsset).toHaveBeenCalledTimes(1);
+        expect(compliance.bindSchemaToAsset).not.toHaveBeenCalled();
+        expect(compliance.unbindSchemaFromAsset).not.toHaveBeenCalled();
+    });
+
+    it("reads the override again on Retry and then offers the field", async () => {
+        compliance.fetchComplianceState
+            .mockResolvedValueOnce([false, "Internal Server Error"])
+            .mockResolvedValue([true, { schemaSource: "asset", schemaName: "std" }]);
+        mount();
+        await screen.findByText(
+            `Could not load the ${Synonyms.asset}'s compliance schema: Internal Server Error`
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(schemaSelect().isDisabled()).toBe(false));
+        expect(schemaSelect().findTrigger().getElement()).toHaveTextContent("std");
+    });
+
+    it("says the schemas could not be loaded when their read fails", async () => {
+        compliance.fetchComplianceSchemas.mockResolvedValue([false, "Not Authorized"]);
+        mount();
+        expect(
+            await screen.findByText("Could not load the compliance schemas: Not Authorized")
+        ).toBeInTheDocument();
+    });
+});
+
+describe("Update Asset compliance schema field by route", () => {
+    beforeEach(() => {
+        mockCanBind = true;
+    });
+
+    const optionLabels = () => {
+        const select = present(
+            formField("Compliance Schema").findControl()?.findSelect(),
+            "schema select"
+        );
+        act(() => {
+            select.openDropdown();
+        });
+        return select
+            .findDropdown()
+            .findOptions()
+            .map((option) => option.getElement().textContent);
+    };
+
+    it("is not offered to a role that may not read the asset's compliance state", async () => {
+        mockRefused = ["GET /compliance/state/{databaseId}/{assetId}"];
+        mount();
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(
+            createWrapper()
+                .findAllFormFields()
+                .some((f) => f.findLabel()?.getElement().textContent === "Compliance Schema")
+        ).toBe(false);
+        expect(compliance.fetchComplianceState).not.toHaveBeenCalled();
+    });
+
+    it("does not offer Inherit for an override the role may not remove", async () => {
+        mockRefused = ["DELETE /compliance/bind/{databaseId}/{assetId}"];
+        compliance.fetchComplianceState.mockResolvedValue([
+            true,
+            { schemaSource: "asset", schemaName: "std" },
+        ]);
+        mount();
+        await schemaOptionsLoaded();
+        expect(optionLabels().some((label) => label?.includes("Inherit"))).toBe(false);
+    });
+
+    it("offers Inherit while the asset has no override, since choosing it removes nothing", async () => {
+        mockRefused = ["DELETE /compliance/bind/{databaseId}/{assetId}"];
+        mount();
+        await schemaOptionsLoaded();
+        expect(optionLabels().some((label) => label?.includes("Inherit"))).toBe(true);
     });
 });

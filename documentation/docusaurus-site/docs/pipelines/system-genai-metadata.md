@@ -426,7 +426,7 @@ A database with **Restrict metadata outside schemas** (`restrictMetadataOutsideS
 The restriction applies to the writes a person or an API client makes, and only to keys that are new to the record: a key already stored on the file or asset passes later writes, including a change to its value, so the `genai_*` keys the pipeline wrote do not block editing the record ([#968](https://github.com/awslabs/visual-asset-management-system/issues/968)). A write that adds a key no schema gives the entity is refused with the metadata service's message, for example when a person adds back a pipeline key they deleted:
 
 ```text
-Field 'genai_title' is not defined in the metadata schema. Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled.
+A field is not defined in the metadata schema. Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled.
 ```
 
 To make the pipeline's metadata fields schema fields on such a database, typed and addable by hand, declare them in a schema once. The two arrays below list every **metadata** field with its `metadataFieldValueType` — the `ext_*` facts and the run's provenance rows are attributes, which schemas do not govern; the first is a `fileMetadata` schema, the second an `assetMetadata` schema. Save each as a file and create the schemas — no field is required, so files the pipeline has not analyzed still validate:

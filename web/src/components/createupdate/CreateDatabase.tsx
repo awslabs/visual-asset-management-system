@@ -33,6 +33,7 @@ import {
     REMOVE_BINDING_HEADER,
     removeBindingConfirmation,
 } from "../compliance/bindingConfirmations";
+import { loadFailureMessage } from "../compliance/listingStates";
 
 // Compliance routes behind the schema-binding field; the field is shown only when the caller
 // may list schemas and bind one to the database.
@@ -212,16 +213,28 @@ export default function CreateDatabase({
         retry: retryPermissions,
         can: canCallRoute,
     } = useAllowedRoutes();
-    // Compliance schema binding
+    // Compliance schema binding. Editing a database reads its current binding first, so the field
+    // also needs the binding's GET there; a new database has no binding to read.
     const canBindComplianceSchema =
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
-        canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE);
+        canCallRoute("PUT", COMPLIANCE_BIND_DATABASE_API_ROUTE) &&
+        (!initState?.databaseId || canCallRoute("GET", COMPLIANCE_BIND_DATABASE_API_ROUTE));
+    // None removes a bound schema through the binding's DELETE; while none is bound it removes
+    // nothing, so it stays offered then.
+    const canUnbindComplianceSchema = canCallRoute("DELETE", COMPLIANCE_BIND_DATABASE_API_ROUTE);
     const canListBuckets = canCallRoute("GET", BUCKETS_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
 
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
+    // Whether the schema list and the database's binding were read. The field is offered only once
+    // the binding is known (a new database has none), so a choice is never compared against a
+    // binding the form could not read. A failure shows its reason and a Retry, which reads both again.
+    const [schemasError, setSchemasError] = useState<string | null>(null);
+    const [bindingStatus, setBindingStatus] = useState<"loading" | "loaded" | "failed">("loading");
+    const [bindingError, setBindingError] = useState<string | null>(null);
+    const [complianceReadAttempt, setComplianceReadAttempt] = useState(0);
     // The confirmation shown before a bound schema is removed (None chosen).
     const [confirmUnbind, setConfirmUnbind] = useState(false);
 
@@ -229,13 +242,16 @@ export default function CreateDatabase({
     // mounted while closed.
     useEffect(() => {
         if (!open || !canBindComplianceSchema) return;
+        let cancelled = false;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
+            setSchemasError(null);
             // Only GLOBAL schemas and this database's own can be bound to it; a new database
             // has none of its own yet.
             const [success, result] = await fetchComplianceSchemas(
                 initState?.databaseId || "GLOBAL"
             );
+            if (cancelled) return;
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     bindableSchemas(result).map((s) => ({
@@ -244,25 +260,46 @@ export default function CreateDatabase({
                         description: s.description,
                     }))
                 );
+            } else {
+                setSchemaOptions([]);
+                setSchemasError(loadFailureMessage("the compliance schemas", result));
             }
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [open, canBindComplianceSchema, initState?.databaseId]);
+        return () => {
+            cancelled = true;
+        };
+    }, [open, canBindComplianceSchema, initState?.databaseId, complianceReadAttempt]);
 
-    // Load current schema binding when editing
+    // Load current schema binding when editing; a new database has none.
     useEffect(() => {
-        if (!open || !canBindComplianceSchema || !initState?.databaseId) return;
+        if (!open || !canBindComplianceSchema) return;
+        if (!initState?.databaseId) {
+            setBindingStatus("loaded");
+            return;
+        }
+        let cancelled = false;
         const loadBinding = async () => {
+            setBindingStatus("loading");
+            setBindingError(null);
             const [success, result] = await getDatabaseBindings(initState.databaseId);
+            if (cancelled) return;
             if (success && typeof result !== "string") {
                 const bound = result.databaseSchema || null;
                 setSelectedSchema(bound ? { label: bound, value: bound } : null);
                 setInitialSchemaValue(bound);
+                setBindingStatus("loaded");
+            } else {
+                setBindingStatus("failed");
+                setBindingError(loadFailureMessage("the compliance schema binding", result));
             }
         };
         loadBinding();
-    }, [open, canBindComplianceSchema, initState?.databaseId]);
+        return () => {
+            cancelled = true;
+        };
+    }, [open, canBindComplianceSchema, initState?.databaseId, complianceReadAttempt]);
 
     // The list page mounts this form with the list, so the bucket list is read only once the form
     // opens, and only for a role allowed GET /buckets; any other role would get a 403 on every load.
@@ -382,7 +419,10 @@ export default function CreateDatabase({
     const submit = async (unbindConfirmed = false) => {
         const selectedValue = (selectedSchema?.value as string | undefined) || null;
         const sendSave = savedState === null || !sameDatabaseFields(formState, savedState);
-        const sendBinding = canBindComplianceSchema && selectedValue !== initialSchemaValue;
+        const sendBinding =
+            canBindComplianceSchema &&
+            bindingStatus === "loaded" &&
+            selectedValue !== initialSchemaValue;
         if (!sendSave && !sendBinding) {
             closeModal();
             return;
@@ -619,6 +659,20 @@ export default function CreateDatabase({
                                     label="Compliance Schema"
                                     description={`Bind a compliance schema to this ${Synonyms.database}. All ${Synonyms.assets} in the ${Synonyms.database} inherit this schema unless overridden at the ${Synonyms.asset} level. Offered: the GLOBAL schemas and those available to this ${Synonyms.database} only.`}
                                     constraintText="Optional. Schema can be changed later."
+                                    errorText={bindingError || schemasError || undefined}
+                                    secondaryControl={
+                                        bindingError || schemasError ? (
+                                            <Button
+                                                onClick={() =>
+                                                    setComplianceReadAttempt(
+                                                        (attempt) => attempt + 1
+                                                    )
+                                                }
+                                            >
+                                                Retry
+                                            </Button>
+                                        ) : undefined
+                                    }
                                 >
                                     <Select
                                         selectedOption={selectedSchema}
@@ -630,13 +684,20 @@ export default function CreateDatabase({
                                             )
                                         }
                                         options={[
-                                            { label: "None (no compliance schema)", value: "" },
+                                            ...(canUnbindComplianceSchema || !initialSchemaValue
+                                                ? [
+                                                      {
+                                                          label: "None (no compliance schema)",
+                                                          value: "",
+                                                      },
+                                                  ]
+                                                : []),
                                             ...schemaOptions,
                                         ]}
                                         placeholder="Select a compliance schema"
                                         loadingText="Loading schemas"
                                         statusType={loadingSchemas ? "loading" : "finished"}
-                                        disabled={inProgress}
+                                        disabled={inProgress || bindingStatus !== "loaded"}
                                         filteringType="auto"
                                         data-testid="database-compliance-schema"
                                     />

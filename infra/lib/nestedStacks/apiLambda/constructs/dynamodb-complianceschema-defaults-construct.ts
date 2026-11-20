@@ -74,6 +74,9 @@ const DEFAULT_COMPLIANCE_SCHEMA_ITEM = {
     schemaBody: { S: JSON.stringify(DEFAULT_COMPLIANCE_SCHEMA) },
     registeredBy: { S: "SYSTEM_USER" },
     isSystem: { BOOL: true },
+    // The latest-version marker the schema listing reads (LatestVersionIndex): version 1 is the
+    // latest until a save replaces it.
+    latestVersion: { S: "latest" },
 };
 
 /**

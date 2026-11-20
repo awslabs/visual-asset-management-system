@@ -34,6 +34,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    tagEcsTaskDefinition,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs"; // remove once ECS cluster is moved to VAMS vpc
 
@@ -386,6 +391,11 @@ export class RapidPipelineConstruct extends NestedStack {
             memoryLimitMiB: 16384, // 16 GB
             cpu: 2048, // 2 vCPU
         });
+        // Each task the state machine starts takes these by propagation (propagatedTagSource below).
+        tagEcsTaskDefinition(
+            taskDefinition,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.rapidPipelineEcs)
+        );
 
         const containerDefinition = taskDefinition.addContainer(
             "RapidPipelineContainerDefinition",

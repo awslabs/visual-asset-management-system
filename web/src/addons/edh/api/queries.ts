@@ -6,7 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as workstationService from "./workstations";
 import * as catalogService from "./catalog";
-import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
+import { callService, mayHaveTakenEffect } from "./outcome";
 import { isStartStalled } from "../labels";
 import type {
     CapacityReservationView,
@@ -61,19 +61,6 @@ export function computeWorkstationRefetchInterval(
     return rows.some(isTransitionalWorkstation)
         ? WORKSTATION_POLL_TRANSITIONAL_MS
         : WORKSTATION_POLL_STABLE_MS;
-}
-
-// Helper to throw on service [false, msg] tuple for query error state
-async function callService<T>(
-    serviceFn: () => Promise<[boolean, T | string | EdhRequestError]>
-): Promise<T> {
-    const [ok, data] = await serviceFn();
-    if (!ok) {
-        // An EdhRequestError is thrown as it is: its status and body say whether EDH confirmed it.
-        if (data instanceof Error) throw data;
-        throw new Error(typeof data === "string" ? data : "Service call failed");
-    }
-    return data as T;
 }
 
 export function useWorkstations() {

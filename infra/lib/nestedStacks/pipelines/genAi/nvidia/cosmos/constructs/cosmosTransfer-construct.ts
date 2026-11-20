@@ -40,6 +40,12 @@ import {
     suppressCdkNagEcrAuthTokenWildcard,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../../constructs/pipelineJobTags";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
@@ -627,7 +633,11 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
                 resultPath: "$.error",
             });
 
-            const batchJob = new tasks.BatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
+            const batchJob = new TaggedBatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
+                jobTags: pipelineJobTags(
+                    props.config,
+                    VAMS_PIPELINE_TAG_VALUES.nvidiaCosmosTransfer
+                ),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchJobDefinition.attrJobDefinitionArn,
                 jobQueueArn: batchJobQueue.ref,
@@ -684,6 +694,7 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
                 }
             );
 
+            suppressBatchJobTaggingNag(pipelineStateMachine);
             // The Batch `.sync` integration polls the submitted job and cancels it when the
             // execution stops. Batch job ids are runtime-generated with no name pattern to
             // scope on, so both actions take a wildcard resource.
