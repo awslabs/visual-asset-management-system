@@ -510,7 +510,7 @@ def reconcile(monkeypatch):
         monkeypatch.setattr(
             pfs,
             "_resolve_asset_from_s3_event",
-            lambda bucket, key: {
+            lambda bucket, key, record=None: {
                 "databaseId": DB,
                 "assetId": ASSET,
                 "relativePath": RELATIVE,
@@ -618,7 +618,7 @@ def stale_reupload(monkeypatch):
         monkeypatch.setattr(
             pfs,
             "_resolve_asset_from_s3_event",
-            lambda bucket, key: {
+            lambda bucket, key, record=None: {
                 "databaseId": DB,
                 "assetId": ASSET,
                 "relativePath": RELATIVE,

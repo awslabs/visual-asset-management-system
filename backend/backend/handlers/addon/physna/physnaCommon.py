@@ -924,6 +924,7 @@ def delete_folder_if_empty(
 from boto3.dynamodb.conditions import Key
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3 import region_routing_s3_client, bucket_region_fields
+from common.assetLocations import normalize_base_prefix
 
 _dynamodb = boto3.resource("dynamodb", config=_retry_config)
 _s3_client = region_routing_s3_client()
@@ -1057,11 +1058,7 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
     if not items:
         return None
     bucket = items[0]
-    base_prefix = bucket.get("baseAssetsPrefix", "/")
-    if not base_prefix.endswith("/"):
-        base_prefix += "/"
-    if base_prefix.startswith("/"):
-        base_prefix = base_prefix[1:]
+    base_prefix = normalize_base_prefix(bucket.get("baseAssetsPrefix", "/"))
     return {
         "bucketId": bucket_id,
         "bucketName": bucket.get("bucketName"),
@@ -1081,20 +1078,20 @@ def get_bucket_details_by_name(bucket_name: str) -> Optional[Dict[str, Any]]:
     """
     if not bucket_name:
         return None
-    response = s3_asset_buckets_table.query(
-        IndexName="bucketNameGSI",
-        KeyConditionExpression=Key("bucketName").eq(bucket_name),
-        Limit=1,
-    )
-    items = response.get("Items", [])
+    query_kwargs = {"IndexName": "bucketNameGSI", "KeyConditionExpression": Key("bucketName").eq(bucket_name)}
+    items: list = []
+    while True:
+        response = s3_asset_buckets_table.query(**query_kwargs)
+        items.extend(response.get("Items", []))
+        if "LastEvaluatedKey" not in response:
+            break
+        query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
     if not items:
         return None
-    bucket = items[0]
-    base_prefix = bucket.get("baseAssetsPrefix", "/")
-    if not base_prefix.endswith("/"):
-        base_prefix += "/"
-    if base_prefix.startswith("/"):
-        base_prefix = base_prefix[1:]
+    if len(items) > 1:
+        logger.warning(f"Bucket {bucket_name} has {len(items)} registrations; using the first by prefix")
+    bucket = sorted(items, key=lambda r: str(r.get("baseAssetsPrefix") or ""))[0]
+    base_prefix = normalize_base_prefix(bucket.get("baseAssetsPrefix", "/"))
     return {
         "bucketId": bucket.get("bucketId"),
         "bucketName": bucket.get("bucketName") or bucket_name,
@@ -1144,14 +1141,7 @@ def get_database_id_for_asset_id(
         )
         return None
 
-    def _normalize_prefix(prefix: Optional[str]) -> str:
-        prefix = prefix or ""
-        if prefix and not prefix.endswith("/"):
-            prefix += "/"
-        if prefix.startswith("/"):
-            prefix = prefix[1:]
-        return prefix
-
+    _normalize_prefix = normalize_base_prefix
     event_prefix = _normalize_prefix(base_assets_prefix)
 
     matches: list = []

@@ -47,7 +47,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
-from common.s3PathPatterns import join_asset_location_key
+from common.assetLocations import object_key_for
 from common.syncTracking import (
     SYNC_ACTION_DELETE,
     SYNC_ACTION_MODIFY,
@@ -230,7 +230,7 @@ def _vams_file_is_permanently_gone(
         return False
     return (
         physnaFileSync._vams_file_still_in_s3(
-            bucket_name, [join_asset_location_key(asset_base_key, relative)]
+            bucket_name, [object_key_for(asset_base_key, relative)]
         )
         is False
     )
@@ -324,7 +324,7 @@ def _upload_missing_physna_files(
             asset_id,
             relative,
             bucket_name,
-            join_asset_location_key(asset_base_key, relative),
+            object_key_for(asset_base_key, relative),
         ):
             uploads_complete = False
 
@@ -525,7 +525,7 @@ def _sync_asset_metadata_to_physna(
                 VAMS_RESERVED_FILE_VERSION_KEY
             )
             if not existing_file_version and asset_base_key and not is_archived:
-                s3_key = join_asset_location_key(asset_base_key, relative)
+                s3_key = object_key_for(asset_base_key, relative)
                 logger.info(
                     f"Physna asset for {path} is missing "
                     f"__VAMS__FileVersion; treating as stale and re-"
