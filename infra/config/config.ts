@@ -1342,6 +1342,24 @@ export function applyZipDownloadsDefaults(config: ConfigPublic): void {
 }
 
 /**
+ * Reject an app.pipelines.useImageTo3d.modelCacheGeneration that is not a whole number of 0 or more. The
+ * value becomes a path segment of the model cache's EFS directory and S3 prefix (`hf_cache/g<N>/<model>`),
+ * which the container composes by the same rule and refuses to run when they disagree.
+ */
+export function validateImageTo3dModelCacheGeneration(
+    block: ConfigPublic["app"]["pipelines"]["useImageTo3d"]
+): void {
+    const generation = block.modelCacheGeneration;
+    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) {
+        const shown = JSON.stringify(generation);
+        throw new Error(
+            `Configuration Error: useImageTo3d.modelCacheGeneration must be a whole number of 0 or ` +
+                `more, not ${shown}. Raise it by one to start every model on an empty weight cache.`
+        );
+    }
+}
+
+/**
  * app.pipelines.useConversion3dBasic.enableStepInput: absent or null is false, so a config.json written
  * before the key keeps an image without Open CASCADE; any other value must be a JSON boolean.
  */
@@ -2456,6 +2474,7 @@ export function getConfig(app: cdk.App): Config {
                 "g5.8xlarge",
             ],
             maxVCpus: 48,
+            modelCacheGeneration: 0,
             models: {
                 sam3d: { enabled: false },
                 // Stable3DGen is the default model: it builds from wheels alone, carries no
@@ -2499,6 +2518,9 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.pipelines.useImageTo3d.enabled == undefined) {
         config.app.pipelines.useImageTo3d.enabled = false;
+    }
+    if (config.app.pipelines.useImageTo3d.modelCacheGeneration == undefined) {
+        config.app.pipelines.useImageTo3d.modelCacheGeneration = 0;
     }
 
     // Deadline Cloud pipeline execution-type support (workflow createJob task states +
@@ -3674,6 +3696,8 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: useImageTo3d.instanceTypes must be a non-empty array."
             );
         }
+
+        validateImageTo3dModelCacheGeneration(config.app.pipelines.useImageTo3d);
 
         // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
         // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
@@ -6776,6 +6800,10 @@ export interface ConfigPublic {
                 autoTriggerOnFileExtensionsUpload: string;
                 instanceTypes: string[];
                 maxVCpus: number;
+                // Raise by one to start every model on an empty weight cache at its next run: generation N
+                // reads and writes `hf_cache/gN/<model>` on EFS and `imageTo3d/hf_cache/gN/<model>/` in S3,
+                // and 0 uses `hf_cache/<model>` and `imageTo3d/hf_cache/<model>/`. Running jobs keep theirs.
+                modelCacheGeneration: number;
                 models: {
                     sam3d: { enabled: boolean };
                     stable3dgen: { enabled: boolean };

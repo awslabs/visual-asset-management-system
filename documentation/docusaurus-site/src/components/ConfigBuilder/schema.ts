@@ -2226,6 +2226,16 @@ const CORE_FIELDS: FieldMeta[] = [
         min: 1,
         visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
     },
+    {
+        path: `${IMAGETO3D}.modelCacheGeneration`,
+        label: "Image to 3D — model cache generation",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 0,
+        help: "Raise by one and deploy to start every model on an empty weight cache (new EFS directory and S3 prefix). Runs already in flight keep the old cache; remove it yourself afterwards.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
     ...imageTo3dModelFields.map((f) => ({
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.enabled`),
