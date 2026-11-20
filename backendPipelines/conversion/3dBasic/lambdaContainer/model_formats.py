@@ -370,7 +370,27 @@ def apply_plan(loaded, plan):
     matrix = units_axes.transform_matrix(plan)
     if matrix is None:
         return
-    loaded.apply_transform(np.array(matrix, dtype=np.float64))
+    matrix = np.array(matrix, dtype=np.float64)
+    import trimesh
+    if isinstance(loaded, trimesh.Scene):
+        _apply_scene_transform(loaded, matrix)
+    else:
+        loaded.apply_transform(matrix)
+
+
+def _apply_scene_transform(scene, matrix):
+    """``Scene.apply_transform`` in time linear in the scene's nodes. trimesh's own reads each child's
+    matrix through the graph cache, which is rebuilt after every update, so a scene of many top-level
+    nodes took minutes. The edges below the base frame are read from the graph's own data first, then
+    updated as trimesh does (the same edges, the same matrices)."""
+    graph = scene.graph
+    base = graph.base_frame
+    edges = graph.transforms.edge_data
+    identity = np.eye(4)
+    combined = [(child, np.dot(matrix, edges[(base, child)].get("matrix", identity)))
+                for child in list(graph.transforms.children[base])]
+    for child, value in combined:
+        graph.update(frame_from=base, frame_to=child, matrix=value)
 
 
 def _meshes(loaded):

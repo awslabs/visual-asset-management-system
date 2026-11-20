@@ -16,6 +16,7 @@ import sys
 import time
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -406,3 +407,38 @@ over "A"
         monkeypatch.setattr(usd_io, "read_usd", fake_read)
         assert model_formats.load_model(job, MagicMock()) == ("scene", 1.0, 'y')
         assert 70 < seen["remaining"] <= 75
+
+
+# --------------------------------------------------------------------------------------------------
+# The unit and axis transform of a scene of many nodes
+# --------------------------------------------------------------------------------------------------
+
+def _scene_of(count):
+    scene = trimesh.Scene()
+    box = trimesh.creation.box()
+    for i in range(count):
+        offset = np.eye(4)
+        offset[:3, 3] = (i, 2 * i, 0)
+        scene.add_geometry(box, node_name=f"n{i}", geom_name="box", transform=offset)
+    return scene
+
+
+@pytest.mark.unit
+class TestSceneTransform:
+    def test_the_transform_matches_trimesh(self):
+        matrix = trimesh.transformations.rotation_matrix(0.5, [1, 0, 0])
+        matrix[:3, :3] *= 0.01
+        ours, theirs = _scene_of(20), _scene_of(20)
+        model_formats._apply_scene_transform(ours, matrix)
+        theirs.apply_transform(matrix)
+        for i in range(20):
+            assert np.allclose(ours.graph[f"n{i}"][0], theirs.graph[f"n{i}"][0])
+            assert ours.graph[f"n{i}"][1] == theirs.graph[f"n{i}"][1]
+        assert np.allclose(ours.bounds, theirs.bounds)
+
+    def test_a_scene_of_many_nodes_is_transformed_in_seconds(self):
+        scene = _scene_of(5_000)
+        started = time.monotonic()
+        model_formats._apply_scene_transform(scene, np.diag([0.01, 0.01, 0.01, 1.0]))
+        assert time.monotonic() - started < 5
+        assert np.allclose(scene.graph["n4999"][0][:3, 3], (49.99, 99.98, 0))
