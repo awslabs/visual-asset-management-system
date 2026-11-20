@@ -71,7 +71,8 @@ def register(
         `sessionId` (null until EDH assigns it), `name`, `state` (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED),
         `activity` (`starting` from a start until the desktop is connectable, `stopping`, or null),
         `instanceType`, `osFamily`, `connectionAvailable`, `connectionUnavailableReason`
-        (`DISPLAY_SESSION_ENDED`: stop, then start, to reconnect), the lease fields and the capacity
+        (`DISPLAY_SESSION_ENDED`: stop, then start, to reconnect; `DESKTOP_ERROR`: in error in EDH, disk
+        kept: wait, or stop, then start), the lease fields and the capacity
         reservation fields (`capacityReservationFallbackReason` `full` or `ended`).
 
         `lastError` says why a launch ended ORPHANED (e.g. CAPACITY_UNAVAILABLE, QUOTA_EXCEEDED) or why a
@@ -99,7 +100,8 @@ def register(
         among its codes), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
         checkpoint, VAMS captured from EDH for a failed launch; null when none was captured),
         `connectionAvailable`,
-        `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended), and
+        `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended,
+        `DESKTOP_ERROR` when EDH reports the workstation in error), and
         the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
         `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row does. Reading it makes
         EDH issue no connection
@@ -335,7 +337,8 @@ def register(
             connectionUrl, osFamily}`. A workstation that is not connectable is refused (409); one whose
             display session has ended with `error_type` `EdhDisplaySessionEndedError`, `code`
             `DISPLAY_SESSION_ENDED`: stop it, then start it again (stop_edh_workstation, then
-            start_edh_workstation). Each call makes EDH issue at most one connection token per request EDH
+            start_edh_workstation); one EDH reports in error with `error_type` `EdhDesktopErrorError`, `code`
+            `DESKTOP_ERROR`: its disk is kept, so wait a few minutes or stop it, then start it again. Each call makes EDH issue at most one connection token per request EDH
             answers, for this desktop.
 
             `connectionUrl` is a CREDENTIAL (a DCV session auth token): anyone holding it can open the desktop
@@ -407,8 +410,10 @@ def register(
             start keeps the
             launch image). Follow it with list_edh_workstations until ACTIVE. A refused start leaves the row
             STOPPED with `lastError` CAPACITY_UNAVAILABLE (start again later), RESERVATION_FULL,
-            RESERVATION_ENDED or START_FAILED and `startFailure`; the desktop is never deleted for a refused
+            RESERVATION_ENDED or START_FAILED and `startFailure`, as does one EC2 took and then stopped; the
+            desktop is never deleted for a refused
             start. START_STALLED on a CREATING row: stop it with stop_edh_workstation, then start it again.
+            `EdhDesktopErrorError` (409): EDH reports it in error; stop it, then start it.
             `EdhOutcomeUnknownError`: the start may still be under way; list before retrying.
             `EdhStartInProgressError` (409): another start is being processed; list again, and start again
             if it still shows stopped after 5 minutes."""
