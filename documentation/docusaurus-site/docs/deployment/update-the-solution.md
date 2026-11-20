@@ -922,6 +922,10 @@ A v2.5 deployment can deploy v2.7 directly. Follow the [v2.5 to v2.6](#v25-to-v2
 -   **Two new DynamoDB tables and two new auto-named Amazon SQS queue pairs.** `VectorEmbeddingsStorageTable` (created on every deployment; its vector index only when `app.vectorSearch.enabled`) and `WorkflowExecutionLocksStorageTable` are added with `RETAIN`; the vector indexer and system-workflow launch queues, each with a dead-letter queue, exist only when vector search is enabled. Back up the new tables like every other table before later updates.
 -   **The system workflow uses `concurrencyRestriction: perInputFileVersion`.** Executing it twice for the same file version answers `400 A conflicting execution of this workflow is already running for this file version.`; a newer version of the same file runs concurrently. The value is available to your own workflows as well.
 
+**Behaviour changes:**
+
+-   **Unarchiving a single-file asset restores the asset's own files.** Unarchiving a single-file asset restores only the files it holds: its file, its previews and its companion folder. A file outside the asset that an earlier archive of it also marked as archived, a key that only starts with the asset's key such as `model.glb.bak`, is unarchived one file at a time. A file that a permanent delete of such an asset removed before this release cannot be restored.
+
 **Required migration steps:**
 
 1.  Abort or drain in-flight executions of the two retired workflows **before** deploying. The deploy deletes the retired pipelines' inner state machines and log groups; an execution caught mid-flight stays `RUNNING` until its workflow task times out (18,000 s for GenAI 3D Metadata Labeling, 900 s for CAD/Mesh Metadata Extraction), then turns `FAILED`, and its full-mode sub-process logs are gone. List and abort them:
