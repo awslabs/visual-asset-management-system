@@ -7,16 +7,6 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
-            "path": "backendPipelines/preview/pcPotreeViewer/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/pcPotreeViewer/container/utils/requirements.txt",
-            "reason": "Requirements of the Potree container's utils package; folded into the container's lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
             "path": "tools/VamsCLI/pyproject.toml",
             "reason": "Published package with ranged dependencies by design; gets a development-only uv.lock for audit.",
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
