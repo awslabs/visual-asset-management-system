@@ -144,7 +144,8 @@ class TestAssetTypeAfterUpload:
         with patch.object(module, "list_all_objects", side_effect=fake), \
                 patch.object(module, "is_file_archived", return_value=False):
             assert module.determine_asset_type("asset-1", "bucket", FILE_LOCATION) == ".glb"
-        assert all(max_objects == 1 for prefix, max_objects in calls if prefix == FILE_LOCATION), calls
+        # The location itself is read once, as a one-key listing
+        assert [max_objects for prefix, max_objects in calls if prefix == FILE_LOCATION] == [1], calls
 
     @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
     def test_a_companion_file_makes_a_folder(self, module_name):
