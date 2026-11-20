@@ -112,6 +112,7 @@ describe("the add-on switches reach the listing Lambdas", () => {
                 ADDON_APP_FEATURES.EDH_WORKSTATIONS,
                 ADDON_APP_FEATURES.EDH_CONTAINERS,
                 ADDON_APP_FEATURES.EDH_AMI_RECIPES,
+                ADDON_APP_FEATURES.MIRIS_ADDON,
                 CORE_FEATURES.AUDITLOGSEARCH,
             ].join(",")
         );

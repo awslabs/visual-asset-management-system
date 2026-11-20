@@ -44,6 +44,7 @@ ASSET_BUCKET_HANDLERS = [
     "handlers/osVectorSearch/vectorIndexer.py", "handlers/osVectorSearch/vectorReindexer.py",
     "handlers/addon/garnetFramework/garnetDataIndexFile.py",
     "handlers/addon/physna/physnaCommon.py", "handlers/addon/physna/physnaFileSync.py",
+    "handlers/addon/miris/getAssetStatus.py",
     "handlers/pipelines/pipelineTemplateService.py",
     "handlers/compliance/complianceEvaluationStore.py", "handlers/compliance/complianceTrigger.py",
 ]
@@ -67,6 +68,7 @@ BUCKET_DETAILS_HELPERS = [
     ("handlers/addon/garnetFramework/garnetDataIndexFile.py", "get_bucket_details"),
     ("handlers/addon/physna/physnaCommon.py", "get_bucket_details"),
     ("handlers/addon/physna/physnaCommon.py", "get_bucket_details_by_name"),
+    ("handlers/addon/miris/getAssetStatus.py", "get_asset_bucket_details"),
 ]
 
 
@@ -148,7 +150,7 @@ class TestNoDeploymentRegionS3ClientInAssetHandlers:
         assert plain == [], (
             f"{relative} builds a plain S3 client ({plain}); use common.s3.region_routing_s3_client() / "
             f"region_routing_s3_resource() so calls are signed for each bucket's Region")
-        assert re.search(r"= region_routing_s3_(client|resource)\(\)", source), (
+        assert re.search(r"= region_routing_s3_(client|resource)\(", source), (
             f"{relative} holds no Region-routing S3 client")
 
     def test_no_handler_sets_the_regional_endpoint_variable_itself(self):

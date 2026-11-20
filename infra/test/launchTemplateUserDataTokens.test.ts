@@ -28,8 +28,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-
-const PIPELINES_DIR = path.join(__dirname, "..", "lib", "nestedStacks", "pipelines");
+import { PIPELINE_SOURCE_DIRS, pipelineSourceLabel } from "./support/addonPipelines";
 
 /** Every .ts file under the pipelines tree. */
 function pipelineSources(dir: string): string[] {
@@ -49,13 +48,13 @@ function pipelineSources(dir: string): string[] {
 const TOKEN_INTERPOLATIONS = [/\$\{[^}]*fileSystemId\}/, /\$\{[^}]*bucketName\}/, /\$\{region\}/];
 
 describe("launch template user data", () => {
-    const sources = pipelineSources(PIPELINES_DIR);
+    const sources = PIPELINE_SOURCE_DIRS.flatMap(pipelineSources);
 
     test("the pipelines tree is being read", () => {
         expect(sources.length).toBeGreaterThan(5);
     });
 
-    test.each(sources.map((file) => [path.relative(PIPELINES_DIR, file), file]))(
+    test.each(sources.map((file) => [pipelineSourceLabel(file), file]))(
         "%s encodes token-bearing user data through CloudFormation",
         (_relative, file) => {
             const source = fs.readFileSync(file, "utf-8");
@@ -71,7 +70,7 @@ describe("launch template user data", () => {
         }
     );
 
-    test.each(sources.map((file) => [path.relative(PIPELINES_DIR, file), file]))(
+    test.each(sources.map((file) => [pipelineSourceLabel(file), file]))(
         "%s pins the launch template version so a user-data edit reaches an instance",
         (_relative, file) => {
             const source = fs.readFileSync(file, "utf-8");
@@ -110,7 +109,7 @@ describe("launch template user data", () => {
         }
     );
 
-    test.each(sources.map((file) => [path.relative(PIPELINES_DIR, file), file]))(
+    test.each(sources.map((file) => [pipelineSourceLabel(file), file]))(
         "%s updates its compute environment in place",
         (_relative, file) => {
             const source = fs.readFileSync(file, "utf-8");
@@ -138,7 +137,7 @@ describe("launch template user data", () => {
         }
     );
 
-    test.each(sources.map((file) => [path.relative(PIPELINES_DIR, file), file]))(
+    test.each(sources.map((file) => [pipelineSourceLabel(file), file]))(
         "%s writes each user-data command on one line",
         (_relative, file) => {
             const source = fs.readFileSync(file, "utf-8");

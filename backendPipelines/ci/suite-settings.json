@@ -1,6 +1,12 @@
 {
     "description": "CI-only settings for pipeline test directories, read by backendPipelines/ci/pipeline_tests.py. Keyed by repo-relative test directory. They live here, not in the pipeline folders, because CDK packages those folders as container build contexts and Lambda code, and a file there changes the deployed asset. extraRequirements are installed after the common and nearest requirements files, in one pip call: an entry '-r <repo-relative path>' names a requirements file, any other entry is a requirement line. headlessDisplay runs the suite under xvfb-run with the thumbnail image's rendering environment.",
     "suites": {
+        "backendPipelines/conversion/mirisUpload/container/tests": {
+            "extraRequirements": {
+                "reason": "The tests fake the Miris API over HTTP with responses and AWS Secrets Manager with moto; the container image installs neither. Pinned at backend/requirements-dev.txt's versions.",
+                "requirements": ["moto==5.1.0", "responses==0.25.8"]
+            }
+        },
         "backendPipelines/genAi/cadStepAgent/evaluation/tests": {
             "extraRequirements": {
                 "reason": "The harness runs in the container's environment plus PyYAML for corpus.yaml, as evaluation/README.md describes.",

@@ -19,12 +19,13 @@
  * `AWS::Lambda::Function` whose `Handler` names one of those modules — across every nested stack,
  * whatever builder created it — and its role's policies (inline, attached and managed) must carry a
  * `dynamodb:Query` statement on the `S3AssetBucketsStorageTable`. The add-on handlers exist only when
- * their add-ons are enabled, so the assembly is synthesized with both add-ons on.
+ * their add-ons are enabled, so the assembly is synthesized with the Physna, Garnet and Miris add-ons on.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import { synthTemplate, SynthResult, Resource } from "../support/templateSynth";
+import { MIRIS_TEST_SECRET_ARN, MIRIS_TEST_VIEWER_KEY } from "../addon/mirisUploadHarness";
 
 const RATCHET = path.join(
     __dirname,
@@ -61,7 +62,7 @@ const LIBRARY_MODULES = new Set(["physnaCommon", "complianceEvaluationStore"]);
 
 const synth = (): SynthResult =>
     synthTemplate("commercial", {
-        mutateKey: "routing-client-grants-addons-on",
+        mutateKey: "routing-client-grants-addons-on-with-miris",
         mutate: (c) => {
             c.app.addons.usePhysnaSync.enabled = true;
             c.app.addons.usePhysnaSync.tenantId = "11111111-2222-3333-4444-555555555555";
@@ -70,6 +71,13 @@ const synth = (): SynthResult =>
             c.app.addons.useGarnetFramework.garnetApiToken = "token";
             c.app.addons.useGarnetFramework.garnetIngestionQueueSqsUrl =
                 "https://sqs.us-east-1.amazonaws.com/123456789012/garnet-ingest";
+            c.app.webUi.allowUnsafeEvalFeatures = true;
+            Object.assign(c.app.addons.useMirisStreaming, {
+                enabled: true,
+                viewerKeyMode: "static",
+                viewerKey: MIRIS_TEST_VIEWER_KEY,
+                apiKeySecretArn: MIRIS_TEST_SECRET_ARN,
+            });
         },
     });
 

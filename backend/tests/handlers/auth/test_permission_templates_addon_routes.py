@@ -280,4 +280,5 @@ class TestTemplatesMatchTheSeededGrant:
 
     @pytest.mark.parametrize("template_name", sorted(ADDON_ROUTE_GRANTS[API_ADDON_PHYSNA_VIEWER]))
     def test_the_template_spells_the_criterion_as_the_seed_does(self, template_name):
-        assert _addon_criteria(template_name) == [("starts_with", API_ADDON_PHYSNA_VIEWER.path)]
+        physna = [c for c in _addon_criteria(template_name) if c[1].startswith("/addon/physna/")]
+        assert physna == [("starts_with", API_ADDON_PHYSNA_VIEWER.path)]

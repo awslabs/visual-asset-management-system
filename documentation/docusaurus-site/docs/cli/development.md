@@ -140,7 +140,7 @@ vamscli/
   main.py        # CLI entry point and command-group registration
   version.py     # Version constants
   constants.py   # API endpoint paths, limit constants and core feature-switch names
-  addon_constants.py   # Add-on feature-switch names (FEATURE_PHYSNA_ADDON), re-exported by constants.py
+  addon_constants.py   # Add-on feature-switch names (FEATURE_PHYSNA_ADDON, FEATURE_MIRIS_ADDON, FEATURE_MIRIS_UPLOAD), re-exported by constants.py
   custom_constants.py  # Fork extension point: a fork's endpoint paths and FEATURE_CUSTOM_* names
   auth/          # Authentication providers (Cognito)
   commands/      # One module per command group; commands/custom/ is the fork extension point

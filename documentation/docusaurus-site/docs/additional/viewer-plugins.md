@@ -1,6 +1,6 @@
 # Viewer Plugins
 
-VAMS includes a plugin-based viewer architecture with 24 built-in viewer plugins for visualizing 3D models, point clouds, media files, documents, and data. This page provides a configuration reference for viewer plugins.
+VAMS includes a plugin-based viewer architecture with 25 built-in viewer plugins for visualizing 3D models, point clouds, media files, documents, and data. This page provides a configuration reference for viewer plugins.
 
 For the complete list of viewers, supported extensions, and extension-to-viewer mapping, see [File Viewers](../concepts/viewers.md).
 
@@ -8,7 +8,7 @@ For the complete list of viewers, supported extensions, and extension-to-viewer 
 
 ## Viewer Configuration
 
-Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.json` (core viewers) and `web/src/visualizerPlugin/config/addonViewerConfig.json` (add-on viewers: the Physna viewer and the licensed VNTANA and VEERUM viewers, which ship disabled). A licensed viewer is enabled by setting `"enabled": true` on its entry in `addonViewerConfig.json`. Each viewer entry supports the following fields:
+Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.json` (core viewers) and `web/src/visualizerPlugin/config/addonViewerConfig.json` (add-on viewers: the Physna viewer, and the Miris Spatial Streaming viewer and the licensed VNTANA and VEERUM viewers, which ship disabled). A disabled add-on viewer is enabled by setting `"enabled": true` on its entry in `addonViewerConfig.json` before running `npm install` in `web/`. Each viewer entry supports the following fields:
 
 | Field                        | Type     | Description                                                                                                                |
 | ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -20,6 +20,7 @@ Viewer plugins are configured in `web/src/visualizerPlugin/config/viewerConfig.j
 | `supportsMultiFile`          | boolean  | Whether the viewer can display multiple files simultaneously                                                               |
 | `canFullscreen`              | boolean  | Whether fullscreen mode is supported                                                                                       |
 | `priority`                   | number   | Lower number = listed first when multiple viewers match                                                                    |
+| `autoSelect`                 | boolean  | Opens the viewer automatically in visualize mode when it is the sole match at the lowest priority                          |
 | `loadStrategy`               | string   | `"lazy"` or `"eager"`. Not read; every viewer loads on first use.                                                          |
 | `category`                   | string   | Viewer category (`3d`, `media`, `document`, `data`, `preview`)                                                             |
 | `enabled`                    | boolean  | Whether the plugin is active                                                                                               |

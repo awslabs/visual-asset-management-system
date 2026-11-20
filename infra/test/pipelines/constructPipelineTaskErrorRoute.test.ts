@@ -31,6 +31,26 @@ import { synthTemplate, SynthResult, TemplateName } from "../support/templateSyn
 /** The state that reports on the parent workflow's callback token. */
 const RELEASER = "PipelineEndTask";
 
+/**
+ * The Miris upload pipeline catches into its own failure end task, which invokes `pipelineEnd` with a
+ * failure status and the token before its Fail state. Accepted in that pipeline's stack only, and only
+ * as a Lambda invoke that hands over `externalSfnTaskToken`, so no other pipeline passes by naming a
+ * state the same way.
+ */
+const MIRIS_UPLOAD_RELEASER = "MirisUploadEndFailure";
+
+function releasesToken(stack: string, asl: Asl, name: string): boolean {
+    if (name === RELEASER) return true;
+    if (name !== MIRIS_UPLOAD_RELEASER || !/MirisUploadBuilderNestedStack/.test(stack))
+        return false;
+    const state = asl.States![name];
+    return (
+        state?.Type === "Task" &&
+        /:states:::lambda:invoke$/.test(String(state.Resource)) &&
+        state.Parameters?.Payload?.["externalSfnTaskToken.$"] === "$.externalSfnTaskToken"
+    );
+}
+
 type Asl = { StartAt?: string; States?: Record<string, any> };
 
 /**
@@ -104,6 +124,17 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                         !pipelines.useGenAiVideoSopBom.bedrockModelId
                     )
                         pipelines.useGenAiVideoSopBom.bedrockModelId = "synth-only-model";
+                    // The Miris upload pipeline is part of the Miris add-on, which deploys to the
+                    // commercial partition only.
+                    if (templateName === "commercial") {
+                        c.app.webUi.allowUnsafeEvalFeatures = true;
+                        const miris = c.app.addons.useMirisStreaming;
+                        miris.enabled = true;
+                        miris.viewerKey = "synth-only-viewer-key-000000";
+                        miris.apiKeySecretArn =
+                            "arn:aws:secretsmanager:us-east-1:123456789012:secret:synth-only-miris-AbCdEf";
+                        miris.upload.enabled = true;
+                    }
                 },
             });
         });
@@ -154,7 +185,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                     let next: string | undefined = entry.Next;
                     const seen = new Set<string>();
                     while (next && !seen.has(next)) {
-                        if (next === RELEASER) {
+                        if (releasesToken(stack, asl, next)) {
                             reached = true;
                             break;
                         }
@@ -173,6 +204,31 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
             }
             expect(offenders).toEqual([]);
         });
+
+        if (templateName === "commercial") {
+            it("[control] the Miris failure end task counts only in its own stack, as a token-carrying invoke", () => {
+                const machines = pipelineStateMachines(synth).filter((m) =>
+                    /MirisUploadBuilderNestedStack/.test(m.stack)
+                );
+                expect(machines).toHaveLength(1);
+                const { stack, asl } = machines[0];
+                expect(releasesToken(stack, asl, MIRIS_UPLOAD_RELEASER)).toBe(true);
+                // The same state name in another pipeline's stack is not accepted.
+                expect(
+                    releasesToken(
+                        "vamst1OtherPipelineNestedStack.nested",
+                        asl,
+                        MIRIS_UPLOAD_RELEASER
+                    )
+                ).toBe(false);
+                // Nor is a state of that name that does not hand over the token.
+                const withoutToken = JSON.parse(JSON.stringify(asl));
+                delete withoutToken.States[MIRIS_UPLOAD_RELEASER].Parameters.Payload[
+                    "externalSfnTaskToken.$"
+                ];
+                expect(releasesToken(stack, withoutToken, MIRIS_UPLOAD_RELEASER)).toBe(false);
+            });
+        }
 
         it("the Catch preserves the state rather than replacing it", () => {
             // `ResultPath: "$.error"` appends the error beside the existing state. Without it the error

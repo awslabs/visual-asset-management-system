@@ -28,6 +28,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { CORE_PIPELINES_DIR, PIPELINE_SOURCE_DIRS } from "../support/addonPipelines";
 
 const read = (relative: string) =>
     fs.readFileSync(path.resolve(__dirname, "..", relative), "utf-8");
@@ -394,15 +395,14 @@ describe("every appliesTo regex is wrapped in slashes", () => {
  * by path, so the ban is scoped to the pipelines tree.
  */
 describe("no pipeline stack suppresses findings at stack level", () => {
-    const PIPELINES_DIR = path.join(LIB_DIR, "nestedStacks", "pipelines");
-
-    const pipelineFiles = sourceFiles(PIPELINES_DIR);
+    // The core pipelines tree and each add-on pipeline's directory.
+    const pipelineFiles = PIPELINE_SOURCE_DIRS.flatMap((dir) => sourceFiles(dir));
 
     test("[control] the pipelines tree was walked", () => {
         expect(pipelineFiles.length).toBeGreaterThan(20);
     });
 
-    test("no file under lib/nestedStacks/pipelines calls addStackSuppressions", () => {
+    test("no pipeline file (lib/nestedStacks/pipelines, add-on pipelines) calls addStackSuppressions", () => {
         const offenders = pipelineFiles
             .filter((file) => {
                 // Comment lines stripped: the EKS stack explains the removal in prose that names the
@@ -423,7 +423,7 @@ describe("no pipeline stack suppresses findings at stack level", () => {
         // ban above while breaking synthesis for any deployment that enables the EKS pipeline.
         const eksStack = fs.readFileSync(
             path.join(
-                PIPELINES_DIR,
+                CORE_PIPELINES_DIR,
                 "multi",
                 "rapidPipelineEKS",
                 "rapidPipelineEKS-nestedStack.ts"

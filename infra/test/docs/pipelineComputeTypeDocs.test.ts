@@ -21,6 +21,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { ADDON_PIPELINES } from "../support/addonPipelines";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const INFRA_LIB = path.join(REPO_ROOT, "infra", "lib");
@@ -28,6 +29,9 @@ const NESTED_STACKS = path.join(INFRA_LIB, "nestedStacks");
 const PIPELINES_ROOT = path.join(NESTED_STACKS, "pipelines");
 const PIPELINE_BUILDER = path.join(PIPELINES_ROOT, "pipelineBuilder-nestedStack.ts");
 const SHARED_CONSTRUCTS_DIR = path.join(PIPELINES_ROOT, "constructs");
+const ADDON_BUILDER = path.join(NESTED_STACKS, "addon", "addonBuilder-nestedStack.ts");
+/** Pipeline nested stacks an add-on builds, imported by `addonBuilder-nestedStack.ts`. */
+const ADDON_PIPELINE_STACKS = ADDON_PIPELINES.map((p) => p.nestedStackClass);
 const DOC_PATH = path.join(
     REPO_ROOT,
     "documentation",
@@ -77,8 +81,8 @@ interface PipelineStack {
 
 /**
  * The pipelines VAMS ships, taken from the nested stacks `pipelineBuilder-nestedStack.ts` imports
- * from its own tree. Each import is checked to be instantiated so a stale import cannot register a
- * pipeline that is no longer built.
+ * from its own tree, plus the add-on pipelines `addonBuilder-nestedStack.ts` imports. Each import is
+ * checked to be instantiated so a stale import cannot register a pipeline that is no longer built.
  */
 function pipelineStacks(): PipelineStack[] {
     const src = read(PIPELINE_BUILDER);
@@ -91,6 +95,25 @@ function pipelineStacks(): PipelineStack[] {
         if (!fs.existsSync(file)) throw new Error(`pipelineBuilder imports a missing file: ${rel}`);
         if (!src.includes(`new ${className}(`)) {
             throw new Error(`pipelineBuilder imports ${className} but never instantiates it`);
+        }
+        stacks.push({
+            className,
+            file,
+            docPath: toPosix(path.relative(REPO_ROOT, file)),
+            dir: path.dirname(file),
+        });
+    }
+    const addonSrc = read(ADDON_BUILDER);
+    for (const className of ADDON_PIPELINE_STACKS) {
+        const imported = new RegExp(`import \\{ ${className} \\} from "(\\./[^"]+)";`).exec(
+            addonSrc
+        );
+        if (!imported) throw new Error(`addonBuilder does not import ${className}`);
+        const file = path.resolve(path.dirname(ADDON_BUILDER), `${imported[1]}.ts`);
+        if (!fs.existsSync(file))
+            throw new Error(`addonBuilder imports a missing file: ${imported[1]}`);
+        if (!addonSrc.includes(`new ${className}(`)) {
+            throw new Error(`addonBuilder imports ${className} but never instantiates it`);
         }
         stacks.push({
             className,

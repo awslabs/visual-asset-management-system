@@ -171,6 +171,13 @@ function allFargatePipelinesWithCmk(c: any) {
     c.app.pipelines.useGenAiVideoSopBom.useCodeBuild = true;
     // The CAD STEP agent builds a Fargate job definition on its Fargate runtime only.
     c.app.pipelines.useGenAiCadStepAgent.runtime = "fargate";
+    // The Miris upload pipeline belongs to the Miris add-on, which requires unsafe-eval.
+    c.app.webUi.allowUnsafeEvalFeatures = true;
+    c.app.addons.useMirisStreaming.enabled = true;
+    c.app.addons.useMirisStreaming.apiKeySecretArn =
+        "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf";
+    c.app.addons.useMirisStreaming.upload.enabled = true;
+    c.app.addons.useMirisStreaming.upload.autoRegisterWithVAMS = false;
 }
 
 /** Fargate job definitions, identified by the platform capability Batch receives. */
@@ -209,11 +216,11 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
         });
     });
 
-    test("[control] the seven Fargate job definitions are emitted in this synth", () => {
+    test("[control] the eight Fargate job definitions are emitted in this synth", () => {
         // Coordinate transform, the system GenAI metadata renderer, 3D thumbnail, PDAL and Potree,
-        // the video SOP/BOM job and the CAD STEP agent. A lower count means a pipeline was left out of
-        // the mutate, and the loop below would then assert on nothing for it.
-        expect(fargateJobDefinitions(synth)).toHaveLength(7);
+        // the video SOP/BOM job, the CAD STEP agent and the Miris upload. A lower count means a
+        // pipeline was left out of the mutate, and the loop below would then assert on nothing for it.
+        expect(fargateJobDefinitions(synth)).toHaveLength(8);
     });
 
     test("the video SOP/BOM job is sized 4 vCPU / 16 GiB; the untiered five keep 16 vCPU / 64 GiB", () => {
@@ -231,8 +238,10 @@ describe("every Fargate job definition logs to a VAMS-owned group", () => {
         expect(requirementOf(video[0], "VCPU")).toBe("4");
         expect(requirementOf(video[0], "MEMORY")).toBe("16384");
         expect(fargateJobDefinitions(synth).filter(isTiered)).toHaveLength(1);
+        // The Miris upload job's size is asserted by mirisUploadPipeline.test.ts.
+        const isMiris = (jd: Resource) => jd.logicalId.includes("MirisUpload");
         const resized = fargateJobDefinitions(synth)
-            .filter((jd) => !isVideo(jd) && !isTiered(jd))
+            .filter((jd) => !isVideo(jd) && !isTiered(jd) && !isMiris(jd))
             .filter(
                 (jd) =>
                     requirementOf(jd, "VCPU") !== "16" || requirementOf(jd, "MEMORY") !== "65536"

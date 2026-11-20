@@ -628,12 +628,21 @@ class RegionRoutingS3Client:
     ``exceptions`` and ``meta`` are the deployment-Region client's: botocore shares one set of
     exception classes across the clients of a service."""
 
-    def __init__(self):
+    def __init__(self, config: Config = None):
+        # ``config`` is merged over S3_ASSET_CLIENT_CONFIG for every client this router builds, for a
+        # caller that needs tighter timeouts or retries than the shared per-Region clients carry.
+        self._config_override = config
+        self._bounded_config = S3_ASSET_CLIENT_CONFIG.merge(config) if config is not None else None
+        self._clients_by_region = {}
         # The deployment-Region client is bound at construction rather than on first use, so a
         # handler module that builds its router at import binds it there, the way a plain
         # module-level client would.
-        self._default_client = boto3.client('s3', region_name=deployment_region(),
-                                            config=S3_ASSET_CLIENT_CONFIG)
+        if self._bounded_config is None:
+            self._default_client = boto3.client('s3', region_name=deployment_region(),
+                                                config=S3_ASSET_CLIENT_CONFIG)
+        else:
+            self._default_client = boto3.client('s3', region_name=deployment_region(),
+                                                config=self._bounded_config)
 
     def _client_for(self, bucket):
         if not bucket:
@@ -641,7 +650,13 @@ class RegionRoutingS3Client:
         region = bucket_region_for_name(bucket)
         if region == deployment_region():
             return self._default_client
-        return s3_client_for_region(region)
+        if self._bounded_config is None:
+            return s3_client_for_region(region)
+        client = self._clients_by_region.get(region)
+        if client is None:
+            client = boto3.client('s3', region_name=region, config=self._bounded_config)
+            self._clients_by_region[region] = client
+        return client
 
 
     @staticmethod
@@ -748,9 +763,10 @@ class RegionRoutingS3Resource:
         return getattr(self._default_resource, name)
 
 
-def region_routing_s3_client() -> RegionRoutingS3Client:
-    """A new Region-routing S3 client for a handler module's module-level client."""
-    return RegionRoutingS3Client()
+def region_routing_s3_client(config: Config = None) -> RegionRoutingS3Client:
+    """A new Region-routing S3 client for a handler module's module-level client; ``config``, when
+    given, is merged over S3_ASSET_CLIENT_CONFIG for each of its per-Region clients."""
+    return RegionRoutingS3Client(config)
 
 
 def region_routing_s3_resource() -> RegionRoutingS3Resource:

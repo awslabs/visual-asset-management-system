@@ -29,6 +29,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { PIPELINE_SOURCE_DIRS } from "../support/addonPipelines";
 import { Template } from "aws-cdk-lib/assertions";
 import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
@@ -246,9 +247,8 @@ describe("the registration hash for the evaluation bundle", () => {
     });
 });
 
-/** Every pipeline construct source file, relative to lib/nestedStacks/pipelines. */
+/** Every pipeline construct source file, under lib/nestedStacks/pipelines and the add-on pipelines. */
 function pipelineConstructSources(): string[] {
-    const root = path.join(__dirname, "..", "..", "lib", "nestedStacks", "pipelines");
     const found: string[] = [];
     const walk = (dir: string) => {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -257,7 +257,7 @@ function pipelineConstructSources(): string[] {
             else if (entry.name.endsWith("-construct.ts")) found.push(full);
         }
     };
-    walk(root);
+    for (const dir of PIPELINE_SOURCE_DIRS) walk(dir);
     return found;
 }
 
@@ -303,6 +303,7 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
             "cosmosReason-construct.ts",
             "cosmosTransfer-construct.ts",
             "imageTo3d-construct.ts",
+            "mirisUpload-construct.ts",
             "pcPotreeViewer-construct.ts",
             "preview3dThumbnail-construct.ts",
             "systemGenAiMetadata-construct.ts",

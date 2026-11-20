@@ -78,6 +78,26 @@ class TestClientFactory:
         assert config.max_pool_connections == shipped.S3_CLIENT_MAX_POOL_CONNECTIONS
         assert shipped.S3_CLIENT_MAX_POOL_CONNECTIONS >= shipped.MAX_PARALLEL_S3_WORKERS
 
+    def test_a_router_with_a_config_override_builds_its_own_bounded_clients(self, shipped):
+        from botocore.config import Config
+        bounded = Config(connect_timeout=1, read_timeout=2,
+                         retries={"total_max_attempts": 2, "mode": "standard"})
+        router = shipped.region_routing_s3_client(bounded)
+        shipped.register_bucket_region("bounded-remote", "eu-west-1")
+        remote = router._client_for("bounded-remote")
+        for client in (router._client_for("local"), remote):
+            config = client.meta.config
+            assert (config.connect_timeout, config.read_timeout) == (1, 2)
+            assert config.retries == {"total_max_attempts": 2, "mode": "standard"}
+            assert config.signature_version == "s3v4"
+            assert config.s3.get("addressing_style") == "path"
+        assert remote.meta.region_name == "eu-west-1"
+        assert remote is router._client_for("bounded-remote")
+        # The shared per-Region clients keep their own configuration.
+        assert remote is not shipped.s3_client_for_region("eu-west-1")
+        assert shipped.region_routing_s3_client()._client_for("bounded-remote") is \
+            shipped.s3_client_for_region("eu-west-1")
+
     def test_no_endpoint_url_is_set(self, shipped):
         # Partition rule 2: the SDK resolves the endpoint per Region.
         client = shipped.s3_client_for_region("eu-west-1")

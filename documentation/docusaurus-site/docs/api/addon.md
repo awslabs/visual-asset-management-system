@@ -1228,3 +1228,82 @@ Terminates one of the caller's container jobs on the backend the query names. Th
 
 -   **API tier:** `DELETE` on `/addon/edh/containers/jobs/{jobId}`.
 -   **Object tier:** `DELETE` on `edhContainer` from the listed job record's definition.
+
+---
+
+## Miris Spatial Streaming add-on
+
+The Miris Spatial Streaming add-on serves the two routes the Miris viewer plugin calls for a USD file: the stream status and a viewer key. Both are deployed only when `app.addons.useMirisStreaming.enabled` is `true`; the VAMS CLI and MCP server do not call them. See [Miris Spatial Streaming](../developer/miris-spatial-streaming.md) for the viewer, viewer key modes, and configuration.
+
+Both routes read the Miris asset UUID server side from the file's `miris_asset_uuid` metadata, so a caller reaches only a stream the file itself references. Before any call that depends on the UUID, they read the Miris asset with the Miris Integration Key and require its binding tags, `vams-asset-{assetId}` and `vams-database-{databaseId}`; a missing asset or tag is `notBound`. Both routes take the same fields, as query parameters on the status route and as a JSON body on the viewer key route:
+
+| Field        | Type   | Required | Description                                                                                                                                                 |
+| ------------ | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId` | string | Yes      | VAMS database ID the asset belongs to.                                                                                                                      |
+| `assetId`    | string | Yes      | VAMS asset ID.                                                                                                                                              |
+| `filePath`   | string | Yes      | The file's asset-relative path (`/folder/scene.usd`) or its full object key, which is reduced to the asset-relative path. A path ending in `/` is rejected. |
+
+### GET `/addon/miris/asset-status`
+
+Returns the stream metadata recorded on the file and the stream's state. The state is advisory: anything short of a definitive processing failure or a missing binding is `unknown`, and the response still carries the UUID.
+
+#### Response fields (200)
+
+| Field             | Type            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `filePath`        | string          | The normalized asset-relative path, for example `/scene.usd`.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `mirisAssetUuid`  | string or null  | `miris_asset_uuid`; null when absent or empty.                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `sourceVersionId` | string or null  | `miris_source_version_id`; null when absent, empty when the source version was not known at upload.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `uploadedAt`      | string or null  | `miris_uploaded_at` (ISO 8601); null when absent.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `displayName`     | string or null  | `miris_display_name`; null when absent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `state`           | string          | One of the states below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `stale`           | boolean or null | `true` when a file the stream was built from (the root file, its sublayers and references, or a texture or other asset it uses) was removed from the asset or changed since the upload, `false` when none was, and null when this cannot be established: the file records no `miris_dependency_manifest` or no usable `miris_asset_uuid`, the manifest or the asset listing cannot be read, the manifest does not match its SHA-256 ID, or the comparison does not finish before the request deadline. |
+
+#### States
+
+| `state`       | Meaning                                                                                                                                                                 |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notStreamed` | `miris_asset_uuid` is absent or empty. Miris is not called.                                                                                                             |
+| `invalidUuid` | `miris_asset_uuid` is not a UUID. Miris is not called.                                                                                                                  |
+| `notBound`    | The Miris asset is missing, Miris reports it `deleted`, or it lacks a binding tag.                                                                                      |
+| `unknown`     | The state could not be established: the add-on is not configured for its viewer key mode, or Miris was unreachable, timed out, or returned an error or no usable state. |
+| `processing`  | `static` mode only: the Miris viewer API answered `400`.                                                                                                                |
+| Miris state   | The processing state Miris reports, such as `preview`, `streamable`, `error`, or `failed`.                                                                              |
+
+Errors: `400` for invalid query parameters or an asset that does not exist, `403` when Tier 1 or Tier 2 authorization is denied, and `500` for an unexpected error.
+
+### POST `/addon/miris/viewer-key`
+
+Returns a viewer key that can stream the file's Miris asset once both authorization tiers and the binding check pass. What is returned follows the deployment's `viewerKeyMode`:
+
+-   **`static`**: the deployment-wide viewer key, with `expiresAt` `null`. Nothing is created or stored. Each delivery writes a `mirisStaticViewerKeyIssue` audit record. A caller who passes the checks for one bound asset receives a key that streams every Miris asset it allows, so scope it in Miris with tags and an expiry, or use `perView` mode (see [Static mode](../developer/miris-spatial-streaming.md#static-mode)).
+-   **`perView`**: a new key for the one Miris asset that expires `viewerKeyTtlMinutes` minutes after it is minted. Its key ID is recorded in the add-on's viewer key table, and a cleanup function deletes the key from Miris after it expires. Each mint writes a `mirisViewerKeyMint` audit record.
+
+The key material is never stored, logged, or audited. Responses carry `Cache-Control: no-cache, no-store`.
+
+#### Response fields (200)
+
+| Field            | Type           | Description                                                                 |
+| ---------------- | -------------- | --------------------------------------------------------------------------- |
+| `filePath`       | string         | The normalized asset-relative path.                                         |
+| `mirisAssetUuid` | string         | The Miris asset the key can stream.                                         |
+| `viewerKey`      | string         | The viewer key material.                                                    |
+| `expiresAt`      | string or null | The key's expiry, RFC 3339 UTC, in `perView` mode; `null` in `static` mode. |
+
+#### Errors (body: `message`, and `state` when the error concerns the file's stream)
+
+| HTTP  | `state`       | Cause                                                                                                                |
+| ----- | ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `400` | `invalidUuid` | `miris_asset_uuid` is not a UUID.                                                                                    |
+| `400` | --            | Invalid request body, or the asset does not exist.                                                                   |
+| `403` | `notBound`    | The Miris asset is missing or lacks a binding tag. The message names both tags.                                      |
+| `403` | --            | Tier 1 or Tier 2 authorization denied.                                                                               |
+| `404` | `notStreamed` | The file records no Miris stream.                                                                                    |
+| `500` | --            | A minted key could not be recorded (VAMS attempts to delete it from Miris), or the key lifetime is invalid.          |
+| `502` | --            | Miris could not be reached, or did not create the key.                                                               |
+| `503` | --            | The viewer key mode, the Integration Key secret, the Miris API base URL, or the static viewer key is not configured. |
+| `504` | --            | The request deadline passed before Miris answered.                                                                   |
+
+### Authorization
+
+Both routes enforce Tier 1 on the route (`objectType: "api"`) and Tier 2 `GET` on the `databaseId` / `assetId` combination (`objectType: "asset"`) before any metadata is read; the viewer key route checks `GET` because a viewer key grants streaming only. The Database Admin, Database User, Database Read-Only, and Global Read-Only permission templates grant both routes, and the seeded `basicReadOnly` role gains both when the add-on is enabled.

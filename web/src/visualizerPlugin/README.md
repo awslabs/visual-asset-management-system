@@ -24,7 +24,7 @@ web/src/visualizerPlugin/
 │   └── types.ts                  # TypeScript interfaces
 ├── config/
 │   ├── viewerConfig.json         # Core plugin configuration
-│   ├── addonViewerConfig.json    # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+│   ├── addonViewerConfig.json    # Add-on viewers (Physna, Miris; licensed VNTANA, VEERUM)
 │   └── customViewerConfig.json   # Fork extension point (shipped empty)
 ├── components/                    # UI components
 │   ├── DynamicViewer.tsx         # Main viewer component
@@ -318,7 +318,19 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Feature restriction**: `PHYSNA_ADDON` (set when `app.addons.usePhysnaSync.enabled` is `true`)
 -   **Note**: The file must be synced to Physna and finished indexing before it can be viewed.
 
-### 20. ThreeJSViewerPlugin
+### 20. MirisStreamViewerPlugin
+
+-   **ID**: `miris-stream-viewer`
+-   **Extensions**: `.usd`, `.usda`, `.usdc`, `.usdz`
+-   **Features**: Streams the Miris asset recorded in the file's `miris_*` metadata with the Miris web SDK, after `GET /addon/miris/asset-status` and `POST /addon/miris/viewer-key`. A file not yet streamed offers a **Stream with Miris** button when the deployment publishes `MIRIS_UPLOAD`.
+-   **Multi-file**: No
+-   **Dependencies**: `@miris-inc/components`, `@miris-inc/core`, `@miris-inc/three` and `three`, bundled by `web/customInstalls/miris/` into `public/viewers/miris/`
+-   **Priority**: 0, with `autoSelect`
+-   **Category**: 3d
+-   **Feature restriction**: `MIRIS_ADDON` (set when `app.addons.useMirisStreaming.enabled` is `true`) and `ALLOWUNSAFEEVAL`
+-   **Enabled**: false; see `web/customInstalls/miris/README.md` to enable it
+
+### 21. ThreeJSViewerPlugin
 
 -   **ID**: `threejs-viewer`
 -   **Extensions**: `.gltf`, `.glb`, `.obj`, `.fbx`, `.stl`, `.ply`, `.dae`, `.3ds`, `.3mf`, `.usd`, `.usda`, `.usdc`, `.usdz`, `.stp`, `.step`, `.iges`, `.igs`, `.brep`
@@ -330,7 +342,7 @@ All plugin behavior is defined in `viewerConfig.json`:
 -   **Feature restriction**: none
 -   **Note**: The mesh formats are always offered. The CAD formats (`.stp`, `.step`, `.iges`, `.igs`, `.brep`) need a Three.js bundle built with OCCT (`occt-import-js`, LGPL, off by default; see `web/customInstalls/threejs/README.md`) and `SharedArrayBuffer` (cross-origin isolation headers). When either is missing, `loadFile()` in `ThreeJSViewerPlugin/utils/fileLoaders.ts` reports it on the file instead of hiding the viewer.
 
-### 21. RoboticsDataViewerPlugin
+### 22. RoboticsDataViewerPlugin
 
 -   **ID**: `robotics-data-viewer`
 -   **Extensions**: `.mcap`, `.bag`, `.db3`, `.ulg`, `.ulog`

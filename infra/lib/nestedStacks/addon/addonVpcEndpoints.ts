@@ -15,7 +15,11 @@ import { edhLambdasInPrivateSubnets } from "../../../config/addon/edhWorkstation
 export function addonNeedsPrivateSubnets(config: Config.Config): boolean {
     // EDH Workstations with lambdaSubnets "private": its Lambdas reach an internet-facing EDH load
     // balancer through the NAT gateways.
-    return edhLambdasInPrivateSubnets(config);
+    // The Miris upload pipeline: its AWS Batch Fargate jobs reach *.miris.com through the NAT gateways.
+    return (
+        edhLambdasInPrivateSubnets(config) ||
+        config.app.addons.useMirisStreaming?.upload?.enabled === true
+    );
 }
 
 /** An interface endpoint an enabled add-on needs in the VAMS VPC. */
@@ -70,6 +74,19 @@ export function addonInterfaceEndpoints(config: Config.Config): AddonInterfaceEn
                   {
                       id: "EC2MessagesEndpoint",
                       service: ec2.InterfaceVpcEndpointAwsService.EC2_MESSAGES,
+                  },
+              ]
+            : []),
+        // The Miris upload pipeline submits AWS Batch jobs and pulls its container image from Amazon
+        // ECR. The ids match the container-pipeline endpoints the VPC builder creates, so an endpoint
+        // a core pipeline already needs is not repeated.
+        ...(config.app.addons.useMirisStreaming?.upload?.enabled === true
+            ? [
+                  { id: "BatchEndpoint", service: ec2.InterfaceVpcEndpointAwsService.BATCH },
+                  { id: "ECRAPIEndpoint", service: ec2.InterfaceVpcEndpointAwsService.ECR },
+                  {
+                      id: "ECRDockerEndpoint",
+                      service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
                   },
               ]
             : []),

@@ -123,6 +123,7 @@ web/
       appCache.ts           # Replaces Amplify Cache for runtime config
       webRoutesCheck.ts     # Batched + cached web-route (Tier-1) checks
       addons/physnaAPIService.ts  # Add-on API calls (Physna viewer metadata)
+      addons/mirisAPIService.ts   # Add-on API calls (Miris stream status, viewer key, upload start)
 
     addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts (add-on feature-switch names)
       edh/                  #   EDH Workstations add-on module (Tailwind + Radix, pages/ route shells) — see .kiro/steering/ADDON_EDH_WORKSTATIONS.md
@@ -249,7 +250,7 @@ web/
       README.md             # Plugin development docs
       config/
         viewerConfig.json   # Plugin configuration (core)
-        addonViewerConfig.json   # Add-on viewers (Physna; licensed VNTANA, VEERUM)
+        addonViewerConfig.json   # Add-on viewers (Physna, Miris Spatial Streaming; licensed VNTANA, VEERUM)
         customViewerConfig.json  # FORK EXTENSION POINT (shipped empty)
       core/
         PluginRegistry.ts   # Singleton registry (manages all viewers)
@@ -272,6 +273,7 @@ web/
         Online3dViewerPlugin/
         PDFViewerPlugin/
         PhysnaViewerPlugin/
+        MirisStreamViewerPlugin/     # Miris Spatial Streaming add-on viewer
         PlayCanvasGaussianSplatViewerPlugin/
         PotreeViewerPlugin/
         RoboticsDataViewerPlugin/    # MCAP / ROS bag / PX4 ULog viewer (framed Lichtblick app)
@@ -413,7 +415,7 @@ const response = await fetch(`/api/database/${databaseId}/assets`);
 -   `FileOperationsService.ts` — file operations
 -   `MetadataService.ts` — metadata CRUD
 -   `MetadataSchemaService.ts` — schema management
--   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer)
+-   `addons/*.ts` — add-on API calls (`addons/physnaAPIService.ts` for the Physna viewer, `addons/mirisAPIService.ts` for the Miris Spatial Streaming viewer)
 -   `features/orchestration/api/*.ts` — orchestration services (pipelines, workflows, executions, templates, triggers)
 -   `addons/<addon>/api/*.ts` (under `src/`) — the services of an add-on that ships its own module, beside its types and query hooks
 -   `custom/services/*.ts` — the fork extension point for a fork's own API calls (shipped empty)
@@ -992,7 +994,7 @@ Every asset path comes from `components/form/uploadPaths.ts`. A page stores the 
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`src/visualizerPlugin/core/PluginRegistry.ts`) -- Singleton that manages all viewer plugins
--   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for the core plugins; add-on viewers (Physna and the licensed VNTANA and VEERUM viewers) are configured in `addonViewerConfig.json` and a fork's in `customViewerConfig.json` (fork extension point, shipped `{ "viewers": [] }`)
+-   **viewerConfig.json** (`src/visualizerPlugin/config/viewerConfig.json`) -- JSON configuration for the core plugins; add-on viewers (Physna, Miris Spatial Streaming and the licensed VNTANA and VEERUM viewers) are configured in `addonViewerConfig.json` and a fork's in `customViewerConfig.json` (fork extension point, shipped `{ "viewers": [] }`)
 -   **manifest.ts** (`src/visualizerPlugin/viewers/manifest.ts`) -- Vite static analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` hold the add-on and fork entries
 -   **viewerSources.ts** (`src/visualizerPlugin/core/viewerSources.ts`) -- merges core, add-on and custom configs and manifests; a custom viewer whose `id` repeats a shipped one is skipped with a console error, and a shipped manifest key always wins
 -   **StylesheetManager** -- Per-plugin CSS lifecycle management
@@ -1025,6 +1027,7 @@ The 3D/media viewer system uses a plugin-based architecture:
 | `needletools-usd-viewer`           | Needle USD Viewer                 | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `threejs-viewer`                   | Three.js Viewer                   | 3d       | .gltf, .glb, .obj, .fbx, .stl, .ply, .dae, .3ds, .3mf, .usd, .usda, .usdc, .usdz, .stp, .step, .iges, .igs, .brep                        | enabled                                             |
 | `physna-viewer`                    | Physna Viewer                     | 3d       | .3ds, .asm, .catpart, .catproduct, .glb, .iam, .iges, .igs, .ipt, .jt, .obj, .par, .prt, .sldasm, .sldprt, .stl, .step, .stp, .x_b, .x_t | enabled (requires PHYSNA_ADDON)                     |
+| `miris-stream-viewer`              | Miris Spatial Streaming           | 3d       | .usd, .usda, .usdc, .usdz                                                                                                                | **disabled** (add-on; MIRIS_ADDON, ALLOWUNSAFEEVAL) |
 | `thatopenwebifc-viewer`            | ThatOpen IFC BIM Viewer           | 3d       | .ifc, .ifczip                                                                                                                            | enabled (requires ALLOWUNSAFEEVAL)                  |
 | `robotics-data-viewer`             | Robotics Data Viewer (Lichtblick) | data     | .mcap, .bag, .db3, .ulg, .ulog                                                                                                           | enabled (requires ALLOWUNSAFEEVAL, iframe-embedded) |
 | `preview-viewer`                   | Preview Viewer                    | preview  | \* (wildcard)                                                                                                                            | enabled                                             |
@@ -1127,6 +1130,7 @@ export const VIEWER_COMPONENTS = {
 | `supportsMultiFile`          | boolean           | Can handle multiple files at once                                             |
 | `canFullscreen`              | boolean           | Supports fullscreen mode                                                      |
 | `priority`                   | number            | Lower = listed first when multiple viewers match                              |
+| `autoSelect`                 | boolean?          | Auto-open as the sole top-priority match (visualize)                          |
 | `loadStrategy`               | "lazy" \| "eager" | Not read; every viewer loads on first use                                     |
 | `category`                   | string            | Viewer category (3d, media, document, data, preview)                          |
 | `featuresEnabledRestriction` | string[]?         | Required feature flags                                                        |
@@ -1385,7 +1389,7 @@ Known feature flags:
 
 -   `LOCATIONSERVICES` -- Map/geospatial features
 -   `NOOPENSEARCH` -- Disable OpenSearch-dependent features
--   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
+-   `ALLOWUNSAFEEVAL` -- Required for Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data Viewer, Online 3D Viewer .3dm files, Miris Spatial Streaming (add-on, also requires `MIRIS_ADDON`), and Three.js CAD formats (WASM loaders use eval). The Three.js viewer opens USD (.usd/.usda/.usdc/.usdz) without it; with it, Needle and Three.js both match USD and the user picks.
 -   Three.js referenced files (textures, `.mtl`, USD layers) are fetched only through `ThreeJSViewerPlugin/utils/assetDependencyResolver.ts` (path rules, limits, URL modifier with placeholder) and, like the main file, read from presigned URLs of the download route through `core/presignedFetch.ts` rather than the redirecting streaming route (#1623); see "Three.js Referenced Files" in `web/src/visualizerPlugin/CLAUDE.md`.
 -   `VECTORSEARCH` -- Natural-language (vector) search: enables the NLP mode of the search page's Search view and `POST /search/nlp`; with `NOOPENSEARCH` also present the view runs in its reduced (NLP-only) form. The Executions board offers its `System-Reindex` trigger filter only with it (only the vector reindexer starts such runs)
 -   Add-on flags (`addons/addonFeatures.ts`) are described in each add-on's own steering

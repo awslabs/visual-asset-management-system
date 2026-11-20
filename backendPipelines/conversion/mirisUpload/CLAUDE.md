@@ -1,0 +1,14 @@
+# CLAUDE.md -- Miris upload pipeline
+
+> Auto-loaded when Claude Code works within `backendPipelines/conversion/mirisUpload/`. Every rule in `backendPipelines/CLAUDE.md` applies here as well; this file adds what is specific to the Miris upload pipeline, which the Miris Spatial Streaming add-on builds (`infra/lib/nestedStacks/addon/miris/CLAUDE.md`, "Upload pipeline (CDK)"). Exit codes and the root selection order are documented in `README.md` here and on `documentation/docusaurus-site/docs/developer/miris-spatial-streaming.md`. The Kiro mirror is `.kiro/steering/ADDON_MIRIS_SPATIAL_STREAMING.md`.
+
+---
+
+-   **Root file.** The selected file on a manual run; otherwise the `miris_root_file` asset metadata, or the one USD layer no other layer references. Several candidates fail and are named; the pipeline never guesses, and its message never advises adding references. The root must define geometry.
+-   **Pre-flight before any upload.** Text-USD bytes against the task's memory budget (`memory_budget.py`), unreadable or out-of-asset references, texture formats and stage metadata (`preflight.py`). Every download is pinned to one listing of the asset; a file that changes mid-run fails.
+-   **Same Region only.** The container reads the asset and writes the stream metadata with a client for the deployment Region, so `vamsExecuteMirisUpload.py` calls `manifestHelper.enforce_same_region_io(resolved)` before `mirisUploadGate` claims the content (`backendPipelines/tests/test_pipeline_cross_region_inputs.py`).
+-   **Claim.** A triggered run claims a fingerprint of the asset's USD files in the auxiliary bucket, so the per-layer triggers of a multi-file upload, or a repeat trigger on unchanged content, upload once. A manual run skips the claim.
+-   **Never delete a Miris asset.** A run links the file as soon as Miris has the upload, and exits before anything reaches Miris when too little task time is left.
+-   **Shared copies.** `lambda/customLogging/` is a copy of the shared pipeline logging package and stays byte-identical to the others (`backendPipelines/tests/test_pipeline_logger_identity.py`). `openPipeline.py` follows the repo-wide extension gate and failure-route rules (`backendPipelines/tests/test_open_pipeline_extension_gates.py`, `test_open_pipeline_failure_route_returns.py`); its allow list comes from `upload.triggerExtensions`.
+
+Tests: `container/tests/` (run with the container's own environment; `PYTHONPATH` must not point at a local USD build) and `lambda/tests/`.

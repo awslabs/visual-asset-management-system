@@ -19,6 +19,7 @@ from typing import Tuple
 from common.addonFeatures import ADDON_FEATURE_EDH_AMI_RECIPES as _EDH_AMI_RECIPES
 from common.addonFeatures import ADDON_FEATURE_EDH_CONTAINERS as _EDH_CONTAINERS
 from common.addonFeatures import ADDON_FEATURE_EDH_WORKSTATIONS as _EDH
+from common.addonFeatures import ADDON_FEATURE_MIRIS as _MIRIS
 from common.addonFeatures import ADDON_FEATURE_PHYSNA as _PHYSNA
 from common.apiRouteTypes import DELETE, GET, POST, PUT, ApiRoute
 
@@ -136,6 +137,17 @@ EDH_ROUTES: Tuple[ApiRoute, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Miris Spatial Streaming
+# ---------------------------------------------------------------------------
+API_ADDON_MIRIS_ASSET_STATUS = ApiRoute("/addon/miris/asset-status", (GET,), "addons", addon_feature=_MIRIS)
+API_ADDON_MIRIS_VIEWER_KEY = ApiRoute("/addon/miris/viewer-key", (POST,), "addons", addon_feature=_MIRIS)
+
+MIRIS_ROUTES: Tuple[ApiRoute, ...] = (
+    API_ADDON_MIRIS_ASSET_STATUS,
+    API_ADDON_MIRIS_VIEWER_KEY,
+)
+
+# ---------------------------------------------------------------------------
 # Every add-on route
 # ---------------------------------------------------------------------------
-ADDON_ROUTES: Tuple[ApiRoute, ...] = (API_ADDON_PHYSNA_VIEWER, *EDH_ROUTES)
+ADDON_ROUTES: Tuple[ApiRoute, ...] = (API_ADDON_PHYSNA_VIEWER, *EDH_ROUTES, *MIRIS_ROUTES)
