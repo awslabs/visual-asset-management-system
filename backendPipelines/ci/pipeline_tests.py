@@ -16,8 +16,9 @@ from, in install order:
    pipeline Lambdas import at runtime. It is exported from ``uv.lock`` in this directory.
 2. The nearest ``requirements.txt`` above the tests directory, stopping below the pipeline's use-case
    directory (``lambda/requirements.txt``, ``container/requirements.txt``). Where the directory has a
-   ``uv.lock`` this file is its pinned export (``uv export``), so the suite runs on the versions the
-   image or Lambda installs.
+   ``uv.lock`` this file is its pinned export (``uv export``), so the suite runs on the locked versions
+   for this runner's Python. The coordinate transform lock forks by Python version: its image is
+   Python 3.11 and the runner is 3.12, so those suites run on the 3.12 versions, not the image's.
 3. The directory's ``extraRequirements`` in ``suite-settings.json`` beside this file, when it has
    any, for packages only the tests import: requirement lines, or ``-r <repo-relative path>``.
 

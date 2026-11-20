@@ -1562,7 +1562,7 @@ run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `
 module and runs `python -m pytest tests -q` from its parent, on Python 3.12 (the Lambda runtime), in a
 virtual environment built with uv (on `PATH`; CI installs the pinned version) from, in order: `ci/requirements-common.txt` (the export of `ci/uv.lock`: pytest plus the common base layer
 packages the Lambdas import), the nearest `requirements.txt` above the tests directory (stopping below the
-use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`; where the directory has a `uv.lock` it is that lock's export, so the suite runs on the packages the image installs), and the directory's
+use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`; where the directory has a `uv.lock` it is that lock's export, so the suite runs on the locked versions for the runner's Python 3.12; the coordinate transform lock forks by Python version, so its suites do not run on the 3.11 image's versions), and the directory's
 `extraRequirements` in `ci/suite-settings.json` when it has any. Put a package only the tests import, or a
 pipeline-specific Lambda layer (`-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`,
 repo-relative), there, with its reason. **Never put a CI-only file inside a pipeline folder**: CDK packages
