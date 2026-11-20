@@ -135,10 +135,18 @@ export class Conversion3dBasicBatchTier extends Construct {
                     actions: ["s3:GetObject", "s3:GetObjectVersion"],
                     resources: [`${record.bucket.bucketArn}/${normalizedPrefix}*`],
                 }),
+                // ListBucket makes a missing key answer 404 instead of 403 for the HeadObject and GetObject
+                // calls the job makes; it never lists. StringLikeIfExists limits an actual listing (which
+                // carries s3:prefix) to the bucket's base prefix and leaves those key-level calls alone,
+                // where the condition key is absent. A bucket at its root has no prefix to limit to.
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
                     actions: ["s3:ListBucket"],
                     resources: [record.bucket.bucketArn],
+                    conditions:
+                        normalizedPrefix === ""
+                            ? undefined
+                            : { StringLikeIfExists: { "s3:prefix": [`${normalizedPrefix}*`] } },
                 }),
                 // Output and results of a run: <baseAssetsPrefix>pipelines/<pipeline>/<job>/output/<execution>/...
                 new iam.PolicyStatement({
@@ -443,10 +451,14 @@ export class Conversion3dBasicBatchTier extends Construct {
         this.stateMachine = new sfn.StateMachine(this, "Conversion3dBasicProcessing-StateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(sfn.Chain.start(startChoice)),
             timeout: CONVERSION_3D_BASIC_STATE_MACHINE_TIMEOUT,
+            // ERROR level without execution data: the execution input carries the workflow's task
+            // token (externalSfnTaskToken), which every VAMS logger redacts and which must not persist in
+            // a log group. The run's stages and their errors are in the execution history and the
+            // launcher and container logs.
             logs: {
                 destination: stateMachineLogGroup,
-                includeExecutionData: true,
-                level: sfn.LogLevel.ALL,
+                includeExecutionData: false,
+                level: sfn.LogLevel.ERROR,
             },
             tracingEnabled: true,
         });
@@ -499,6 +511,16 @@ export class Conversion3dBasicBatchTier extends Construct {
             kmsKey
         );
 
+        NagSuppressions.addResourceSuppressions(this.stateMachine, [
+            {
+                id: "AwsSolutions-SF1",
+                reason:
+                    "The state machine logs errors, not every event, on purpose: its execution input carries the " +
+                    "workflow's task token (externalSfnTaskToken), which every VAMS logger redacts and which must " +
+                    "not persist in a log group, and ERROR level without execution data cannot store it. " +
+                    "The run's stages and errors are in the execution history and in the launcher and container logs.",
+            },
+        ]);
         this.addSuppressions();
     }
 
@@ -549,7 +571,7 @@ export class Conversion3dBasicBatchTier extends Construct {
                         "The conversion job reads input files and run configuration in deployment-specific VAMS asset buckets " +
                         "(object keys under each bucket's base prefix, which are not known at deploy time) and writes only " +
                         "under <baseAssetsPrefix>pipelines/*/output/*, where the two '*' are the generated pipeline/job and " +
-                        "execution ids. It holds no Step Functions, delete, ACL or policy action.",
+                        "execution ids. It holds no Step Functions, delete, ACL or policy action. ListBucket on an asset bucket with a base prefix is limited to that prefix for a listing; the job never lists, and the auxiliary bucket's ListBucket is bucket-wide because the run's auxiliary keys are generated per execution.",
                 },
             ],
             true

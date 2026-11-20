@@ -14,9 +14,11 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import * as s3 from "aws-cdk-lib/aws-s3";
 import { Template, Match } from "aws-cdk-lib/assertions";
 import * as Config from "../../config/config";
 import { Conversion3dBasicConstruct } from "../../lib/nestedStacks/pipelines/conversion/3dBasic/constructs/conversion3dBasic-construct";
+import * as s3AssetBuckets from "../../lib/helper/s3AssetBuckets";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
 import { lambdaEnvironmentsByHandler, parseAsl, singleStateMachine } from "../support/asl";
 
@@ -186,6 +188,64 @@ describe("batchTier on", () => {
             expect(states[name].TimeoutSeconds).toBe(5 * 3600 + 15 * 60);
             expect(states[name].Parameters.Timeout.AttemptDurationSeconds).toBe(4 * 3600 + 15 * 60);
         }
+    });
+});
+
+describe("the state machine log group never stores the task token (D2)", () => {
+    const template = synth("t1732log", true);
+
+    test("logging is at ERROR level without execution data", () => {
+        const machine = Object.values<any>(
+            template.findResources("AWS::StepFunctions::StateMachine")
+        )[0];
+        const configuration = machine.Properties.LoggingConfiguration;
+        expect(configuration.Level).toBe("ERROR");
+        expect(configuration.IncludeExecutionData).toBe(false);
+    });
+
+    test("the execution input does carry the token, which is why the data stays out of the log", () => {
+        const source = fs.readFileSync(
+            path.join(REPO, "backendPipelines/conversion/3dBasic/lambda/openPipeline.py"),
+            "utf-8"
+        );
+        expect(source).toContain('"externalSfnTaskToken": external_sfn_task_token');
+    });
+});
+
+describe("the job role's ListBucket is limited to the base prefix for a listing (L3)", () => {
+    function listStatements(prefix: string): any[] {
+        const h = makePipelineHarness("t1732list" + prefix.length, (c) => {
+            const block = c.app.pipelines.useConversion3dBasic;
+            block.autoRegisterWithVAMS = false;
+            block.batchTier = { enabled: true, maxMemoryGiB: 120 };
+        });
+        s3AssetBuckets.addS3AssetBucket(new s3.Bucket(h.stack, "PrefixedBucket"), prefix, "db2");
+        const construct = new Conversion3dBasicConstruct(h.stack, "Conversion3dBasicPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        return roleStatements(
+            Template.fromStack(construct),
+            /Conversion3dBasicBatchJobRole/
+        ).filter((st) =>
+            (Array.isArray(st.Action) ? st.Action : [st.Action]).includes("s3:ListBucket")
+        );
+    }
+
+    test("a bucket with a base prefix lists only under it; the root bucket and the auxiliary bucket stay open", () => {
+        const statements = listStatements("assets/");
+        const conditioned = statements.filter((st) => st.Condition);
+        expect(conditioned).toHaveLength(1);
+        expect(conditioned[0].Condition).toEqual({
+            StringLikeIfExists: { "s3:prefix": ["assets/*"] },
+        });
+        // The root-prefix asset bucket and the auxiliary bucket have no condition.
+        expect(statements.length - conditioned.length).toBe(2);
     });
 });
 
