@@ -1,0 +1,4 @@
+# The build backend pyproject.toml's [build-system] requires. requirements.lock locks these with
+# requirements.txt for the EDH AMI recipes, which build the CLI with --no-build-isolation.
+setuptools>=61.0
+wheel

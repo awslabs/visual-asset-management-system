@@ -38,6 +38,10 @@ tools/VamsCLI/
 ├── tests/                   # Test files (mirror command structure; add-on tests under tests/addon/)
 ├── setup.py                 # Package configuration
 ├── pyproject.toml          # Modern Python packaging
+├── requirements.txt        # Runtime dependencies; matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
+├── requirements-build.txt  # The [build-system] requires of pyproject.toml
+├── requirements.lock       # Hashed lock of both, which the EDH Linux AMI recipes install; regenerate with the uv
+│                           #   command in its header after a dependency change (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
 └── README.md               # User documentation
 ```
 
