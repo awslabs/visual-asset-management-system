@@ -25,7 +25,10 @@ const ExecutionDetail: React.FC = () => {
         );
     }
 
-    return <ExecutionDetailPage executionId={executionId} />;
+    // Keyed by the execution, so a link from one execution to another on this route (the Skipped
+    // panel's blocking run) opens the page fresh: its tab, the per-step editor state and the logs
+    // view belong to the execution they were opened for.
+    return <ExecutionDetailPage key={executionId} executionId={executionId} />;
 };
 
 export default ExecutionDetail;

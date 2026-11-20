@@ -43,6 +43,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
     readOnly = false,
     showBulkEdit = true,
     restrictMetadataOutsideSchemas = false,
+    canDelete = true,
 }) => {
     // A specific version, and everything on an archived asset's page, is read-only
     const assetArchived = useAssetArchived();
@@ -716,6 +717,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             rows={rows}
                                             mode={mode}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                             onSave={handleBulkEditSave}
                                             onCancel={() => {
                                                 resetChanges();
@@ -746,6 +748,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             isFileAttribute={true}
                                             refreshing={refreshing}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                         />
                                     ),
                             },
@@ -758,6 +761,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             rows={rows}
                                             mode={mode}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                             onSave={handleBulkEditSave}
                                             onCancel={() => {
                                                 resetChanges();
@@ -788,6 +792,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                                             isFileAttribute={false}
                                             refreshing={refreshing}
                                             restrictMetadata={restrictMetadata && hasSchemas}
+                                            canDelete={canDelete}
                                         />
                                     ),
                             },
@@ -834,6 +839,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         rows={rows}
                         mode={mode}
                         restrictMetadata={restrictMetadata && hasSchemas}
+                        canDelete={canDelete}
                         onSave={handleBulkEditSave}
                         onCancel={() => {
                             resetChanges();
@@ -864,6 +870,7 @@ export const MetadataContainer: React.FC<MetadataContainerProps> = ({
                         isFileAttribute={false}
                         refreshing={refreshing}
                         restrictMetadata={restrictMetadata && hasSchemas}
+                        canDelete={canDelete}
                     />
                 )}
             </SpaceBetween>

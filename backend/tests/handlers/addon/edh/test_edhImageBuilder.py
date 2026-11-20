@@ -130,10 +130,10 @@ class TestComponentDataSubstitution:
                 DEPLOYMENT)
 
     def test_an_undeclared_placeholder_is_refused(self):
-        with pytest.raises(ib_mod.ComponentDocumentError, match=r"unresolved placeholder"):
+        with pytest.raises(ib_mod.ComponentDocumentError, match=f"^{ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED}$"):
             ib_mod.substitute_component_data(
                 "schemaVersion: 1.0\n# ${ASSET_typo}\n", "vams-artefacts", ASSET_RECIPE, DEPLOYMENT)
-        with pytest.raises(ib_mod.ComponentDocumentError, match=r"unresolved placeholder"):
+        with pytest.raises(ib_mod.ComponentDocumentError, match=f"^{ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED}$"):
             ib_mod.substitute_component_data(
                 "schemaVersion: 1.0\n# ${PARAM_missing}\n", "vams-artefacts", ASSET_RECIPE, DEPLOYMENT)
 
@@ -144,10 +144,14 @@ class TestComponentDataSubstitution:
             out = ib_mod.substitute_component_data("v=${PARAM_a}", "", recipe, DEPLOYMENT)
             assert out == "v=${PARAM_b}"
 
-    def test_malformed_asset_and_parameter_tokens_are_refused(self):
+    def test_malformed_asset_and_parameter_tokens_are_refused(self, monkeypatch):
         for token in ["${ASSET_}", "${ASSET_vamscli%/}", "${ASSET_a.b}", "${PARAM_key }"]:
-            with pytest.raises(ib_mod.ComponentDocumentError, match=re.escape(token)):
+            log = MagicMock()
+            monkeypatch.setattr(ib_mod, "logger", log)
+            with pytest.raises(ib_mod.ComponentDocumentError) as err:
                 ib_mod.substitute_component_data(f"x={token}", "vams-artefacts", ASSET_RECIPE, DEPLOYMENT)
+            assert str(err.value) == ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED
+            assert token in " ".join(str(call.args[0]) for call in log.warning.call_args_list)
         # ${base} expansions remain untouched
         assert ib_mod.substitute_component_data("x=${base}t64", "", RECIPE, DEPLOYMENT) == "x=${base}t64"
 
@@ -213,17 +217,26 @@ class TestDeploymentPlaceholders:
         ("${DEPLOY_SessionSecretPrefix}", DEPLOYMENT),
         ("${DEPLOY_}", DEPLOYMENT),
     ])
-    def test_a_key_outside_the_set_or_without_a_value_is_unresolved(self, token, deployment):
-        with pytest.raises(ib_mod.ComponentDocumentError, match=re.escape(
-                f"unresolved placeholder(s) in component document: {token}")):
+    def test_a_key_outside_the_set_or_without_a_value_is_unresolved(self, token, deployment, monkeypatch):
+        log = MagicMock()
+        monkeypatch.setattr(ib_mod, "logger", log)
+        with pytest.raises(ib_mod.ComponentDocumentError) as err:
             ib_mod.substitute_component_data(f"schemaVersion: 1.0\n# {token}\n", "", RECIPE, deployment)
+        # The refusal is a fixed text; the token it could not resolve is logged, not returned.
+        assert str(err.value) == ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED
+        assert token in " ".join(str(call.args[0]) for call in log.warning.call_args_list)
 
     @pytest.mark.parametrize("value", ["team-a/edh-session", 'team-a/"$(id)/', "team a/", "team-a/\n"])
-    def test_a_value_not_of_the_keys_form_is_refused(self, value):
-        with pytest.raises(ib_mod.ComponentDocumentError, match=re.escape(
-                "deployment value(s) not in the expected form for: ${DEPLOY_sessionSecretPrefix}")):
+    def test_a_value_not_of_the_keys_form_is_refused(self, value, monkeypatch):
+        log = MagicMock()
+        monkeypatch.setattr(ib_mod, "logger", log)
+        with pytest.raises(ib_mod.ComponentDocumentError) as err:
             ib_mod.substitute_component_data(
                 "schemaVersion: 1.0\n# ${DEPLOY_sessionSecretPrefix}\n", "", RECIPE, {"sessionSecretPrefix": value})
+        assert str(err.value) == ib_mod.COMPONENT_DEPLOYMENT_VALUE_MALFORMED
+        assert "${DEPLOY_sessionSecretPrefix}" not in str(err.value)
+        assert "${DEPLOY_sessionSecretPrefix}" in " ".join(
+            str(call.args[0]) for call in log.warning.call_args_list)
 
     @pytest.mark.parametrize("extra,refused", [(0, False), (1, True)])
     def test_the_length_limit_counts_the_deployment_value(self, extra, refused):
@@ -407,6 +420,41 @@ class TestParentResolution:
 
 
 @pytest.mark.unit
+class TestParentResolutionRefusalsNameNoInput:
+    """A parent that cannot be resolved is refused with a fixed text; the name it was given and the AWS
+    error code go to the log only."""
+
+    def _refusal_and_log(self, monkeypatch, parent, *, c=None, edh=None):
+        log = MagicMock()
+        monkeypatch.setattr(ib_mod, "logger", log)
+        with pytest.raises(ib_mod.ParentImageUnavailable) as err:
+            ib_mod.resolve_parent_image(parent, ctx=c or ctx(), edh_client=edh, kind="vdi")
+        return str(err.value), " ".join(str(call.args[0]) for call in log.warning.call_args_list)
+
+    def test_an_unreadable_ssm_parameter(self, monkeypatch):
+        c = ctx()
+        c.ssm.get_parameter.side_effect = _client_error("ParameterNotFound")
+        refusal, logged = self._refusal_and_log(monkeypatch, "ssm:/team/parent-ami", c=c)
+        assert refusal == ib_mod.PARENT_SSM_PARAMETER_UNREADABLE
+        assert "/team/parent-ami" not in refusal and "ParameterNotFound" not in refusal
+        assert "/team/parent-ami" in logged and "ParameterNotFound" in logged
+
+    def test_an_edh_stack_edh_does_not_list(self, monkeypatch):
+        edh = MagicMock()
+        edh.list_software_stacks.return_value = []
+        refusal, logged = self._refusal_and_log(monkeypatch, "edhStack:Team Stack", edh=edh)
+        assert refusal == ib_mod.PARENT_EDH_STACK_NOT_LISTED
+        assert "Team Stack" not in refusal
+        assert "Team Stack" in logged
+
+    def test_an_unsupported_reference(self, monkeypatch):
+        refusal, logged = self._refusal_and_log(monkeypatch, "other:team-parent")
+        assert refusal == ib_mod.PARENT_REFERENCE_UNSUPPORTED
+        assert "team-parent" not in refusal
+        assert "team-parent" in logged
+
+
+@pytest.mark.unit
 class TestMaterialize:
     def test_creates_every_resource_once_and_returns_the_arns(self):
         c = ctx()
@@ -510,7 +558,7 @@ class TestMaterialize:
         recipe = {**ASSET_RECIPE, "components": [
             {"name": "first", "data": "schemaVersion: 1.0"},
             {"name": "second", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}]}
-        with pytest.raises(ib_mod.ComponentDocumentError, match="PARAM_missing"):
+        with pytest.raises(ib_mod.ComponentDocumentError, match=f"^{ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED}$"):
             ib_mod.materialize(c, recipe, "ami-0abc0abc0abc0abc0")
         c.ib.create_component.assert_not_called()
 

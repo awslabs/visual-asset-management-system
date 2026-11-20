@@ -56,11 +56,11 @@ const listingsRead = (...pages: object[][]) => {
     });
 };
 
-// The row's button opens the reason dialog, whose confirm button shares the label (the table's
-// button comes first in the DOM, the modal portal's last). The reason is optional and left empty.
+// The row's button (named with the cascade) opens the reason dialog, whose confirm button is the
+// bare verb. The reason is optional and left empty.
 const decide = async (label: "Approve" | "Reject") => {
     await screen.findByText("manual trigger");
-    await userEvent.click(screen.getAllByRole("button", { name: label })[0]);
+    await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${label} cascade `) }));
     const confirm = screen.getAllByRole("button", { name: label });
     await userEvent.click(confirm[confirm.length - 1]);
 };

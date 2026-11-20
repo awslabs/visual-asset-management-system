@@ -22,7 +22,7 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import ASSET, DB as EVAL_DB
 from backend.tests.handlers.compliance.test_compliancePipelineRuleSaveAuthorization import (
-    DB, REFUSED, World, _body, _rule, _stand_in,
+    CONVERT_POSITION, DB, REFUSED, World, _body, _rule, _stand_in,
 )
 from handlers.compliance import complianceEvaluationStore as store
 from models.compliance import PipelineRule
@@ -55,7 +55,7 @@ SYSTEM_BUNDLES = _shipped_system_bundles()
 # The one message every refusal and every error result carries (pinned here, not read from the code).
 MESSAGE = ("A pipeline rule cannot use a system pipeline. To require the generated metadata, add a "
            "metadata rule on its genai_* fields.")
-REFUSAL = {"message": MESSAGE, "ruleName": "convert"}
+REFUSAL = {"message": MESSAGE, "rulePosition": CONVERT_POSITION}
 
 
 def _bundle_id(bundle):
@@ -185,8 +185,9 @@ class TestAStoredRuleNamingASystemRecordIsNotLaunched:
                 patch.object(store, "list_file_keys_under", return_value=["/pump.glb"]), \
                 patch.object(store, "launch_workflow_execution", launch), \
                 patch.object(store, "evaluation_table", table):
+            launched = []
             started, errored = store.start_pipeline_rule_executions(
-                {"genai": STORED_RULE}, "eval-1", EVAL_DB, ASSET, "2026-03-01T12:00:00+00:00")
+                {"genai": STORED_RULE}, "eval-1", EVAL_DB, ASSET, "2026-03-01T12:00:00+00:00", launched)
         assert started == []
         (result,) = errored
         assert result.ruleName == "genai"
@@ -194,6 +195,7 @@ class TestAStoredRuleNamingASystemRecordIsNotLaunched:
         assert result.message == MESSAGE
         launch.assert_not_called()
         table.put_item.assert_not_called()
+        assert launched == []
 
     def test_an_ordinary_rule_still_launches(self):
         launch = MagicMock(name="launch_workflow_execution", return_value=("exec-1", False))
@@ -206,11 +208,13 @@ class TestAStoredRuleNamingASystemRecordIsNotLaunched:
                 patch.object(store, "asset_file_change_source", return_value=""), \
                 patch.object(store, "launch_workflow_execution", launch), \
                 patch.object(store, "evaluation_table", MagicMock()):
+            launched = []
             started, errored = store.start_pipeline_rule_executions(
-                {"genai": STORED_RULE}, "eval-1", EVAL_DB, ASSET, "2026-03-01T12:00:00+00:00")
+                {"genai": STORED_RULE}, "eval-1", EVAL_DB, ASSET, "2026-03-01T12:00:00+00:00", launched)
         assert errored == []
         assert [entry["executionId"] for entry in started] == ["exec-1"]
         launch.assert_called_once()
+        assert launched == ["genai"]
 
     def test_a_waiting_rule_is_closed_instead_of_relaunched(self):
         row = {"evaluationId": "eval-1#genai", "pipelineRuleName": "genai",

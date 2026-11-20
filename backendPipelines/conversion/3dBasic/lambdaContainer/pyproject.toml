@@ -1,30 +1,41 @@
-[tool.poetry]
-name = "3dBasicLambdaPipeline"
+[project]
+name = "3dbasic-lambda-pipeline"
 version = "0.1.0"
-description = ""
-authors = ["Kurt Scheuringer <scheurik@amazon.com>"]
-package-mode = false
-
-[tool.poetry.dependencies]
-python = ">=3.12,!=3.14.1,<3.15"
-trimesh = "^5.2.1"
-aws-lambda-powertools = "^3.41.0"
-pillow = "^13.0.0"
-usd-core = "^26.11"
-lxml = "^6.1.3"
-networkx = "^3.7"
-pycollada = "^0.9.3"
+description = "3D Basic conversion Lambda container image"
+authors = [
+    {name = "Kurt Scheuringer", email = "scheurik@amazon.com"}
+]
+requires-python = ">=3.12,!=3.14.1,<3.15"
+dependencies = [
+    "trimesh>=5.2.1,<6",
+    "aws-lambda-powertools>=3.41.0,<4",
+    "pillow>=13.0.0,<14",
+    "usd-core>=26.11,<27",
+    "lxml>=6.1.3,<7",
+    "networkx>=3.7,<4",
+    "pycollada>=0.9.3,<0.10",
+]
 
 # STEP input (app.pipelines.useConversion3dBasic.enableStepInput): installed only into the image built
-# with ENABLE_STEP_INPUT=true, from requirements-step.txt (`poetry export --only step`). cascadio
+# with ENABLE_STEP_INPUT=true, from requirements-step.txt (`uv export --only-group step`). cascadio
 # bundles Open CASCADE (LGPL-2.1 with the OCCT exception), so the default image holds none of it.
-[tool.poetry.group.step]
-optional = true
+[dependency-groups]
+step = [
+    "cascadio>=0.1.1,<0.2",
+]
 
-[tool.poetry.group.step.dependencies]
-cascadio = "^0.1.1"
+# The image installs the committed, hashed requirements.txt and requirements-step.txt with pip, which
+# are exported from uv.lock; uv is a development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+# Wide enough for the hashed exports to install on a developer machine as well as in the image: Linux
+# (x86_64 and aarch64) and macOS, CPython 3.12 to 3.14, the set the earlier export covered.
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
+default-groups = []
 
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+# The packages named below were uploaded less than seven days before this lock; they are the versions
+# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is
+# older than seven days: numpy after 2026-11-22, aws-lambda-powertools after 2026-11-25.
+exclude-newer-package = { aws-lambda-powertools = "2026-11-19T12:13:18Z", numpy = "2026-11-16T21:30:10Z" }

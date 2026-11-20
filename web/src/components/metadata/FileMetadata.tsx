@@ -19,6 +19,11 @@
 import React from "react";
 import { Container, Header } from "@cloudscape-design/components";
 import { MetadataContainer } from "../metadataV2";
+import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+
+// The route both file tabs (metadata and attributes) write. Removing a stored field, by row delete or
+// by a bulk-edit save that leaves it out, needs DELETE on it.
+const FILE_METADATA_ROUTE = "/database/{databaseId}/assets/{assetId}/metadata/file";
 
 /**
  * Props interface for the FileMetadata component
@@ -73,6 +78,7 @@ export default function FileMetadata({
     onSaveSuccess,
     onSaveError,
 }: FileMetadataProps) {
+    const { can } = useAllowedRoutes();
     const commonProps = {
         "data-testid": "file-metadata",
         role: "region",
@@ -91,6 +97,7 @@ export default function FileMetadata({
             mode="online"
             assetVersionId={assetVersionId}
             readOnly={readOnly}
+            canDelete={can("DELETE", FILE_METADATA_ROUTE)}
         />
     );
 

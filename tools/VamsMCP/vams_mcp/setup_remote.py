@@ -44,7 +44,16 @@ class SetupError(Exception):
     """A step the operator has to correct; the message says how."""
 
 
+def _require_secure_url(url: str) -> None:
+    """Refuse a URL to read the deployment's settings from unless it is https (or http to loopback)."""
+    from vamscli.commands.setup import BASE_URL_RULE, validate_base_url
+
+    if not validate_base_url(url):
+        raise SetupError(f"'{url}' cannot be read: it must be {BASE_URL_RULE}")
+
+
 def _get_json(url: str) -> Dict[str, Any]:
+    _require_secure_url(url)
     try:
         response = requests.get(url, timeout=HTTP_TIMEOUT, allow_redirects=False)
     except requests.RequestException as exc:
@@ -65,11 +74,11 @@ def _set(value: Any) -> Optional[str]:
 
 
 def _normalize_vams_url(url: str) -> str:
-    from vamscli.commands.setup import normalize_base_url_for_stage, validate_base_url
+    from vamscli.commands.setup import BASE_URL_RULE, normalize_base_url_for_stage, validate_base_url
 
     url = url.strip().rstrip("/")
     if not validate_base_url(url):
-        raise SetupError(f"'{url}' is not a valid VAMS web application or API URL")
+        raise SetupError(f"'{url}' is not a valid VAMS web application or API URL: use {BASE_URL_RULE}")
     return normalize_base_url_for_stage(url).rstrip("/")
 
 
@@ -95,16 +104,22 @@ def _discovery_url(base: str, published: Optional[str] = None) -> str:
 
 
 def _discovery(
-    issuer: str, explicit: Optional[str] = None, fallback_issuer: Optional[str] = None
+    issuer: str, explicit: Optional[str] = None, fallback_issuer: Optional[str] = None,
+    errors: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Read the discovery document from ``issuer`` (the published path applies), else from ``fallback_issuer``."""
+    """Read the discovery document from ``issuer`` (the published path applies), else from ``fallback_issuer``.
+
+    Each read that fails adds its reason to ``errors`` when a list is given.
+    """
     urls = [_discovery_url(issuer, explicit)]
     if fallback_issuer:
         urls.append(_discovery_url(fallback_issuer))
     for url in dict.fromkeys(urls):
         try:
             return _get_json(url)
-        except SetupError:
+        except SetupError as exc:
+            if errors is not None:
+                errors.append(str(exc))
             continue
     return None
 
@@ -188,13 +203,15 @@ def build_settings(args: argparse.Namespace, amplify: Dict[str, Any]) -> RemoteA
         web_client_id = _set(amplify.get("externalOAuthIdpClientId"))
         _refuse_web_client(audiences, web_client_id)
         provider_url = _set(amplify.get("externalOAuthIdpURL"))
+        discovery_errors: List[str] = []
         document = _discovery(
-            provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")), fallback_issuer=args.issuer
+            provider_url, _set(amplify.get("externalOAuthIdpDiscoveryEndpoint")), fallback_issuer=args.issuer,
+            errors=discovery_errors,
         )
         if document is None:
             raise SetupError(
-                "the external IdP's OpenID Connect discovery document could not be read; pass --issuer "
-                "with the issuer that signs the IdP's access tokens"
+                f"the external IdP's OpenID Connect discovery document could not be read "
+                f"({'; '.join(discovery_errors)}); pass --issuer with the issuer that signs the IdP's access tokens"
             )
         issuer = args.issuer or _set(document.get("issuer"))
         jwks_uri = _set(document.get("jwks_uri"))

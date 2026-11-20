@@ -2,31 +2,6 @@
     "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a Python dependency file (pyproject.toml, requirements*.txt/.in/.lock, Pipfile, setup.py with install_requires) the audit does not cover unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock.",
     "exemptions": [
         {
-            "path": "backendPipelines/multi/rapidPipelineEKS/lambdaLayer/pyproject.toml",
-            "reason": "Poetry project (pipeline Lambda layer); moves to uv in a later #1741 change.",
-            "plannedIn": "#1741 PR 3: pipeline Lambda layers and the 3D Basic image"
-        },
-        {
-            "path": "backendPipelines/multi/rapidPipelineEKS/lambdaLayer/requirements.txt",
-            "reason": "Poetry export of the layer above.",
-            "plannedIn": "#1741 PR 3: pipeline Lambda layers and the 3D Basic image"
-        },
-        {
-            "path": "backendPipelines/conversion/3dBasic/lambdaContainer/pyproject.toml",
-            "reason": "Poetry project (3D Basic conversion image); moves to uv in a later #1741 change.",
-            "plannedIn": "#1741 PR 3: pipeline Lambda layers and the 3D Basic image"
-        },
-        {
-            "path": "backendPipelines/conversion/3dBasic/lambdaContainer/requirements.txt",
-            "reason": "Hashed Poetry export of the 3D Basic image.",
-            "plannedIn": "#1741 PR 3: pipeline Lambda layers and the 3D Basic image"
-        },
-        {
-            "path": "backendPipelines/conversion/3dBasic/lambdaContainer/requirements-step.txt",
-            "reason": "Hashed export of the 3D Basic image's optional STEP group.",
-            "plannedIn": "#1741 PR 3: pipeline Lambda layers and the 3D Basic image"
-        },
-        {
             "path": "backendPipelines/ci/requirements-common.txt",
             "reason": "Exact pins shared by the pipeline test runner; becomes the export of a backendPipelines/ci project.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"

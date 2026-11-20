@@ -342,7 +342,10 @@ describe("compliance job queue and job Lambda", () => {
             COMPLIANCE_JOB_QUEUE_URL: { Ref: job() },
             COMPLIANCE_TRIGGER_QUEUE_URL: { Ref: trigger() },
         });
-        expect(queueEnv("database")).toEqual({ COMPLIANCE_JOB_QUEUE_URL: { Ref: job() } });
+        expect(queueEnv("database")).toEqual({
+            COMPLIANCE_JOB_QUEUE_URL: { Ref: job() },
+            COMPLIANCE_JOB_DLQ_URL: { Ref: dlq() },
+        });
     });
 
     test("the SQS grants of each role are exactly the queues it reads and sends to", () => {
@@ -364,8 +367,11 @@ describe("compliance job queue and job Lambda", () => {
                 [job(), send],
                 [trigger(), send],
             ],
-            // A delete's move.
-            database: [[job(), send]],
+            // A delete's move; the DLQ when the move cannot be queued.
+            database: [
+                [job(), send],
+                [dlq(), send],
+            ],
         };
         for (const role of Object.keys(expected) as Role[]) {
             const sorted = [...expected[role]].sort(([a, x], [b, y]) =>

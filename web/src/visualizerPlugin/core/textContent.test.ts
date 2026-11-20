@@ -16,7 +16,9 @@ import {
     decodeText,
     loadTextFile,
     TEXT_SAMPLE_BYTES,
+    TEXT_VIEWER_MAX_BYTES,
     TextFetchError,
+    textReadFailureMessage,
 } from "./textContent";
 
 const utf8 = (text: string) => new TextEncoder().encode(text);
@@ -191,6 +193,7 @@ interface FakeResponseInit {
     status: number;
     bytes?: Uint8Array;
     contentRange?: string;
+    contentLength?: number;
     /** Deliver the body as a stream of chunks of this size (a 200 the loader reads incrementally). */
     chunkSize?: number;
 }
@@ -200,6 +203,7 @@ const fakeResponse = ({
     status,
     bytes = new Uint8Array(),
     contentRange,
+    contentLength,
     chunkSize,
 }: FakeResponseInit) => {
     const stream = { reads: 0, cancelled: false };
@@ -208,7 +212,12 @@ const fakeResponse = ({
         ok: status >= 200 && status < 300,
         status,
         headers: {
-            get: (name: string) => (name === "Content-Range" ? contentRange ?? null : null),
+            get: (name: string) =>
+                name === "Content-Range"
+                    ? contentRange ?? null
+                    : name === "Content-Length" && contentLength !== undefined
+                    ? String(contentLength)
+                    : null,
         },
         arrayBuffer: async () => bytes.slice().buffer,
         body: chunkSize
@@ -406,5 +415,88 @@ describe("loadTextFile", () => {
             loadTextFile("https://s3/x", controller.signal, fetchImpl as any)
         ).rejects.toBeInstanceOf(TypeError);
         expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("the text viewers' size cap", () => {
+    it("reads no more than the sample of a text file whose 206 total is above the cap", async () => {
+        const head = bigText(TEXT_SAMPLE_BYTES);
+        const fetchImpl = jest.fn(
+            async () =>
+                fakeResponse({
+                    status: 206,
+                    bytes: head,
+                    contentRange: `bytes 0-${TEXT_SAMPLE_BYTES - 1}/${TEXT_VIEWER_MAX_BYTES + 1}`,
+                }).response
+        );
+
+        expect(await loadTextFile("https://s3/x", undefined, fetchImpl as any)).toEqual({
+            kind: "too-large",
+        });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels a 200 whose Content-Length is above the cap once the sample is classified", async () => {
+        const { response, stream } = fakeResponse({
+            status: 200,
+            bytes: bigText(64 * 1024),
+            contentLength: TEXT_VIEWER_MAX_BYTES + 1,
+            chunkSize: 4096,
+        });
+
+        expect(
+            await loadTextFile("https://s3/x", undefined, (async () => response) as any)
+        ).toEqual({ kind: "too-large" });
+        expect(stream.cancelled).toBe(true);
+        expect(stream.reads).toBe(2);
+    });
+
+    it("stops reading a stream once it passes the cap when no size was given", async () => {
+        const { response, stream } = fakeResponse({
+            status: 200,
+            bytes: bigText(TEXT_VIEWER_MAX_BYTES + 1024 * 1024),
+            chunkSize: 1024 * 1024,
+        });
+
+        expect(
+            await loadTextFile("https://s3/x", undefined, (async () => response) as any)
+        ).toEqual({ kind: "too-large" });
+        expect(stream.cancelled).toBe(true);
+    });
+
+    it("still decodes a text file at the cap", async () => {
+        const whole = bigText(64 * 1024);
+        const { response } = fakeResponse({
+            status: 200,
+            bytes: whole,
+            contentLength: whole.length,
+            chunkSize: 4096,
+        });
+        const result = await loadTextFile("https://s3/x", undefined, (async () => response) as any);
+        expect(result.kind).toBe("text");
+    });
+});
+
+describe("textReadFailureMessage", () => {
+    it("words a storage 403 or 404 as a link to refresh, never as a VAMS permission answer", () => {
+        expect(textReadFailureMessage(new TextFetchError("HTTP error! status: 403", 403))).toBe(
+            "The file could not be read. Open it again to refresh the link."
+        );
+        expect(textReadFailureMessage(new TextFetchError("HTTP error! status: 404", 404))).toBe(
+            "The file could not be read. Open it again to refresh the link."
+        );
+        expect(textReadFailureMessage(new TextFetchError("HTTP error! status: 500", 500))).toBe(
+            "The file could not be downloaded (HTTP 500)."
+        );
+    });
+
+    it("words a read with no response as a connection problem", () => {
+        expect(textReadFailureMessage(new TypeError("Failed to fetch"))).toBe(
+            "The file could not be downloaded. Check your connection and open it again."
+        );
+    });
+
+    it("leaves any other error to the viewer", () => {
+        expect(textReadFailureMessage(new Error("Failed to download file"))).toBeUndefined();
     });
 });

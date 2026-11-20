@@ -21,26 +21,29 @@ A schema is addressed by name. Registering a name that already exists writes a n
 
 ## compliance schema list
 
-List compliance schemas (the latest version of each).
+List compliance schemas (the latest version of each), in name order: one page per call, or every page with `--auto-paginate`.
 
 ```bash
 vamscli compliance schema list [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                 |
-| --------------------- | ---- | -------- | ----------------------------------------------------------- |
-| `-d`, `--database-id` | TEXT | No       | Only schemas scoped to this database, plus `GLOBAL` schemas |
-| `--json-output`       | FLAG | No       | Output raw JSON response (`{"schemas": [...]}`)             |
+| Option                | Type    | Required | Description                                                                                                          |
+| --------------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT    | No       | Only schemas scoped to this database, plus `GLOBAL` schemas                                                          |
+| `--max-items`         | INTEGER | No       | Schemas per page (the API applies 100 when omitted; at most 200); with `--auto-paginate`, the size of each page read |
+| `--starting-token`    | TEXT    | No       | Token for pagination (the previous page's `NextToken`)                                                               |
+| `--auto-paginate`     | FLAG    | No       | Follow `NextToken` until every schema has been read, and list them together                                          |
+| `--json-output`       | FLAG    | No       | Output raw JSON response (`{"schemas": [...], "NextToken"?}`)                                                        |
 
 ```bash
 vamscli compliance schema list
+vamscli compliance schema list --auto-paginate
 vamscli compliance schema list -d my-database
+vamscli compliance schema list --max-items 50 --starting-token "token123"
 vamscli compliance schema list --json-output
 ```
 
-:::note[The listing is returned whole]
-The route returns every schema in one response and takes no paging options; there is no `--starting-token`.
-:::
+Without `--auto-paginate` the command reads one page. The response carries a `NextToken` while more schemas remain; the command prints it with `Use --starting-token to get the next page`. With `--auto-paginate` the command follows each `NextToken` and lists every schema together; `--json-output` then carries `schemas`, `totalItems`, `autoPaginated: true`, `pageCount` and the first page's `createScopes` (and keeps `NextToken` with `truncated: true` only if a page hands back the token it was sent, or after 1,000 pages). `--auto-paginate` cannot be combined with `--starting-token`. A page leaves out the schemas you may not read, so it can hold fewer schemas than `--max-items`, or none (`No compliance schemas on this page.`), while a `NextToken` is present: keep paging until no token is returned.
 
 Each record carries `schemaFormat`, printed as `Format:` — `vams-rules-v1`, or `legacy` for a row whose body is not a `vams-rules-v1` document. A legacy schema cannot be bound (`compliance bind` is refused with `Schema body must be a vams-rules-v1 document`), updated or evaluated; it is listed so that it can be found and removed with `compliance schema delete`.
 
@@ -136,14 +139,16 @@ vamscli compliance schema create -n cad-quality --schema-file cad-quality.json -
 vamscli compliance schema create -n cad-quality --schema-file cad-quality.json --json-output
 ```
 
+Registering an existing name under a database with `-d` is refused while that schema is bound (a database binding or an asset override) in any other database, as [`schema update`](#compliance-schema-update) refuses moving it there.
+
 :::note[Pipeline rules that share a workflow]
 When two or more pipeline rules of the body name the same workflow, the schema still saves and the command prints a `Warning:` line naming those rules (`--json-output` keeps the answer's `warnings` list). When that workflow restricts concurrency (`perAsset`, `perInputFile` or `perInputFileVersion`), the rules run one after another on an asset, so its evaluation takes as long as their runs together. `schema update` prints the same warning. See [Rules that wait for a running execution](../../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 
-When the body's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves and both commands print `Warning: The parent schema '<name>' was not found as a vams-rules-v1 schema you may read. ...` (code `extendsSchemaNotFound`). A parent you may not read gets the same line. See [Schema inheritance](../../concepts/compliance.md#schema-inheritance).
+When the body's `extends` names a parent that was not found as a `vams-rules-v1` schema you may read, the schema still saves and both commands print `` Warning: The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. ... `` (code `extendsSchemaNotFound`). A parent you may not read gets the same line. See [Schema inheritance](../../concepts/compliance.md#schema-inheritance).
 :::
 
 :::note[Saving a pipeline rule needs the right to run its workflow]
-Each evaluation launches a pipeline rule's workflow, so saving the rule needs the rights to run it: the workflow's execute route and a read of the workflow and its pipelines (the `compliance-admin.json` 2.1 and `compliance-global-admin.json` 1.1 templates include them). Without them the command fails with `Access forbidden. Not authorized to run the workflow of pipeline rule '<name>'`, the same whether the workflow is missing or refused. `schema update` checks only the pipeline rules whose `pipelineRef` it changes. See [Authorization model](../../concepts/compliance.md#authorization-model).
+Each evaluation launches a pipeline rule's workflow, so saving the rule needs the rights to run it: the workflow's execute route and a read of the workflow and its pipelines (the `compliance-admin.json` 2.1 and `compliance-global-admin.json` 1.1 templates include them). Without them the command fails with `Access forbidden. Not authorized to run the workflow of pipeline rule rules[<n>]` (`<n>` is the rule's position in the body's `rules`, counting from 0), the same whether the workflow is missing or refused. `schema update` checks only the pipeline rules whose `pipelineRef` it changes. See [Authorization model](../../concepts/compliance.md#authorization-model).
 :::
 
 ---
@@ -171,6 +176,10 @@ vamscli compliance schema update -n cad-quality --description "Tightened toleran
 
 :::note[The body is replaced, not merged]
 `--schema-file` replaces the whole rule document. Assets bound to the schema keep their current state until their next evaluation; run `compliance sweep` to re-evaluate them against the new version.
+:::
+
+:::note[Moving a schema to a database scope]
+`--database-id <database>` is refused while the schema is bound (a database binding or an asset override) in any other database, with `The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).` Run `compliance unbind` for those bindings first, or pass `--database-id GLOBAL`, which this check does not refuse.
 :::
 
 ---
@@ -229,7 +238,7 @@ vamscli compliance bind -n cad-quality -d my-database --no-auto-eval
 vamscli compliance bind -n strict-cad -d my-database -a my-asset
 ```
 
-A database binding is applied to the asset records in the background: the command returns once the binding is saved and prints the change (`Binding Change: bind, applying (0 of 2500 assets)`) and how to follow it, `compliance bindings`. `--wait` reads the binding until the change ends, backing off from 2 to 15 seconds between reads, and prints its counts; the command then exits `0` when the change was applied and `1` when it failed, stopped (`stalled`; run the same command again to resume it) or was still being applied when `--wait-timeout` ran out ("Stopped waiting after N s; the binding change is still being applied"). When the database is deleted while the change is applied, the change fails: `--wait` prints it as failed with the reason "The database was deleted while the binding was being applied" and exits `1`. Without `--wait` it exits `0` once the change is accepted. `--json-output` carries `applyStatus`, `applyId`, `assetCount` and `apply` (with `--wait`, as the change ended, and `waitTimedOut` when the wait ran out). While a change is being applied, another `bind` or `unbind` of the database, and `compliance sweep -d` of it, are refused. `--wait` is refused with `--asset-id`: an override is written at once. The binding marks every asset in the database that has no override `pending_evaluation` (`assetsPendingEvaluation` in the change's counts). A quarantined asset stays quarantined until an evaluation under the new schema decides it, counted as `assetsKeptQuarantined`; `compliance state` prints it with an `Awaiting Re-evaluation:` line. With automatic evaluation on, the binding queues an evaluation of each affected asset (`evaluationsQueued`); with it off, run `compliance evaluate -d <database>` or `compliance sweep`. Binding the schema the database already has, with the same automatic-evaluation setting, prints `✓ Nothing changed.` (`changed: false`); changing only `--auto-eval` / `--no-auto-eval` updates the setting without touching the asset records. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
+A database binding is applied to the asset records in the background: the command returns once the binding is saved and prints the change (`Binding Change: bind, applying (0 of 2500 assets)`) and how to follow it, `compliance bindings`. `--wait` reads the binding until the change ends, backing off from 2 to 15 seconds between reads, and prints its counts; the command then exits `0` when the change was applied and `1` when it failed, stopped (`stalled`; run the same command again to resume it) or was still being applied when `--wait-timeout` ran out ("Stopped waiting after N s; the binding change is still being applied"). When a later bind or unbind replaced the change before it ended, `--wait` stops at once, prints "The binding change was replaced by a later binding change (<applyId>, <status>)" and exits `1`; `--json-output` carries that change as `replacedBy`. When the database is deleted while the change is applied, the change fails: `--wait` prints it as failed with the reason "The database was deleted while the binding was being applied" and exits `1`. Without `--wait` it exits `0` once the change is accepted. `--json-output` carries `applyStatus`, `applyId`, `assetCount` and `apply` (with `--wait`, as the change ended, and `waitTimedOut` when the wait ran out). While a change is being applied, another `bind` or `unbind` of the database, and `compliance sweep -d` of it, are refused. `--wait` is refused with `--asset-id`: an override is written at once. The binding marks every asset in the database that has no override `pending_evaluation` (`assetsPendingEvaluation` in the change's counts). A quarantined asset stays quarantined until an evaluation under the new schema decides it, counted as `assetsKeptQuarantined`; `compliance state` prints it with an `Awaiting Re-evaluation:` line. With automatic evaluation on, the binding queues an evaluation of each affected asset (`evaluationsQueued`); with it off, run `compliance evaluate -d <database>` or `compliance sweep`. Binding the schema the database already has, with the same automatic-evaluation setting, prints `✓ Nothing changed.` (`changed: false`); changing only `--auto-eval` / `--no-auto-eval` updates the setting without touching the asset records. Only a `GLOBAL` schema or one scoped to the database can be bound, and a `legacy` schema (see `schema list`) is refused with `Schema body must be a vams-rules-v1 document`. Changing the schema of a bound database without either flag keeps its automatic-evaluation setting. `--auto-eval` and `--no-auto-eval` are rejected together with `--asset-id`: the asset route does not read the flag.
 
 ---
 
@@ -300,12 +309,12 @@ Evaluate an asset against its bound schema.
 vamscli compliance evaluate [OPTIONS]
 ```
 
-| Option                | Type | Required | Description                                                    |
-| --------------------- | ---- | -------- | -------------------------------------------------------------- |
-| `-d`, `--database-id` | TEXT | Yes      | Database ID                                                    |
-| `-a`, `--asset-id`    | TEXT | Yes      | Asset ID                                                       |
-| `-n`, `--schema-name` | TEXT | No       | Schema to evaluate against (defaults to the asset's bound one) |
-| `--json-output`       | FLAG | No       | Output raw JSON response                                       |
+| Option                | Type | Required | Description                                                                                   |
+| --------------------- | ---- | -------- | --------------------------------------------------------------------------------------------- |
+| `-d`, `--database-id` | TEXT | Yes      | Database ID                                                                                   |
+| `-a`, `--asset-id`    | TEXT | Yes      | Asset ID                                                                                      |
+| `-n`, `--schema-name` | TEXT | No       | Schema to evaluate against (defaults to the asset's bound one); another schema runs a dry run |
+| `--json-output`       | FLAG | No       | Output raw JSON response                                                                      |
 
 ```bash
 vamscli compliance evaluate -d my-database -a my-asset
@@ -313,6 +322,10 @@ vamscli compliance evaluate -d my-database -a my-asset -n cad-quality --json-out
 ```
 
 Metadata, relationship, file structure, version coverage and asset attributes rules are evaluated within the request and their results returned as `ruleResults`, with the `verdict`, `complianceState` and the `schemaVersion` evaluated. Pipeline rules start a workflow execution and complete asynchronously: `pipelineRulesPending` counts them, and `compliance state` shows the final verdict once the workflow finishes. A failed quarantine-level rule quarantines the asset at once. The response also carries `exceptionApplied` (an active exception held the asset released) and `hasRuleErrors`.
+
+:::note[Naming another schema runs a dry run]
+With `-n` naming a schema other than the asset's bound schema, the evaluation is a dry run: the rule results and the verdict are returned, and nothing is recorded. There is no evaluation record, no change to the asset's compliance state, no audit entry, no workflow launch and no cascade. Pipeline rules do not run in a dry run: each is listed as an error rule result (`Pipeline rules do not run in a dry run`) and counted on a `Pipeline Rules Not Run` line (`pipelineRulesNotRun`). After the API's message (`Dry run completed: the asset's compliance state was not changed`) the command prints `Dry Run: yes (nothing was recorded; the asset's compliance state was not changed)` and the asset's current state as `Compliance State: <state> (unchanged)`; it prints no evaluation ID, and `--json-output` carries `dryRun: true` and no `evaluationId`. The named schema must be one you may read (otherwise the command fails with `Access forbidden`), and it must be `GLOBAL` or available to the asset's database (otherwise `The schema is not available to the asset's database`). Without `-n`, or naming the bound schema, the evaluation is the normal one, with `dryRun: false`.
+:::
 
 When a pipeline rule's workflow restricts concurrency and another execution of it already holds the asset, file or file version (a user's run, the asset's earlier evaluation, or another rule of the schema on the same workflow), the rule waits instead of failing: `pipelineRulesWaiting` counts it (it is also in `pipelineRulesPending`), printed as `Pipeline Rules Waiting: N (waiting for a running execution of its workflow; they start when it ends)`, and the asset stays `pending_evaluation`. Evaluating again while a rule waits replaces the waiting evaluation, so only the newest one launches. A rule that waits longer than its workflow can run records the error `Waited too long for a running execution of the workflow`. See [Rules that wait for a running execution](../../concepts/compliance.md#rules-that-wait-for-a-running-execution).
 
@@ -334,11 +347,15 @@ vamscli compliance sweep [OPTIONS]
 | --------------------- | ---- | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `-n`, `--schema-name` | TEXT | One of `-n`, `-d` | Schema whose assets to re-evaluate, in every database it is bound to                                                    |
 | `-d`, `--database-id` | TEXT | One of `-n`, `-d` | Database whose tracked assets to re-evaluate (`POST /compliance/evaluate/{databaseId}`); no other database is evaluated |
+| `--starting-token`    | TEXT | No                | Continue an earlier sweep from the `NextToken` it printed                                                               |
+| `--no-follow`         | FLAG | No                | Make one call only and print the `NextToken` to continue with                                                           |
 | `--json-output`       | FLAG | No                | Output raw JSON response                                                                                                |
 
 ```bash
 vamscli compliance sweep -n cad-quality
 vamscli compliance sweep -d my-database
+vamscli compliance sweep -d my-database --no-follow
+vamscli compliance sweep -d my-database --starting-token "token123"
 vamscli compliance sweep -n cad-quality --json-output
 ```
 
@@ -346,7 +363,7 @@ vamscli compliance sweep -n cad-quality --json-output
 A schema with pipeline rules starts one workflow execution per asset it is bound to. Check `compliance bindings` on the databases that use the schema before sweeping a large one.
 :::
 
-The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets not evaluated, split into `skippedNotAuthorized` (assets the caller is not authorized to evaluate or may not read: counted, never listed) and `skippedArchived` (archived assets, whose records are left as they are; only those the caller may see are counted, so a role without access to the database's archive gets 0 and no `Skipped (archived, not evaluated)` line), and `assetsRemaining` the number still to evaluate. One API call evaluates at most 200 assets; the command continues with each response's `NextToken` until every asset has been evaluated once, and reports the calls together (`calls` in `--json-output`). `--no-follow` makes one call and prints the token; `--starting-token <token>` continues from it. If a call evaluates nothing (for example, it ran out of time before its first evaluation), the command stops and prints the token to continue with. A compliance record whose asset no longer exists is removed rather than evaluated and counted on a `Records of deleted assets removed` line (`removedOrphans`). An asset whose evaluation found a newer evaluation of it already started is marked `(superseded)` in the list and counted on a `Superseded (a newer evaluation had started)` line: its evaluation did not run, and the asset's state is the newer evaluation's. A superseded asset is not an error. With `-d`, the response also counts `registered` (assets of a bound database registered under the binding because they had no compliance record) and `withoutSchema` (tracked assets whose record names no schema, not evaluated), and its `skipped` counts the archived assets (`skippedArchived`, printed on a `Skipped (archived, not evaluated)` line) and the assets you may not read (`skippedNotAuthorized`, printed on a `Skipped (not authorized to evaluate)` line).
+The response lists the assets triggered and counts the rest: `skipped` is the number of bound assets not evaluated, split into `skippedNotAuthorized` (assets the caller is not authorized to evaluate or may not read: counted, never listed) and `skippedArchived` (archived assets, whose records are left as they are; only those the caller may see are counted, so a role without access to the database's archive gets 0 and no `Skipped (archived, not evaluated)` line), and `assetsRemaining` the number of assets the last call read and did not reach. One API call reads the assets a page at a time under a time budget, so it can end before it has read them all: the response carries a `NextToken` while any asset remains, read or not, and `assetsRemaining` can be `0` while it does. The command continues with each response's `NextToken` while one is present, and reports the calls together, adding up their counts (`calls` in `--json-output`); a call that evaluated nothing but returned a new token is followed too. `--no-follow` makes one call and prints the token; `--starting-token <token>` continues from it. If a call hands back the token it was given (it made no progress), the command stops and prints the token to continue with. A compliance record whose asset no longer exists is removed rather than evaluated and counted on a `Records of deleted assets removed` line (`removedOrphans`). An asset whose evaluation found a newer evaluation of it already started is marked `(superseded)` in the list and counted on a `Superseded (a newer evaluation had started)` line: its evaluation did not run, and the asset's state is the newer evaluation's. A superseded asset is not an error. With `-d`, the response also counts `registered` (assets of a bound database registered under the binding because they had no compliance record) and `withoutSchema` (tracked assets whose record names no schema, not evaluated), and its `skipped` counts the archived assets (`skippedArchived`, printed on a `Skipped (archived, not evaluated)` line) and the assets you may not read (`skippedNotAuthorized`, printed on a `Skipped (not authorized to evaluate)` line).
 
 ---
 
@@ -387,7 +404,7 @@ vamscli compliance state -d my-database --json-output
 A quarantined asset that a binding change reached prints `Awaiting Re-evaluation: under <schema>` (or, when the binding was removed, that the quarantine holds until a release or a new binding's evaluation): it stays quarantined until an evaluation under the binding now in force decides it. A quarantined asset whose evaluation is waiting for its pipeline rules stays quarantined too and prints `Awaiting Re-evaluation: an evaluation under <schema> is waiting for its pipeline rules (the quarantine holds until its verdict)` with `Last Evaluation Status: pending_pipeline`; `compliance quarantine list` keeps listing it, and `compliance evaluations` shows the pending evaluation.
 
 :::note[A deleted database's history]
-A deleted database's compliance data is read under `<databaseId>#deleted`. Pass it as typed, `-d '<databaseId>#deleted'` (quoted, so the shell does not read `#` as a comment), to `compliance state`, `compliance evaluations` and `compliance audit`, and to the `-d` filter of `compliance cascade list` and `compliance schema list`: every compliance command percent-encodes the ids it puts in a request path, and an id already typed encoded (`<databaseId>%23deleted`) is sent as it is. A compliance command that changes something of a database id whose deleted data is still being moved fails with `The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.` See [Deleted databases](../../concepts/compliance.md#deleted-databases).
+A deleted database's compliance data is read under `<databaseId>#deleted`. Pass it as typed, `-d '<databaseId>#deleted'` (quoted, so the shell does not read `#` as a comment), to `compliance state`, `compliance evaluations` and `compliance audit`, and to the `-d` filter of `compliance cascade list` and `compliance schema list`: every compliance command percent-encodes the ids it puts in a request, so type the `#` itself: `<databaseId>%23deleted` is read as the characters `%23`, not as `#`. A compliance command that changes something of a database id whose deleted data is still being moved fails with `The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.` See [Deleted databases](../../concepts/compliance.md#deleted-databases).
 :::
 
 ---
@@ -414,7 +431,7 @@ vamscli compliance evaluations -d my-database -a my-asset --max-items 10
 vamscli compliance evaluations -d my-database -a my-asset --starting-token "token123" --json-output
 ```
 
-Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. A `pending_pipeline` evaluation lists its pipeline rules in `pipelineExecutions`; a rule whose entry is `waiting` (or `launching`) is printed as `Waiting: rule-name (waiting for a running execution of its workflow)`. No execution is named, because the running one may be another user's. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`. A row whose verdict a release or exception grant made after it began outranked prints its verdict and a line such as `Not applied: the asset was released after this evaluation began`; the asset's state is the one that decision left (`notApplied` and `notAppliedMessage` in `--json-output`).
+Each evaluation carries its `evaluationId`, `schemaName`, `evaluatedAt`, the `verdict` and `ruleResults` once complete, and — for an evaluation with pipeline rules — the `executionId` of the workflow execution behind it. A row with `hasRuleErrors` names in `errorRules` the rules whose tooling failed; they are printed as `! rule-name [enforcement] (error)` apart from the failed rules and are absent from `violations`, because they produced no verdict. A `pending_pipeline` evaluation lists its pipeline rules in `pipelineExecutions`; a rule whose entry is `waiting` (or `launching`) is printed as `Waiting: rule-name (waiting for a running execution of its workflow)`. No execution is named, because the running one may be another user's. The response carries a `NextToken` when more evaluations exist; pass it back as `--starting-token`. A row whose verdict was not applied (a release, an exception grant or a schema binding change made after it began, or an outcome that could not be written to the asset) prints its verdict and a line such as `Not applied: the asset was released after this evaluation began`; the asset's state is the one that decision left (`notApplied` and `notAppliedMessage` in `--json-output`).
 
 ---
 
@@ -666,13 +683,13 @@ vamscli compliance audit [OPTIONS]
 vamscli compliance audit
 vamscli compliance audit --event-type quarantine_released --max-items 100
 vamscli compliance audit -d my-database --text reviewer
-vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59Z
+vamscli compliance audit --start-date 2026-09-01T00:00:00Z --end-date 2026-09-30T23:59:59.999999Z
 vamscli compliance audit --starting-token "token123"
 vamscli compliance audit -d my-database -a my-asset
 vamscli compliance audit -d my-database -a my-asset --json-output
 ```
 
-Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `evaluation_error` (a rule's tooling failed in an evaluation, or its schema could not be loaded; the details name the rules), `quarantine_released`, `exception_granted`, `cascade_triggered`, `cascade_approved`, `schema_binding_applied_to_asset` (one per asset a database binding change reached, with its previous and new state), `schema_binding_auto_eval_changed`, `schema_binding_apply_finished` (a database binding change finished applying in the background, with its outcome and totals), and for a deleted database `database_deleted`, `cascade_database_deleted` and `database_compliance_moved` (recorded under `<databaseId>#deleted`). `--database-id` and `--asset-id` are given together; `--event-type` is rejected with them because the per-asset route has no such filter.
+Event types include `schema_bound_to_database`, `schema_bound_to_asset`, `schema_unbound_from_database`, `schema_unbound_from_asset`, `schema_deleted`, `compliance_check`, `evaluation_error` (a rule's tooling failed in an evaluation, or its schema could not be loaded; the details name the rules), `quarantine_released`, `exception_granted`, `cascade_triggered`, `cascade_approved`, `schema_binding_applied_to_asset` (one per asset a database binding change reached, with its previous and new state), `schema_binding_auto_eval_changed`, `schema_binding_apply_finished` (a database binding change finished applying in the background, with its outcome and totals), and for a deleted database `database_deleted`, `cascade_database_deleted` and `database_compliance_moved` (recorded under `<databaseId>#deleted`). `--database-id` and `--asset-id` are given together and read that asset's own history; with `--event-type` or `--text` as well, the command reads the global trail narrowed to that asset, because the per-asset route has no such filters.
 
 :::note[The audit routes return one page per call]
 Entries are returned most recent first, `--max-items` per page (`--limit` is the same option). The response carries a `NextToken` when more entries exist; pass it back as `--starting-token` with the same filters to read the next page. With `--database-id`, or when you may read only some databases, only those databases' entries are read, so other databases' entries never take a page's place. A page can still hold fewer entries than `--max-items`, even none, while a `NextToken` is printed, when `--text` or `--event-type` leave out most of the entries a call reads (each call reads a bounded part): keep paging until no token is printed. Without `--event-type` the global trail is one timestamp-ordered listing, so entries of different event types interleave by time; the token is opaque and belongs to the filters it was issued for.

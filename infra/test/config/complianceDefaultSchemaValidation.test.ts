@@ -103,14 +103,32 @@ const CASES: Array<{ name: string; mutate: (c: any) => void; violates: boolean }
         violates: false,
     },
     {
-        // getConfig() backfills a missing app.compliance block with autoLoadDefaultSchema: true, so an
-        // older config.json that predates the block is still held to the rule.
-        name: "compliance block absent (backfilled to seed), default asset metadata schema off",
+        // A v2.6 config.json predates the app.compliance block. getConfig() backfills its
+        // autoLoadDefaultSchema from autoLoadDefaultAssetSchema, so such a config with the default
+        // asset metadata schema off upgrades without an edit instead of failing the deploy.
+        name: "compliance block absent, default asset metadata schema off (v2.6 upgrade)",
         mutate: (c) => {
             delete c.app.compliance;
             c.app.metadataSchema.autoLoadDefaultAssetSchema = false;
         },
-        violates: true,
+        violates: false,
+    },
+    {
+        name: "autoLoadDefaultSchema unset in a present block, default asset metadata schema off",
+        mutate: (c) => {
+            delete c.app.compliance.autoLoadDefaultSchema;
+            c.app.metadataSchema.autoLoadDefaultAssetSchema = false;
+        },
+        violates: false,
+    },
+    {
+        // Only an explicit true is held to the rule; the backfill never produces the bad pair.
+        name: "compliance block absent, default asset metadata schema on (backfilled to seed)",
+        mutate: (c) => {
+            delete c.app.compliance;
+            c.app.metadataSchema.autoLoadDefaultAssetSchema = true;
+        },
+        violates: false,
     },
     {
         // A missing metadataSchema block is backfilled with every flag true, so the seed has its schema.

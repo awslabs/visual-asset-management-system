@@ -40,12 +40,13 @@ Metadata schema validation is enforced only when metadata is created or updated 
 
 Amazon API Gateway waits for the integration timeout configured in `app.api.apiGatewayRest.apiGatewayTimeoutTime` — `29` seconds by default — before returning a `504`. The underlying AWS Lambda function continues executing for up to **15 minutes**. This affects:
 
-| Operation                              | Impact                                             |
-| -------------------------------------- | -------------------------------------------------- |
-| Listing assets with thousands of files | Response may time out while Lambda completes       |
-| Asset export with deep link trees      | Large response payloads take time to assemble      |
-| Bulk metadata operations               | Individual batch writes continue after timeout     |
-| Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504 |
+| Operation                              | Impact                                                                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Listing assets with thousands of files | Response may time out while Lambda completes                                                                          |
+| Asset export with deep link trees      | Large response payloads take time to assemble                                                                         |
+| Bulk metadata operations               | Individual batch writes continue after timeout                                                                        |
+| Amazon OpenSearch re-indexing          | Lambda may complete indexing after API returns 504                                                                    |
+| Copying or moving a large file         | The AWS Lambda function copies the file in Amazon S3 within the request; the copy continues after the API returns 504 |
 
 Deployments that routinely operate on assets with many files or many relationships can raise the integration timeout up to `300` seconds so these operations complete within a single synchronous request. Values above `29` seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md). The 15-minute AWS Lambda timeout remains the outer bound.
 
@@ -137,6 +138,10 @@ The largest input the 3D Preview Thumbnail pipeline accepts is the free space of
 ### Video SOP/BOM Extraction Pipeline Input Limits
 
 The Video SOP/BOM Extraction pipeline accepts at most **4 video files** per run (`limits.maxVideoFiles`), **4 GB** per video and **16 GB** per run (`config.ts` constants sized to the container's 100 GiB ephemeral volume), and **240 minutes** of summed audio (`limits.maxTotalDurationMinutes`, at most 480, the Amazon Transcribe ceiling). Templates and workflows cannot express these bounds, so the pipeline enforces them itself: the file count, extensions, and byte sizes are checked by the entry-point Lambda before any AWS Batch job is submitted, and the duration by the container from the extracted audio before the transcription starts. A refused run fails its pipeline step through the AWS Step Functions task token with a readable cause visible in the execution details (for example `VideoSopBomInputRejected: 5 video files selected; this deployment allows at most 4.`); no partial deliverables are written. Whole-asset and folder selections are refused by the execute API with a `400` response. See [Video SOP/BOM Extraction — Limits](../pipelines/video-sop-bom.md#limits).
+
+### Download as Zip Archive Size and Retention
+
+A Download as Zip archive is a single Amazon S3 object, so one archive holds at most 5 TiB, and a selection larger than that is refused rather than split; download it as several archives. An archive is kept for 7 days and the retention is not configurable, so download it within that time or request it again. See [Download as Zip Limits](../additional/quotas.md#download-as-zip-limits).
 
 ### Pipeline Output Path Requirements
 

@@ -15,8 +15,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 
+from common.compliance import listing
 from common.logRedaction import redact_log_text
 from common.metadataSchemaValidation import extract_file_extension
 from customLogging.logger import safeLogger
@@ -25,6 +27,7 @@ from models.compliance import (
     METADATA_FILE_SCOPES,
     AssetAttributesRule,
     ComplianceRule,
+    EnforcementLevel,
     EvaluationVerdict,
     FileStructureRule,
     MetadataCheck,
@@ -37,6 +40,7 @@ from models.compliance import (
     RULE_STATUS_ERROR,
     RULE_STATUS_EVALUATED,
     RULE_TYPE_MODELS,
+    RESERVED_RULE_NAME_PREFIX,
     Tolerance,
     ToleranceOperator,
     VersionCoverageRule,
@@ -113,12 +117,21 @@ MANUAL_DECISION_AT_FIELD = "manualDecisionAt"
 MANUAL_DECISION_FIELDS = (MANUAL_DECISION_FIELD, MANUAL_DECISION_AT_FIELD)
 MANUAL_DECISION_RELEASED = "released"
 MANUAL_DECISION_EXCEPTION_GRANTED = "exceptionGranted"
-# The evaluation-row `notAppliedMessage` of an evaluation whose outcome a later decision outranked;
-# its `notApplied` is the decision.
+# The human decisions recorded on the compliance record (`MANUAL_DECISION_FIELD`).
+MANUAL_DECISIONS = (MANUAL_DECISION_RELEASED, MANUAL_DECISION_EXCEPTION_GRANTED)
+# An evaluation outranked by a binding change made after it began (`began_before_binding_change`),
+# and one whose outcome could not be written to the record before its claim was undone.
+NOT_APPLIED_BINDING_CHANGED = "bindingChanged"
+NOT_APPLIED_NOT_RECORDED = "notRecorded"
+# The evaluation-row `notApplied` values with their `notAppliedMessage`: the decision that outranked
+# the evaluation's outcome (a `MANUAL_DECISIONS` value), a binding change, or a write that failed.
 NOT_APPLIED_MESSAGES = {
     MANUAL_DECISION_RELEASED: "Not applied: the asset was released after this evaluation began",
     MANUAL_DECISION_EXCEPTION_GRANTED: (
         "Not applied: an exception was granted after this evaluation began"),
+    NOT_APPLIED_BINDING_CHANGED: (
+        "Not applied: the asset's compliance schema binding changed after this evaluation began"),
+    NOT_APPLIED_NOT_RECORDED: "Not applied: the outcome could not be written to the asset",
 }
 
 # Evaluation record statuses.
@@ -193,40 +206,74 @@ def schema_format(schema_body: Any) -> str:
     return VAMS_RULES_V1 if is_vams_rules_schema(parse_schema_body(schema_body)) else SCHEMA_FORMAT_LEGACY
 
 
+# The `status: error` results of the rules an evaluation could not read (`unreadable_rule_results`):
+# a rule that does not parse, and the rules of a parent `extends` names that was not found. The
+# messages name no schema and no rule content.
+UNREADABLE_RULE_MESSAGE = "The rule definition could not be read"
+# Under the reserved prefix, so no rule of the schema can carry the same name.
+UNRESOLVED_PARENT_RULE_NAME = f"{RESERVED_RULE_NAME_PREFIX}extends"
+UNRESOLVED_PARENT_MESSAGE = ("The parent schema was not found as a vams-rules-v1 schema, or the "
+                             "inheritance chain is too deep; its rules were not evaluated")
+# An evaluation whose schema has a rule it could not read, or a parent it could not resolve,
+# reaches no verdict whatever the other rules say (`TOOLING_FAILURES_APPLY_ENFORCEMENT` either
+# way): its pipeline rules are not launched, and the asset's state is left as it is.
+UNREADABLE_SCHEMA_MESSAGE = ("The schema has a rule that could not be read, or a parent schema "
+                             "that was not found; no verdict was reached")
+PIPELINE_RULE_NOT_RUN_MESSAGE = ("Pipeline rule not run: the schema has a rule that could not be "
+                                 "read, or a parent schema that was not found")
+# A dry run (an evaluation against a schema other than the asset's bound one) launches no workflow.
+DRY_RUN_PIPELINE_RULE_MESSAGE = "Pipeline rules do not run in a dry run"
+
+
+def pipeline_rules_not_run(pipeline_rules: Dict[str, Any], message: str) -> List[RuleResult]:
+    """One `status: error` result per pipeline rule that is not launched, with `message`."""
+    return [_tooling_error(name, _enum_value(rule.ruleType), _enum_value(rule.enforcement), message)
+            for name, rule in (pipeline_rules or {}).items()]
+
+
+def _enum_value(value: Any) -> str:
+    return value.value if isinstance(value, Enum) else str(value)
+
+
 def resolve_rules(
     schema_body: Dict[str, Any],
     load_parent: Callable[[str], Optional[Dict[str, Any]]],
     depth: int = 0,
+    unresolved: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Merged rule dicts for a schema body, following its `extends` chain.
 
     `load_parent(schema_name)` returns a parent's schema body (or None). A missing parent, a
     non-vams-rules parent, or a chain deeper than MAX_SCHEMA_INHERITANCE_DEPTH stops the walk
-    and the child's own rules are used from that point.
+    and the child's own rules are used from that point; the parent's name is then appended to
+    `unresolved` when one is given, so the evaluation records that rules were left out.
     """
     parent_name = schema_body.get("extends")
     if not parent_name:
         return schema_body.get("rules", {}) or {}
     if depth >= MAX_SCHEMA_INHERITANCE_DEPTH:
         logger.warning("Schema inheritance chain exceeds the depth bound; using child rules only")
+        if unresolved is not None:
+            unresolved.append(parent_name)
         return schema_body.get("rules", {}) or {}
 
     parent_body = load_parent(parent_name)
     if parent_body is None or not is_vams_rules_schema(parent_body):
         logger.warning("Parent schema not found or not vams-rules-v1; using child rules only")
+        if unresolved is not None:
+            unresolved.append(parent_name)
         return schema_body.get("rules", {}) or {}
 
-    parent_rules = resolve_rules(parent_body, load_parent, depth + 1)
+    parent_rules = resolve_rules(parent_body, load_parent, depth + 1, unresolved)
     return resolve_schema_inheritance(schema_body, {"rules": parent_rules})
 
 
 def parse_resolved_rules(rules: Dict[str, Any]) -> Dict[str, ComplianceRule]:
-    """Typed rule models for raw rule dicts; a rule that fails to parse is logged and skipped."""
+    """Typed rule models for raw rule dicts; a rule that fails to parse is logged and skipped
+    (`unreadable_rule_results` records it for the evaluation)."""
     parsed: Dict[str, ComplianceRule] = {}
     for rule_name, rule_def in (rules or {}).items():
-        if not isinstance(rule_def, dict):
-            continue
-        model = RULE_TYPE_MODELS.get(rule_def.get("ruleType"))
+        model = RULE_TYPE_MODELS.get(rule_def.get("ruleType")) if isinstance(rule_def, dict) else None
         if model is None:
             logger.warning(f"Unknown rule type in rule '{rule_name}'")
             continue
@@ -235,6 +282,32 @@ def parse_resolved_rules(rules: Dict[str, Any]) -> Dict[str, ComplianceRule]:
         except (ValueError, TypeError) as e:
             logger.warning(f"Failed to parse rule '{rule_name}': {e}")
     return parsed
+
+
+def unreadable_rule_results(rules: Dict[str, Any], parsed: Dict[str, ComplianceRule],
+                            unresolved_parents: List[str]) -> List[RuleResult]:
+    """One `status: error` result for each raw rule `parse_resolved_rules` left out of `parsed`,
+    and one for the rules of a parent the `extends` chain did not resolve (`unresolved_parents`).
+    The evaluation therefore records that it ran on part of its rules, and one whose every rule
+    is left out reaches no verdict rather than a compliant one. A result keeps the rule's own type
+    and enforcement when they are valid; otherwise it is recorded as `quarantine`, the strictest,
+    which applies when `TOOLING_FAILURES_APPLY_ENFORCEMENT` is set."""
+    results = []
+    for rule_name, rule_def in (rules or {}).items():
+        if rule_name in parsed:
+            continue
+        rule_def = rule_def if isinstance(rule_def, dict) else {}
+        rule_type = rule_def.get("ruleType")
+        enforcement = rule_def.get("enforcement")
+        results.append(_tooling_error(
+            str(rule_name), rule_type if isinstance(rule_type, str) and rule_type else "unknown",
+            enforcement if enforcement in {level.value for level in EnforcementLevel}
+            else EnforcementLevel.quarantine.value,
+            UNREADABLE_RULE_MESSAGE))
+    if unresolved_parents:
+        results.append(_tooling_error(UNRESOLVED_PARENT_RULE_NAME, UNRESOLVED_PARENT_RULE_NAME,
+                                      EnforcementLevel.quarantine.value, UNRESOLVED_PARENT_MESSAGE))
+    return results
 
 
 class RuleGroups(NamedTuple):
@@ -1416,14 +1489,38 @@ def parse_timestamp(value: Any) -> Optional[datetime]:
     return parsed
 
 
+# When a binding last changed on the record (a database binding applied to it or removed from it,
+# an asset override set or cleared). An evaluation that began at or before it ran under the binding
+# before it, so it no longer owns the record (`evaluation_owns_state_row`).
+BINDING_CHANGED_AT_FIELD = listing.BINDING_CHANGED_AT_ATTRIBUTE
+
+
+def began_before_binding_change(state_row: Optional[Dict[str, Any]], evaluated_at: Any) -> bool:
+    """Whether an evaluation began (`evaluated_at`) at or before the record's last binding change
+    (`BINDING_CHANGED_AT_FIELD`). A record without the stamp has had no binding change since it was
+    stamped, so no evaluation is held off by it. An unparseable time on either side is compared as
+    text."""
+    changed = (state_row or {}).get(BINDING_CHANGED_AT_FIELD)
+    if not changed:
+        return False
+    this_time, changed_time = parse_timestamp(evaluated_at), parse_timestamp(changed)
+    if this_time is not None and changed_time is not None:
+        return this_time <= changed_time
+    return str(evaluated_at) <= str(changed)
+
+
 def evaluation_owns_state_row(state_row: Optional[Dict[str, Any]], evaluation_id: str,
                               evaluated_at: Any) -> bool:
     """Whether an evaluation may write the asset-state row: it is the row's `lastEvaluationId`, or
     it began (`evaluated_at`) after the row's `lastEvaluatedAt`, or the row records no evaluation
     yet. An evaluation older than the row's last one — a synchronous evaluation that lost the race,
     a pipeline-rule callback landing after a newer evaluation — does not own the row, so its outcome
-    never replaces a newer one. An unparseable timestamp on either side is compared as text."""
+    never replaces a newer one. An evaluation that began before the record's binding last changed
+    (`began_before_binding_change`) owns it in no case: it ran under the binding before the change.
+    An unparseable timestamp on either side is compared as text."""
     row = state_row or {}
+    if began_before_binding_change(row, evaluated_at):
+        return False
     if not row.get("lastEvaluationId") or row.get("lastEvaluationId") == evaluation_id:
         return True
     last = row.get("lastEvaluatedAt")
@@ -1443,7 +1540,7 @@ def outranking_decision(state_row: Optional[Dict[str, Any]], evaluated_at: Any) 
     side counts as before the evaluation, so the evaluation decides as it always did."""
     row = state_row or {}
     decision = row.get(MANUAL_DECISION_FIELD)
-    if decision not in NOT_APPLIED_MESSAGES:
+    if decision not in MANUAL_DECISIONS:
         return None
     decided, started = parse_timestamp(row.get(MANUAL_DECISION_AT_FIELD)), parse_timestamp(evaluated_at)
     if decided is None or started is None or decided <= started:

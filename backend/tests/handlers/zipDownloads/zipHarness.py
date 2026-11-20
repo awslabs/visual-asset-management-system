@@ -448,6 +448,17 @@ def land_archive(env, row, size=10, token=UPLOAD_TOKEN, version="v1"):
                metadata={env.zd.ARCHIVE_UPLOAD_TOKEN_METADATA: token})
 
 
+def write_resolved_manifest(env, row, members=("/a.glb",)):
+    """The resolved manifest the container writes before it starts the archive (one JSON line per
+    member). The download URL route rechecks these members before it signs the archive."""
+    key = env.zd.resolved_manifest_key(row["databaseId"], row["assetId"], row["userId"],
+                                       row["requestId"])
+    row["resolvedManifestKey"] = key
+    body = "".join(json.dumps({"relativePath": m, "versionId": "va1", "size": 100}) + "\n"
+                   for m in members)
+    env.s3.put_object(Bucket=AUX, Key=key, Body=body.encode("utf-8"))
+
+
 def blocklist(key, content_type):
     """Stand-in for common.s3.validateUnallowedFileExtensionAndContentType: blocks .exe."""
     return not key.lower().endswith(".exe") and content_type != "application/x-msdownload"
