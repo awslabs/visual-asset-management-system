@@ -10,7 +10,7 @@ import {
     requestPresignedUrl,
 } from "./presignedUrl";
 import { MAX_RASTER_OVERLAYS } from "./rasterEligibility";
-import { PreparedRaster } from "./rasterResolver";
+import { FileIdentity, PreparedRaster } from "./rasterResolver";
 
 /** The part of a MapLibre map the manager uses (kept narrow so tests can supply a stand-in). */
 export interface MapLike {
@@ -106,16 +106,36 @@ const MAX_ERROR_REFRESHES = 3;
  */
 export const AUTO_RETRY_DELAY_MS = 4 * 1000;
 
-/** The same file, whichever way it was named: leading slashes ignored; versions must be equal (unpinned equals unpinned only). */
-function sameFile(a: RasterFileRef, b: RasterFileRef, latestVersionId?: string): boolean {
-    const key = (file: RasterFileRef) => file.key.replace(/^\/+/, "");
-    if (a.databaseId !== b.databaseId || a.assetId !== b.assetId || key(a) !== key(b)) return false;
-    // Compare the version each side actually loads: an unpinned file loads the latest version, so it
-    // is the same bytes as a pin on that version. When the latest is not known, a pin and the unpinned
-    // file may be different content and stay separate.
-    const effective = (file: RasterFileRef) => file.versionId || latestVersionId || "";
+/** What the API said about a file (its asset-relative path and latest version), when it was asked. */
+export type IdentityLookup = (file: RasterFileRef) => FileIdentity | undefined;
+
+const stripSlashes = (path: string) => path.replace(/^\/+/, "");
+const fileName = (file: RasterFileRef) => {
+    const parts = file.key.split("/");
+    return parts[parts.length - 1];
+};
+
+/**
+ * The same file, whichever way it was named. The path is the asset-relative path the API returned
+ * when it is known (a file manager entry names the full stored key, a source's recorded COG the path
+ * inside the asset), else the key as given; leading slashes are ignored. An unpinned file loads the
+ * latest version, so it is the same bytes as a pin on that version; when the latest is not known, a
+ * pin and the unpinned file may be different content and stay separate.
+ */
+function sameFile(a: RasterFileRef, b: RasterFileRef, identityOf?: IdentityLookup): boolean {
+    if (a.databaseId !== b.databaseId || a.assetId !== b.assetId) return false;
+    const path = (file: RasterFileRef) =>
+        stripSlashes(identityOf?.(file)?.relativePath ?? file.key);
+    if (stripSlashes(a.key) !== stripSlashes(b.key) && path(a) !== path(b)) return false;
+    const effective = (file: RasterFileRef) =>
+        file.versionId || identityOf?.(file)?.latestVersionId || "";
     if (!a.versionId && !b.versionId) return true;
     return effective(a) !== "" && effective(a) === effective(b);
+}
+
+/** A lookup that answers the same latest version for every file (callers that know one file). */
+export function latestOnly(latestVersionId?: string): IdentityLookup | undefined {
+    return latestVersionId ? () => ({ latestVersionId }) : undefined;
 }
 
 function boundsOfCorners(corners: [number, number][]): [[number, number], [number, number]] {
@@ -163,27 +183,36 @@ export class RasterLayerManager {
      * the same COG selected by itself are one raster, though their ids can differ in how the key and
      * version are written.
      */
-    hasFile(file: RasterFileRef, latestVersionId?: string): boolean {
-        return this.items.some((item) => sameFile(item.entry.file, file, latestVersionId));
+    hasFile(file: RasterFileRef, identityOf?: IdentityLookup): boolean {
+        return this.items.some((item) => sameFile(item.entry.file, file, identityOf));
     }
 
     /**
-     * True when a layer shows the same file under a different version identity (one pinned, one
-     * unpinned), so whether they are the same version needs the file's latest version id.
+     * The listed files that may be this file under another name or version: same database, asset
+     * and file name, but not the same by key and version as written. A file manager entry names the
+     * full stored key and a source's COG the path inside the asset, and one may be pinned and the
+     * other not, so whether they are one raster needs the API's identity of each (see sameFile).
      */
-    needsVersionCheck(file: RasterFileRef): boolean {
-        return this.items.some(
-            (item) =>
-                sameFile(
-                    { ...item.entry.file, versionId: undefined },
-                    { ...file, versionId: undefined }
-                ) && !sameFile(item.entry.file, file)
-        );
+    possibleDuplicates(file: RasterFileRef): RasterFileRef[] {
+        return this.items
+            .map((item) => item.entry.file)
+            .filter(
+                (listed) =>
+                    listed.databaseId === file.databaseId &&
+                    listed.assetId === file.assetId &&
+                    fileName(listed) === fileName(file) &&
+                    !sameFile(listed, file)
+            );
     }
 
-    add(prepared: PreparedRaster, opacity = 0.8, latestVersionId?: string): AddResult {
+    /** True when whether this file is already listed depends on the API's identity of the files. */
+    needsVersionCheck(file: RasterFileRef): boolean {
+        return this.possibleDuplicates(file).length > 0;
+    }
+
+    add(prepared: PreparedRaster, opacity = 0.8, identityOf?: IdentityLookup): AddResult {
         if (this.disposed) return { ok: false, message: "The map is closed." };
-        if (this.has(prepared.id) || this.hasFile(prepared.file, latestVersionId)) {
+        if (this.has(prepared.id) || this.hasFile(prepared.file, identityOf)) {
             return { ok: true };
         }
         if (this.items.length >= this.max) {

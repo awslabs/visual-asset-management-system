@@ -10,7 +10,8 @@ import {
     PrepareOptions,
     PreparedRaster,
     prepareRaster,
-    latestVersionId,
+    FileIdentity,
+    fileIdentity,
     rasterId,
     rasterLabel,
 } from "./rasterResolver";
@@ -42,6 +43,9 @@ export interface UseRasterLayers {
     retry: (id: string) => Promise<boolean>;
 }
 
+/** Rounds of identity lookups for one file, in case files of the same name are listed meanwhile. */
+const MAX_IDENTITY_ROUNDS = 3;
+
 export interface UseRasterLayersOptions {
     /** Id of the first layer rasters must sit below; evaluated each time layers are placed. */
     beforeLayerId?: () => string | undefined;
@@ -60,6 +64,8 @@ export function useRasterLayers(
     const [notices, setNotices] = useState<RasterNotice[]>([]);
     const [busy, setBusy] = useState(0);
     const manager = useRef<RasterLayerManager | null>(null);
+    // What the API said about each file asked about on this map, by raster id (see addFile).
+    const identities = useRef(new Map<string, FileIdentity>());
     const mounted = useRef(true);
     const beforeLayerId = useRef(options.beforeLayerId);
     beforeLayerId.current = options.beforeLayerId;
@@ -80,6 +86,7 @@ export function useRasterLayers(
             },
         });
         manager.current = created;
+        identities.current = new Map();
         return () => {
             created.dispose();
             if (manager.current === created) manager.current = null;
@@ -109,14 +116,29 @@ export function useRasterLayers(
                 if (ready.mode === "tile") await registerCogProtocol();
                 // The map may have gone while the file was being read.
                 if (!mounted.current || !manager.current) return false;
-                // A source and its COG are one layer: the COG's id is what is shown.
-                // The same file selected unpinned and at a pinned version is one raster when the pin
-                // is the latest version: ask the API for the latest only in that case.
-                const latest = manager.current.needsVersionCheck(ready.file)
-                    ? await latestVersionId(ready.file)
-                    : undefined;
+                // A source and its COG are one layer: the COG's id is what is shown. The same file
+                // can be named by its full stored key (file manager) or its path inside the asset
+                // (the source's COG link), and pinned or not: when a listed file has the same name,
+                // ask the API who each file is (its path and latest version) and compare those.
+                // Files listed while the answers were awaited are checked too (bounded).
+                for (let round = 0; round < MAX_IDENTITY_ROUNDS; round += 1) {
+                    const listed = manager.current.possibleDuplicates(ready.file);
+                    if (listed.length === 0) break;
+                    const pending = [ready.file, ...listed]
+                        .map((candidate) => ({ candidate, id: rasterId(candidate) }))
+                        .filter(({ id }) => !identities.current.has(id));
+                    if (pending.length === 0) break;
+                    const answers = await Promise.all(
+                        pending.map(({ candidate }) => fileIdentity(candidate))
+                    );
+                    pending.forEach(({ id }, index) => identities.current.set(id, answers[index]));
+                    if (!mounted.current || !manager.current) return false;
+                }
                 if (!mounted.current || !manager.current) return false;
-                const result = manager.current.add(ready, undefined, latest);
+                const known = identities.current;
+                const result = manager.current.add(ready, undefined, (candidate) =>
+                    known.get(rasterId(candidate))
+                );
                 if (!result.ok) {
                     notice({ id, label, text: result.message, kind: "warning" });
                     return false;

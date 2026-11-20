@@ -8,6 +8,7 @@ import {
     MapLike,
     RasterLayerManager,
     firstLayerIdWithPrefix,
+    latestOnly,
 } from "./RasterLayerManager";
 import { PreparedRaster } from "./rasterResolver";
 import { RasterDownloadRefused } from "./presignedUrl";
@@ -366,9 +367,9 @@ describe("RasterLayerManager", () => {
         manager.add(cog());
         expect(manager.needsVersionCheck(cog("v7").file)).toBe(true);
         expect(manager.needsVersionCheck(cog().file)).toBe(false);
-        expect(manager.add(cog("v7"), undefined, "v7")).toEqual({ ok: true });
+        expect(manager.add(cog("v7"), undefined, latestOnly("v7"))).toEqual({ ok: true });
         expect(manager.entries()).toHaveLength(1);
-        manager.add(cog("v6"), undefined, "v7");
+        manager.add(cog("v6"), undefined, latestOnly("v7"));
         expect(manager.entries()).toHaveLength(2);
         // Without the latest, the pin stays apart.
         manager.add(cog("v5"));
@@ -377,9 +378,44 @@ describe("RasterLayerManager", () => {
         const other = new RasterLayerManager(new FakeMap(), OPTIONS(map));
         other.add(cog("v7"));
         expect(other.needsVersionCheck(cog().file)).toBe(true);
-        other.add(cog(), undefined, "v7");
+        other.add(cog(), undefined, latestOnly("v7"));
         expect(other.entries()).toHaveLength(1);
         other.dispose();
+        manager.dispose();
+    });
+
+    it("matches a full stored key and the path inside the asset by the API's identity (d17-D1)", () => {
+        const map = new FakeMap();
+        const manager = new RasterLayerManager(map, OPTIONS(map));
+        const cog = (key: string, versionId?: string): PreparedRaster => ({
+            ...prepared("x"),
+            id: `db/a/${key}${versionId ? `@${versionId}` : ""}`,
+            file: { databaseId: "db", assetId: "a", key, versionId },
+        });
+        const identities: Record<string, { relativePath: string; latestVersionId: string }> = {
+            "/a.tif.cog.tif": { relativePath: "/a.tif.cog.tif", latestVersionId: "v7" },
+            "xroot/a.tif.cog.tif": { relativePath: "/a.tif.cog.tif", latestVersionId: "v7" },
+            "xroot/sub/a.tif.cog.tif": {
+                relativePath: "/sub/a.tif.cog.tif",
+                latestVersionId: "v2",
+            },
+        };
+        const identityOf = (file: { key: string }) => identities[file.key];
+        manager.add(cog("/a.tif.cog.tif"));
+        // Same name, other spelling of the key: worth asking the API; a file in a subfolder too.
+        expect(manager.possibleDuplicates(cog("xroot/a.tif.cog.tif", "v7").file)).toHaveLength(1);
+        // Without the identity the two spellings are not known to be one file.
+        expect(manager.hasFile(cog("xroot/a.tif.cog.tif", "v7").file)).toBe(false);
+        expect(manager.add(cog("xroot/a.tif.cog.tif", "v7"), undefined, identityOf)).toEqual({
+            ok: true,
+        });
+        expect(manager.entries()).toHaveLength(1);
+        // An older pin of the same file, and a file of the same name elsewhere, are their own rows.
+        manager.add(cog("xroot/a.tif.cog.tif", "v6"), undefined, identityOf);
+        manager.add(cog("xroot/sub/a.tif.cog.tif"), undefined, identityOf);
+        expect(manager.entries()).toHaveLength(3);
+        // Another file name is never a candidate.
+        expect(manager.possibleDuplicates(cog("xroot/b.tif.cog.tif").file)).toHaveLength(0);
         manager.dispose();
     });
 

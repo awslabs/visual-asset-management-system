@@ -187,12 +187,21 @@ async function lookupSize(file: RasterFileRef): Promise<number | undefined> {
     }
 }
 
+/** Who a file is, as the API names it: its asset-relative path and the version its latest is at. */
+export interface FileIdentity {
+    /** The path inside the asset, with a leading slash, whatever form of the key was asked about. */
+    relativePath?: string;
+    /** The version id the unpinned (latest) file is at right now. */
+    latestVersionId?: string;
+}
+
 /**
- * The version id the unpinned (latest) file is at right now, or undefined when the API cannot say.
- * Used to tell whether a file chosen at a pinned version and the same file chosen unpinned are the
- * same bytes. The API answers; nothing is derived here.
+ * The file's identity from the file-info route, or an empty one when the API cannot say. A file can
+ * be named by its full stored key (the file manager) or by its path inside the asset (a source's
+ * recorded COG); the API resolves both to one `relativePath`. Used to tell whether two entries are
+ * the same bytes. The API answers; nothing is derived here.
  */
-export async function latestVersionId(file: RasterFileRef): Promise<string | undefined> {
+export async function fileIdentity(file: RasterFileRef): Promise<FileIdentity> {
     try {
         const [ok, info] = await fetchFileInfo({
             databaseId: file.databaseId,
@@ -200,15 +209,26 @@ export async function latestVersionId(file: RasterFileRef): Promise<string | und
             fileKey: file.key,
             includeVersions: true,
         });
-        if (!ok) return undefined;
+        if (!ok) return {};
         const versions: any[] = (info as any)?.versions ?? [];
         const latest = versions.find((version) => version?.isLatest) ?? versions[0];
-        return typeof latest?.versionId === "string" && latest.versionId
-            ? latest.versionId
-            : undefined;
+        const relativePath = (info as any)?.relativePath;
+        return {
+            relativePath:
+                typeof relativePath === "string" && relativePath ? relativePath : undefined,
+            latestVersionId:
+                typeof latest?.versionId === "string" && latest.versionId
+                    ? latest.versionId
+                    : undefined,
+        };
     } catch {
-        return undefined;
+        return {};
     }
+}
+
+/** The version id the unpinned (latest) file is at right now, or undefined when the API cannot say. */
+export async function latestVersionId(file: RasterFileRef): Promise<string | undefined> {
+    return (await fileIdentity(file)).latestVersionId;
 }
 
 /** Whether the source's latest version differs from the version a COG was converted from. */

@@ -29,6 +29,7 @@ import {
     attributeFacts,
     clearRasterAttributeCache,
     cogKeyFor,
+    fileIdentity,
     isCogFileName,
     isStaleCog,
     prepareRaster,
@@ -355,5 +356,33 @@ describe("refusals from the API", () => {
         (fromUrl as jest.Mock).mockRejectedValue(new Error("boom"));
         const result: any = await prepareRaster(FILE);
         expect(result).toMatchObject({ refused: true, reason: "unreadable" });
+    });
+});
+
+describe("fileIdentity (d17-D1)", () => {
+    it("returns the API's asset-relative path and the latest version", async () => {
+        (fetchFileInfo as jest.Mock).mockResolvedValue([
+            true,
+            {
+                relativePath: "/maps/site.tif.cog.tif",
+                versions: [
+                    { versionId: "old", isLatest: false },
+                    { versionId: "new", isLatest: true },
+                ],
+            },
+        ]);
+        await expect(
+            fileIdentity({ databaseId: "db", assetId: "a1", key: "xa1/maps/site.tif.cog.tif" })
+        ).resolves.toEqual({ relativePath: "/maps/site.tif.cog.tif", latestVersionId: "new" });
+        expect(fetchFileInfo).toHaveBeenCalledWith(
+            expect.objectContaining({ fileKey: "xa1/maps/site.tif.cog.tif", includeVersions: true })
+        );
+    });
+
+    it("says nothing when the API refuses or fails", async () => {
+        (fetchFileInfo as jest.Mock).mockResolvedValue([false, "Not authorized"]);
+        await expect(fileIdentity(FILE)).resolves.toEqual({});
+        (fetchFileInfo as jest.Mock).mockRejectedValue(new Error("network"));
+        await expect(fileIdentity(FILE)).resolves.toEqual({});
     });
 });
