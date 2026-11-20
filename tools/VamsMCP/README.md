@@ -361,8 +361,8 @@ and each row adds `requestedBy`, `isOwn` and the API's `canDownload` /
 `canRemove` decisions. Jobs on assets the caller can no longer read, and expired
 jobs, are left out.
 `get_zip_download_url` (a write-tier tool) also signs another user's archive
-when the caller may download from the asset and every archived file is still
-downloadable.
+when the caller may download from the asset. Every archive, the caller's own or
+another user's, is signed only while every file in it is still downloadable.
 `get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
 CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
