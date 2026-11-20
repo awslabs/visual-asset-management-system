@@ -50,10 +50,13 @@ RUN dnf install -y \
 # (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442), which Blender 4.5 (25.02) and 5.0/5.1 (25.08) bundle. The
 # checksum is the one Blender publishes in blender-<version>.sha256 beside the release; verifying it in the
 # SAME layer as the download makes a tampered or truncated archive fail the build. download.blender.org is
-# not reachable from every build network, so the build tries BLENDER_DOWNLOAD_BASE first (a private mirror
-# can be set there with --build-arg) and then two public Blender mirrors, which serve byte-identical
-# archives. Each candidate must match BLENDER_SHA256; one that does not is discarded and the next is tried,
-# and the build fails when none matches.
+# not reachable from every build network, so the build tries BLENDER_DOWNLOAD_BASE first and then two public
+# Blender mirrors, which serve byte-identical archives. `cdk deploy` passes no build arguments; a manual
+# `docker build --build-arg BLENDER_DOWNLOAD_BASE=...` can point the first try at a private mirror. Each
+# candidate must match BLENDER_SHA256; one that does not is discarded and the next is tried, and the build
+# fails when none matches. --connect-timeout bounds only the connection setup, so a source whose traffic is
+# dropped costs about a minute and a half rather than about seven, and the 385 MB transfer itself is not
+# limited. The browser User-Agent is sent because the primary host has refused automated clients before.
 ARG BLENDER_SERIES=5.2
 ARG BLENDER_VERSION=5.2.3
 ARG BLENDER_SHA256=78486c018b4443efe5e75ab54c290ed8c15abafd249b862c2c9ce2530a918eec
@@ -62,7 +65,7 @@ RUN for base in "${BLENDER_DOWNLOAD_BASE}" \
                 "https://ftp.nluug.nl/pub/graphics/blender/release" \
                 "https://mirrors.dotsrc.org/blender/blender-release"; do \
         rm -f /tmp/blender.tar.xz; \
-        if curl -fL --retry 2 -A "Mozilla/5.0" \
+        if curl -fL --connect-timeout 30 --retry 2 -A "Mozilla/5.0" \
                 "${base}/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
                 -o /tmp/blender.tar.xz \
            && echo "${BLENDER_SHA256}  /tmp/blender.tar.xz" | sha256sum -c -; then \

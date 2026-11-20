@@ -310,6 +310,17 @@ def test_download_tries_the_configured_base_then_two_https_mirrors():
 
 
 @pytest.mark.unit
+def test_a_source_whose_traffic_is_dropped_is_given_up_on_quickly():
+    """Without a connect timeout each retry waits for the kernel's TCP give-up (about 137 s), so a firewalled
+    source would stall the build for about seven minutes before the next one is tried."""
+    curl = re.search(r"curl (.*?)\"\$\{base\}", _download_run())
+    assert curl is not None, "the download curl no longer precedes the ${base} URL"
+    match = re.search(r"--connect-timeout (\d+)", curl.group(1))
+    assert match is not None, curl.group(1)
+    assert 0 < int(match.group(1)) <= 60
+
+
+@pytest.mark.unit
 def test_every_candidate_is_checksummed_before_it_is_kept():
     """The checksum gates the break out of the loop, so a candidate that fails it is never unpacked."""
     run = _download_run()
