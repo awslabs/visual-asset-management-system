@@ -14,7 +14,7 @@ This guide covers development patterns for the VAMS Python Lambda backend, inclu
 | Logging       | AWS Lambda Powertools Logger with custom redaction   |
 | Testing       | pytest, moto                                         |
 
-Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are generated from `poetry.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
+Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are generated from `backend/uv.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
 
 :::warning[Pydantic v1 Only]
 VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.

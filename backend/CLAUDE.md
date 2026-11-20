@@ -25,8 +25,8 @@
 ```
 backend/
 ├── conftest.py, pytest.ini              # See backend/tests/CLAUDE.md
-├── pyproject.toml, poetry.lock          # Poetry-managed deps
-├── requirements.txt, requirements-dev.txt  # Exported from poetry.lock
+├── pyproject.toml, uv.lock              # uv-managed deps
+├── requirements.txt, requirements-dev.txt  # Exported from uv.lock
 ├── backend/
 │   ├── common/                                     # Shared utilities (no AWS bootstrap)
 │   │   ├── auth/apiEvent.py                        #   normalize_event: REST→HTTP-API-v2 shape
@@ -1536,34 +1536,34 @@ Dev only: `moto` 5.2.5 (AWS mocks), `pytest` 9.2.0, `mypy` 1.0.0, `flake8` 6.0.0
 
 ---
 
-## Updating Python Dependencies (Poetry-Managed)
+## Updating Python Dependencies (uv-Managed)
 
-Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a **generated artifact** exported from `poetry.lock` — never edit it by hand. Poetry-managed projects: `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/`, and `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`.
+Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a **generated artifact** exported from the project's lock — never edit it by hand. The projects locked with [uv](https://docs.astral.sh/uv/) (`uv.lock`) are `backend/`, `backend/lambdaLayers/base/`, `backend/lambdaLayers/authorizer/` and `backendAddons/edh/rootKeySync/lambdaLayer/`. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/` and the 3D Basic conversion container still use a Poetry lock (`poetry.lock`) and a committed Poetry export until they move to uv; for those, run `poetry update --lock <package>`, then `poetry export --without-hashes -f requirements.txt -o requirements.txt` for the Kubernetes layer, and commit the lock and export together. The layer bundling build installs that committed export, so it must equal its `poetry.lock`.
+
+uv is a developer and CI tool only. Deploys never run it: layer bundling installs the committed `requirements.txt` with pip. Every `pyproject.toml` pins the uv version it was locked with (`required-version`), so run that version (`uvx --from uv==<version> uv ...`); another version stops with an error instead of rewriting the lock. Each pyproject also sets `exclude-newer = "7 days"`, so a re-lock only picks releases older than seven days (to take a newer security fix, add `--exclude-newer-package <package>=<date>` to the `uv lock` command).
 
 To change a dependency version:
 
-1. Edit the constraint in `pyproject.toml` only if the current constraint excludes the target version (exact pins like `urllib3 = "2.6.3"` must be edited; ranges like `^2.12.1` that already admit the target need no edit).
-2. Re-resolve without installing: `poetry update --lock <package> [<package>...]`
-3. Re-export the requirements file(s):
+1. Edit the constraint in `pyproject.toml` only if the current constraint excludes the target version (exact pins like `"urllib3==2.8.0"` must be edited; ranges like `>=2.12.1,<3.0.0` that already admit the target need no edit).
+2. Re-resolve the lock: `uv lock --upgrade-package <package>` (add one `--upgrade-package` per package; edit the constraint first when it pins another version).
+3. Re-export the requirements file(s) from the project directory:
 
     ```bash
-    # Lambda layers and pipeline layers (single requirements.txt):
-    poetry export --without-hashes -f requirements.txt -o requirements.txt
+    # Lambda layers (single requirements.txt):
+    uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 
-    # backend/ (split main vs dev):
-    poetry export --only main --without-hashes -f requirements.txt -o requirements.txt
-    poetry export --with dev --without-hashes -f requirements.txt -o requirements-dev.txt
+    # backend/ (main and dev):
+    uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
+    uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
     ```
 
-4. Commit `pyproject.toml`, `poetry.lock`, and the exported requirements file(s) together — a requirements file that drifts from its lock will be silently overwritten by the next export. The layer bundling build never reads the committed file: `layerBundlingCommand()` (`infra/lib/helper/lambda.ts`) re-exports the layer's `poetry.lock` inside the build container and installs that export, so a layer ships what its lock resolves to. The command installs pinned versions of pip, Poetry and `poetry-plugin-export`, with Poetry pinned to the version that writes the layer lock files; regenerate the locks with that Poetry version, or move the pin with them (`infra/test/security/layerBundlingToolPins.test.ts` asserts every tool is pinned).
+4. Commit `pyproject.toml`, `uv.lock` and the exported requirements file(s) together; `uv lock --check` must pass in the project directory, and `backend/tests/test_base_layer_dependency_parity.py` checks that each committed export matches its lock. The layer bundling build never resolves anything: `layerBundlingCommand()` (`infra/lib/helper/lambda.ts`) installs a pinned pip, fails with a message when the layer directory has no `requirements.txt`, and runs `pip install -r requirements.txt`, so a layer ships exactly what its committed export names. `infra/test/security/layerBundlingToolPins.test.ts` asserts pip is pinned and that no resolver runs in the command.
 
-`backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version: handler Lambdas load their third-party packages from the base layer, while the backend suite installs `backend/requirements-dev.txt`. Change a shared package in both trees in the same change. To match a transitive package to a version other than its newest release, add a temporary exact constraint to `pyproject.toml`, run `poetry lock`, remove the constraint, and run `poetry lock` again — Poetry keeps the locked version. `backend/tests/test_base_layer_dependency_parity.py` fails on any difference. The authorizer layer (`backend/lambdaLayers/authorizer/`) is a separate dependency set and is not compared.
+Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
+
+`backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version: handler Lambdas load their third-party packages from the base layer, while the backend suite installs `backend/requirements-dev.txt`. Change a shared package in both trees in the same change. To match a transitive package to a version other than its newest release, add a temporary exact `constraint-dependencies` entry under `[tool.uv]` in `pyproject.toml`, run `uv lock`, remove the entry, and run `uv lock` again — uv keeps the locked version. `backend/tests/test_base_layer_dependency_parity.py` fails on any difference. The authorizer layer (`backend/lambdaLayers/authorizer/`) is a separate dependency set and is not compared; it loads in the API Gateway authorizer, so a version change there is its own change.
 
 The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into `/opt/python`, so a package both layers carry at different versions ends up mixed from two releases. That layer therefore declares no AWS SDK package (`boto3`, `botocore` and `s3transfer` come from the base layer) and locks every other package it shares with the base layer at the base layer's version; re-lock it in the same change that moves a shared package in the base layer. `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails on either, and on a function that attaches the Kubernetes layer without the base layer.
-
-Requirements files with **no** side-by-side `pyproject.toml` (e.g. `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files, edited directly.
-
----
 
 ## Anti-Patterns -- What NOT to Do
 

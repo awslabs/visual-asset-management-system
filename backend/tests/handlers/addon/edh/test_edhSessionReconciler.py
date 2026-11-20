@@ -117,7 +117,7 @@ SCHEDULE_FAILURES = [
 
 EXPIRED_KEY = (NOW - timedelta(minutes=1)).strftime(STAMP)
 
-REVOKING_IDS = ["expired key", "stopped", "in error", "gone", "deleted with a key"]
+REVOKING_IDS = ["expired key", "stopped", "new launch in error", "gone", "deleted with a key"]
 
 
 def _row(bootstrap_id, **overrides):
@@ -144,12 +144,13 @@ def _desktop(session_id, state="running", **fields):
     return desktop
 
 
-# Every way a pass revokes a credential: an expired key on a running desktop, a desktop EDH lists stopped
-# or in error, a desktop EDH no longer lists, and a DELETED row that still names a key.
+# Every way a pass revokes a credential: an expired key on a running desktop, a desktop EDH lists stopped,
+# a new launch EDH lists in error, a desktop EDH no longer lists, and a DELETED row that still names a key.
 REVOKING_CASES = [
     ({"keyExpiresAt": EXPIRED_KEY}, [_desktop("sess-h")]),
     ({}, [_desktop("sess-h", "stopped")]),
-    ({}, [_desktop("sess-h", "error")]),
+    ({"state": rec.STATE_CREATING, "edhState": "placing", "connectionAvailable": False},
+     [_desktop("sess-h", "error")]),
     ({}, []),
     ({"state": rec.STATE_DELETED}, []),
 ]
@@ -217,7 +218,7 @@ def _default_revoke(event, row, *, delete_secret, actor):
 
 def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabled=True, current=None,
          persist=None, api_key_service="vams-apiKeyService", schedule_answer=None, context=_MOCK_CONTEXT,
-         states=None, failure=None):
+         states=None, failure=None, instances=None):
     """One sweep with every collaborator replaced. ``keys`` is the session-key listing (a list, or the
     exception the listing raises); ``delete`` scripts the orphan-key deletion; ``current`` maps a bootstrap
     id to the row the consistent re-read returns when it differs from the scanned one (None for a row that
@@ -225,7 +226,9 @@ def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabl
     lost condition; ``api_key_service`` is the apiKeyService function name the environment carries;
     ``schedule_answer`` is what EDH's schedule update raises; ``context`` is the invocation context;
     ``states`` is what EDH's session-state read answers for unlisted rows (a list, or the exception it raises);
-    ``failure`` is what EDH's launch-failure read answers (a map, None, or the exception it raises).
+    ``failure`` is what EDH's launch-failure read answers (a map, None, or the exception it raises);
+    ``instances`` is what EC2's DescribeInstances answers (a map, or the exception it raises; an answer naming no
+    instance when not given), exposed as the returned client factory's ``ec2``.
     The persist double carries ``order``, the sequence of persist and revoke calls."""
     client = create_autospec(EdhClient, instance=True)
     client.list_all_desktops.return_value = desktops
@@ -240,6 +243,12 @@ def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabl
     else:
         client.get_desktop_failure.return_value = failure
     client_factory = MagicMock(return_value=client)
+    ec2 = MagicMock()
+    if isinstance(instances, Exception):
+        ec2.describe_instances.side_effect = instances
+    else:
+        ec2.describe_instances.return_value = instances if instances is not None else {"Reservations": []}
+    client_factory.ec2 = ec2
     table = MagicMock()
     half = max(1, len(rows) // 2)
     pager = Pager({"Items": rows[:half], "LastEvaluatedKey": {"bootstrapId": "cursor"}},
@@ -271,6 +280,7 @@ def _run(rows, desktops, *, revoke=None, keys=None, delete=None, bootstrap_enabl
     default_policy = {"enabled": False, "leaseHours": 8, "forced": False, "graceHours": 24,
                      "updatedAt": None, "updatedBy": None}
     with patch.object(rec, "EdhClient", client_factory), \
+            patch.object(rec, "ec2", ec2), \
             patch.object(rec, "session_table", table), \
             patch.object(rec, "read_lease_policy", MagicMock(return_value=default_policy)), \
             patch.object(bootstrap, "session_bootstrap_enabled", bootstrap_enabled), \
@@ -328,7 +338,9 @@ class TestReconcileRow:
 
     def test_a_pending_desktop_keeps_its_key(self):
         updates, revoke, delete_secret = rec.reconcile_row(_row("a"), _index(_desktop("sess-a", "placing")), NOW)
-        assert updates == {"state": rec.STATE_CREATING, "edhState": "placing", "connectionAvailable": False}
+        # The desktop has run, so the row keeps that through CREATING (``startAcceptedAt``, stamped by the sweep).
+        assert updates == {"state": rec.STATE_CREATING, "edhState": "placing", "connectionAvailable": False,
+                           "startAcceptedAt": start_stamp(NOW)}
         assert (revoke, delete_secret) == (False, False)
 
     def test_an_unknown_edh_state_keeps_the_stored_state_and_the_key(self):
@@ -336,10 +348,17 @@ class TestReconcileRow:
         assert updates == {"edhState": "hibernating", "connectionAvailable": False}
         assert (revoke, delete_secret) == (False, False)
 
-    def test_a_desktop_in_error_orphans_the_row_and_removes_its_credential(self):
+    def test_a_running_desktop_in_error_keeps_its_state_and_its_credential(self):
+        # EDH sets error on a desktop that runs when its Amazon DCV check fails; it is not a failed launch.
         updates, revoke, delete_secret = rec.reconcile_row(_row("a"), _index(_desktop("sess-a", "error")), NOW)
-        assert updates == {"state": rec.STATE_ORPHANED, "edhState": "error",
-                           "lastError": LAST_ERROR_LAUNCH_ERROR, "connectionAvailable": False}
+        assert updates == {"edhState": "error", "connectionAvailable": False,
+                           "connectionUnavailableReason": "DESKTOP_ERROR"}
+        assert (revoke, delete_secret) == (False, False)
+
+    def test_a_new_launch_in_error_is_orphaned_and_its_credential_removed(self):
+        row = _row("a", state=rec.STATE_CREATING, edhState="placing", connectionAvailable=False)
+        updates, revoke, delete_secret = rec.reconcile_row(row, _index(_desktop("sess-a", "error")), NOW)
+        assert updates == {"state": rec.STATE_ORPHANED, "edhState": "error", "lastError": LAST_ERROR_LAUNCH_ERROR}
         assert (revoke, delete_secret) == (True, True)
 
     def test_a_desktop_edh_no_longer_lists_is_recorded_deleted_and_its_secret_removed(self):
@@ -525,7 +544,8 @@ class TestReconcileRow:
     def test_a_start_edh_lists_under_way_clears_the_rows_start_stamp(self):
         row = _start_stamped_row("a")
         updates, revoke, delete_secret = rec.reconcile_row(row, _index(_desktop("sess-a", "pending")), NOW)
-        assert updates == {"state": rec.STATE_CREATING, "edhState": "pending", "startRequestedAt": None}
+        assert updates == {"state": rec.STATE_CREATING, "edhState": "pending", "startRequestedAt": None,
+                           "startAcceptedAt": start_stamp(NOW)}
         assert (revoke, delete_secret) == (False, False)
 
     def test_a_desktop_edh_still_lists_stopped_keeps_the_rows_start_stamp(self):
@@ -560,13 +580,20 @@ class TestReconcileRow:
         assert rec.reconcile_row(row, _index(_desktop("sess-a", "stopped")), NOW, summary) == ({}, True, False)
         assert summary == _summary()
 
-    @pytest.mark.parametrize("desktops, final_state", [([_desktop("sess-a", "error")], rec.STATE_ORPHANED),
-                                                       ([], rec.STATE_DELETED)], ids=["in error", "gone"])
-    def test_a_desktop_in_error_or_gone_under_a_fresh_start_claim_still_loses_its_credential(
-            self, desktops, final_state):
-        updates, revoke, delete_secret = rec.reconcile_row(self._claimed(30), _index(*desktops), NOW)
-        assert updates["state"] == final_state
+    def test_a_desktop_gone_under_a_fresh_start_claim_still_loses_its_credential(self):
+        updates, revoke, delete_secret = rec.reconcile_row(self._claimed(30), _index(), NOW)
+        assert updates["state"] == rec.STATE_DELETED
         assert (revoke, delete_secret) == (True, True)
+
+    def test_a_desktop_in_error_under_a_fresh_start_claim_stays_stopped_and_keeps_its_credential(self):
+        # EDH sets error only on a desktop that runs, whose DCV check failed: it is not a failed launch.
+        summary = _summary()
+        updates, revoke, delete_secret = rec.reconcile_row(
+            self._claimed(30), _index(_desktop("sess-a", "error")), NOW, summary)
+        assert "state" not in updates
+        assert updates["connectionUnavailableReason"] == "DESKTOP_ERROR"
+        assert (revoke, delete_secret) == (False, False)
+        assert summary == _summary(deferred=1)
 
 
 @pytest.mark.unit
@@ -1936,15 +1963,64 @@ class TestLeaseSweep:
         assert "leaseStoppedAt" not in row
         assert summary["failed"] == 0
 
-    def test_a_stop_of_a_desktop_in_error_takes_the_ordinary_path(self, edh_session_table):
+    def test_an_expired_lease_stops_a_desktop_that_has_run_while_edh_reports_it_in_error(self, edh_session_table):
+        # EDH sets error on a desktop that runs when its Amazon DCV check fails: the lease still stops it.
         calls = self._fake_edh_client()
 
-        _, row = self._sweep(edh_session_table, self._expired("b10"), _index(_desktop("sess-b10", "error")), calls)
+        summary, row = self._sweep(edh_session_table, self._expired("b10"), _index(_desktop("sess-b10", "error")), calls)
 
-        assert calls.stopped == []
+        assert set(calls.stopped) == {(EDH_UID, "sess-b10")}
+        assert calls.deleted == []
+        assert row["state"] == rec.STATE_STOPPED
+        assert row["leaseStoppedAt"] == NOW.isoformat()
+        assert row["lastError"] == rec.LAST_ERROR_LEASE_EXPIRED
+        assert row["connectionAvailable"] is False
+        assert summary == {**self.UNTOUCHED, "updated": 1}
+
+    def test_the_lease_stop_clears_the_desktop_error_the_row_recorded(self, edh_session_table):
+        calls = self._fake_edh_client()
+        expired = self._expired("b10c", edhState="error", connectionAvailable=False,
+                                connectionUnavailableReason="DESKTOP_ERROR")
+
+        _summary_, row = self._sweep(edh_session_table, expired, _index(_desktop("sess-b10c", "error")), calls)
+
+        assert set(calls.stopped) == {(EDH_UID, "sess-b10c")}
+        assert row["state"] == rec.STATE_STOPPED and row["lastError"] == rec.LAST_ERROR_LEASE_EXPIRED
+        assert "connectionUnavailableReason" not in row
+
+    def test_a_lease_stopped_desktop_that_has_run_is_revoked_while_edh_still_reports_error(self, edh_session_table):
+        # The lease stop leaves the row STOPPED, a revoking state, whatever EDH reports next.
+        calls = self._fake_edh_client()
+        keyed = self._expired("b10k", apiKeyId="key-b10k", secretName="vams/edh-session/b10k",
+                              keyExpiresAt=(NOW + timedelta(hours=6)).strftime(STAMP))
+
+        _summary_, row = self._sweep(edh_session_table, keyed, _index(_desktop("sess-b10k", "error")), calls)
+        _updates, revoke, delete_secret = rec.reconcile_row(row, _index(_desktop("sess-b10k", "error")),
+                                                            NOW + timedelta(minutes=15))
+
+        assert set(calls.stopped) == {(EDH_UID, "sess-b10k")}
+        assert (revoke, delete_secret) == (True, False)
+
+    def test_a_lease_stopped_desktop_edh_reports_in_error_is_not_deleted(self, edh_session_table):
+        # Past its grace, but EDH's error means the desktop may be running: the delete is not sent.
+        calls = self._fake_edh_client()
+
+        _summary_, row = self._sweep(edh_session_table, self._lease_stopped("b10d"),
+                                     _index(_desktop("sess-b10d", "error")), calls)
+
+        assert calls.deleted == [] and calls.stopped == []
+        assert row["state"] == rec.STATE_STOPPED
+        assert row["leaseStoppedAt"] == self.LEASE_STOPPED_AT
+
+    def test_a_new_launch_in_error_is_not_stopped_by_the_lease(self, edh_session_table):
+        calls = self._fake_edh_client()
+        launch = self._expired("b10n", state=rec.STATE_CREATING, edhState="placing", connectionAvailable=False)
+
+        _summary_, row = self._sweep(edh_session_table, launch, _index(_desktop("sess-b10n", "error")), calls)
+
+        assert calls.stopped == [] and calls.deleted == []
         assert row["state"] == rec.STATE_ORPHANED
         assert row["lastError"] == LAST_ERROR_LAUNCH_ERROR
-        assert "leaseStoppedAt" not in row
 
     def test_a_delete_claims_the_row_before_edh_is_called(self, edh_session_table):
         states_at_call = []
