@@ -88,7 +88,7 @@ vamscli zip-download get -d my-db -a my-asset -r 0mh3k2q9x-4f1c8a7e2b9d4c6e8f0a1
 
 ## zip-download download
 
-Download a finished archive to a local file. The command requests a short-lived URL and streams the archive with progress; the URL itself is never printed.
+Download a finished archive to a local file. The command requests a short-lived URL and streams the archive with progress; the URL itself is never printed, and `--verbose` shows it with its `X-Amz-Signature` and `X-Amz-Security-Token` values masked.
 
 ```bash
 vamscli zip-download download -d my-db -a my-asset -r <requestId> -o ./building.zip
