@@ -1963,8 +1963,8 @@ renders as the state's `TimeoutSeconds` and is caught like any other error (`tas
 the attempt override). Nest the chain: attempt duration ≤ the state bound; the state bound plus 15
 minutes (the two 5-minute Lambda states around it) ≤ the state machine timeout; the state machine
 timeout < the `vamsSchema` `taskTimeout`, which starts before the execution does. A
-`WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform) bounds the wait
-with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Step Functions ends a `.sync` job
+`WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform, COG conversion)
+bounds the wait with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Step Functions ends a `.sync` job
 when the state's own bound fires (on a deployed stack, a job still queued at the bound gets `TerminateJob` from
 the state machine role in the same second), so for a `.sync` state the pipelineEnd terminate is a backup; a
 job a Lambda submitted under a token wait has no owner after the wait times out, so there the pipelineEnd is
@@ -2175,7 +2175,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
     Which flags belong where is read from the source, and the two lists below are asserted against it by `infra/test/platform/steeringVectorSearchRelease.test.ts` (the block anchors are shared with `infra/test/security/vpcEndpointsAndAuthGrants.test.ts`):
 
-    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
+    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useCogConversion`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
 
     Private-subnet flags (all three blocks): `useGenAiCadStepAgent.runtime`, `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
 

@@ -333,6 +333,12 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useCogConversion: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: false,
+            },
             useGenAiCadStepAgent: {
                 enabled: false,
                 runtime: "agentcore",

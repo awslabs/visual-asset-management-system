@@ -87,6 +87,10 @@ The Coordinate Transform pipeline depends on the open-source [laspy](https://git
 The laspy BSD-3-Clause license is functionally similar to the MIT and Apache-2.0 licenses already used throughout VAMS and does not introduce any copyleft (LGPL/GPL) requirements. The pipeline's other core libraries — PDAL (BSD-3-Clause), pyproj (MIT), and NumPy (BSD-3-Clause) — are likewise permissively licensed.
 :::
 
+### COG Conversion Pipeline Library Notice
+
+The COG Conversion pipeline runs the GDAL command line (`gdal_translate`, MIT license) as a separate process. The container image installs GDAL and its dependencies as the exact conda-forge packages listed in `backendPipelines/conversion/cogConvert/container/conda-explicit.txt`. Two of those packages carry copyleft terms: GEOS (LGPL-2.1) and libspatialite (MPL-1.1 OR GPL-2.0 OR LGPL-2.1, used here as the conda-forge `lgpl` build under LGPL-2.1). They are shared libraries that GDAL loads for its vector drivers; the pipeline converts raster files only and does not call them. The `lgpl` build is pinned so that the GPL-2.0 librttopo library is not part of the image. No VAMS code is linked against these libraries, nothing is modified, and each package's license text is kept in the image under `/opt/cog/licenses`. The per-package list is in the repository's `NOTICE.md`.
+
 ### SYSTEM GenAI Metadata Pipeline Library Notice
 
 The SYSTEM GenAI metadata pipeline ships three AWS Lambda container images built in the deploying account. Their licensed components are recorded in the repository's `NOTICE.md`; the ones that carry copyleft terms are:

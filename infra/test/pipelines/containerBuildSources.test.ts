@@ -71,6 +71,13 @@ const IMAGE_TO_3D_CONTAINER_DIR = path.join(PIPELINES_DIR, "genAi", "imageTo3d",
 function imageTo3dDockerfile(model: string): string {
     return path.join(IMAGE_TO_3D_CONTAINER_DIR, `Dockerfile.${model}`);
 }
+const COG_DOCKERFILE = path.join(
+    PIPELINES_DIR,
+    "conversion",
+    "cogConvert",
+    "container",
+    "Dockerfile"
+);
 
 /** Every buildspec.yml under `dir`, recursively. */
 function buildspecs(dir: string): string[] {
@@ -258,6 +265,38 @@ describe("the coordinateTransform image", () => {
     });
 });
 
+describe("the cogConvert image", () => {
+    const text = fs.readFileSync(COG_DOCKERFILE, "utf-8");
+    const lines = text.split(/\r?\n/);
+
+    it("is pinned to a digest, not only a tag, in both stages", () => {
+        const froms = lines.filter((l) => /^FROM\s/.test(l));
+        expect(froms).toHaveLength(2);
+        for (const from of froms) expect(from).toMatch(/@sha256:[0-9a-f]{64}/);
+    });
+
+    it("runs on a slim base: the runtime stage is not the conda build image", () => {
+        const froms = lines.filter((l) => /^FROM\s/.test(l));
+        expect(froms[0]).toContain("miniforge3");
+        expect(froms[1]).not.toContain("miniforge3");
+        expect(text).toContain("COPY --from=build /opt/cog /opt/cog");
+    });
+
+    it("installs the GDAL stack from a hash-listed explicit file and Python from the hash lock", () => {
+        expect(text).toContain("--file conda-explicit.txt");
+        expect(text).toContain("--require-hashes");
+    });
+
+    it("drops root before the entrypoint", () => {
+        const userAt = lines.findIndex((l) => /^USER\s+\w/.test(l));
+        expect(userAt).toBeGreaterThan(-1);
+        const lastCopyAt = lines.reduce((acc, l, i) => (/^COPY\s/.test(l) ? i : acc), -1);
+        const entrypointAt = lines.findIndex((l) => /^ENTRYPOINT\s/.test(l));
+        expect(userAt).toBeGreaterThan(lastCopyAt);
+        if (entrypointAt > -1) expect(userAt).toBeLessThan(entrypointAt);
+    });
+});
+
 /**
  * The remaining Fargate images must drop root too, and the assertion has to be PER STAGE.
  *
@@ -341,6 +380,12 @@ const NON_ROOT_IMAGES: {
         label: `Image to 3D ${model}`,
         file: imageTo3dDockerfile(model),
     })),
+    {
+        label: "cogConvert",
+        file: COG_DOCKERFILE,
+        // The package the entrypoint imports at run time.
+        readSources: ["./cog_convert_pipeline/"],
+    },
 ];
 
 /**

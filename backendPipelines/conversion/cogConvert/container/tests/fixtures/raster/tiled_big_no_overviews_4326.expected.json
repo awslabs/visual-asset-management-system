@@ -1,0 +1,35 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 256,
+  "blockWidth": 256,
+  "compression": "deflate",
+  "crs": "EPSG:4326",
+  "dataType": "uint8",
+  "file": "tiled_big_no_overviews_4326.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 1024,
+  "isCog": false,
+  "layout": "tiled",
+  "nativeBounds": [
+    7.0,
+    53.488,
+    7.5120000000000005,
+    54.0
+  ],
+  "nodata": null,
+  "overviewCount": 0,
+  "pixelIsPoint": false,
+  "pixelSizeX": 0.0005,
+  "pixelSizeY": 0.0005,
+  "rotated": false,
+  "wgs84Bounds": [
+    7.0,
+    53.488,
+    7.512,
+    54.0
+  ],
+  "width": 1024
+}

@@ -2621,6 +2621,16 @@ export function getConfig(app: cdk.App): Config {
         };
     }
 
+    // TIF to COG conversion: opt-in, off by default, and its upload trigger ships disabled.
+    if (config.app.pipelines.useCogConversion == undefined) {
+        config.app.pipelines.useCogConversion = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+    }
+
     // The Video SOP/BOM caps travel to the pipeline's Lambdas as environment variables, so every leaf
     // is filled here: an absent one would reach the Lambda as the string "undefined".
     if (config.app.pipelines.useGenAiVideoSopBom == undefined) {
@@ -2727,6 +2737,7 @@ export function getConfig(app: cdk.App): Config {
 
     defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useCogConversion, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiCadStepAgent, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
@@ -2759,6 +2770,7 @@ export function getConfig(app: cdk.App): Config {
         autoRegisterAutoTriggerOnFileUpload?: boolean;
     }>({
         useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        useCogConversion: config.app.pipelines.useCogConversion,
         useGenAiCadStepAgent: config.app.pipelines.useGenAiCadStepAgent,
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
@@ -3214,6 +3226,7 @@ export function getConfig(app: cdk.App): Config {
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
+            "useCogConversion",
             "useGenAiCadStepAgent",
             "useSplatToolbox",
             "useIsaacLabTraining",
@@ -3369,6 +3382,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useImageTo3d");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useCogConversion?.enabled)
+        vpcRequiringFeatures.push("pipelines.useCogConversion");
     if (config.app.pipelines.useGenAiVideoSopBom.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
@@ -6482,6 +6497,12 @@ export interface ConfigPublic {
                 enableStepInput: boolean;
             };
             useConversionCoordinateTransform: {
+                enabled: boolean;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useCogConversion: {
                 enabled: boolean;
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;
