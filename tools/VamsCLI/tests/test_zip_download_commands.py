@@ -1,12 +1,18 @@
 """The 'vamscli zip-download' commands: arguments reaching the APIClient, --json-output purity,
-the disabled-feature business error, --wait, the archive download, and the URL never printed."""
+the disabled-feature business error, --wait, the archive download, and the URL's secrets never shown."""
 
+import io
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
+import requests
+import requests.adapters
 
 from vamscli.main import cli
+from vamscli.utils.api_client import APIClient
+from vamscli.utils.logging import REDACTED
 from vamscli.utils.exceptions import (
     ZipDownloadDisabledError,
     ZipDownloadLimitError,
@@ -25,6 +31,63 @@ JOB = {
     "createdAt": "2026-11-06T00:00:00Z", "expiresAt": "2026-11-13T00:00:00Z",
 }
 SCOPE = ["-d", "db", "-a", "a"]
+
+# A presigned archive URL as the API issues it (role-signed, so it carries a session token too).
+# Neither value is real.
+SIGNATURE = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"  # pragma: allowlist secret
+SESSION_TOKEN = "IQoJb3JpZ2luX2VjEXAMPLESESSIONTOKEN%2Fpart%2Bmore%3D"  # pragma: allowlist secret
+ARCHIVE_HOST = "https://bucket.s3.us-east-1.amazonaws.com/"
+SIGNED_ARCHIVE_URL = (
+    f"{ARCHIVE_HOST}vams.preparedDownloads/r1/Asset.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    f"&X-Amz-Security-Token={SESSION_TOKEN}&X-Amz-SignedHeaders=host&X-Amz-Signature={SIGNATURE}")
+ARCHIVE = b"PK\x05\x06" + b"\x00" * 18  # an empty zip
+
+
+class _Deployment(requests.adapters.BaseAdapter):
+    """A transport answering the zip download routes of job r1 and its archive URL."""
+
+    def __init__(self):
+        super().__init__()
+        self.sent = []
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        self.sent.append(request)
+        path = urlparse(request.url).path
+        status, body = 404, {"message": "Not Found"}
+        if request.url.startswith(ARCHIVE_HOST):
+            status, body = 200, ARCHIVE
+        elif request.method == "POST" and path.endswith("/database/db/assets/a/download/zip"):
+            status, body = 200, JOB
+        elif request.method == "GET" and path.endswith("/database/db/assets/a/download/zip/r1"):
+            status, body = 200, {**JOB, "status": "SUCCEEDED", "archiveSizeBytes": len(ARCHIVE)}
+        elif request.method == "POST" and path.endswith("/database/db/assets/a/download/zip/r1/url"):
+            status, body = 200, {"url": SIGNED_ARCHIVE_URL, "expiresIn": 900,
+                                 "archiveFileName": "Asset.zip", "archiveSizeBytes": len(ARCHIVE)}
+        response = requests.Response()
+        response.status_code = status
+        if isinstance(body, bytes):
+            response.raw = io.BytesIO(body)
+        else:
+            response.headers["Content-Type"] = "application/json"
+            response.raw = io.BytesIO(json.dumps(body).encode("utf-8"))
+        response.url = request.url
+        response.request = request
+        return response
+
+    def close(self):
+        pass
+
+
+def _real_client(transport):
+    profile_manager = MagicMock()
+    profile_manager.is_override_token.return_value = False
+    profile_manager.is_token_expired.return_value = False
+    profile_manager.load_auth_profile.return_value = {"access_token": "t"}
+    profile_manager.get_feature_switches_info.return_value = {
+        "has_feature_switches": True, "enabled": ["ZIPDOWNLOADS"]}
+    client = APIClient("https://api.example.com", profile_manager=profile_manager)
+    client.session.mount("https://", transport)
+    return client
 
 
 def _invoke(cli_runner, *args):
@@ -100,28 +163,37 @@ class TestCreate:
             assert data["status"] == "FAILED" and data["requestId"] == "r1"
             assert "blocked type" in data["errorMessage"]
 
-    def test_download_to_streams_the_archive_and_never_prints_the_url(
-            self, cli_runner, generic_command_mocks, tmp_path):
-        with generic_command_mocks("zip_download") as mocks:
-            api = mocks["api_client"]
-            api.create_zip_download.return_value = JOB
-            api.get_zip_download.return_value = {**JOB, "status": "SUCCEEDED", "archiveSizeBytes": 4}
-            api.get_zip_download_url.return_value = {
-                "url": PRESIGNED, "expiresIn": 900, "archiveFileName": "Asset.zip",
-                "archiveSizeBytes": 4}
-            api.download_zip_archive.return_value = 4
+    def test_download_to_never_shows_the_url_secrets_even_with_verbose(
+            self, cli_runner, generic_command_mocks, tmp_path, monkeypatch):
+        """A real APIClient on a stubbed transport, so the URL response reaches the --verbose echo
+        and the archive request goes through the session as it does against a deployment."""
+        monkeypatch.setenv("NETRC", str(tmp_path / "no-netrc"))  # no ambient netrc credentials
+        deployment = _Deployment()
+        with generic_command_mocks("zip_download") as mocks, \
+                patch("vamscli.utils.zip_downloads.time.sleep"):
+            mocks["patches"]["cmd_api"].side_effect = lambda *a, **k: _real_client(deployment)
 
             for json_flag in ([], ["--json-output"]):
-                result = _invoke(cli_runner, "create", *SCOPE, "--whole-asset", "--download-to",
-                                 str(tmp_path), *json_flag)
+                target = tmp_path / ("json" if json_flag else "text")
+                target.mkdir()
+                result = cli_runner.invoke(cli, ["--verbose", "zip-download", "create", *SCOPE,
+                                                 "--whole-asset", "--download-to", str(target),
+                                                 *json_flag])
                 assert result.exit_code == 0, result.output
-                assert "X-Amz-Signature" not in result.output and PRESIGNED not in result.output
+                # Control: the URL response did reach the echo, so the checks below are not vacuous.
+                assert "X-Amz-Signature=" + REDACTED in result.stderr
+                assert "X-Amz-Security-Token=" + REDACTED in result.stderr
+                for text in (result.stdout, result.stderr):
+                    assert SIGNATURE not in text and SESSION_TOKEN not in text
+                assert (target / "Asset.zip").read_bytes() == ARCHIVE
 
-            data = json.loads(result.output)
-            assert data["download"]["localPath"] == str(tmp_path / "Asset.zip")
-            assert data["download"]["bytesWritten"] == 4
-            url, path = api.download_zip_archive.call_args.args
-            assert url == PRESIGNED and path == str(tmp_path / "Asset.zip")
+            data = json.loads(result.stdout)
+            assert data["download"]["localPath"] == str(target / "Asset.zip")
+            assert data["download"]["bytesWritten"] == len(ARCHIVE)
+
+        archive_requests = [r for r in deployment.sent if r.url.startswith(ARCHIVE_HOST)]
+        assert len(archive_requests) == 2
+        assert all("Authorization" not in r.headers for r in archive_requests)
 
     def test_a_failure_after_the_job_exists_names_its_request_id(self, cli_runner, generic_command_mocks, tmp_path):
         """A retry must download the existing job, not create a second one."""

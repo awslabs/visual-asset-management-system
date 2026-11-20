@@ -939,7 +939,9 @@ deletion is written to the audit trail as `schema_deleted`.
     exactly the permissions of the user whose token the request carries: the server never decides a
     permission, and the VAMS API's authorizer and Casbin policy check every call.
 -   Remote mode: the server verifies every token itself, accepts only tokens issued to the clients in
-    its auth configuration (not the web application's client), never reads a profile, never logs or
+    its auth configuration (not the web application's client), sends each token on only to the VAMS
+    API in that configuration for the same request (by design it forwards the token rather than
+    exchanging it; see the Remote MCP Server page), never reads a profile, never logs or
     returns a token, and writes no CLI request log (one process serves many users). It logs one line
     per request and per tool call: user, client, tool, outcome and duration. Bind beyond `127.0.0.1`
     only inside a container or private network behind an HTTPS front end, and keep the write and

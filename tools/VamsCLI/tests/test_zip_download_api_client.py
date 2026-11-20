@@ -1,11 +1,13 @@
 """APIClient methods and helpers of Download as Zip: requests sent, error mapping, the feature
 precheck, the business 429, the cancel/delete state checks and the archive stream."""
 
+import io
 import json
 from unittest.mock import MagicMock
 
 import pytest
 import requests
+import requests.adapters
 
 from vamscli import constants
 from vamscli.utils.api_client import APIClient
@@ -288,16 +290,39 @@ class _Stream:
             yield chunk
 
 
+class _Transport(requests.adapters.BaseAdapter):
+    """A transport mounted on the client's session: records each prepared request and answers it.
+
+    Stubbing here rather than `session.get` keeps everything requests adds on the way (session
+    default headers, session auth, netrc) in the request the test inspects.
+    """
+
+    def __init__(self, answer):
+        super().__init__()
+        self.sent = []
+        self._answer = answer
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        self.sent.append((request, stream))
+        status, body, headers = self._answer(request)
+        response = requests.Response()
+        response.status_code = status
+        response.headers.update(headers or {})
+        response.raw = io.BytesIO(body)
+        response.url = request.url
+        response.request = request
+        return response
+
+    def close(self):
+        pass
+
+
 class TestArchiveStream:
     def test_writes_atomically_without_auth(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("NETRC", str(tmp_path / "no-netrc"))  # no ambient netrc credentials
         client = _client()
-        seen = {}
-
-        def get(url, **kwargs):
-            seen.update(kwargs, url=url)
-            return _Stream()
-
-        monkeypatch.setattr(client.session, "get", get)
+        transport = _Transport(lambda request: (200, b"abcdef", {}))
+        client.session.mount("https://", transport)
         target = tmp_path / "a.zip"
         progress = []
 
@@ -305,7 +330,12 @@ class TestArchiveStream:
                                               progress_callback=lambda d, t: progress.append((d, t)))
 
         assert written == 6 and target.read_bytes() == b"abcdef"
-        assert "headers" not in seen and seen["stream"] is True
+        assert len(transport.sent) == 1
+        request, stream = transport.sent[0]
+        assert request.url == PRESIGNED and stream is True
+        # The request that left the session, not the call's arguments: Amazon S3 refuses a request
+        # presenting a VAMS token next to the URL's own signature.
+        assert "Authorization" not in request.headers
         assert progress[-1] == (6, 6)
         assert not (tmp_path / "a.zip.vamsdownload").exists()
 
