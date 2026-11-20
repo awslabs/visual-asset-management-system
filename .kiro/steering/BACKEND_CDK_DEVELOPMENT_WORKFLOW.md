@@ -599,6 +599,13 @@ raise Exception(f"Error getting database default bucket details: missing bucket_
 raise VAMSGeneralErrorResponse(f"S3 bucket {bucket_name} access denied: {str(e)}")
 ```
 
+### **Failures That Decide Whether Records Are Removed**
+
+-   **Never swallow an exception silently.** Log it, then raise, translate it to a `VAMSGeneralErrorResponse`, or continue with a documented best-effort behavior. `common.assetHistory` and `common.syncTracking` are the deliberate best-effort exceptions.
+-   **A delete whose result decides whether records are removed reports a failure, not an empty result.** `assetFiles.delete_s3_prefix_all_versions` raises `S3PrefixDeleteIncomplete` (the keys it deleted and the keys it kept) when it cannot list the prefix or a key keeps a version or delete marker. A `NoSuchBucket` listing is empty; every other listing error, `AccessDenied` included, is a failure.
+-   The asset permanent delete deletes the S3 objects before any record and stops on that exception: the files that are gone lose their file records (`delete_files_metadata`, one asset-wide read per table) and auxiliary data (`delete_auxiliary_files_of_keys`), and the asset keeps the rest for a retry. A single-file delete checks the file's own delete before it removes its previews and auxiliary data.
+-   The refusal message says what to check and echoes no input. See `backend/CLAUDE.md` "Swallowing exceptions silently" and `tests/handlers/assets/test_permanent_delete_s3_failures.py`.
+
 ### **Validation and Model Guidelines**
 
 #### **Validator Integration**

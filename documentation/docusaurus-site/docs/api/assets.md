@@ -546,7 +546,7 @@ Permanently deletes an asset, including all associated files, metadata, versions
 
 Asset subscribers are notified by email when the asset is archived. A permanent delete removes the asset's subscriptions and notification topic and sends no email.
 
-The asset's Amazon S3 objects are deleted before any of its records. When Amazon S3 does not delete every object version (for example, access to the bucket is denied), the request returns `400` and the asset keeps its records and its remaining files, so the delete can be retried. The files that were deleted lose their metadata, attributes and version records.
+The asset's Amazon S3 objects are deleted before any of its records. When Amazon S3 does not delete every object version (for example, access to the bucket is denied or the objects are locked), the request returns `400` and the asset keeps its records and its remaining files, so the delete can be retried once the cause is fixed. The files that were deleted lose their metadata, attributes, version records and auxiliary data. An asset whose bucket no longer exists is deleted.
 
 :::danger[Irreversible Operation]
 This operation permanently removes the asset and all its data. It cannot be undone. Consider using [Archive Asset](#archive-asset) for soft-deletion instead.
