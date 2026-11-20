@@ -353,7 +353,7 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     Raises:
         VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
     """
-    # A single-file location holds that one object and nothing under or beside it
+    # A single-file location's paths name its object, its previews and its companion folder {key}/
     if asset_base_key and not is_folder_location(asset_base_key):
         object_key = object_key_for(asset_base_key, file_path)
         if object_key is None:
@@ -580,6 +580,62 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     key = (asset_file_key or "").strip('/')
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
+
+def _single_file_location_prefixes(location: str) -> List[str]:
+    """The S3 prefixes that list what a single-file location holds besides its object: its own previews
+    (``{key}.previewFile.``) and its companion folder (``{key}/``)."""
+    return [location + PREVIEW_FILE_PATTERN, location + '/']
+
+def _list_single_file_location_page(bucket: str, location: str, list_params: Dict) -> Dict:
+    """One listing page of a single-file location, in the shape of a ListObjectsV2 response.
+
+    The first page (no continuation token) holds the object, read with a one-key listing of its own
+    key, and its previews; then, every page, the companion folder ``{key}/``, whose S3 continuation
+    token is the page's token. The first page asks the companion folder for fewer keys by the number
+    already listed, so a page keeps its size.
+    """
+    contents: List[Dict] = []
+    if not list_params.get('ContinuationToken'):
+        head = s3_client.list_objects_v2(Bucket=bucket, Prefix=location, MaxKeys=1)
+        contents.extend(obj for obj in head.get('Contents', []) if obj['Key'] == location)
+        previews = s3_client.get_paginator('list_objects_v2').paginate(
+            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN)
+        for preview_page in previews:
+            contents.extend(preview_page.get('Contents', []))
+    folder_params = dict(list_params, Prefix=location + '/',
+                         MaxKeys=max(1, int(list_params['MaxKeys']) - len(contents)))
+    folder = s3_client.list_objects_v2(**folder_params)
+    contents.extend(folder.get('Contents', []))
+    page = {'Contents': contents}
+    if 'NextContinuationToken' in folder:
+        page['NextContinuationToken'] = folder['NextContinuationToken']
+    return page
+
+def _is_location_object(location: str, object_key: str) -> bool:
+    """Whether a key is the object of a single-file location (the location key itself)."""
+    return bool(location) and not is_folder_location(location) and \
+        (object_key or "").lstrip('/') == location.lstrip('/')
+
+def aux_file_base(database_id: str, location: str, object_key: str) -> str:
+    """Auxiliary-bucket prefix of one file's derived data, scoped to that file.
+
+    The object of a single-file location keeps its data in the ``preview`` subfolder of
+    ``{databaseId}/{key}/``; the rest of that base holds the data of the entries in its
+    companion folder ``{key}/``, so the object's prefix stops at ``preview/``.
+    """
+    base = aux_bucket_asset_file_base(database_id, object_key)
+    return base + "preview/" if _is_location_object(location, object_key) else base
+
+def aux_file_bases(source_db: str, source_location: str, source_key: str,
+                   dest_db: str, dest_location: str, dest_key: str) -> Tuple[str, str]:
+    """Source and destination auxiliary prefixes for a copy or move of one file. When either side is
+    the object of a single-file location both stop at ``preview/``, so the data lands in the same
+    layout and no companion entry's data moves with it."""
+    source = aux_bucket_asset_file_base(source_db, source_key)
+    dest = aux_bucket_asset_file_base(dest_db, dest_key)
+    if _is_location_object(source_location, source_key) or _is_location_object(dest_location, dest_key):
+        return source + "preview/", dest + "preview/"
+    return source, dest
 
 def delete_assetAuxiliary_files(prefix):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
@@ -1339,9 +1395,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     """
     logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}, basic_mode: {basic_mode}")
 
-    # A single-file location lists the keys it holds (its object, its companion folder and its own
-    # previews): the S3 prefix also matches keys that only share its characters, and a companion entry
-    # at the object's own path is shadowed by the object
+    # A single-file location lists the keys it holds: its object, its own previews and its companion
+    # folder {key}/. Each is listed by its own prefix, so keys that only share the location's characters
+    # ({key}.bak, {key}_tiles/...) are never read and cannot fill a page.
     location = prefix
     single_object = not is_folder_location(location)
     single_object_filter = (query_params.get('prefix') or '').lstrip('/')
@@ -1375,8 +1431,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if query_params.get('startingToken'):
             list_params['ContinuationToken'] = query_params['startingToken']
         
-        # Single S3 list call
-        page = s3_client.list_objects_v2(**list_params)
+        if single_object:
+            page = _list_single_file_location_page(bucket, location, list_params)
+        else:
+            # Single S3 list call
+            page = s3_client.list_objects_v2(**list_params)
         
         # Items that need head_object enrichment (non-basic mode)
         items_needing_enrichment = []
@@ -1494,11 +1553,20 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 # Track keys we've already processed to avoid duplicates
                 existing_keys = {item['key'] for item in result['items']}
                 
-                for page in version_paginator.paginate(
-                    Bucket=bucket,
-                    Prefix=prefix,
-                    PaginationConfig=pagination_config
-                ):
+                # A single-file location reads its object's newest version alone, then its own prefixes
+                version_pages = []
+                if single_object:
+                    newest = s3_client.list_object_versions(Bucket=bucket, Prefix=location, MaxKeys=1)
+                    version_pages.append({'DeleteMarkers': [marker for marker in newest.get('DeleteMarkers', [])
+                                                            if marker['Key'] == location]})
+                version_pages.extend(page for version_prefix in (
+                    _single_file_location_prefixes(location) if single_object else [prefix])
+                    for page in version_paginator.paginate(
+                        Bucket=bucket,
+                        Prefix=version_prefix,
+                        PaginationConfig=pagination_config
+                    ))
+                for page in version_pages:
                     # Process delete markers
                     for marker in page.get('DeleteMarkers', []):
                         key = marker['Key']
@@ -2270,7 +2338,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         success = delete_s3_object_all_versions(bucket, full_key)
 
         # Delete aux files if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        delete_assetAuxiliary_files(aux_file_base(databaseId, base_key, full_key))
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
@@ -2756,10 +2824,8 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
     # Copy auxiliary files if they exist
-    copy_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(effective_dest_db, dest_key)
-    )
+    copy_auxiliary_files(*aux_file_bases(databaseId, source_base_key, source_key,
+                                         effective_dest_db, dest_base_key, dest_key))
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -2917,10 +2983,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     )
     
     # Move auxiliary files if they exist
-    move_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(databaseId, dest_key)
-    )
+    move_auxiliary_files(*aux_file_bases(databaseId, base_key, source_key, databaseId, base_key, dest_key))
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -3035,7 +3098,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
     #Delete aux files for asset as they don't match anymore with the version.
-    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+    delete_assetAuxiliary_files(aux_file_base(databaseId, base_key, full_key))
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -4630,7 +4693,7 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+    aux_prefix = aux_file_base(databaseId, base_key, full_key)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0

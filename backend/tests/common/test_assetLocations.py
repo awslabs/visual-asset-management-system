@@ -251,3 +251,28 @@ class TestObjectKeyFor:
     ])
     def test_object_key_for_inverts_relative_path_in(self, location, key):
         assert al.object_key_for(location, al.relative_path_in(location, key)) == key
+
+
+@pytest.mark.unit
+class TestListingPrefixes:
+    def test_a_single_file_location_lists_its_object_previews_and_companion_folder(self):
+        assert al.listing_prefixes(FILE_LOCATION) == [
+            (FILE_LOCATION, 1), (FILE_LOCATION + ".previewFile.", None), (FILE_LOCATION + "/", None)]
+
+    def test_every_key_the_location_holds_is_under_one_of_its_prefixes(self):
+        held = (FILE_LOCATION, "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj",
+                "projects/model.glb/model.glb")
+        for key in held:
+            assert any(key.startswith(prefix) for prefix, _ in al.listing_prefixes(FILE_LOCATION)), key
+
+    def test_a_neighbour_is_only_under_the_one_key_read(self):
+        for key in ("projects/model.glb.bak", "projects/model.glb-old/n.txt", "projects/model.glbx/inner.txt"):
+            wide = [prefix for prefix, cap in al.listing_prefixes(FILE_LOCATION) if cap != 1]
+            assert not any(key.startswith(prefix) for prefix in wide), key
+
+    def test_a_folder_location_is_its_own_prefix(self):
+        assert al.listing_prefixes(FOLDER_LOCATION) == [(FOLDER_LOCATION, None)]
+        assert al.listing_prefixes("/" + FOLDER_LOCATION) == [(FOLDER_LOCATION, None)]
+
+    def test_no_location_lists_nothing(self):
+        assert al.listing_prefixes("") == [] and al.listing_prefixes(None) == []

@@ -31,7 +31,7 @@ than with the prefix match alone.
 Pure functions, no AWS calls.
 """
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
@@ -148,6 +148,22 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
     if all(segment == name for segment in segments):
         return loc + "/".join([""] + [name] * (len(segments) - 1)) + preview
     return loc + "/" + relative
+
+
+def listing_prefixes(location: Optional[str]) -> List[Tuple[str, Optional[int]]]:
+    """``(prefix, key cap)`` pairs that list the keys a location holds, and no key that only shares its characters.
+
+    A folder location is one uncapped prefix. A single-file location reads its own key with a one-key
+    listing (the smallest key under that prefix is the key itself, when it exists), then its own
+    previews ``{key}.previewFile.`` and its companion folder ``{key}/``. Callers still keep only the
+    keys ``contains`` accepts.
+    """
+    loc = normalize_location(location)
+    if not loc:
+        return []
+    if loc.endswith("/"):
+        return [(loc, None)]
+    return [(loc, 1), (loc + PREVIEW_FILE_PATTERN, None), (loc + "/", None)]
 
 
 def folder_listing_prefix(location: Optional[str], relative_folder: Optional[str]) -> str:

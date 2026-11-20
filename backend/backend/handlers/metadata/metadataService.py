@@ -823,7 +823,7 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
         asset_base_path = asset['assetLocation']['Key']
 
         if asset_base_path and not is_folder_location(asset_base_path):
-            # A single-file location holds its one object, named by its file name
+            # A single-file location's paths name its object, its previews and its companion folder {key}/
             full_key = object_key_for(asset_base_path, file_path)
             if full_key is None:
                 raise VAMSGeneralErrorResponse("File not found in S3")

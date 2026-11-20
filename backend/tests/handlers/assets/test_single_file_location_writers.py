@@ -121,23 +121,40 @@ def _contents(*keys):
 
 @pytest.mark.unit
 class TestAssetTypeAfterUpload:
+    """The sample reads the location's own keys by their own prefixes: the object with a one-key listing,
+    its previews and its companion folder. The bare location is never listed as a wide prefix, so keys that
+    only share its characters cannot fill the sample."""
+
+    @staticmethod
+    def _listing(*keys):
+        calls = []
+
+        def _list_all_objects(bucket, prefix, client=None, max_objects=None):
+            calls.append((prefix, max_objects))
+            listed = _contents(*sorted(k for k in keys if k.startswith(prefix)))
+            return listed[:max_objects] if max_objects is not None else listed
+
+        return _list_all_objects, calls
+
     @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
     def test_keys_that_only_share_the_characters_are_not_counted(self, module_name):
         import importlib
         module = importlib.import_module(f"backend.backend.handlers.assets.{module_name}")
-        listed = _contents("p1/model.glb", "p1/model.glb.bak", "p1/model.glbx/inner.txt")
-        with patch.object(module, "list_all_objects", return_value=listed), \
+        fake, calls = self._listing("p1/model.glb", "p1/model.glb.bak", "p1/model.glbx/inner.txt")
+        with patch.object(module, "list_all_objects", side_effect=fake), \
                 patch.object(module, "is_file_archived", return_value=False):
             assert module.determine_asset_type("asset-1", "bucket", FILE_LOCATION) == ".glb"
+        assert all(max_objects == 1 for prefix, max_objects in calls if prefix == FILE_LOCATION), calls
 
     @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
     def test_a_companion_file_makes_a_folder(self, module_name):
         import importlib
         module = importlib.import_module(f"backend.backend.handlers.assets.{module_name}")
-        listed = _contents("p1/model.glb", "p1/model.glb/sub/x.obj")
-        with patch.object(module, "list_all_objects", return_value=listed), \
+        fake, calls = self._listing("p1/model.glb", "p1/model.glb-old/n.txt", "p1/model.glb/sub/x.obj")
+        with patch.object(module, "list_all_objects", side_effect=fake), \
                 patch.object(module, "is_file_archived", return_value=False):
             assert module.determine_asset_type("asset-1", "bucket", FILE_LOCATION) == "folder"
+        assert ("p1/model.glb/", module.ASSET_TYPE_DETECTION_SAMPLE_SIZE) in calls, calls
 
 
 @pytest.mark.unit

@@ -273,11 +273,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 }
 ```
 
-| Field                    | Type    | Required | Description                                                                      |
-| ------------------------ | ------- | -------- | -------------------------------------------------------------------------------- |
-| `filePath`               | string  | Yes      | Relative file path to delete.                                                    |
-| `isPrefix`               | boolean | No       | When `true`, delete all files under the path prefix. Defaults to `false`.        |
-| `confirmPermanentDelete` | boolean | Yes      | Safety confirmation. Must be `true`; the operation errors when it is not `true`. |
+| Field                    | Type    | Required | Description                                                                                                                                                            |
+| ------------------------ | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filePath`               | string  | Yes      | Relative file path to delete.                                                                                                                                          |
+| `isPrefix`               | boolean | No       | When `true`, `filePath` names a folder and every file in it is deleted; a trailing `/` is added when missing, so `/sub` never selects `/sub.txt`. Defaults to `false`. |
+| `confirmPermanentDelete` | boolean | Yes      | Safety confirmation. Must be `true`; the operation errors when it is not `true`.                                                                                       |
 
 **Response:**
 
@@ -321,10 +321,10 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 }
 ```
 
-| Field      | Type    | Required | Description                                                                |
-| ---------- | ------- | -------- | -------------------------------------------------------------------------- |
-| `filePath` | string  | Yes      | Relative file path to archive.                                             |
-| `isPrefix` | boolean | No       | When `true`, archive all files under the path prefix. Defaults to `false`. |
+| Field      | Type    | Required | Description                                                                                                                                                             |
+| ---------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filePath` | string  | Yes      | Relative file path to archive.                                                                                                                                          |
+| `isPrefix` | boolean | No       | When `true`, `filePath` names a folder and every file in it is archived; a trailing `/` is added when missing, so `/sub` never selects `/sub.txt`. Defaults to `false`. |
 
 **Response:**
 
