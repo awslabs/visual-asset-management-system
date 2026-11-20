@@ -6,7 +6,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
-import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import LoadingSpinner from "../../components/LoadingSpinner";
 import { ThatOpenWebIfcDependencyManager } from "./dependencies";
 import ThatOpenWebIfcPanel from "./ThatOpenWebIfcPanel";
@@ -20,7 +19,8 @@ import {
 import { buildSpatialTree } from "./utils/spatialTree";
 import { VIEWER_LAYER } from "../../core/viewerLayers";
 import { useInfoBoxClearOfPanel } from "../../core/useOverlap";
-import { isApiRefusalError, streamResponseFailure } from "../../core/streamFailure";
+import { isApiRefusalError } from "../../core/streamFailure";
+import { fetchPresignedFile } from "../../core/presignedFetch";
 
 // Self-hosted Fragments model worker, copied next to the bundle by the
 // customInstall (see customInstalls/thatopenwebifc). Served same-origin so it
@@ -176,35 +176,22 @@ const ThatOpenWebIfcViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 if (loadingCancelledRef.current) return;
 
-                // Fetch the file bytes from the streaming endpoint (same flow as
-                // the Three.js viewer): dual-auth header + version query params.
+                // Read the file straight from S3 through a presigned URL from the authorized
+                // download route. The streaming route's 307 makes the browser send `Origin: null`
+                // to S3, which an external bucket's single-origin CORS rule rejects (#1630).
                 setLoadingMessage(`Downloading ${assetKey.split("/").pop()}...`);
-                const authHeader = await getDualAuthorizationHeader();
-                const encodedFileKey = assetKey
-                    .split("/")
-                    .map((seg) => encodeURIComponent(seg))
-                    .join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
-                    assetId
-                )}/download/stream/${encodedFileKey}`;
-                if (assetVersionId) {
-                    assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
-                } else if (versionId) {
-                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
-                }
                 downloadAbortRef.current = new AbortController();
-                const response = await fetch(assetUrl, {
-                    headers: { Authorization: authHeader },
-                    signal: downloadAbortRef.current.signal,
-                });
-                if (!response.ok) {
-                    // Another refusal is named by the API's own message, as an ApiRefusalError
-                    // (D166).
-                    throw await streamResponseFailure(
-                        response,
-                        `Failed to load: ${assetKey.split("/").pop()} (${response.status})`
-                    );
-                }
+                const response = await fetchPresignedFile(
+                    {
+                        databaseId,
+                        assetId,
+                        key: assetKey,
+                        assetVersionId: assetVersionId || undefined,
+                        versionId: !assetVersionId && versionId ? versionId : undefined,
+                        signal: downloadAbortRef.current.signal,
+                    },
+                    `Failed to load: ${assetKey.split("/").pop()}`
+                );
                 // Refuse before buffering: arrayBuffer() on a multi-GB file takes
                 // the tab down with no error to show the user.
                 const declaredLength = Number(response.headers.get("content-length"));
