@@ -992,6 +992,18 @@ A Batch/Fargate container sizes its work to the limits of the task it runs in ra
 -   Download with a `TransferConfig` (parallel ranged GETs) on a client whose `max_pool_connections` is at least its `max_concurrency` (`utils/s3_utils.py`): botocore pools 10 connections, and urllib3 discards the connection of each concurrent request beyond the pool and reconnects. Stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
 -   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
 
+### **Sizing COLLADA and USD Scenes Before They Load (3D Basic Conversion)**
+
+The 3D Basic Conversion sizes a COLLADA or USD scene from the file before its loader expands it (`backendPipelines/conversion/3dBasic/lambdaContainer/expansion_bounds.py`, container-only):
+
+-   `model_formats.check_collada_scene` counts the nodes, vertices and triangles `trimesh` places for `instance_node` and nested `node` elements (one node and one mesh for each primitive element of each geometry placed), from the hardened XML parse and a memoised count over the node graph, and refuses a scene over the bound or one that places a node inside itself.
+-   `usd_io.read_usd` counts the prims `Usd.Stage.Open` composes from the layers' prim specs and arcs (references, payloads, inherits, specializes, sublayers, variants; an instanceable prim counts once, its shared content once per prototype) before it opens the stage, and refuses a scene over the bound or one whose prim composes itself.
+-   Both use `expansion_bounds.max_scene_nodes(memory)`: 1,000,000 on the 10,240 MB function, in proportion above that, from the same memory input as the input size limits; this is the value of `scene_limits.MAX_SCENE_NODES`. The job carries it as `max_scene_nodes`, and the conversion passes it as `SceneLimit(max_nodes=...)`.
+-   `read_usd` also takes a `deadline` (a share, `model_formats.USD_READ_TIME_SHARE`, of the job's `tool_timeout_seconds`) checked for every prim of the walk. A refusal names nodes or prims, not memory.
+-   `model_formats.apply_plan` transforms a scene through `_apply_scene_transform` (trimesh's `Scene.apply_transform` rebuilds its graph cache per node).
+
+Claude Code counterpart: `backendPipelines/CLAUDE.md`, "Files a Model Input References".
+
 ### **Reporting Failure on a Task-Token Pipeline**
 
 A pipeline registered with `waitForCallback: "Enabled"` receives an AWS Step Functions task token, and the
