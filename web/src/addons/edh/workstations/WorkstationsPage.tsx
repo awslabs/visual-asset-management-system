@@ -281,7 +281,8 @@ const RowActions: React.FC<RowActionsProps> = ({
     // `DESKTOP_ERROR`, from the service): EDH's stop takes it in any state VAMS keeps, and its start
     // only once EDH reports it stopped, so Stop is offered and Start is not, as the reason says. A
     // launch the sweep found stalled never ran, so its Delete applies instead.
-    const desktopError = row.connectionUnavailableReason === "DESKTOP_ERROR" && !isLaunchStalled(row);
+    const desktopError =
+        row.connectionUnavailableReason === "DESKTOP_ERROR" && !isLaunchStalled(row);
     // The menu offers only the one of Stop and Start that applies, and neither while the workstation
     // is being created, started or stopped (`activity`). A start EDH accepted and has not finished
     // after 30 minutes (`isStartStalled`) leaves the row CREATING with no activity; the service stops

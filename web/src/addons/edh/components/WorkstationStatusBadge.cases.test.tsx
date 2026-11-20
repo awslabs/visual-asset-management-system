@@ -100,9 +100,9 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         // Both at once: a stalled launch EDH reports in error is orphaned, and a record carrying both
         // codes anyway reads as the launch stall.
         expect(
-            CASES.filter(
-                (c) => c.record.state === "ORPHANED" && c.record.edhState === "error"
-            ).map((c) => c.record.lastError)
+            CASES.filter((c) => c.record.state === "ORPHANED" && c.record.edhState === "error").map(
+                (c) => c.record.lastError
+            )
         ).toEqual(["LAUNCH_ERROR"]);
         expect(
             CASES.filter(
