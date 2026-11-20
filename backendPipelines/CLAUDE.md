@@ -422,7 +422,8 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     that, from the same memory input as the input size limits), the value of `scene_limits.MAX_SCENE_NODES`;
     the job carries it as `max_scene_nodes` and the conversion passes it as `SceneLimit(max_nodes=...)`.
     `read_usd` also takes a `deadline` (a share, `model_formats.USD_READ_TIME_SHARE`, of the job's
-    `tool_timeout_seconds`) checked for every prim of the walk. A refusal names nodes or prims, not memory.
+    `tool_timeout_seconds`) checked for every prim of the walk. A refusal names nodes or prims, not memory. `model_formats.apply_plan` transforms a scene through
+    `_apply_scene_transform` (trimesh's `Scene.apply_transform` rebuilds its graph cache per node).
 -   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
     `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the `step` Poetry
     group, `poetry export --only step`). `lambda.py` refuses a STEP run before any S3 call when the variable is

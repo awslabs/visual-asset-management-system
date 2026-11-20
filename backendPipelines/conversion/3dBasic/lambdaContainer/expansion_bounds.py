@@ -321,7 +321,8 @@ class _Composition:
     def _arc_targets(self, root_layer, spec):
         """The bundles the composition arcs authored on ``spec`` bring in."""
         found = []
-        lists = ((spec.referenceList,) if spec.hasReferences else ()) + ((spec.payloadList,) if spec.hasPayloads else ())
+        lists = (((spec.referenceList,) if spec.hasReferences else ())
+                 + ((spec.payloadList,) if spec.hasPayloads else ()))
         for arcs in lists:
             for item in _items(arcs):
                 if item.assetPath:
