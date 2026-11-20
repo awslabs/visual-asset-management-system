@@ -103,7 +103,7 @@ describe("search page asset actions by role", () => {
         });
     });
 
-    it("the administrator listing without the unarchive and deleteAsset routes may create and archive only", async () => {
+    it("the administrator listing without the unarchive route may create and delete only", async () => {
         expect(await reasonsFor(ADMIN_ROUTES)).toEqual({
             create: undefined,
             delete: undefined,

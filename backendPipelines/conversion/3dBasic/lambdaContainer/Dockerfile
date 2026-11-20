@@ -49,9 +49,10 @@ FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.12@sha256:a53086fc311
 ARG ENABLE_STEP_INPUT=false
 ENV ENABLE_STEP_INPUT=${ENABLE_STEP_INPUT}
 
-# Copies requirements.txt file into the container. It is exported from poetry.lock WITH hashes
-# (`poetry export -f requirements.txt -o requirements.txt`, which needs poetry-plugin-export), never
-# edited by hand. requirements-step.txt is the `step` group (`poetry export --only step`).
+# Copies requirements.txt file into the container. It is exported from uv.lock WITH hashes
+# (`uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt`), never edited by
+# hand. requirements-step.txt is the `step` group (`uv export --only-group step`). uv is a development
+# and CI tool only: the image installs the committed exports with pip.
 COPY requirements.txt requirements-step.txt ./
 # Installs exactly the locked packages: pip refuses any file whose SHA-256 is not in requirements.txt.
 RUN pip install --no-cache-dir --no-deps --only-binary=:all: --require-hashes -r requirements.txt
@@ -61,7 +62,7 @@ RUN if [ "${ENABLE_STEP_INPUT}" = "true" ]; then \
 
 COPY --from=assimp-builder /opt/assimp /opt/assimp/bin/assimp
 
-# Be sure to copy over the function itself! `.dockerignore` keeps the tests, the Poetry files and any
+# Be sure to copy over the function itself! `.dockerignore` keeps the tests, the uv project files and any
 # local caches out of this copy, so the image holds the runtime modules only.
 COPY . .
 

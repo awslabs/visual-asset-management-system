@@ -537,10 +537,9 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
     });
 
     test("the schema-restriction warning quotes the metadata service's refusal text", () => {
-        // The message is a Python constant split over adjacent string literals; join them first.
         const validation = readRepo(
             path.join("backend", "backend", "common", "metadataSchemaValidation.py")
-        ).replace(/"\s*\n\s*"/g, "");
+        );
         expect(validation).toContain("is not defined in the metadata schema");
         expect(validation).toContain(
             "Only schema-defined fields are allowed when restrictMetadataOutsideSchemas is enabled"

@@ -6,17 +6,23 @@
 /**
  * How a zipArchive run submits its job and how it ends when its container never reports. The
  * ZipArchiveBatchJob state submits through executeBatchJob, which is not idempotent, so the state
- * carries no Retry. Its heartbeat clock starts at submit, so it also runs out for a job still waiting in the AWS Batch queue or one that
- * failed before its container ran. pipelineEnd then looks the run's job up on the pipeline's queue by
- * job name (ListJobs) and cancels a job still waiting to start (TerminateJob), so it needs the queue
- * and both actions.
+ * carries no Retry. Its heartbeat clock starts at submit, so it also runs out for a job still waiting
+ * in the AWS Batch queue or one that failed before its container ran, and Step Functions records a
+ * heartbeat expiry as States.Timeout, the same error as the state's bound. pipelineEnd then looks the
+ * run's job up on the pipeline's queue by job name (ListJobs), ends it while it is queued or running
+ * (TerminateJob), and tells the bound from a lost heartbeat by the job's age.
  */
 
 import { Template } from "aws-cdk-lib/assertions";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
-import { ZipArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
+import {
+    ZIP_ARCHIVE_BATCH_HEARTBEAT,
+    ZIP_ARCHIVE_BATCH_TIMEOUT,
+    ZipArchiveConstruct,
+} from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
 import { makePipelineHarness } from "../support/pipelineConstructHarness";
 import { lambdaEnvironmentsByHandler, parseAsl, singleStateMachine } from "../support/asl";
+import { expectBatchStateTimeoutCleanup } from "../support/batchStateTimeoutCleanup";
 
 let template: Template;
 
@@ -62,26 +68,21 @@ const roleStatementsOf = (handler: string): any[] => {
 const actionsOf = (statement: any): string[] =>
     Array.isArray(statement.Action) ? statement.Action : [statement.Action];
 
-describe("zipArchive pipelineEnd after a heartbeat timeout", () => {
-    test("knows the pipeline's job queue", () => {
-        const [env] = lambdaEnvironmentsByHandler(template, "pipelineEnd.lambda_handler");
-        const queues = template.findResources("AWS::Batch::JobQueue");
-        expect(Object.keys(queues)).toHaveLength(1);
-        expect(JSON.stringify(env.BATCH_JOB_QUEUE)).toContain(Object.keys(queues)[0]);
+describe("zipArchive pipelineEnd after its token wait times out", () => {
+    test("knows the pipeline's job queue, and may list the run's jobs and end one by id only", () => {
+        expectBatchStateTimeoutCleanup(template);
+        const statements = roleStatementsOf("pipelineEnd.lambda_handler");
+        expect(statements.some((s) => actionsOf(s).includes("batch:SubmitJob"))).toBe(false);
     });
 
-    test("may list the run's jobs and cancel one by id, and nothing wider", () => {
-        const statements = roleStatementsOf("pipelineEnd.lambda_handler");
-        const list = statements.filter((s) => actionsOf(s).includes("batch:ListJobs"));
-        expect(list).toHaveLength(1);
-        expect(list[0].Resource).toBe("*");
-        expect(actionsOf(list[0])).toEqual(["batch:ListJobs"]);
-
-        const terminate = statements.filter((s) => actionsOf(s).includes("batch:TerminateJob"));
-        expect(terminate).toHaveLength(1);
-        expect(actionsOf(terminate[0])).toEqual(["batch:TerminateJob"]);
-        expect(JSON.stringify(terminate[0].Resource)).toMatch(/:job\/\*"/);
-        expect(statements.some((s) => actionsOf(s).includes("batch:SubmitJob"))).toBe(false);
+    test("knows the token wait's own bound, to tell it from a lost heartbeat", () => {
+        // Step Functions ends the wait with States.Timeout both when the heartbeat runs out and at
+        // the bound; pipelineEnd compares the job's age with this value.
+        const [env] = lambdaEnvironmentsByHandler(template, "pipelineEnd.lambda_handler");
+        expect(env.STATE_TIMEOUT_SECONDS).toBe(String(ZIP_ARCHIVE_BATCH_TIMEOUT.toSeconds()));
+        const state = parseAsl(singleStateMachine(template)).States.ZipArchiveBatchJob;
+        expect(state.TimeoutSeconds).toBe(ZIP_ARCHIVE_BATCH_TIMEOUT.toSeconds());
+        expect(state.HeartbeatSeconds).toBe(ZIP_ARCHIVE_BATCH_HEARTBEAT.toSeconds());
     });
 });
 

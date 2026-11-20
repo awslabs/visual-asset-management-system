@@ -3,12 +3,12 @@
 
 """A pipelineEnd whose Batch state has its own bound ends the run's job when that bound fires.
 
-Step Functions cancels a `.sync` Batch job when the execution is stopped, not when a state times out,
-and a job a Lambda submitted under WAIT_FOR_TASK_TOKEN has no owner at all once the token wait times
-out. So after `States.Timeout` the job may still be queued, and would start after its run has already
-failed. Each of these pipelineEnd handlers looks the run's job up by its run-unique name on the queues
-in BATCH_JOB_QUEUES and terminates it while it is not finished. Image to 3D and Video SOP/BOM have the
-same check in their own suites; the three pipelines here have no pipelineEnd suite of their own.
+Step Functions ends a `.sync` Batch job when the state's own bound fires, so for a `.sync` state this is a
+backup; a job a Lambda submitted under WAIT_FOR_TASK_TOKEN has no owner at all once the token wait times
+out, and would start or go on after its run has already failed. Each of these pipelineEnd handlers looks
+the run's job up by its run-unique name on the queues in BATCH_JOB_QUEUES and terminates it while it is
+not finished. Image to 3D and Video SOP/BOM have the same check in their own suites; the four
+pipelines here have no pipelineEnd suite of their own.
 """
 
 import importlib.util
@@ -24,6 +24,7 @@ _HANDLERS = [
     "preview/3dThumbnail/lambda/pipelineEnd.py",
     "preview/pcPotreeViewer/lambda/pipelineEnd.py",
     "conversion/coordinateTransform/lambda/pipelineEnd.py",
+    "conversion/cogConvert/lambda/pipelineEnd.py",
 ]
 
 
