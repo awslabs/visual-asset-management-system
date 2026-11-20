@@ -512,6 +512,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Web** The Three.js viewer opens files from an external S3 bucket whose CORS rule lists only the VAMS web origin. It now reads each file and referenced file through a presigned URL, so the browser sends the web origin instead of `null`. ([#1623](https://github.com/awslabs/visual-asset-management-system/issues/1623))
 -   **Home-page carousel works from the keyboard** — Tab reaches the "How it works" carousel's slide controls, the arrow keys change the slide, the focused slide's dot is outlined, and each control is named after its slide; the other slides could be shown only with a pointer. (issue #1573)
 -   **Uninstall log group cleanup stays within the deployment** — Step 4 of the uninstall guide reads the log groups to delete from the deleted stack's AWS CloudFormation record, leaves out those of a current stack of the same name and lists them for review first, so it no longer deletes the groups of other VAMS deployments that share the `/aws/vendedlogs/` prefixes; it also covers the API Gateway execution log group. (issue #1572)
+-   **Single-file assets** — File operations on an asset created from a single Amazon S3 object act on its own file, its previews and its companion folder only, and its file can be listed, downloaded and opened again; a prefix delete or archive names a folder; uploads at the asset's own file path are refused, and Download as Zip refuses such an asset. (PR #PR)
 
 **Documentation:**
 
