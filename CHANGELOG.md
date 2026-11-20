@@ -10,8 +10,12 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Pipelines** A deployment can register an existing pipeline bundle with a different execution config (callback mode, timeouts or Lambda name) through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without shipping a second bundle. A registration without the property is unchanged. Changing a value that the generated state machines encode redeploys every workflow that uses the pipeline, including custom workflows, and running executions finish on the definition they started with. (issue #1732)
+
 ### Bug Fixes
 
+-   **Web** Natural-language search results on a deployment without OpenSearch list a file's path in the first column after Relevance, before the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))
+-   **Web** On the Search page's Map view, when footprints overlap the popup opens the footprint with the smallest drawn area under the click. Area is measured on the flat map, so a rotated footprint no longer loses to a larger one that shares its box, and latitude no longer skews the comparison. ([#1729](https://github.com/awslabs/visual-asset-management-system/issues/1729))
 -   **Web** On the Search page's Map view, clicking a file's footprint opens its popup at the click instead of at the centre of the footprint's box, which for a large or L-shaped footprint was away from the click and for a footprint split at longitude 180 was on the other side of the world. When footprints overlap, the smallest one under the click opens, so a small footprint under a large one can be opened. (issue #1683)
 -   **Pipelines** The Isaac Lab compute environment launches only GPU instance types that can run its job: one RT-core GPU, at least 8 vCPUs and more registered memory than the 32 GiB the job asks for. The default list is wider, with 11 single-GPU G5, G6, GR6 and G6E types. CPU-only instance classes are no longer added, and `keepWarmInstance` keeps one instance the job can run on. ([#1308](https://github.com/awslabs/visual-asset-management-system/issues/1308))
     -   Note: the new `app.pipelines.useIsaacLabTraining.instanceTypes` option sets the list, and deployment fails at synthesis for a type that cannot run the job. Deployments that enable the pipeline update their compute environment on the next deploy.
@@ -20,9 +24,17 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Pipelines** Isaac Lab training with `rlLibrary` set to `rl_games` or `skrl` uploads the checkpoints the library writes to the run's `checkpoints/` folder, as `rsl_rl` already did: the `.pth` files of an `rl_games` run and the `agent_<timestep>.pt` and `best_agent.pt` files of a `skrl` run. A training run that finds no checkpoint to upload fails, after its logs and configuration are uploaded. Evaluation without a checkpoint path also finds `.pth` files, and selects the latest checkpoint by the chosen library's file naming, ignoring other libraries' checkpoints on the asset. ([#1315](https://github.com/awslabs/visual-asset-management-system/issues/1315))
 
+-   **EDH Workstations** A workstation that has already run is no longer shown Orphaned when EDH reports its desktop in error (EDH does this when the desktop's Amazon DCV health check fails). It keeps its state, disk and credential, and the web app, CLI and MCP tools show that its remote display is not responding (`connectionUnavailableReason` `DESKTOP_ERROR`). It can be stopped as usual, and started again once EDH reports it stopped. Only a new launch that never ran ends Orphaned. ([#1731](https://github.com/awslabs/visual-asset-management-system/issues/1731))
+    -   Note: while EDH reports the workstation in error, Connect, the desktop sign-in and Start answer `409` with `code` `DESKTOP_ERROR`, and the web app offers Stop. A started workstation whose desktop EDH no longer lists is recorded Deleted, as an active or stopped one is, instead of Orphaned.
+-   **EDH Workstations** A start that Amazon EC2 accepts and then returns to stopped for lack of capacity now shows why: the workstation stays Stopped with `CAPACITY_UNAVAILABLE` and the AWS error code and Availability Zone, as a start EC2 refuses at once does, and can be started again. ([#1730](https://github.com/awslabs/visual-asset-management-system/issues/1730))
+    -   Note: the session sweep and the workstation service read the instance's state reason with `ec2:DescribeInstances`, which the next deploy grants them.
+-   **Docs** The EDH setup guide says to keep EDH's `DCV_LINUX_TERMINATE_STOPPED_SESSION` and `DCV_WINDOWS_TERMINATE_STOPPED_SESSION` at `0`, so that EDH does not terminate stopped workstations and their disks. ([#1731](https://github.com/awslabs/visual-asset-management-system/issues/1731))
+
 ### Chores
 
 -   **Backend tests** The Physna add-on tests' `handlers.auth` stub carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, so a backend test run that collects the Physna tests before another test imports `customLogging.auditLogging` (for example `tests/handlers` alone) no longer fails at collection. ([#1451](https://github.com/awslabs/visual-asset-management-system/issues/1451))
+-   **Python dependencies** The backend and the base, authorizer and EDH root key sync Lambda layers lock their Python dependencies with uv, and the layer build installs each layer's committed `requirements.txt` with pip without resolving anything. Installed package versions are unchanged. ([#1742](https://github.com/awslabs/visual-asset-management-system/issues/1742))
+    -   Note: after changing a layer's `pyproject.toml`, run `uv lock` and `uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt` in that layer's directory and commit both files. A layer directory without a `requirements.txt` now fails the build with a message instead of locking dependencies during the build. See the developer setup guide.
 
 ### Known Outstanding Issues
 

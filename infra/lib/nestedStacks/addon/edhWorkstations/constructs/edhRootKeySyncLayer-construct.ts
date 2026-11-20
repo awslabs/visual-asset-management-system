@@ -11,12 +11,12 @@ import { Construct } from "constructs";
 import { LAMBDA_PYTHON_RUNTIME } from "../../../../../config/config";
 import { layerBundlingCommand } from "../../../../helper/lambda";
 
-/** The layer's Poetry project, relative to `infra/` as every VAMS layer asset is. */
+/** The layer's uv project, relative to `infra/` as every VAMS layer asset is. */
 export const EDH_ROOT_KEY_SYNC_LAYER_PROJECT = "../backendAddons/edh/rootKeySync/lambdaLayer";
 
 /**
  * The root key sync generates an RSA key pair for each run with `cryptography`, which the base layer does not
- * carry. This layer holds `cryptography`, `cffi` and `pycparser` only, pinned in its own Poetry project to the
+ * carry. This layer holds `cryptography`, `cffi` and `pycparser` only, pinned in its own uv project to the
  * versions the core authorizer layer uses, and none of the base layer's packages, so the two layers the sync
  * carries share no package file or package metadata. It is bundled exactly as the core layers are
  * (`lambdaLayersBuilder-nestedStack.ts`): the same build image, `layerBundlingCommand`, linux/amd64 platform

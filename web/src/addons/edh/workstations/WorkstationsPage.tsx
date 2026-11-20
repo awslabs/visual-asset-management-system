@@ -275,13 +275,17 @@ const RowActions: React.FC<RowActionsProps> = ({
         row.state === "STOPPED" && row.edhState && row.edhState !== "stopped"
             ? `The workstation is still ${row.edhState}; it can be started once it has stopped.`
             : undefined;
+    // A workstation that has run which EDH reports in error (`connectionUnavailableReason`
+    // `DESKTOP_ERROR`, from the service): EDH's stop takes it in any state VAMS keeps, and its start
+    // only once EDH reports it stopped, so Stop is offered and Start is not, as the reason says.
+    const desktopError = row.connectionUnavailableReason === "DESKTOP_ERROR";
     // The menu offers only the one of Stop and Start that applies, and neither while the workstation
     // is being created, started or stopped (`activity`). A start EDH accepted and has not finished
     // after 30 minutes (`isStartStalled`) leaves the row CREATING with no activity; the service stops
     // it like an active one, so Stop is offered for it.
     const changing = !!row.activity;
-    const stoppable = !changing && (row.state === "ACTIVE" || isStartStalled(row));
-    const startable = !changing && row.state === "STOPPED";
+    const stoppable = !changing && (row.state === "ACTIVE" || isStartStalled(row) || desktopError);
+    const startable = !changing && row.state === "STOPPED" && !desktopError;
     const items: ContextMenuItem[] = [
         {
             label: "Stop",
@@ -353,6 +357,7 @@ const StatusCell: React.FC<{ row: WorkstationRecord }> = ({ row }) => (
             sessionId={row.sessionId}
             instanceType={row.instanceType}
             startFailure={row.startFailure}
+            connectionUnavailableReason={row.connectionUnavailableReason}
         />
         {(row.state === "ORPHANED" || row.lastError === "LEASE_EXPIRED") && (
             <span className="block text-xs text-text-secondary">

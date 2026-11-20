@@ -12,11 +12,10 @@ import { nestedTemplateKeyFor } from "../support/iamPolicySize";
  *
  * CloudFormation rejects a template body over 1,000,000 bytes when it creates the change set:
  * "Template may not exceed 1000000 bytes in size". Nothing is created and an upgrade of an existing
- * stack is refused the same way. The jest synth harness synthesizes fine at any size, so before this
- * guard the failure surfaced only on a real deploy (#1535: with `useGlobalVpc.useForAllLambdas` on, the
- * ApiBuilder2 nested stack was 1,009,044 bytes while development, at 986,768, had passed with 13,232
- * bytes to spare). Writing the shared IAM suppressions on the IAM resources alone (#1647) has since
- * cut ApiBuilder2 to about 0.65 MB in that cell.
+ * stack is refused the same way. The jest synth harness synthesizes fine at any size, so only this
+ * guard catches an oversize template before a real deploy (#1535: with `useGlobalVpc.useForAllLambdas`
+ * on, ApiBuilder2 reached 1,009,044 bytes once the audit search was added to it). Writing the shared
+ * IAM suppressions on the IAM resources alone (#1647) keeps ApiBuilder2 at about 0.65 MB in that cell.
  *
  * WHAT IS MEASURED. The template CloudFormation receives from `cdk synth`, which differs from a bare
  * `app.synth()` in two ways that move the size, so both are reproduced here:

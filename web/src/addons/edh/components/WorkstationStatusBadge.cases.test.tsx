@@ -19,6 +19,7 @@ import WorkstationStatusBadge, {
 import fixture from "../workstationStatusCases.json";
 import { connectUnavailableReason } from "../workstations/ConnectLink";
 import type {
+    ConnectionUnavailableReason,
     StartFailure,
     WorkstationActivity,
     WorkstationRecord,
@@ -80,6 +81,12 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         expect(
             CASES.filter((c) => c.record.connectionUnavailableReason === "DISPLAY_SESSION_ENDED")
         ).toHaveLength(1);
+        // A workstation that has run which EDH reports in error, in each state it keeps.
+        expect(
+            CASES.filter((c) => c.record.connectionUnavailableReason === "DESKTOP_ERROR")
+                .map((c) => c.record.state)
+                .sort()
+        ).toEqual(["ACTIVE", "CREATING", "STOPPED"]);
     });
 
     it.each(table)("%s: the Connect reason is as agreed", (_name, c) => {
@@ -112,11 +119,16 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
                 activity={c.record.activity as WorkstationActivity | null}
                 instanceType={c.record.instanceType}
                 startFailure={c.record.startFailure}
+                connectionUnavailableReason={
+                    c.record.connectionUnavailableReason as ConnectionUnavailableReason | null
+                }
             />
         );
         expect(screen.getByText(c.badge)).toBeInTheDocument();
-        // The phases in motion carry the pulsing dot.
-        const moving = ["Starting", "Stopping", "Creating"].includes(c.badge);
+        // The phases in motion carry the pulsing dot; a workstation EDH reports in error is not moving.
+        const moving =
+            ["Starting", "Stopping", "Creating"].includes(c.badge) &&
+            c.record.connectionUnavailableReason !== "DESKTOP_ERROR";
         const dot = screen.getByText(c.badge).parentElement?.querySelector(".animate-pulse");
         if (moving) {
             expect(dot).not.toBeNull();
