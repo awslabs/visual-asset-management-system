@@ -857,6 +857,14 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
                  expected_size=input_size)
         # An input whose text is not UTF-8 fails here, before its references are read or fetched.
         check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
+        # A package compressed on disk (3MF) needs memory for what it holds, not for its zip: its
+        # declared uncompressed size is read from the central directory and checked before any part
+        # is parsed.
+        if size_check.uncompressed_expansion_factor(input_s3_asset_extension) is not None:
+            size_check.check_uncompressed_size(
+                os.path.basename(input_key), input_s3_asset_extension,
+                size_check.declared_uncompressed_bytes(temp_file),
+                memory_bytes=size_check.memory_limit_bytes(), output_extension=output_filetype)
         memory_bytes = size_check.memory_limit_bytes()
         handling = options.resolved_reference_handling(output_filetype)
         scene_input = input_s3_asset_extension in referenced_files.USD_EXTENSIONS or input_s3_asset_extension == ".dae"

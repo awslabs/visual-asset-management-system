@@ -5,8 +5,8 @@
 
 A handler Lambda ships only the `backend/backend` source and loads every third-party package
 from the `vams_layer_base` layer, which `lambdaLayersBuilder-nestedStack.ts` bundles from
-`backend/lambdaLayers/base` by exporting that directory's `poetry.lock`. The backend suite
-installs `backend/requirements-dev.txt`, exported from `backend/poetry.lock`. A package the two
+`backend/lambdaLayers/base` by installing that directory's `requirements.txt`, which is exported from its `uv.lock`. The
+backend suite installs `backend/requirements-dev.txt`, exported from `backend/uv.lock`. A package the two
 locks carry at different versions therefore runs in production on a version no backend test
 exercised -- for `casbin`, the engine behind every Tier-1 and Tier-2 check.
 
@@ -21,10 +21,10 @@ import tomllib
 import pytest
 
 BACKEND_DIR = pathlib.Path(__file__).resolve().parents[1]
-BACKEND_LOCK = BACKEND_DIR / 'poetry.lock'
-BASE_LAYER_LOCK = BACKEND_DIR / 'lambdaLayers' / 'base' / 'poetry.lock'
+BACKEND_LOCK = BACKEND_DIR / 'uv.lock'
+BASE_LAYER_LOCK = BACKEND_DIR / 'lambdaLayers' / 'base' / 'uv.lock'
 
-# `name==version` at the start of a Poetry-exported requirements line; the markers after `;`
+# `name==version` at the start of a uv-exported requirements line; the markers after `;`
 # are not compared (the backend is resolved for Python 3.13+, the layer for the 3.12 runtime).
 REQUIREMENT_PIN = re.compile(r'^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;]+)')
 
@@ -35,7 +35,7 @@ def _normalize(name):
 
 
 def _locked_versions(lock_path):
-    """{normalized name: set of versions} for every package in a poetry.lock."""
+    """{normalized name: set of versions} for every package in a uv.lock."""
     with open(lock_path, 'rb') as handle:
         packages = tomllib.load(handle).get('package', [])
     versions = {}
@@ -45,7 +45,7 @@ def _locked_versions(lock_path):
 
 
 def _pinned_versions(requirements_path):
-    """{normalized name: set of versions} for every pin in a Poetry-exported requirements file."""
+    """{normalized name: set of versions} for every pin in a uv-exported requirements file."""
     pins = {}
     for line in requirements_path.read_text(encoding='utf-8').splitlines():
         match = REQUIREMENT_PIN.match(line.strip())
@@ -97,14 +97,17 @@ class TestBaseLayerDependencyParity:
     def test_shared_packages_are_locked_at_the_same_version(self):
         drift = _version_drift(_locked_versions(BACKEND_LOCK), _locked_versions(BASE_LAYER_LOCK))
         assert not drift, (
-            "backend/poetry.lock and backend/lambdaLayers/base/poetry.lock lock these packages at "
-            f"different versions, as (name, backend, layer): {drift}. Re-lock both trees to the same "
-            "version (backend/CLAUDE.md 'Updating Python Dependencies').")
+            "backend/uv.lock and backend/lambdaLayers/base/uv.lock lock these packages at "
+            f"different versions, as (name, backend, layer): {drift}. Re-lock both with uv lock and "
+            "re-export (backend/CLAUDE.md 'Updating Python Dependencies').")
 
     @pytest.mark.parametrize('requirements_file, lock_file', [
-        ('requirements.txt', 'poetry.lock'),
-        ('requirements-dev.txt', 'poetry.lock'),
-        ('lambdaLayers/base/requirements.txt', 'lambdaLayers/base/poetry.lock'),
+        ('requirements.txt', 'uv.lock'),
+        ('requirements-dev.txt', 'uv.lock'),
+        ('lambdaLayers/base/requirements.txt', 'lambdaLayers/base/uv.lock'),
+        ('lambdaLayers/authorizer/requirements.txt', 'lambdaLayers/authorizer/uv.lock'),
+        ('../backendAddons/edh/rootKeySync/lambdaLayer/requirements.txt',
+         '../backendAddons/edh/rootKeySync/lambdaLayer/uv.lock'),
     ])
     def test_exported_requirements_match_their_lock(self, requirements_file, lock_file):
         """The suite installs `requirements-dev.txt`, not the lock, so the lock comparison above
@@ -119,4 +122,4 @@ class TestBaseLayerDependencyParity:
         )
         assert not mismatched, (
             f"{requirements_file} disagrees with {lock_file}, as (name, exported, locked): "
-            f"{mismatched}. Re-export it with poetry export.")
+            f"{mismatched}. Re-export it with uv export (backend/CLAUDE.md 'Updating Python Dependencies').")

@@ -89,6 +89,14 @@ Report:
 
 If pytest is not installed or fails to run, report the setup issue.
 
+When the change touches a `pyproject.toml`, `uv.lock` or exported `requirements*.txt`, also run the CI dependency audit from the repository root with the uv version the projects require on `PATH` (`PIP_AUDIT_VERSION` is the value in `.github/workflows/ci.yml`):
+
+```bash
+PIP_AUDIT_VERSION=<version from ci.yml> python3 .github/scripts/python_dependency_audit.py
+```
+
+Report a stale lock, a stale export or an advisory as a FAIL.
+
 #### 6. CLI Tests
 
 ```bash
