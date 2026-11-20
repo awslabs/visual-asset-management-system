@@ -302,36 +302,36 @@ mdurl==0.1.2 ; sys_platform == 'darwin' or sys_platform == 'linux' \
 more-itertools==11.1.0 ; sys_platform == 'darwin' or sys_platform == 'linux' \
     --hash=sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d \
     --hash=sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192
-msgpack==1.2.2 ; sys_platform == 'darwin' or sys_platform == 'linux' \
-    --hash=sha256:0a652ceeededf71d3fa40c303a02a149d42338d310162367b91c539d4bd6e0a3 \
-    --hash=sha256:0e91332144f69bc3018c91232fac26da580ef748fb8eaddd7914d4458001cc4f \
-    --hash=sha256:3e915d390d7068b257ca8b62f3fc59fad135c8631d1017ab03b0b924b07c5367 \
-    --hash=sha256:4a4348705be86e029d04e741cf9ed0dfe03e942d7d3b92e838fa80d3aa2c3ebc \
-    --hash=sha256:4b554d8164ebb526892194f71dcd96ef1fefe0c250087498785d3ffc04a80be3 \
-    --hash=sha256:77c2e018417dc1d66f235e383877ee885b60ade9d29e494dd581e08af2cb1923 \
-    --hash=sha256:90986cc9aab9d7d1d8f38bcbf65d3f7ac83bdd90c35765db7d691b4829698cba \
-    --hash=sha256:9eb0b0e602064527a045ea28c4f174ed69383587e29cebe28947e3b84106eb2a \
-    --hash=sha256:c522420d78db2431887d45b518e304d86e27b9ad0b30f24e3806a6ad5d8bdbfc
-multidict==6.8.0 ; sys_platform == 'darwin' or sys_platform == 'linux' \
-    --hash=sha256:003a3bddb32915c3f67096ea41d24e53edf710edb65a1f5d0c70ab40b0e4d20b \
-    --hash=sha256:088b04a66b3c1fce6fe4d771ec184a0426262d0b86709c908477b4ac7965df40 \
-    --hash=sha256:10456943903744ae1249728161c96bd9d2f7eb5ee17fcc2ffda2dc32e1bb36c7 \
-    --hash=sha256:13967dca8b2f33230a1427b52438326bb1c9101a1df22a3309ed3fcbbb3c96f0 \
-    --hash=sha256:22a310ad37672a261e55a8b5e28d0ae08cfb68abb1f46418ccd19835c3b8e836 \
-    --hash=sha256:31e8901637e20ccb3cf8f8848b5d0f7a00462bf5b34f7cf3dcbb2753b18e8b39 \
-    --hash=sha256:35977263d9bf506dbc65349f63b3b8c91606d4abc110990945e3b94bc671319c \
-    --hash=sha256:5cd4637ce76312ba1e05eb9c5193fec231f64fee0944e135fa1e951242355b37 \
-    --hash=sha256:658f5a1895b804423d97b22d06fc0d0b171c7c01dcc3aa9c8faf0c0e26a249a5 \
-    --hash=sha256:75daa15ca16d6285eb2e104b2f05ee6f8d9836c68da3ce5c85f615a0450eed0e \
-    --hash=sha256:887f9a975996032c686719eb7b3e1e7942fab5079c2b778bbd9afe9a9d78244f \
-    --hash=sha256:90c10b22860dbd09982d0b8993b66231a861bea2993d4a817ff35273f6ea285a \
-    --hash=sha256:9caef53b20a105c0d66518a34be2f71b2783de8d091767575ef86f6ea422236d \
-    --hash=sha256:a5e1583c14775580da05641240ce0d93f36ce3ddef3d5083a827468b0bcfe874 \
-    --hash=sha256:ad474c11d851b6fc97cb625e4822bc0cbd567fc07dc2602e28faec5a36b42bbb \
-    --hash=sha256:bb8c7da8c861391f7ae48e3593762be2dabe405109e01aec520fbe1a6d15d14b \
-    --hash=sha256:c5f3a2af441670d80ce5fdf13b6c1b421fc1fc7fc5182d58ac7486738bb2b742 \
-    --hash=sha256:e9dc7b4ff6ef184504b49ef9a4113d49a646653b2ce89f5f48c1f57cdf6ba081 \
-    --hash=sha256:f3071e6515cc63714d014da8f738ae9fa3997c476203f3cd46de380c2376ed7b
+msgpack==1.2.3 ; sys_platform == 'darwin' or sys_platform == 'linux' \
+    --hash=sha256:32edb81a2b5eb7cd7c9d941b2bfbbb082fd2cd09e0e725930316af6b708db186 \
+    --hash=sha256:666ef5601ab0e6e345e47febc96aa81143cc932201543480cbb9499164f05ffb \
+    --hash=sha256:87cf2ef05ff2f2493ba29fcdaef27e960ca64dacfd13460ae29e6f92e0ed05bb \
+    --hash=sha256:89c930aece4e972b208ba589c8410b4167b05e411a5ea2cb25fd96f8bc47ee43 \
+    --hash=sha256:905a189853d6bdb204c7ae5f4ab77fb857448abfff574d3d93c62e2815b24b4f \
+    --hash=sha256:b774ff994d844e541439ac5d2d49a14def4104830c3465e9394c153f86200ffb \
+    --hash=sha256:eaf7e82249837e3aa97297b34a0bb9ff562027381631e057cea6e1367f10b438 \
+    --hash=sha256:ede33b2892ceb976283e009ad12fa1834cfdf1f9c43ee9c97849fc588d00a618 \
+    --hash=sha256:f3d7b3d0018746b5997dd6b14a1870b07cc4c327d9101145d94a1fc264a51a06
+multidict==6.9.1 ; sys_platform == 'darwin' or sys_platform == 'linux' \
+    --hash=sha256:0f06e60fa190aa7abd0914c2a766736fdc8e9f34878c4346338534b73d1b20e2 \
+    --hash=sha256:0f2ce963299d42fa3f22a90adc0fdf174792ffef5ff4c7ffb68260548fb05580 \
+    --hash=sha256:19e31815d41cefc365489e591d105d2baceb2f65aa75d29471fbdbda8651e006 \
+    --hash=sha256:1a53de2772cfb74559df2eb4456ec4eeb908435ec55a84b69370d9d745d62aa8 \
+    --hash=sha256:1a8adfcaf96f587ab138476eaddef95f29b8a2a8a9afbfea8d2fd62180995d02 \
+    --hash=sha256:29138fef49828542e859828107e42e50d0e587c513b7eb4b2d92bade2b0860fe \
+    --hash=sha256:35fc236507fb1b3138f0af5ecd5f94ed752d4d6d826248eae425f86204013eea \
+    --hash=sha256:3c95601ed98fad3f6e2f8fe809c3b526b0fab31ef525e00a155e227f3d17f58a \
+    --hash=sha256:5b30ddf7234e611ca877575b62840e6af5977f92f1f9d532eedbb05a44ff8004 \
+    --hash=sha256:637f4ae36264bd7b8d9a60193acddc1d735ad52e8ed53a19931ea6d921fea8e5 \
+    --hash=sha256:63ada7ee2e9345695f9e9bc4c65d72222253f07b1ac94fd0e37555cc6f3c7f60 \
+    --hash=sha256:6ed30be8918e18c8bed0a2e8b70639ecf02feb61ed00ca2e41cfcb2a50fa3f42 \
+    --hash=sha256:7bf6478188f4e47bf5686e8a33da4ae28bf43b1b2528d9ee144d28492bfac60b \
+    --hash=sha256:95052e8777a86bae87c0bd0b5ab22d809e3d1d02bf69e3e66ddda5ba75a05805 \
+    --hash=sha256:976fd7689d69ec78d67d31d38d396d8adb562f7e8368279f76aed4aa451fa06d \
+    --hash=sha256:b5f8771aaaed7f80e84a4e471d2f29ab6721e4595075e54d03ae1ed951b2000a \
+    --hash=sha256:c148e8b596000dd3e4bfe206e70f3e666be18d72032e0012555f2373c52e35d6 \
+    --hash=sha256:d35a4f1c63f07fbb8c8f9946dea98b21eddf6c57421585f71d91864be3ba2a24 \
+    --hash=sha256:e58952f04772f59f11c6e007471449809a30165188669bca8fdb19dde40a8f24
 multimethod==1.12 ; sys_platform == 'darwin' or sys_platform == 'linux' \
     --hash=sha256:8db8ef2a8d2a247e3570cc23317680892fdf903d84c8c1053667c8e8f7671a67 \
     --hash=sha256:fd0c473c43558908d97cc06e4d68e8f69202f167db46f7b4e4058893e7dbdf60
@@ -554,9 +554,9 @@ scipy==1.18.1 ; sys_platform == 'darwin' or sys_platform == 'linux' \
 scooby==0.12.0 ; sys_platform == 'darwin' or sys_platform == 'linux' \
     --hash=sha256:65dea5b32006ef554aea9e945032c0c448eaacada96078187681e24f0a2fe8fa \
     --hash=sha256:e1eff64727b60b68634719326e220cd1ddbb299f8c073421c2abaa4f59ca5f20
-setuptools==84.0.0 ; sys_platform == 'darwin' or sys_platform == 'linux' \
-    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
-    --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73
+setuptools==84.1.0 ; sys_platform == 'darwin' or sys_platform == 'linux' \
+    --hash=sha256:23657205b63d4d31395ab917815247f694aafad28cd21316bf5fd45a51048ea0 \
+    --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9
 six==1.17.0 ; sys_platform == 'darwin' or sys_platform == 'linux' \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -619,9 +619,9 @@ vtk==9.6.2 ; sys_platform == 'darwin' or sys_platform == 'linux' \
 wcwidth==0.8.3 ; sys_platform == 'linux' \
     --hash=sha256:d128512515fbf4612e0ff21fd6380399210318b7b54a9af59dff8454cf9730eb \
     --hash=sha256:d5b73dba6158a595ec9370350e7f2637bcac8d6c5e4fde34f30fcffb6103a5e4
-werkzeug==3.1.8 ; sys_platform == 'darwin' or sys_platform == 'linux' \
-    --hash=sha256:63a77fb8892bf28ebc3178683445222aa500e48ebad5ec77b0ad80f8726b1f50 \
-    --hash=sha256:9bad61a4268dac112f1c5cd4630a56ede601b6ed420300677a869083d70a4c44
+werkzeug==3.1.9 ; sys_platform == 'darwin' or sys_platform == 'linux' \
+    --hash=sha256:55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060 \
+    --hash=sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab
 widgetsnbextension==4.0.16 ; sys_platform == 'linux' \
     --hash=sha256:a31a8774885b96fe825462f5d6496166f0c7cae111195b6465c801d230eb5a4e \
     --hash=sha256:adeea0ae78f0856ee4945f413299801b82a0a01416303301f39a704282a37b73
