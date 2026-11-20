@@ -122,6 +122,9 @@ export function buildFileIndexingFunction(
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadData(fun);
     storageResources.dynamo.fileAttributeStorageTable.grantReadData(fun);
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
+    // Sets indexedAt on the sync-ledger row of each version it indexes (one conditional UpdateItem);
+    // the table's customer managed key permissions come from kmsKeyLambdaPermissionAddToResourcePolicy.
+    storageResources.dynamo.assetFileVersionHistoryStorageTable.grant(fun, "dynamodb:UpdateItem");
 
     // Grant S3 read permissions
     grantReadPermissionsToAllAssetBuckets(fun);

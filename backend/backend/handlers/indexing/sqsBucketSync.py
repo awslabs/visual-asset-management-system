@@ -46,6 +46,7 @@ from common.assetHistory import (
     write_asset_history_record,
 )
 from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
+from common.fileAttribution import RESOLVED_BY_FAST_PATH, RESOLVED_BY_LOCATION_INDEX, VAMS_BINDING_FIELD
 from common.assetLocations import (
     RESOLVED_AMBIGUOUS,
     RESOLVED_FOUND,
@@ -153,13 +154,10 @@ asset_cache = SimpleCache()       # Cache for asset lookups
 # miss is served from the cache (None is what the cache returns for "not cached").
 ARCHIVED_DATABASE_CACHE_VALUE = "#archived"
 
-# How bucket sync found the asset a file belongs to: the first folder under the bucket's prefix
-# (normal assets, and assets it auto-creates), or the location index (any other stored location).
-RESOLVED_BY_FAST_PATH = "fastPath"
-RESOLVED_BY_LOCATION_INDEX = "locationIndex"
-
-# The additive field on each forwarded S3 record that carries bucket sync's answer to its consumers.
-VAMS_BINDING_FIELD = "vamsBinding"
+# How bucket sync found the asset a file belongs to (RESOLVED_BY_FAST_PATH: the first folder under the
+# bucket's prefix, for normal assets and assets it auto-creates; RESOLVED_BY_LOCATION_INDEX: any other
+# stored location), and VAMS_BINDING_FIELD, the additive field on each forwarded S3 record that carries
+# that answer to its consumers, come from common.fileAttribution, which the consumers read them with.
 
 # Why a record went to the rejected-record queue.
 REJECTED_REASON_AMBIGUOUS = "ambiguousLocation"
