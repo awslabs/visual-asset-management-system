@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Pipelines** A deployment can register an existing pipeline bundle with a different execution config (callback mode, timeouts or Lambda name) through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without shipping a second bundle. A registration without the property is unchanged. Changing a value that the generated state machines encode redeploys every workflow that uses the pipeline, including custom workflows, and running executions finish on the definition they started with. (issue #1732)
+
 ### Bug Fixes
 
 -   **Web** Natural-language search results on a deployment without OpenSearch list a file's path in the first column after Relevance, before the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))

@@ -44,6 +44,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
+-   **Execution config overrides at pipeline registration** — A deployment can register an existing pipeline bundle with a different callback mode, timeouts or Lambda name through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without a second bundle. A registration without the property is unchanged. A change to a value the generated state machines encode redeploys every workflow that uses the pipeline, custom workflows included, and running executions finish on the definition they started with. (issue #1732)
+
 **Key fixes:**
 
 -   **Search file path column without OpenSearch** — Natural-language file results on a deployment without OpenSearch list the file path directly after Relevance, ahead of the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))
