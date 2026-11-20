@@ -469,7 +469,8 @@ class TestConvertEntry:
         text = json.dumps(document)
         assert "s3://" not in text and "arn:" not in text
         assert set(document) <= {"schema", "tier", "taskMemoryMiB", "taskVcpu", "phaseSeconds", "reason",
-                                 "reasonText", "escalatedFrom", "requiredMemoryMiB", "message"}
+                                 "reasonText", "escalatedFrom", "requiredMemoryMiB", "message",
+                                 "peakWorkerMemoryMiB"}
 
     def test_the_phase_timer_adds_up_a_repeated_phase(self):
         ticks = iter([0.0, 1.0, 1.0, 4.0, 4.0, 5.0])
@@ -871,3 +872,88 @@ class TestMergedExpansionChecksOnBothTiers:
                 model_formats.load_model({"input_file": "/x/m.dae", "input_name": "m.dae", "input_dir": "/x",
                                           "max_triangles": 106_000_000, "max_scene_nodes": 3_000_000}, MagicMock())
         assert seen == {"t": 106_000_000, "n": 3_000_000}
+
+
+class TestMemoryWordsFollowTheTier:
+    """L1: a refusal on an AWS Batch task names the job's memory, not the function's."""
+
+    def _refusal(self, env):
+        with pytest.raises(size_check.InputTooLargeError) as excinfo:
+            size_check.check_size("m.stl", ".stl", 40_000 * MB, memory_bytes=size_check.memory_limit_bytes(env),
+                                  output_extension=".glb")
+        return excinfo.value
+
+    def test_a_batch_refusal_says_job_memory(self):
+        with patch.dict(os.environ, {"VAMS_TASK_MEMORY_MIB": "122880"}, clear=False):
+            error = self._refusal({"VAMS_TASK_MEMORY_MIB": "122880"})
+        assert "The limit is set by the job memory." in str(error)
+        assert "function memory" not in str(error)
+        assert error.resource == size_check.MEMORY_RESOURCE  # the identifier the code compares is unchanged
+
+    def test_a_lambda_refusal_keeps_its_words(self):
+        env = {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"}
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("VAMS_TASK_MEMORY_MIB", None)
+            error = self._refusal(env)
+        assert "The limit is set by the function memory." in str(error)
+
+    def test_an_uncompressed_3mf_refusal_says_job_memory_on_a_batch_task(self):
+        env = {"VAMS_TASK_MEMORY_MIB": "30720"}
+        with patch.dict(os.environ, env, clear=False):
+            with pytest.raises(size_check.InputTooLargeError) as excinfo:
+                size_check.check_uncompressed_size("m.3mf", ".3mf", 10_000 * MB, memory_bytes=30720 * MB,
+                                                   output_extension=".glb")
+        assert "job memory" in str(excinfo.value) and "function memory" not in str(excinfo.value)
+
+    def test_the_worker_stopped_messages_name_the_owner_of_the_memory(self, tmp_path):
+        mod = _load()
+        process = MagicMock()
+        process.pid = 4242
+        process.returncode = -9
+        for env, owner in (({"VAMS_TASK_MEMORY_MIB": "30720"}, "job"), ({}, "function")):
+            with patch.dict(os.environ, env, clear=False):
+                if not env:
+                    os.environ.pop("VAMS_TASK_MEMORY_MIB", None)
+                with patch.object(mod.subprocess, "Popen", return_value=process), \
+                        patch.object(mod, "_kill_group"), patch.object(mod, "reap_stray_processes"):
+                    with pytest.raises(conversion_service.WorkerKilledForMemory) as excinfo:
+                        mod.run_worker({"input_name": "m.stl", "address_space_bytes": 4 * GIB}, str(tmp_path),
+                                       timeout_seconds=5)
+            assert f"larger than the {owner}'s memory" in str(excinfo.value)
+
+
+class TestPeakMemoryIsMeasured:
+    """L2: the run document carries the measured peak of the workers."""
+
+    def test_the_document_carries_the_peak(self):
+        document = conversion_service.run_document("batch", 30720, 4, {}, peak_memory_mib=1876.4)
+        assert document["peakWorkerMemoryMiB"] == 1876.4
+
+    @pytest.mark.parametrize("value", [None, True, "1"])
+    def test_no_peak_no_key(self, value):
+        assert "peakWorkerMemoryMiB" not in conversion_service.run_document("batch", 30720, 4, {},
+                                                                            peak_memory_mib=value)
+
+    def test_the_worker_reports_its_own_peak(self):
+        import conversion_worker
+        peak = conversion_worker.peak_memory_mib()
+        assert isinstance(peak, float) and peak > 0
+
+    def test_the_parent_keeps_the_largest_peak_of_a_run(self, tmp_path):
+        mod = _load()
+        mod._peak_worker_memory_mib = None
+        peaks = iter([512.0, 2048.5, 1024.0])
+
+        def popen(command, **kwargs):
+            with open(command[-1], "w", encoding="utf-8") as handle:
+                json.dump({"ok": True, "peakMemoryMiB": next(peaks)}, handle)
+            process = MagicMock()
+            process.pid = 1
+            process.returncode = 0
+            return process
+
+        with patch.object(mod.subprocess, "Popen", side_effect=popen), \
+                patch.object(mod, "_kill_group"), patch.object(mod, "reap_stray_processes"):
+            for _ in range(3):
+                mod.run_worker({"input_name": "m.stl"}, str(tmp_path), timeout_seconds=5)
+        assert mod._peak_worker_memory_mib == 2048.5

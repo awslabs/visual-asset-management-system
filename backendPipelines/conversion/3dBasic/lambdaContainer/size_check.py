@@ -119,6 +119,9 @@ DISK_HEADROOM_BYTES = 64 * MB
 
 MEMORY_RESOURCE = "function memory"
 DISK_RESOURCE = "working disk (/tmp)"
+# What a message calls the memory limit on an AWS Batch task. ``MEMORY_RESOURCE`` stays the identifier
+# the code compares and the escalation result carries; only the words a user reads change.
+BATCH_MEMORY_LABEL = "job memory"
 
 
 class InputTooLargeError(ValueError):
@@ -300,10 +303,18 @@ def check_uncompressed_size(name, extension, uncompressed_bytes, memory_bytes=No
                   else f"{extension.lower()} inputs")
         raise InputTooLargeError(
             f"{name} is {_mb(uncompressed_bytes)} uncompressed, over the {_mb(limit)} uncompressed "
-            f"limit for {target}. The limit is set by the {MEMORY_RESOURCE}. Reduce the model's size "
+            f"limit for {target}. The limit is set by the {resource_label(MEMORY_RESOURCE)}. Reduce the model's size "
             f"and run the conversion again.",
             total_bytes=uncompressed_bytes, limit_bytes=limit, resource=MEMORY_RESOURCE)
     return limit
+
+
+def resource_label(resource, environ=None):
+    """The words a message uses for ``resource``: the memory limit of a Batch task is the job's memory,
+    not the function's."""
+    if resource == MEMORY_RESOURCE and compute_tier(environ) == TIER_BATCH:
+        return BATCH_MEMORY_LABEL
+    return resource
 
 
 def _mb(value):
@@ -327,7 +338,7 @@ def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=N
                 and expansion_factor(extension, output_extension) > expansion_factor(extension) else "")
         raise InputTooLargeError(
             f"{name} is {_mb(total)}, over the {_mb(limit)} limit for {target}. The limit is set by "
-            f"the {resource}. Reduce the model's size and run the conversion again.{hint}",
+            f"the {resource_label(resource)}. Reduce the model's size and run the conversion again.{hint}",
             total_bytes=total, limit_bytes=limit, resource=resource)
     return limit
 

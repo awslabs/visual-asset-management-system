@@ -737,6 +737,10 @@ def run_worker(job, work_dir, timeout_seconds=None):
     except (OSError, ValueError):
         pass
     if result is not None and result.get("ok"):
+        global _peak_worker_memory_mib
+        peak = result.get("peakMemoryMiB")
+        if isinstance(peak, (int, float)) and not isinstance(peak, bool):
+            _peak_worker_memory_mib = max(peak, _peak_worker_memory_mib or 0)
         return result
     if result is None:
         _log_worker_stderr(stderr_path)
@@ -747,12 +751,12 @@ def run_worker(job, work_dir, timeout_seconds=None):
         error_type = conversion_service.WorkerKilledForMemory if code == -9 else RuntimeError
         raise error_type(
             f"The conversion of {job['input_name']} stopped unexpectedly: the converter {detail}. "
-            f"A model larger than the function's memory is the usual cause.")
+            f"A model larger than the {_memory_owner()}'s memory is the usual cause.")
     if result.get("type") == "MemoryError":
         memory = job.get("address_space_bytes")
         limit = f" ({memory / 1024 ** 2:,.0f} MB)" if memory else ""
         raise conversion_service.WorkerKilledForMemory(
-            f"{job['input_name']} needs more memory to convert than this function has{limit}. "
+            f"{job['input_name']} needs more memory to convert than this {_memory_owner()} has{limit}. "
             f"Reduce the model's size and run the conversion again.")
     message = _without_work_dir(str(result.get("message") or "The conversion failed"), work_dir)
     if result.get("type") not in USER_ERRORS:
@@ -795,6 +799,13 @@ def _log_worker_stderr(path):
 
 # The phase timer of the run in progress (read by convert() for conversion-run.json).
 _phase_timer = conversion_service.PhaseTimer()
+# The largest peak resident memory (MiB) a worker of the run in progress reported; None before one has.
+_peak_worker_memory_mib = None
+
+
+def _memory_owner():
+    """What owns the memory a message names: the job on an AWS Batch task, the function on Lambda."""
+    return "job" if size_check.compute_tier() == size_check.TIER_BATCH else "function"
 
 
 def _escalation(reason, message, name, input_bytes, input_extension, output_filetype, resource=None):
@@ -832,6 +843,8 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     referenced file over its limits) raises ``EscalationRequired`` carrying the named result instead of
     the error."""
     escalation_allowed = bool(allow_escalation) and size_check.compute_tier() == size_check.TIER_LAMBDA
+    global _peak_worker_memory_mib
+    _peak_worker_memory_mib = None
     _phase_timer.reset()
     _phase_timer.phase("head")
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
@@ -1267,7 +1280,7 @@ def convert(data):
             tier, task_memory_mib, _task_vcpu(), _phase_timer.seconds, reason=reason,
             escalated_from=size_check.TIER_LAMBDA if reason else None,
             required_memory_mib=required if isinstance(required, int) and not isinstance(required, bool) else None,
-            message=message))
+            message=message, peak_memory_mib=_peak_worker_memory_mib))
     if message:
         logger.warning(message)
     return {

@@ -124,6 +124,8 @@ def _refusal(escalation, permitted, limits, input_bytes, floor, max_gib):
     name = escalation.get("inputName") or "The input"
     pair = escalation.get("formatPair") or "this conversion"
     resource = escalation.get("resource") or "job memory"
+    # The attempt that refused ran on the function; the limit cited here is the largest job's.
+    resource = "job memory" if resource == "function memory" else resource
     where = f"{largest[0]} vCPU and {largest[1] // GIB} GiB"
     capped = largest != largest_available
     limit = limits.get(largest[1])

@@ -172,7 +172,7 @@ class PhaseTimer:
 
 
 def run_document(tier, task_memory_mib, task_vcpu, phase_seconds, reason=None, escalated_from=None,
-                 required_memory_mib=None, message=None, failed=False):
+                 required_memory_mib=None, message=None, failed=False, peak_memory_mib=None):
     """The ``conversion-run.json`` body of a run: which tier ran it, with how much memory, how long each
     phase took and, for a run that continued from another tier, why. Small text; no model content, no
     S3 key, no identity."""
@@ -190,6 +190,10 @@ def run_document(tier, task_memory_mib, task_vcpu, phase_seconds, reason=None, e
         document["reasonText"] = REASON_TEXT.get(reason, "")
     if required_memory_mib is not None:
         document["requiredMemoryMiB"] = required_memory_mib
+    if isinstance(peak_memory_mib, (int, float)) and not isinstance(peak_memory_mib, bool):
+        # Measured: the most resident memory a conversion worker held (the size check's
+        # requiredMemoryMiB is an estimate from the input's size).
+        document["peakWorkerMemoryMiB"] = peak_memory_mib
     if failed:
         document["failed"] = True
     if message:
