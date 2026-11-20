@@ -46,6 +46,20 @@ from common.assetHistory import (
     write_asset_history_record,
 )
 from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
+from common.assetLocations import (
+    RESOLVED_AMBIGUOUS,
+    RESOLVED_FOUND,
+    LocationTooDeepError,
+    contains,
+    derive_location,
+    find_conflicts,
+    index_ready,
+    is_folder_location,
+    normalize_base_prefix,
+    normalize_location,
+    relative_path_in,
+    resolve_owner,
+)
 
 # Initialize AWS clients
 retry_config = BotoConfig(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -61,6 +75,7 @@ events_client = boto3.client(
     'events',
     config=BotoConfig(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
 dynamodb_client = boto3.client('dynamodb', config=retry_config)
+sqs_client = boto3.client('sqs', config=retry_config)
 logger = safeLogger(service_name="sqsBucketSync")
 
 # Environment variables
@@ -79,6 +94,9 @@ try:
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
     file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
     asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
+    # The deployment's queue for records bucket sync cannot attribute by rule (two live assets on
+    # one location). Optional: without it a rejected record is only logged.
+    rejected_queue_url = os.environ.get("BUCKET_SYNC_REJECTED_QUEUE_URL", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -130,6 +148,120 @@ class SimpleCache:
 s3_buckets_cache = SimpleCache()  # Cache for S3 asset buckets table
 database_cache = SimpleCache()    # Cache for database lookups
 asset_cache = SimpleCache()       # Cache for asset lookups
+
+# Cached in place of a database id when a bucket's auto-generated database is archived, so a repeated
+# miss is served from the cache (None is what the cache returns for "not cached").
+ARCHIVED_DATABASE_CACHE_VALUE = "#archived"
+
+# How bucket sync found the asset a file belongs to: the first folder under the bucket's prefix
+# (normal assets, and assets it auto-creates), or the location index (any other stored location).
+RESOLVED_BY_FAST_PATH = "fastPath"
+RESOLVED_BY_LOCATION_INDEX = "locationIndex"
+
+# The additive field on each forwarded S3 record that carries bucket sync's answer to its consumers.
+VAMS_BINDING_FIELD = "vamsBinding"
+
+# Why a record went to the rejected-record queue.
+REJECTED_REASON_AMBIGUOUS = "ambiguousLocation"
+
+# A first-level auto-create whose folder already holds other objects is deferred once by this many
+# seconds, so an asset created through the API a moment earlier reaches the location index first.
+DEFERRED_AUTO_CREATE_VISIBILITY_SECONDS = 10
+
+# Amazon SNS message and Amazon EventBridge entry size limits, less a margin for the envelope.
+SNS_MESSAGE_MAX_BYTES = 256 * 1024
+EVENTBRIDGE_ENTRY_MAX_BYTES = 256 * 1024
+PUBLISH_SIZE_MARGIN_BYTES = 8 * 1024
+
+
+class RecordRedrive(Exception):
+    """A record whose SQS message must be received again: it is reported as a batch item failure,
+    and its visibility timeout is set to `visibility_timeout` seconds when one is given."""
+
+    def __init__(self, message: str, visibility_timeout: Optional[int] = None):
+        super().__init__(message)
+        self.visibility_timeout = visibility_timeout
+
+
+def record_identity(record: Dict) -> str:
+    """A stable key for one S3 record, equal for equal records (the event is parsed from JSON)."""
+    return json.dumps(record, sort_keys=True, default=str)
+
+
+def asset_location_of(asset_row: Optional[Dict], base_prefix: str, asset_id: str) -> str:
+    """The asset's stored location (no leading `/`), or the folder derived from its id for a row
+    that carries none."""
+    stored = normalize_location(((asset_row or {}).get('assetLocation') or {}).get('Key'))
+    return stored or derive_location({'baseAssetsPrefix': base_prefix}, '', asset_id)
+
+
+def build_binding(database_id: str, asset_id: str, bucket_id: str, relative_path: str,
+                  resolved_by: str) -> Dict[str, str]:
+    """The `vamsBinding` bucket sync adds to a forwarded record: which asset holds the file and how
+    that was decided. The database id is the live one, also for an archived asset."""
+    live_database_id = (database_id or '')
+    if live_database_id.endswith('#deleted'):
+        live_database_id = live_database_id[:-len('#deleted')]
+    return {
+        'databaseId': live_database_id,
+        'assetId': asset_id,
+        'bucketId': bucket_id,
+        'relativePath': relative_path,
+        'resolvedBy': resolved_by,
+    }
+
+
+def with_binding(record: Dict, bindings: Optional[Dict[str, Dict]]) -> Dict:
+    """The record with its `vamsBinding` added, or the record unchanged when it has none."""
+    binding = (bindings or {}).get(record_identity(record))
+    return {**record, VAMS_BINDING_FIELD: binding} if binding else record
+
+
+def reject_record(record: Dict, bucket_name: str, object_key: str, reason: str,
+                  candidates) -> Tuple[bool, bool, str]:
+    """Log a record that cannot be attributed by rule and send it to the rejected-record queue.
+
+    Nothing is attributed and nothing is forwarded. A send that fails raises RecordRedrive, so the
+    record is received again rather than lost.
+    """
+    candidate_assets = [f"{c.database_id}:{c.asset_id}" for c in (candidates or ())]
+    logger.error(f"Bucket sync rejected key {object_key} in bucket {bucket_name} ({reason}); "
+                 f"candidate assets: {candidate_assets}")
+    if not rejected_queue_url:
+        logger.error("No rejected-record queue is configured; the rejected record is only logged")
+        return True, False, f"Rejected {object_key}: {reason}"
+    body = {
+        'reason': reason,
+        'bucket': bucket_name,
+        'key': object_key,
+        'candidateAssets': candidate_assets,
+        'record': record,
+    }
+    try:
+        sqs_client.send_message(QueueUrl=rejected_queue_url, MessageBody=json.dumps(body, default=str))
+    except Exception as e:
+        logger.exception(f"Could not send key {object_key} to the rejected-record queue: {e}")
+        raise RecordRedrive(f"Could not send {object_key} to the rejected-record queue")
+    return True, False, f"Rejected {object_key}: {reason}"
+
+
+def auto_create_refusal(asset_table, bucket_name: str, location: str) -> Optional[str]:
+    """Why an auto-created asset may not take `location`, or None when the location index shows no
+    asset sharing a key with it. Read only once the index is ready."""
+    try:
+        conflicts = find_conflicts(asset_table, bucket_name, location)
+    except LocationTooDeepError:
+        return "the location is nested too deeply to check"
+    if conflicts:
+        owners = [f"{c.database_id}:{c.asset_id} at {c.location}" for c in conflicts[:5]]
+        return f"its location overlaps existing assets {owners}"
+    return None
+
+
+def folder_holds_other_objects(bucket_name: str, folder: str, object_key: str) -> bool:
+    """Whether anything besides `object_key` is stored under `folder` (one short listing)."""
+    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=folder, MaxKeys=2)
+    return any(item.get('Key') != object_key for item in (response.get('Contents') or []))
 
 
 def _sync_file_path(object_key: str, prefix: str, asset_id: str) -> str:
@@ -345,8 +477,12 @@ def determine_asset_type(assetId, bucket, prefix):
             Prefix=prefix,
         )
         
-        # Get the contents and filter out folder markers (objects ending with '/')
+        # Get the contents and filter out folder markers (objects ending with '/'). A single-file
+        # location used as a prefix also lists keys that only share its characters, which are not
+        # part of the asset.
         contents = response.get('Contents', [])
+        if prefix and not is_folder_location(prefix):
+            contents = [item for item in contents if contains(prefix, item.get('Key'))]
         
         # Filter out archived files
         non_archived_files = []
@@ -405,7 +541,8 @@ def determine_asset_type(assetId, bucket, prefix):
         logger.exception(f"Error determining asset type: {e}")
         return None
     
-def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_base_key: str) -> bool:
+def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_base_key: str,
+                      asset_data: Optional[Dict] = None) -> bool:
     """
     Update asset type based on bucket contents
     
@@ -413,14 +550,16 @@ def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_bas
         bucket_id: The bucket ID
         asset_id: The asset ID
         bucket_name: The S3 bucket name
-        asset_base_key: The base key for the asset in S3
+        asset_base_key: The asset's stored location in S3 (a folder, or a single-file key)
+        asset_data: The live asset row when the caller already read it; read here otherwise
         
     Returns:
         bool: True if updated successfully, False otherwise
     """
     try:
-        # Look up asset in DynamoDB
-        asset_data = lookup_asset(bucket_id, asset_id)
+        # Look up asset in DynamoDB unless the caller already holds the live row
+        if asset_data is None or str(asset_data.get('databaseId', '')).endswith('#deleted'):
+            asset_data = lookup_asset(bucket_id, asset_id)
         if not asset_data:
             logger.warning(f"Asset {asset_id} not found in bucket {bucket_id}, cannot update asset type")
             return False
@@ -763,7 +902,7 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     cached_db_id = database_cache.get(cache_key)
     if cached_db_id is not None:
         logger.info(f"Cache hit for database for bucket {bucket_name} prefix {prefix}")
-        return cached_db_id
+        return None if cached_db_id == ARCHIVED_DATABASE_CACHE_VALUE else cached_db_id
     
     # Look up databases that match this bucket
     databases = lookup_databases(bucket_id)
@@ -774,27 +913,28 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
         # Get bucket info for this database (uses caching)
         bucket_info = get_bucket_info_from_bucket_id(db.get('defaultBucketId'))
         if bucket_info:
-            # Normalize prefix for comparison
-            db_prefix = bucket_info.get('baseAssetsPrefix', '').rstrip('/')
-            check_prefix = prefix.rstrip('/') if prefix else ''
-            
-            if bucket_info.get('bucketName') == bucket_name and db_prefix == check_prefix:
+            if (bucket_info.get('bucketName') == bucket_name
+                    and normalize_base_prefix(bucket_info.get('baseAssetsPrefix'))
+                    == normalize_base_prefix(prefix)):
                 matching_databases.append(db)
-    
-    # If we found matching databases, use the first one (or default if it exists)
+
+    # Exactly one database assigned to this registration: that one. None, or several: the
+    # registration's default database, which is the configured default sync database when it is
+    # assigned here, and otherwise the auto-generated database below. Never an arbitrary one.
+    if len(matching_databases) == 1:
+        only_db_id = matching_databases[0]['databaseId']
+        logger.info(f"Using database {only_db_id}, the one database assigned to bucket {bucket_name} prefix {prefix}")
+        database_cache.set(cache_key, only_db_id)
+        return only_db_id
+    default_db = next((db for db in matching_databases if db['databaseId'] == database_id), None)
+    if default_db:
+        logger.info(f"Using default database {database_id} for bucket {bucket_name} prefix {prefix}")
+        database_cache.set(cache_key, default_db['databaseId'])
+        return default_db['databaseId']
     if matching_databases:
-        # Check if default database exists in matching databases
-        default_db = next((db for db in matching_databases if db['databaseId'] == database_id), None)
-        if default_db:
-            logger.info(f"Using default database {database_id} for bucket {bucket_name} prefix {prefix}")
-            # Cache the result
-            database_cache.set(cache_key, default_db['databaseId'])
-            return default_db['databaseId']
-        else:
-            logger.info(f"Using existing database {matching_databases[0]['databaseId']} for bucket {bucket_name} prefix {prefix}")
-            # Cache the result
-            database_cache.set(cache_key, matching_databases[0]['databaseId'])
-            return matching_databases[0]['databaseId']
+        logger.info(f"{len(matching_databases)} databases are assigned to bucket {bucket_name} prefix {prefix} "
+                    f"and the default sync database {database_id} is not one of them; using the bucket's "
+                    "auto-generated database")
     
     # No matching database found - need to create one
     # Generate unique database ID based on bucket and prefix
@@ -834,8 +974,8 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     archived_db = lookup_archived_database(unique_db_id)
     if archived_db:
         logger.info(f"Database {unique_db_id} is archived, skipping creation")
-        # Cache the fact that this database is archived (cache as None)
-        database_cache.set(cache_key, None)
+        # Cache the fact that this database is archived, so the next miss is served from the cache
+        database_cache.set(cache_key, ARCHIVED_DATABASE_CACHE_VALUE)
         return None
     
     # Create new database
@@ -1387,7 +1527,7 @@ def verify_asset_exists(database_id, asset_id):
         logger.exception(f"Error verifying asset: {e}")
         raise Exception(f"Error verifying asset.")
 
-def build_filtered_event(original_event, successful_s3_records):
+def build_filtered_event(original_event, successful_s3_records, bindings=None):
     """
     Build a filtered event that preserves the original structure
     but only includes successfully processed S3 records.
@@ -1395,6 +1535,7 @@ def build_filtered_event(original_event, successful_s3_records):
     Args:
         original_event: The original event (SQS, SNS, or direct S3)
         successful_s3_records: List of S3 records that were successfully processed
+        bindings: Optional `vamsBinding` per record (by `record_identity`), added to the records kept
         
     Returns:
         dict: Filtered event with same structure as original, or None if no records
@@ -1407,7 +1548,7 @@ def build_filtered_event(original_event, successful_s3_records):
         if 'Records' in original_event and original_event['Records'] and 'eventSource' in original_event['Records'][0] and original_event['Records'][0]['eventSource'] == 'aws:s3':
             logger.info("Building filtered direct S3 event")
             return {
-                'Records': successful_s3_records
+                'Records': [with_binding(r, bindings) for r in successful_s3_records]
             }
         
         # Check if this is an SQS event
@@ -1428,7 +1569,8 @@ def build_filtered_event(original_event, successful_s3_records):
                             message = json.loads(parsed_body['Message'])
                             if 'Records' in message:
                                 # Filter S3 records in the SNS message
-                                filtered_s3_records = [r for r in message['Records'] if r in successful_s3_records]
+                                filtered_s3_records = [with_binding(r, bindings) for r in message['Records']
+                                                       if r in successful_s3_records]
                                 if filtered_s3_records:
                                     message['Records'] = filtered_s3_records
                                     parsed_body['Message'] = json.dumps(message)
@@ -1441,7 +1583,8 @@ def build_filtered_event(original_event, successful_s3_records):
                                 filtered_sqs_records.append(sqs_record)
                     elif 'Records' in parsed_body:
                         # Direct S3 event in SQS body
-                        filtered_s3_records = [r for r in parsed_body['Records'] if r in successful_s3_records]
+                        filtered_s3_records = [with_binding(r, bindings) for r in parsed_body['Records']
+                                               if r in successful_s3_records]
                         if filtered_s3_records:
                             parsed_body['Records'] = filtered_s3_records
                             sqs_record_copy = sqs_record.copy()
@@ -1470,7 +1613,8 @@ def build_filtered_event(original_event, successful_s3_records):
                     message = json.loads(sns_record['Sns']['Message'])
                     if 'Records' in message:
                         # Filter S3 records in the SNS message
-                        filtered_s3_records = [r for r in message['Records'] if r in successful_s3_records]
+                        filtered_s3_records = [with_binding(r, bindings) for r in message['Records']
+                                               if r in successful_s3_records]
                         if filtered_s3_records:
                             message['Records'] = filtered_s3_records
                             sns_record_copy = sns_record.copy()
@@ -1494,6 +1638,17 @@ def build_filtered_event(original_event, successful_s3_records):
         logger.exception(f"Error building filtered event: {e}")
         return None
 
+def split_event_to_size(event: Dict, limit: int) -> List[Dict]:
+    """The event as one message, or split by its top-level `Records` into messages that each fit in
+    `limit` bytes. A single record that does not fit is returned as it is, and its publish fails."""
+    records = event.get('Records') or []
+    if len(records) <= 1 or len(json.dumps(event, default=str).encode('utf-8')) <= limit:
+        return [event]
+    middle = len(records) // 2
+    return (split_event_to_size({**event, 'Records': records[:middle]}, limit)
+            + split_event_to_size({**event, 'Records': records[middle:]}, limit))
+
+
 def publish_to_file_indexer_sns(event):
     """
     Publish S3 event to file indexer SNS topic for downstream processing.
@@ -1516,14 +1671,14 @@ def publish_to_file_indexer_sns(event):
             "ASSET_BUCKET_PREFIX": asset_bucket_prefix
         })
         
-        # Publish to SNS topic
-        response = sns_client.publish(
-            TopicArn=file_indexer_sns_topic_arn,
-            Message=json.dumps(event, default=str),
-            Subject='S3 Bucket Sync Event'
-        )
-        
-        logger.info(f"Successfully published to file indexer SNS topic: {response['MessageId']}")
+        # Publish to SNS topic, split by message when the records would exceed one message
+        for part in split_event_to_size(event, SNS_MESSAGE_MAX_BYTES - PUBLISH_SIZE_MARGIN_BYTES):
+            response = sns_client.publish(
+                TopicArn=file_indexer_sns_topic_arn,
+                Message=json.dumps(part, default=str),
+                Subject='S3 Bucket Sync Event'
+            )
+            logger.info(f"Successfully published to file indexer SNS topic: {response['MessageId']}")
         return True
     except Exception as e:
         logger.exception(f"Error publishing to file indexer SNS topic: {e}")
@@ -1568,45 +1723,59 @@ def publish_to_orchestration_bus(successful_records):
         publishable_records = [r for r in (successful_records or []) if r.get("s3")]
         if not publishable_records:
             return
-        detail = {
-            "Records": publishable_records,
-            "ASSET_BUCKET_NAME": asset_bucket_name,
-            "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
-        }
-        entry = {
-            "EventBusName": orchestration_bus_name,
-            "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
-            "DetailType": "asset.file.uploaded",
-            "Detail": json.dumps(detail, default=str),
-        }
-        try:
-            refused = _refused_put_events_entry(events_client.put_events(Entries=[entry]))
-            if refused and refused.get("ErrorCode") in RETRYABLE_PUT_EVENTS_ERROR_CODES:
-                logger.warning(
-                    f"EventBridge refused asset.file.uploaded on bus {orchestration_bus_name} "
-                    f"({refused.get('ErrorCode')}: {refused.get('ErrorMessage')}); re-sending once")
-                refused = _refused_put_events_entry(events_client.put_events(Entries=[entry]))
-        except Exception as e:
-            logger.exception(f"EventBridge put_events failed for asset.file.uploaded on bus {orchestration_bus_name}: {e}")
-            return
-        if refused:
-            object_keys = [r["s3"].get("object", {}).get("key") for r in publishable_records]
-            logger.error(
-                f"EventBridge put_events refused asset.file.uploaded on bus {orchestration_bus_name} "
-                f"({refused.get('ErrorCode')}: {refused.get('ErrorMessage')}); the fileUpload triggers for "
-                f"{len(publishable_records)} record(s) will not fire: {object_keys}")
-            return
-        logger.info(f"Published asset.file.uploaded event ({len(publishable_records)} record(s)) to the orchestration bus")
+        parts = split_event_to_size(
+            {
+                "Records": publishable_records,
+                "ASSET_BUCKET_NAME": asset_bucket_name,
+                "ASSET_BUCKET_PREFIX": asset_bucket_prefix,
+            },
+            EVENTBRIDGE_ENTRY_MAX_BYTES - PUBLISH_SIZE_MARGIN_BYTES,
+        )
+        for detail in parts:
+            _put_file_uploaded_entry(detail)
     except Exception as e:
         logger.exception(f"Error publishing to orchestration bus: {e}")
 
+
+def _put_file_uploaded_entry(detail):
+    """Put one asset.file.uploaded entry; a retryable refusal is re-sent once, and a refusal that
+    remains is logged as an error naming the objects whose fileUpload triggers do not fire."""
+    publishable_records = detail["Records"]
+    entry = {
+        "EventBusName": orchestration_bus_name,
+        "Source": f"{orchestration_event_source_prefix}.trigger.fileUpload",
+        "DetailType": "asset.file.uploaded",
+        "Detail": json.dumps(detail, default=str),
+    }
+    try:
+        refused = _refused_put_events_entry(events_client.put_events(Entries=[entry]))
+        if refused and refused.get("ErrorCode") in RETRYABLE_PUT_EVENTS_ERROR_CODES:
+            logger.warning(
+                f"EventBridge refused asset.file.uploaded on bus {orchestration_bus_name} "
+                f"({refused.get('ErrorCode')}: {refused.get('ErrorMessage')}); re-sending once")
+            refused = _refused_put_events_entry(events_client.put_events(Entries=[entry]))
+    except Exception as e:
+        logger.exception(f"EventBridge put_events failed for asset.file.uploaded on bus {orchestration_bus_name}: {e}")
+        return
+    if refused:
+        object_keys = [r["s3"].get("object", {}).get("key") for r in publishable_records]
+        logger.error(
+            f"EventBridge put_events refused asset.file.uploaded on bus {orchestration_bus_name} "
+            f"({refused.get('ErrorCode')}: {refused.get('ErrorMessage')}); the fileUpload triggers for "
+            f"{len(publishable_records)} record(s) will not fire: {object_keys}")
+        return
+    logger.info(f"Published asset.file.uploaded event ({len(publishable_records)} record(s)) to the orchestration bus")
+
 def build_history_record(database_id, asset_id, relative_file_path, version_id,
-                         s3_metadata, s3_last_modified):
+                         s3_metadata, s3_last_modified, etag=None, size=None, resolved_by=None):
     """Build an asset-file change-history item from an ingested object's S3 metadata.
 
     No vams-changesource present means the file was changed outside VAMS (e.g. a
     direct S3 upload): record changeSource="direct" with no provenance columns.
     Otherwise map the vams-change* metadata to flat columns (skipping blanks).
+
+    The row is also the sync ledger entry of that version: `etag` and `size` of the version, and
+    `resolvedBy`, how bucket sync found its asset. Each is written only when known.
     """
     change_source = s3_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or VAMS_CHANGE_SOURCE_DIRECT
     relative_file_path = normalize_history_file_path(relative_file_path)
@@ -1621,6 +1790,12 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
         "recordCreated": utc_now().isoformat() + "Z",
         "s3LastModified": s3_last_modified or "",
     }
+    if etag:
+        record["etag"] = str(etag).strip('"')
+    if size is not None:
+        record["size"] = int(size)
+    if resolved_by:
+        record["resolvedBy"] = resolved_by
     if change_source != VAMS_CHANGE_SOURCE_DIRECT:
         col_map = {
             VAMS_CHANGE_USER_ID_METADATA_KEY: "changeUserId",
@@ -1639,7 +1814,7 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
 
 
 def write_file_version_history(database_id, asset_id, relative_file_path, version_id,
-                               s3_metadata, s3_last_modified):
+                               s3_metadata, s3_last_modified, etag=None, size=None, resolved_by=None):
     """Write a single change-history record for an ingested object version.
 
     Best-effort: no-op when the table is not configured, and never raises -- a
@@ -1651,14 +1826,15 @@ def write_file_version_history(database_id, asset_id, relative_file_path, versio
     try:
         record = build_history_record(
             database_id, asset_id, relative_file_path, version_id,
-            s3_metadata, s3_last_modified,
+            s3_metadata, s3_last_modified, etag=etag, size=size, resolved_by=resolved_by,
         )
         asset_file_version_history_table.put_item(Item=record)
     except Exception as e:
         logger.exception(f"Failed writing file version history for {asset_id}/{relative_file_path}: {e}")
 
 
-def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
+def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
+                      receive_count: Optional[int] = None) -> Tuple[bool, bool, str]:
     """
     Process a single S3 record
     
@@ -1674,7 +1850,13 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
     
     Args:
         record: The S3 record to process
+        binding_out: Filled with the record's `vamsBinding` once its asset is known
+        receive_count: How often the record's SQS message was received (None outside SQS)
         
+    Raises:
+        RecordRedrive: the record's message must be received again (a deferred auto-create, or a
+            rejected record the rejected-record queue did not accept)
+
     Returns:
         tuple: (processing_success, should_index, message) where:
             - processing_success: boolean indicating if processing was successful
@@ -1762,10 +1944,9 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
             return False, False, f"Key {object_key} contains a reserved VAMS folder segment"
 
-        # 1.d Validate asset ID
-        if not validate_asset_id(asset_id):
-            logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
-            return False, True, f"Asset ID {asset_id} is not valid"
+        # 1.d The first folder is an asset id only for the fast path and for auto-create. A file in
+        # any other stored location is found through the location index whatever its first folder is.
+        first_folder_valid = validate_asset_id(asset_id)
 
         # 1.e Determine WHAT HAPPENED before doing anything: an ObjectCreated event this handler
         # caused itself, by stamping metadata in step 4 below, describes no change a consumer needs
@@ -1784,39 +1965,103 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             )
             return True, False, f"Skipped own metadata stamp echo for {object_key}"
 
-        # 2.a. Lookup asset in assets dynamoDB table
-        # Use cache to prevent excessive lookups (TTL: 60 seconds)
-        asset_data = lookup_asset(bucket_id, asset_id)
+        base_prefix = normalize_base_prefix(prefix)
+        asset_table = dynamodb.Table(asset_table_name)
+        # A redelivered record resolves again without the per-container index cache.
+        use_index_cache = not (receive_count and receive_count > 1)
+
+        # 2.a Fast path: the first folder under the prefix names the asset (BucketIdGSI). A hit counts
+        # only when that asset's stored location holds the key.
+        resolved_by = RESOLVED_BY_FAST_PATH
+        owner_asset_id = asset_id
+        owner_bucket_id = bucket_id
+        asset_data = lookup_asset(bucket_id, asset_id) if first_folder_valid else None
+        if asset_data and not contains(asset_location_of(asset_data, base_prefix, asset_id), object_key):
+            logger.info(f"Asset {asset_id} does not hold {object_key} at its stored location; resolving by location")
+            asset_data = None
+
+        # 2.b On a miss: the live asset whose stored location contains the key (location index).
+        # Two live assets on one location attribute nothing; the record goes to the rejected queue.
+        if not asset_data:
+            resolution = resolve_owner(asset_table, bucket_name, object_key, use_cache=use_index_cache)
+            if resolution.status == RESOLVED_AMBIGUOUS:
+                return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
+                                     resolution.candidates)
+            if resolution.status == RESOLVED_FOUND:
+                asset_data = resolution.row
+                resolved_by = RESOLVED_BY_LOCATION_INDEX
+                owner_asset_id = resolution.entry.asset_id
+                owner_bucket_id = resolution.entry.bucket_id or bucket_id
+
         database_id_to_use = None
-        
+        archived_asset = None
         if asset_data:
-            logger.info(f"Asset {asset_id} found in bucket {bucket_id}")
+            logger.info(f"Asset {owner_asset_id} found in bucket {owner_bucket_id} ({resolved_by})")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # Check if asset is archived before creating new one. A new file
-            # placed directly in S3 under an archived asset's prefix restores
-            # the asset record (DynamoDB-only unarchive): the asset becomes
-            # active again but previously archived files keep their delete
-            # markers — the files present under the prefix are the asset's
-            # files, and users unarchive individual old files via the API.
-            archived_asset = lookup_archived_asset(bucket_id, asset_id)
-            if archived_asset:
+            # 2.c No live owner. Until the location index is ready (its backfill marker exists) a miss
+            # there proves nothing, so the first folder decides exactly as before. Once it is ready,
+            # an archived owner is found by location, and an auto-created asset may not overlap any
+            # asset's location.
+            index_is_ready = index_ready(asset_table_name)
+            if index_is_ready:
+                archived = resolve_owner(asset_table, bucket_name, object_key, include_archived=True,
+                                         use_cache=use_index_cache)
+                if archived.status == RESOLVED_AMBIGUOUS:
+                    return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
+                                         archived.candidates)
+                if archived.status == RESOLVED_FOUND:
+                    resolved_by = RESOLVED_BY_LOCATION_INDEX
+                    owner_asset_id = archived.entry.asset_id
+                    owner_bucket_id = archived.entry.bucket_id or bucket_id
+                    if archived.entry.archived:
+                        archived_asset = archived.row
+                    else:
+                        asset_data = archived.row
+                        database_id_to_use = asset_data.get('databaseId')
+            elif first_folder_valid:
+                archived_asset = lookup_archived_asset(bucket_id, asset_id)
+
+            if asset_data:
+                logger.info(f"Asset {owner_asset_id} found in bucket {owner_bucket_id} ({resolved_by})")
+            elif archived_asset:
+                # A new file placed directly in S3 under an archived asset's location restores the
+                # asset record (DynamoDB-only unarchive): the asset becomes active again but previously
+                # archived files keep their delete markers — the files present under the location are
+                # the asset's files, and users unarchive individual old files via the API.
                 if not object_still_exists(bucket_name, object_key):
                     logger.info(
-                        f"Object {object_key} no longer exists; not restoring archived asset {asset_id}"
+                        f"Object {object_key} no longer exists; not restoring archived asset {owner_asset_id}"
                     )
-                    return True, True, f"Skipped stale create event for archived asset {asset_id}"
-                restored_database_id = restore_archived_asset(bucket_id, asset_id, archived_asset)
+                    return True, True, f"Skipped stale create event for archived asset {owner_asset_id}"
+                restored_database_id = restore_archived_asset(owner_bucket_id, owner_asset_id, archived_asset)
                 if not restored_database_id:
-                    logger.error(f"Failed to restore archived asset {asset_id}")
-                    return False, True, f"Failed to restore archived asset {asset_id}"
-                _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=asset_id)
+                    logger.error(f"Failed to restore archived asset {owner_asset_id}")
+                    return False, True, f"Failed to restore archived asset {owner_asset_id}"
+                _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=owner_asset_id)
                 logger.info(
-                    f"Restored archived asset {asset_id} to database {restored_database_id} "
+                    f"Restored archived asset {owner_asset_id} to database {restored_database_id} "
                     f"after direct S3 upload of {object_key}"
                 )
                 database_id_to_use = restored_database_id
             else:
+                # Auto-create an asset for a new first-level folder.
+                if not first_folder_valid:
+                    logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")
+                    return False, True, f"Asset ID {asset_id} is not valid"
+                derived_location = derive_location({'baseAssetsPrefix': base_prefix}, '', asset_id)
+                if index_is_ready:
+                    refusal = auto_create_refusal(asset_table, bucket_name, derived_location)
+                    if refusal:
+                        logger.warning(f"Not auto-creating asset {asset_id} for {object_key}: {refusal}")
+                        return False, True, f"Auto-create of asset {asset_id} refused"
+                    # The folder already holds other objects: an asset created through the API a
+                    # moment ago may own one of them and not be in the index yet. Look again once.
+                    if receive_count == 1 and folder_holds_other_objects(bucket_name, derived_location, object_key):
+                        logger.info(f"Deferring the auto-create of asset {asset_id} for {object_key} once")
+                        raise RecordRedrive(f"Deferred auto-create of asset {asset_id}",
+                                            DEFERRED_AUTO_CREATE_VISIBILITY_SECONDS)
+
                 # Get or create database for this bucket/prefix
                 database_id_to_use = get_or_create_database_for_bucket(bucket_id, bucket_name, prefix)
 
@@ -1844,9 +2089,22 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
                 _log_sync("assetSync", "create", database_id=database_id_to_use, asset_id=asset_id)
-        
-        # 3. Check if the object is an "init" import marker - If so delete and skip indexing
-        if is_init_marker(object_key):
+
+        # The asset's stored location decides the file's path and the asset type.
+        asset_location = asset_location_of(asset_data or archived_asset, base_prefix, owner_asset_id)
+        relative_path = relative_path_in(asset_location, object_key)
+        if relative_path is None:
+            relative_path = "/" + extract_relative_file_path(object_key, prefix, owner_asset_id).lstrip("/")
+        if binding_out is not None:
+            binding_out.update(build_binding(database_id_to_use, owner_asset_id, owner_bucket_id,
+                                             relative_path, resolved_by))
+
+        # 3. An "init" import marker is deleted and not indexed when its asset is the first-level folder
+        # named by its own id (however the asset was found). In any other stored location an object
+        # named `init` is an ordinary file.
+        first_level_asset = (owner_asset_id == asset_id and asset_location
+                             == derive_location({'baseAssetsPrefix': base_prefix}, '', asset_id))
+        if first_level_asset and is_init_marker(object_key):
             # Check if versioning is enabled
             versioning_enabled = is_versioning_enabled(bucket_id)
             
@@ -1861,32 +2119,37 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             return True, False, f"Deleted init object {object_key}"
         
         # 4. Check if file has S3 metadata attributes that match databaseid and assetid
-        update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, asset_id)
+        update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, owner_asset_id)
         if not update_result:
             logger.error(f"Failed to update metadata for {object_key}")
             return False, True, f"Failed to update metadata for {object_key}"
         
-        # 5. Update asset type based on all files in the bucket
-        # Construct the asset base key (prefix + assetId + /)
-        asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
-        update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+        # 5. Update asset type from the files at the asset's stored location
+        update_asset_type(owner_bucket_id, owner_asset_id, bucket_name, asset_location, asset_data=asset_data)
 
-        # Record file version change history (best-effort; never fails the sync).
-        # Skip folder markers (no version/content). head_object returns 'null' for
-        # VersionId on buckets without versioning enabled.
+        # Record the change history row of the version this event names (best-effort; never fails
+        # the sync), which is also that version's sync ledger entry. Skip folder markers (no
+        # version/content). head_object returns 'null' for VersionId on buckets without versioning.
         object_metadata = None
         if not object_key.endswith('/'):
             try:
-                head = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+                event_version_id = (record['s3'].get('object') or {}).get('versionId')
+                head_kwargs = {'Bucket': bucket_name, 'Key': object_key}
+                if event_version_id:
+                    head_kwargs['VersionId'] = event_version_id
+                head = s3_client.head_object(**head_kwargs)
                 object_metadata = head.get('Metadata', {}) or {}
                 last_modified = head.get('LastModified')
                 write_file_version_history(
                     database_id_to_use,
-                    asset_id,
-                    extract_relative_file_path(object_key, prefix, asset_id),
-                    head.get('VersionId', 'null'),
-                    head.get('Metadata', {}) or {},
+                    owner_asset_id,
+                    relative_path,
+                    head.get('VersionId') or event_version_id or 'null',
+                    object_metadata,
                     last_modified.isoformat() if last_modified else "",
+                    etag=head.get('ETag'),
+                    size=head.get('ContentLength'),
+                    resolved_by=resolved_by,
                 )
             except Exception as e:
                 logger.exception(f"History write skipped for {object_key}: {e}")
@@ -1897,17 +2160,19 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
             return True, False, f"Processed folder marker {object_key}"
 
         if not _written_by_vams(object_metadata):
-            _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=asset_id,
-                      file_path=_sync_file_path(object_key, prefix, asset_id),
+            _log_sync("fileSync", "created", database_id=database_id_to_use, asset_id=owner_asset_id,
+                      file_path=relative_path,
                       bytes=(record.get('s3', {}).get('object') or {}).get('size'))
         return True, True, f"Successfully processed {object_key}"
+    except RecordRedrive:
+        raise
     except Exception as e:
         logger.exception(f"Error processing S3 record: {e}")
         # Unexpected failure mid-processing: still forward to the indexers so
         # OpenSearch and other registered indexers can reconcile independently.
         return False, True, f"Error processing S3 record."
 
-def on_storage_event_created(event):
+def on_storage_event_created(event, bindings=None, receive_counts=None, redrives=None):
     """
     Process S3 storage events for created files
     
@@ -1922,6 +2187,9 @@ def on_storage_event_created(event):
     
     Args:
         event: The S3 event containing records to process
+        bindings: Filled with each forwarded record's `vamsBinding`, by `record_identity`
+        receive_counts: The SQS receive count of each record, by `record_identity`
+        redrives: Filled with (record, visibility timeout) for each record to receive again
         
     Returns:
         tuple: (success_status, successful_records) where success_status is a boolean
@@ -1946,7 +2214,21 @@ def on_storage_event_created(event):
         # Handle records with S3 information
         try:
             # Process the S3 record - now returns (success, should_index, message)
-            success, should_index, message = process_s3_record(record)
+            binding = {}
+            receive_count = (receive_counts or {}).get(record_identity(record))
+            try:
+                success, should_index, message = process_s3_record(
+                    record, binding_out=binding, receive_count=receive_count)
+            except RecordRedrive as redrive:
+                if redrives is None:
+                    error_count += 1
+                    logger.error(f"Record could not be completed and cannot be returned to its queue: {redrive}")
+                else:
+                    redrives.append((record, redrive.visibility_timeout))
+                    logger.info(f"Record returned to its queue: {redrive}")
+                continue
+            if should_index and binding and bindings is not None:
+                bindings[record_identity(record)] = binding
 
             # Forward to the indexers whenever should_index is True — even when
             # VAMS-side processing failed or was skipped — so OpenSearch and other
@@ -1995,6 +2277,107 @@ def on_storage_event_created(event):
     
     # Return success status and list of successful records
     return (error_count == 0 or success_count > 0), successful_records
+
+def _sqs_messages_with_s3_records(event) -> List[Tuple[Dict, List[Dict]]]:
+    """Each SQS message of the event with the S3 records its body carries (an SNS notification or an
+    S3 event), parsed as parse_event parses them. Empty for any other event shape."""
+    pairs = []
+    records = (event or {}).get('Records') or [] if isinstance(event, dict) else []
+    if not records or not isinstance(records[0], dict) or records[0].get('eventSource') != 'aws:sqs':
+        return pairs
+    for sqs_record in records:
+        try:
+            body = json.loads(sqs_record.get('body') or '')
+            if isinstance(body, dict) and 'Message' in body:
+                body = json.loads(body['Message'])
+        except (TypeError, ValueError):
+            continue
+        s3_records = body.get('Records') if isinstance(body, dict) else None
+        if isinstance(s3_records, list):
+            pairs.append((sqs_record, s3_records))
+    return pairs
+
+
+def receive_counts_by_record(event) -> Dict[str, int]:
+    """The SQS `ApproximateReceiveCount` of each S3 record's message, by `record_identity`."""
+    counts = {}
+    for sqs_record, s3_records in _sqs_messages_with_s3_records(event):
+        try:
+            count = int((sqs_record.get('attributes') or {}).get('ApproximateReceiveCount') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            continue
+        for s3_record in s3_records:
+            counts[record_identity(s3_record)] = count
+    return counts
+
+
+_queue_urls: Dict[str, str] = {}
+
+
+def queue_url_for_arn(queue_arn: str) -> Optional[str]:
+    """The URL of the SQS queue an event-source record came from (cached per container). Read with
+    GetQueueUrl so no endpoint suffix is assumed for the partition."""
+    if queue_arn in _queue_urls:
+        return _queue_urls[queue_arn]
+    parts = (queue_arn or '').split(':')
+    if len(parts) < 6 or not parts[5]:
+        return None
+    url = sqs_client.get_queue_url(QueueName=parts[5], QueueOwnerAWSAccountId=parts[4])['QueueUrl']
+    _queue_urls[queue_arn] = url
+    return url
+
+
+def redrive_failures(event, redrives) -> List[Dict[str, str]]:
+    """The batch item failures of the messages whose records are to be received again. A message is
+    first given the visibility timeout its record asks for; when that fails it keeps the queue's."""
+    failures: List[Dict[str, str]] = []
+    if not redrives:
+        return failures
+    seen = set()
+    pairs = _sqs_messages_with_s3_records(event)
+    for record, visibility_timeout in redrives:
+        for sqs_record, s3_records in pairs:
+            message_id = sqs_record.get('messageId')
+            if record not in s3_records or not message_id or message_id in seen:
+                continue
+            seen.add(message_id)
+            failures.append({'itemIdentifier': message_id})
+            if visibility_timeout is None:
+                continue
+            try:
+                queue_url = queue_url_for_arn(sqs_record.get('eventSourceARN') or '')
+                if queue_url:
+                    sqs_client.change_message_visibility(QueueUrl=queue_url,
+                                                         ReceiptHandle=sqs_record.get('receiptHandle'),
+                                                         VisibilityTimeout=visibility_timeout)
+            except Exception as e:
+                logger.warning(f"Could not set the visibility timeout of message {message_id}: {e}")
+    return failures
+
+
+def merge_failures(*failure_lists) -> List[Dict[str, str]]:
+    """Batch item failures from several sources, each message named once."""
+    merged, seen = [], set()
+    for failures in failure_lists:
+        for failure in failures or []:
+            identifier = failure.get('itemIdentifier')
+            if identifier and identifier not in seen:
+                seen.add(identifier)
+                merged.append(failure)
+    return merged
+
+
+def relative_path_for_key(asset_location: str, object_key: str, prefix: str, asset_id: str,
+                          resolved_by: str) -> Optional[str]:
+    """The asset-relative path (leading `/`) of a key in its asset, or None when the asset's stored
+    location does not hold it. A legacy first-folder match falls back to the path after the folder."""
+    relative = relative_path_in(asset_location, object_key)
+    if relative is None and resolved_by == RESOLVED_BY_FAST_PATH:
+        relative = "/" + extract_relative_file_path(object_key, prefix, asset_id).lstrip("/")
+    return relative
+
 
 def parse_event(event):
     """
@@ -2134,6 +2517,7 @@ def lambda_handler_created(event, context):
     logger.info(f"File creation event received: {event_log_summary(event)}")
 
     failures = []
+    redrives = []
 
     try:
         # Parse the event to handle different sources
@@ -2142,7 +2526,10 @@ def lambda_handler_created(event, context):
         # Process the storage event if it contains records
         if parsed_event.get('Records'):
             # Process the storage event and get success status and indexable records
-            success, successful_records = on_storage_event_created(parsed_event)
+            bindings = {}
+            success, successful_records = on_storage_event_created(
+                parsed_event, bindings=bindings, receive_counts=receive_counts_by_record(event),
+                redrives=redrives)
 
             if not success:
                 logger.warning("Hard errors encountered during storage event processing")
@@ -2152,14 +2539,14 @@ def lambda_handler_created(event, context):
             # other registered indexers out of sync.
             if successful_records:
                 # Build filtered event preserving original structure
-                filtered_event = build_filtered_event(event, successful_records)
+                filtered_event = build_filtered_event(event, successful_records, bindings)
 
                 if filtered_event:
                     logger.info(f"Publishing {len(successful_records)} records to file indexer SNS")
                     if publish_to_file_indexer_sns(filtered_event):
                         # Publish to the orchestration EventBridge bus for the fileUpload trigger
                         # dispatcher. Pass the flat S3 records so a clean detail is published.
-                        publish_to_orchestration_bus(successful_records)
+                        publish_to_orchestration_bus([with_binding(r, bindings) for r in successful_records])
                     else:
                         # The indexers never saw these records, so their messages are redriven.
                         # The trigger is published by the delivery that reaches the topic, so a
@@ -2177,7 +2564,7 @@ def lambda_handler_created(event, context):
         # Which records reached the indexers is unknown, so every message is redriven.
         failures = all_batch_item_failures(event)
 
-    return with_batch_item_failures({}, event, failures)
+    return with_batch_item_failures({}, event, merge_failures(failures, redrive_failures(event, redrives)))
 
 
 @audited_handler
@@ -2215,6 +2602,7 @@ def lambda_handler_deleted(event, context):
         # Process records if present
         if parsed_event.get('Records'):
             indexable_records = []
+            bindings = {}
 
             # Check each record for files that are not folder markers
             for record in parsed_event.get('Records', []):
@@ -2276,52 +2664,80 @@ def lambda_handler_deleted(event, context):
                         logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
                         continue
 
-                    # Validate asset ID
-                    if not validate_asset_id(asset_id):
-                        logger.info(f"Asset ID {asset_id} is not valid, skipping cleanup but forwarding to indexers")
+                    # The asset that holds the key, read once: its first folder (BucketIdGSI, live
+                    # rows), else the location index (live or archived rows). The asset type update
+                    # below takes the row rather than reading it again.
+                    base_prefix = normalize_base_prefix(prefix)
+                    first_folder_valid = validate_asset_id(asset_id)
+                    resolved_by = RESOLVED_BY_FAST_PATH
+                    owner_asset_id, owner_bucket_id = asset_id, bucket_id
+                    asset_data = lookup_asset(bucket_id, asset_id) if first_folder_valid else None
+                    if asset_data and not contains(asset_location_of(asset_data, base_prefix, asset_id), object_key):
+                        asset_data = None
+                    if not asset_data:
+                        resolution = resolve_owner(dynamodb.Table(asset_table_name), bucket_name, object_key,
+                                                   include_archived=True)
+                        if resolution.status == RESOLVED_FOUND:
+                            asset_data = resolution.row
+                            resolved_by = RESOLVED_BY_LOCATION_INDEX
+                            owner_asset_id = resolution.entry.asset_id
+                            owner_bucket_id = resolution.entry.bucket_id or bucket_id
+                    if not asset_data:
+                        # The asset record may already be gone (asset-level delete); the record is
+                        # still forwarded so the indexers can clean up.
+                        if first_folder_valid:
+                            logger.info(f"Asset {asset_id} not found in bucket {bucket_id}; skipping metadata cleanup")
+                        else:
+                            logger.info(f"Asset ID {asset_id} is not valid, skipping cleanup but forwarding to indexers")
                         indexable_records.append(record)
                         continue
 
-                    # Construct the asset base key (prefix + assetId + /)
-                    asset_base_key = f"{prefix}{asset_id}/" if prefix and prefix != '/' else f"{asset_id}/"
+                    asset_location = asset_location_of(asset_data, base_prefix, owner_asset_id)
+                    database_id_for_asset = str(asset_data.get('databaseId', ''))
+                    asset_is_live = not database_id_for_asset.endswith('#deleted')
+                    live_database_id = (database_id_for_asset if asset_is_live
+                                        else database_id_for_asset[:-len('#deleted')])
 
-                    # Get asset data to retrieve database_id for metadata deletion.
-                    # The asset record may already be gone (asset-level delete) —
-                    # the record is still forwarded so the indexers can clean up.
-                    asset_data = lookup_asset(bucket_id, asset_id)
-                    if asset_data:
-                        database_id_for_asset = asset_data.get('databaseId')
+                    # Key spellings to clean up: the decoded key is the real object
+                    # key for an encoded event, while a key delivered without any
+                    # encoding applied is real as delivered (a literal '+' in a
+                    # filename decodes to a space). Both are handled when they differ.
+                    key_spellings = [object_key]
+                    if raw_object_key != object_key:
+                        key_spellings.append(raw_object_key)
 
-                        # Key spellings to clean up: the decoded key is the real object
-                        # key for an encoded event, while a key delivered without any
-                        # encoding applied is real as delivered (a literal '+' in a
-                        # filename decodes to a space). Both are handled when they differ.
-                        key_spellings = [object_key]
-                        if raw_object_key != object_key:
-                            key_spellings.append(raw_object_key)
-
-                        # Only delete metadata/attributes when the file is permanently
-                        # gone (no versions or delete markers remain under any spelling).
-                        # A delete-marker event from an archive flow is reversible —
-                        # unarchive restores the file and must find its metadata intact.
-                        # Remaining versions under either spelling, or an error reading
-                        # version state, preserve the metadata.
-                        permanently_deleted = all(
-                            is_object_permanently_deleted(bucket_name, key) for key in key_spellings
-                        )
-                        if permanently_deleted:
-                            for key in key_spellings:
-                                relative_file_path = extract_relative_file_path(key, prefix, asset_id)
-                                logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
-                                delete_file_metadata_on_s3_delete(database_id_for_asset, asset_id, relative_file_path)
-                        else:
-                            logger.info(f"File {object_key} still has versions (archived); preserving metadata/attributes")
+                    # Only delete metadata/attributes when the file is permanently
+                    # gone (no versions or delete markers remain under any spelling).
+                    # A delete-marker event from an archive flow is reversible —
+                    # unarchive restores the file and must find its metadata intact.
+                    # Remaining versions under either spelling, or an error reading
+                    # version state, preserve the metadata. Metadata rows are keyed by
+                    # the live database id and the path relative to the asset's location.
+                    permanently_deleted = all(
+                        is_object_permanently_deleted(bucket_name, key) for key in key_spellings
+                    )
+                    if permanently_deleted:
+                        for key in key_spellings:
+                            relative_file_path = relative_path_for_key(asset_location, key, prefix,
+                                                                       owner_asset_id, resolved_by)
+                            if relative_file_path is None:
+                                continue
+                            logger.info(f"Deleting metadata/attributes for permanently deleted file: {relative_file_path}")
+                            delete_file_metadata_on_s3_delete(live_database_id, owner_asset_id, relative_file_path)
                     else:
-                        logger.info(f"Asset {asset_id} not found in bucket {bucket_id}; skipping metadata cleanup")
+                        logger.info(f"File {object_key} still has versions (archived); preserving metadata/attributes")
 
-                    # Update asset type based on remaining files
-                    logger.info(f"Updating asset type for {asset_id} after file deletion")
-                    update_asset_type(bucket_id, asset_id, bucket_name, asset_base_key)
+                    relative_path = relative_path_for_key(asset_location, object_key, prefix,
+                                                          owner_asset_id, resolved_by)
+                    if relative_path is not None:
+                        bindings[record_identity(record)] = build_binding(
+                            live_database_id, owner_asset_id, owner_bucket_id, relative_path, resolved_by)
+
+                    # Update asset type based on remaining files (a live asset only)
+                    if asset_is_live:
+                        logger.info(f"Updating asset type for {owner_asset_id} after file deletion")
+                        update_asset_type(owner_bucket_id, owner_asset_id, bucket_name, asset_location,
+                                          asset_data=asset_data)
 
                     logger.info(f"Successfully processed deletion for {object_key}")
                 except Exception as e:
@@ -2333,7 +2749,7 @@ def lambda_handler_deleted(event, context):
             # Only publish to SNS if we have records to index
             if indexable_records:
                 # Build filtered event preserving original structure
-                filtered_event = build_filtered_event(event, indexable_records)
+                filtered_event = build_filtered_event(event, indexable_records, bindings)
 
                 if filtered_event:
                     logger.info(f"Publishing {len(indexable_records)} deletion records to file indexer SNS")

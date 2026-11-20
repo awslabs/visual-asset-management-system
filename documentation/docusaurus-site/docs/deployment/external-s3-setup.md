@@ -1044,6 +1044,7 @@ For non-init files (regular asset files already present or uploaded later), the 
 -   Updates Amazon S3 object metadata with `databaseid` and `assetid` tags.
 -   Publishes the event to the file indexer Amazon SNS topic for Amazon OpenSearch indexing.
 -   Publishes an `asset.file.uploaded` event to the VAMS orchestration Amazon EventBridge event bus, which routes it through an Amazon SQS queue to the dispatcher that starts matching `fileUpload` workflow triggers.
+-   Adds to each record it forwards, on the file indexer topic and on the `asset.file.uploaded` event, an optional `vamsBinding` object naming the asset the file belongs to: `databaseId`, `assetId`, `bucketId`, `relativePath` (the file's path in the asset, with a leading `/`) and `resolvedBy` (`fastPath` when the first folder under the prefix names the asset, `locationIndex` when the asset's stored location was found through the asset location index). Every other field of the record is unchanged, and a record bucket sync could not attribute has no `vamsBinding`.
 
 ### Alternative: Use the API with bucketExistingKey
 

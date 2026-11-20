@@ -506,6 +506,21 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
 4. If a file is in the asset's file list but never appears in search, or a deleted asset or file is still listed, check the indexing dead-letter queues (next section).
 
+### Bucket Sync Rejected-Record Queue Holds Messages
+
+**Symptoms:**
+
+-   The Amazon CloudWatch alarm `<configuration name>-<app.baseStackName>-bucketSyncRejected` is in the `ALARM` state.
+-   A file written directly to an asset bucket is in no asset and not in search, and the bucket-sync function logged `Bucket sync rejected key ... (ambiguousLocation)` at `ERROR`.
+
+**Cause:** two live assets hold the same stored location in the bucket, so bucket sync cannot tell which one the file belongs to. It attributes the file to neither and sends the S3 notification to the deployment's bucket-sync rejected-record queue. Each message carries `reason`, `bucket`, `key`, `candidateAssets` (the `databaseId:assetId` of each asset that claims the location) and the original S3 `record`. Messages are kept for 14 days.
+
+**Resolution:**
+
+1. Read the messages in the queue (Amazon SQS console, **Send and receive messages**) and note the `candidateAssets` of each.
+2. Decide which asset owns the location. Archive or permanently delete the other asset, or move its files to a location of its own.
+3. Send each message's `record` again as an S3 event to the bucket's created-events queue (`<configuration name>-<app.baseStackName>-bucketSyncCreated--<n>`), wrapped as `{"Records": [<record>]}`, then delete it from the rejected-record queue. Bucket sync then attributes the file to the remaining asset.
+
 ### Indexing Dead-Letter Queue Holds Messages
 
 **Symptoms:**

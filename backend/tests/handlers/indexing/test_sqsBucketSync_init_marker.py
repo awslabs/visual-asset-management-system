@@ -285,7 +285,8 @@ class TestInitSuffixFilesAreOrdinaryFiles:
         forwarded = m.publish_to_file_indexer_sns.call_args.args[0]["Records"]
         assert [r["s3"]["object"]["key"] for r in forwarded] == INIT_SUFFIX_FILES
         cleaned = [c.args[2] for c in m.delete_file_metadata_on_s3_delete.call_args_list]
-        assert cleaned == ["postinit", "config.init", "terrain_init", "x/init.txt"]
+        # Asset-relative paths with one leading `/`, the form the metadata rows key them by.
+        assert cleaned == ["/postinit", "/config.init", "/terrain_init", "/x/init.txt"]
         assert m.update_asset_type.call_count == len(INIT_SUFFIX_FILES)
 
 
