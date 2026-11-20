@@ -228,7 +228,7 @@ This software includes third party software subject to the following copyrights:
 
 ### Preview 3D Thumbnail Pipeline
 
-**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
+**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/uv.lock`, exported to `container/requirements.txt`, which the image installs)
 
 | Name        | Version    | License                                                                     | Notes                                                 |
 | :---------- | :--------- | :-------------------------------------------------------------------------- | :---------------------------------------------------- |
@@ -265,7 +265,7 @@ This software includes third party software subject to the following copyrights:
 | blosc, blosc2, brotli, bitshuffle, lz4, lzfse, lzf, lzham, lzokay, snappy, libaec, zfp, sz3, isa-l, meshoptimizer, fastlz, bzip2, netcdf-c, hdf5, cfitsio, postgresql pglz | as in the wheel       | BSD-2-Clause, BSD-3-Clause, MIT, public domain or a permissive NASA/PostgreSQL licence                                                                                                                                 | General-purpose and scientific codecs, not selected by the pipeline                                                                          |
 | libgomp (OpenMP runtime)                                                                                                                                                   | GCC 8.5               | GPL-3.0-or-later with the GCC Runtime Library Exception                                                                                                                                                                | Bundled by the wheel; the image already installs Debian `libgomp1` for Open3D. The exception permits linking into programs under any licence |
 
-**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
+**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/uv.lock`; installed because a package above requires them, or compiled into one)
 
 | Name    | Version               | License           | Notes                                                                                                                                               |
 | :------ | :-------------------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -275,7 +275,7 @@ This software includes third party software subject to the following copyrights:
 | tqdm    | 4.70.1                | MPL-2.0 AND MIT   | Progress bars required by open3d                                                                                                                    |
 | Eigen   | da79095 (after 3.4.0) | MPL-2.0           | C++ linear algebra library compiled into the open3d 0.19.0 wheel, not a separate package. Loaded for `.fbx` and `.pcd` files                        |
 
-The other packages in `requirements.lock` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
+The other packages in `requirements.txt` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
 
 **Preview 3D Thumbnail Pipeline native libraries bundled in the cadquery-ocp wheel** (cadquery-ocp 7.9.3.1.1, installed because cadquery requires it; the pipeline loads every library below when it reads a `.step` or `.stp` file)
 

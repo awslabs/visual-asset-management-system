@@ -7,26 +7,6 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lambda.txt",
-            "reason": "Requirements of the 3D Thumbnail Lambda variant, without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lambda.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
             "path": "backendPipelines/preview/pcPotreeViewer/container/requirements.txt",
             "reason": "CPU pipeline container requirements without a lock.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
