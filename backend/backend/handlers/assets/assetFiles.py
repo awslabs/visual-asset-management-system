@@ -44,7 +44,8 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    contains, is_folder_location, is_shadowed, names_own_object, object_key_for, relative_path_in,
+    contains, folder_listing_prefix, in_folder, is_folder_location, names_own_object, object_key_for,
+    relative_path_in,
 )
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
@@ -377,6 +378,12 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         resolved_path = asset_base_key + file_path
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
+
+def _held_in_folder(location: str, folder: Optional[str], key: str) -> bool:
+    """Whether the location holds a key, under an asset-relative folder path when one is given."""
+    if folder is None:
+        return contains(location, key)
+    return in_folder(location, folder, key)
 
 def _relative_to_location(base_key: str, key: str) -> str:
     """The asset-relative path ('/...') of an S3 key in an asset's location."""
@@ -816,14 +823,15 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
-def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None) -> List[str]:
+def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None,
+                                  folder: Optional[str] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
     
     Args:
         bucket: The S3 bucket
         prefix: The S3 key prefix
-        location: The asset location the deleted keys must belong to (``common.assetLocations``);
-            a single-file location deletes its own key only
+        location: The asset location the deleted keys must belong to (``common.assetLocations``)
+        folder: An asset-relative folder path of the location the deleted keys must sit under
         
     Returns:
         List of deleted file keys
@@ -841,7 +849,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
                 key = entry['Key']
-                if location is not None and not contains(location, key):
+                if location is not None and not _held_in_folder(location, folder, key):
                     continue
                 if key not in processed_keys:
                     processed_keys.add(key)
@@ -860,7 +868,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         # Check if the prefix folder itself exists and delete it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or contains(location, folder_prefix):
+        if location is None or _held_in_folder(location, folder, folder_prefix):
             try:
                 # Check if the folder marker exists
                 s3_client.head_object(Bucket=bucket, Key=folder_prefix)
@@ -878,7 +886,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
     return deleted_files
 
 def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
-                      location: Optional[str] = None) -> Dict[str, str]:
+                      location: Optional[str] = None, folder: Optional[str] = None) -> Dict[str, str]:
     """Archive all objects under a prefix
 
     Args:
@@ -887,6 +895,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         databaseId: The database ID
         assetId: The asset ID
         location: The asset location the archived keys must belong to (``common.assetLocations``)
+        folder: An asset-relative folder path of the location the archived keys must sit under
 
     Returns:
         Dict mapping each archived file key to its new delete-marker VersionId
@@ -900,7 +909,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
-                if location is not None and not contains(location, key):
+                if location is not None and not _held_in_folder(location, folder, key):
                     continue
 
                 # Process folder markers separately
@@ -919,7 +928,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         # Check if the prefix folder itself exists and archive it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or contains(location, folder_prefix):
+        if location is None or _held_in_folder(location, folder, folder_prefix):
             try:
                 # Check if the folder marker exists
                 s3_client.head_object(Bucket=bucket, Key=folder_prefix)
@@ -1340,7 +1349,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     def _listed(key):
         if not single_object:
             return True
-        return (contains(location, key) and not is_shadowed(location, key)
+        return (contains(location, key)
                 and relative_path_in(location, key).lstrip('/').startswith(single_object_filter))
     
     # If prefix filter is provided, append it to the base prefix
@@ -2171,6 +2180,13 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # In a single-file asset a folder is selected by asset-relative path (a folder named like the
+    # file also holds the companion entry listed inside it)
+    folder = None
+    if is_prefix and not is_folder_location(base_key):
+        folder = relative_path_in(base_key, full_key) or file_path
+        full_key = folder_listing_prefix(base_key, folder)
     
     # Check if path exists (including archived files)
     try:
@@ -2194,18 +2210,20 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             response = s3_client.list_objects_v2(
                 Bucket=bucket,
                 Prefix=full_key,
-                MaxKeys=1
+                MaxKeys=1 if folder is None else 1000
             )
-            if 'Contents' not in response or len(response['Contents']) == 0:
+            if not any(_held_in_folder(base_key, folder, obj['Key']) for obj in response.get('Contents', [])):
                 # If no current objects, check for archived objects
                 versions_response = s3_client.list_object_versions(
                     Bucket=bucket,
                     Prefix=full_key,
-                    MaxKeys=1
+                    MaxKeys=1 if folder is None else 1000
                 )
                 
-                has_versions = any(version['Key'].startswith(full_key) for version in versions_response.get('Versions', []))
-                has_delete_markers = any(marker['Key'].startswith(full_key) for marker in versions_response.get('DeleteMarkers', []))
+                has_versions = any(version['Key'].startswith(full_key) and _held_in_folder(base_key, folder, version['Key'])
+                                   for version in versions_response.get('Versions', []))
+                has_delete_markers = any(marker['Key'].startswith(full_key) and _held_in_folder(base_key, folder, marker['Key'])
+                                         for marker in versions_response.get('DeleteMarkers', []))
                 
                 if not (has_versions or has_delete_markers):
                     raise VAMSGeneralErrorResponse(f"No files found under prefix.")
@@ -2218,7 +2236,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     if is_prefix:
         # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key)
+        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder)
 
         # Delete aux files under prefix if they exist
         delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
@@ -2341,6 +2359,13 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # In a single-file asset a folder is selected by asset-relative path (a folder named like the
+    # file also holds the companion entry listed inside it)
+    folder = None
+    if is_prefix and not is_folder_location(base_key):
+        folder = relative_path_in(base_key, full_key) or file_path
+        full_key = folder_listing_prefix(base_key, folder)
     
     # Check if path exists and if it's already archived
     try:
@@ -2363,9 +2388,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
             response = s3_client.list_objects_v2(
                 Bucket=bucket,
                 Prefix=full_key,
-                MaxKeys=1
+                MaxKeys=1 if folder is None else 1000
             )
-            if 'Contents' not in response or len(response['Contents']) == 0:
+            if not any(_held_in_folder(base_key, folder, obj['Key']) for obj in response.get('Contents', [])):
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         if _is_missing_object_error(e):
@@ -2380,7 +2405,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     if is_prefix:
         # Archive all files under prefix (maps each archived key -> delete-marker VersionId)
-        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key)
+        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key, folder=folder)
 
         # Convert full keys to relative paths
         for key, marker_version_id in archived_keys.items():

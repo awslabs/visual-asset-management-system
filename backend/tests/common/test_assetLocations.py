@@ -6,7 +6,8 @@
 A location ending in '/' is a folder and holds every key under it. Any other location is a single-file
 asset: it holds its own object, everything under '{file key}/' (its companion folder) and its own
 previews '{file key}.previewFile.{ext}'. A key that merely starts with the same characters (a sibling
-such as 'model.glb.bak', or 'model.glbx/...') is not part of it. The module is the REAL one, registered
+such as 'model.glb.bak', or 'model.glbx/...') is not part of it. A companion entry named exactly like the
+object is listed one level down, so every key has one path and nothing is hidden. The module is the REAL one, registered
 by tests/conftest.py.
 """
 
@@ -128,23 +129,74 @@ class TestRelativePathIn:
 
 
 @pytest.mark.unit
-class TestIsShadowed:
-    @pytest.mark.parametrize("key", ["projects/model.glb/model.glb",
-                                     "projects/model.glb/model.glb.previewFile.png"])
-    def test_a_companion_entry_at_the_object_or_preview_path_is_shadowed(self, key):
-        assert al.is_shadowed(FILE_LOCATION, key) is True
+class TestKeysNamedLikeTheFile:
+    """A companion entry named exactly like the object is listed one level down; nothing is hidden."""
+
+    @pytest.mark.parametrize("key,path", [
+        ("projects/model.glb", "/model.glb"),
+        ("projects/model.glb.previewFile.png", "/model.glb.previewFile.png"),
+        ("projects/model.glb/model.glb", "/model.glb/model.glb"),
+        ("projects/model.glb/model.glb.previewFile.png", "/model.glb/model.glb.previewFile.png"),
+        # A real key one level further down shifts with the chain, so every path names one key
+        ("projects/model.glb/model.glb/model.glb", "/model.glb/model.glb/model.glb"),
+        ("projects/model.glb/model.glb/model.glb.previewFile.gif", "/model.glb/model.glb/model.glb.previewFile.gif"),
+    ])
+    def test_chain_keys_and_their_previews_are_one_level_deeper(self, key, path):
         assert al.contains(FILE_LOCATION, key) is True
-        assert al.relative_path_in(FILE_LOCATION, key) == al.relative_path_in(
-            FILE_LOCATION, FILE_LOCATION + key[len(FILE_LOCATION + "/model.glb"):])
+        assert al.relative_path_in(FILE_LOCATION, key) == path
+        assert al.object_key_for(FILE_LOCATION, path) == key
 
-    @pytest.mark.parametrize("key", [FILE_LOCATION, "projects/model.glb.previewFile.png",
-                                     "projects/model.glb/sub/model.glb", "projects/model.glb/model.glb.bak",
-                                     "projects/model.glb.bak"])
-    def test_nothing_else_is_shadowed(self, key):
-        assert al.is_shadowed(FILE_LOCATION, key) is False
+    @pytest.mark.parametrize("key,path", [
+        ("projects/model.glb/model.glb/sub.txt", "/model.glb/sub.txt"),
+        ("projects/model.glb/model.glb/", "/model.glb/"),
+        ("projects/model.glb/model.glb.bak", "/model.glb.bak"),
+        ("projects/model.glb/sub/model.glb", "/sub/model.glb"),
+    ])
+    def test_every_other_key_keeps_the_path_after_the_file_key(self, key, path):
+        assert al.relative_path_in(FILE_LOCATION, key) == path
+        assert al.object_key_for(FILE_LOCATION, path) == key
 
-    def test_a_folder_location_shadows_nothing(self):
-        assert al.is_shadowed(FOLDER_LOCATION, "projects/building-a/building-a") is False
+    def test_no_two_keys_share_a_path(self):
+        keys = ["projects/model.glb", "projects/model.glb/model.glb", "projects/model.glb/model.glb/model.glb",
+                "projects/model.glb.previewFile.png", "projects/model.glb/model.glb.previewFile.png",
+                "projects/model.glb/model.glb/sub.txt", "projects/model.glb/sub.txt"]
+        paths = [al.relative_path_in(FILE_LOCATION, key) for key in keys]
+        assert len(set(paths)) == len(keys)
+
+    def test_a_folder_location_has_no_chain(self):
+        assert al.relative_path_in(FOLDER_LOCATION, "projects/building-a/building-a") == "/building-a"
+
+
+@pytest.mark.unit
+class TestFolderPaths:
+    @pytest.mark.parametrize("location,folder,prefix", [
+        (FOLDER_LOCATION, "/sub", "projects/building-a/sub/"),
+        (FOLDER_LOCATION, "/sub/", "projects/building-a/sub/"),
+        (FILE_LOCATION, "/sub/", "projects/model.glb/sub/"),
+        (FILE_LOCATION, "/model.glb/", "projects/model.glb/model.glb"),
+        (FILE_LOCATION, "/model.glb/model.glb/", "projects/model.glb/model.glb/model.glb"),
+    ])
+    def test_listing_prefix(self, location, folder, prefix):
+        assert al.folder_listing_prefix(location, folder) == prefix
+
+    @pytest.mark.parametrize("key,expected", [
+        ("projects/model.glb/model.glb", True),
+        ("projects/model.glb/model.glb.previewFile.png", True),
+        ("projects/model.glb/model.glb/x.txt", True),
+        ("projects/model.glb/model.glb.bak", False),
+        ("projects/model.glb/sub/x.txt", False),
+        ("projects/model.glb", False),
+    ])
+    def test_a_folder_named_like_the_file_holds_the_chain_key_below_it(self, key, expected):
+        assert al.in_folder(FILE_LOCATION, "/model.glb/", key) is expected
+
+    @pytest.mark.parametrize("key,expected", [
+        ("projects/building-a/sub/x.txt", True),
+        ("projects/building-a/sub.txt", False),
+        ("projects/building-a/subway.glb", False),
+    ])
+    def test_a_folder_path_selects_no_sibling_that_only_starts_with_its_name(self, key, expected):
+        assert al.in_folder(FOLDER_LOCATION, "/sub", key) is expected
 
 
 @pytest.mark.unit
