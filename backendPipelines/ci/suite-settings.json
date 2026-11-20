@@ -4,7 +4,7 @@
         "backendPipelines/addon/conversion/mirisUpload/container/tests": {
             "extraRequirements": {
                 "reason": "The tests fake the Miris API over HTTP with responses and AWS Secrets Manager with moto; the container image installs neither. Pinned at backend/requirements-dev.txt's versions.",
-                "requirements": ["moto==5.1.0", "responses==0.25.8"]
+                "requirements": ["moto==5.2.5", "responses==0.25.8"]
             }
         },
         "backendPipelines/genAi/cadStepAgent/evaluation/tests": {
