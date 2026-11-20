@@ -55,6 +55,9 @@ def _load():
 
     files_stub = types.ModuleType("handlers.assets.assetFiles")
     files_stub.delete_s3_prefix_all_versions = MagicMock()
+    files_stub.S3PrefixDeleteIncomplete = type("S3PrefixDeleteIncomplete", (Exception,), {})
+    files_stub.delete_file_metadata = MagicMock()
+    files_stub.delete_file_version_records = MagicMock()
     files_stub.aux_bucket_asset_file_base = (
         lambda db, key: f"{(db or '').strip('/')}/{(key or '').strip('/')}/"
     )

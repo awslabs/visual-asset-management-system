@@ -816,6 +816,18 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
+class S3PrefixDeleteIncomplete(Exception):
+    """A prefix delete left at least one object version or delete marker in place.
+
+    ``deleted_keys`` lists the keys whose every version and delete marker is gone, ``failed_keys`` the
+    keys that still have one. Both are empty when the prefix could not be listed, so nothing was deleted.
+    """
+
+    def __init__(self, deleted_keys: List[str], failed_keys: List[str]):
+        super().__init__(f"{len(failed_keys)} key(s) not deleted, {len(deleted_keys)} deleted")
+        self.deleted_keys = deleted_keys
+        self.failed_keys = failed_keys
+
 def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
     
@@ -827,16 +839,18 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         
     Returns:
         List of deleted file keys
+
+    Raises:
+        S3PrefixDeleteIncomplete: The prefix could not be listed, or a key keeps a version or delete
+            marker. It names the keys that were deleted and the keys that were not.
     """
-    deleted_files = []
+    # Collect unique keys across all pages (versions and delete markers)
+    keys_to_delete = []
+    processed_keys = set()
 
     try:
         # Get all object versions under the prefix
         paginator = s3_client.get_paginator('list_object_versions')
-
-        # Collect unique keys across all pages (versions and delete markers)
-        keys_to_delete = []
-        processed_keys = set()
 
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
@@ -846,35 +860,48 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
                 if key not in processed_keys:
                     processed_keys.add(key)
                     keys_to_delete.append(key)
-
-        # Delete each key's versions in parallel; per-key work is independent
-        if keys_to_delete:
-            max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(
-                    lambda key: (key, delete_s3_object_all_versions(bucket, key)),
-                    keys_to_delete
-                ))
-            deleted_files.extend(key for key, ok in results if ok)
-        
-        # Check if the prefix folder itself exists and delete it if it does
-        # Ensure the prefix ends with a slash for folder check
-        folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or contains(location, folder_prefix):
-            try:
-                # Check if the folder marker exists
-                s3_client.head_object(Bucket=bucket, Key=folder_prefix)
-                # Delete the folder marker if it exists
-                if delete_s3_object_all_versions(bucket, folder_prefix):
-                    deleted_files.append(folder_prefix)
-            except ClientError as e:
-                # If the folder doesn't exist, that's fine
-                if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
-                    logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
-    
     except Exception as e:
-        logger.exception(f"Error deleting all versions under prefix {prefix}: {e}")
-    
+        logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
+        raise S3PrefixDeleteIncomplete([], []) from e
+
+    deleted_files = []
+    failed_files = []
+
+    # Delete each key's versions in parallel; per-key work is independent
+    if keys_to_delete:
+        max_workers = min(MAX_PARALLEL_S3_WORKERS, len(keys_to_delete))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(
+                lambda key: (key, delete_s3_object_all_versions(bucket, key)),
+                keys_to_delete
+            ))
+        for key, ok in results:
+            (deleted_files if ok else failed_files).append(key)
+
+    # Check if the prefix folder itself exists and delete it if it does, unless the listing returned it
+    # Ensure the prefix ends with a slash for folder check
+    folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
+    if folder_prefix not in processed_keys and (location is None or contains(location, folder_prefix)):
+        try:
+            # Check if the folder marker exists
+            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+            # Delete the folder marker if it exists
+            if delete_s3_object_all_versions(bucket, folder_prefix):
+                deleted_files.append(folder_prefix)
+            else:
+                failed_files.append(folder_prefix)
+        except ClientError as e:
+            # If the folder doesn't exist, that's fine
+            if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
+                logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+        except Exception as e:
+            logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+
+    if failed_files:
+        logger.error(f"{len(failed_files)} key(s) under prefix {prefix} kept a version or delete marker; "
+                     f"{len(deleted_files)} deleted")
+        raise S3PrefixDeleteIncomplete(deleted_files, failed_files)
+
     return deleted_files
 
 def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
@@ -2215,13 +2242,20 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     # Delete file(s)
     affected_files = []
+    incomplete = None
     
     if is_prefix:
-        # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key)
+        # Delete all files under prefix including all versions; a partial delete still clears the
+        # records of the files it removed, then fails
+        try:
+            deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key)
+        except S3PrefixDeleteIncomplete as e:
+            incomplete = e
+            deleted_keys = e.deleted_keys
 
-        # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        # Delete aux files under prefix if they exist; the files that remain keep theirs
+        if incomplete is None:
+            delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2266,6 +2300,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
 
     # Clean up version snapshot records in DynamoDB for deleted files
     delete_file_version_records(databaseId, assetId, affected_files)
+
+    if incomplete is not None:
+        raise VAMSGeneralErrorResponse("Error deleting files: not every file under the prefix could be deleted "
+                                       "from Amazon S3. The remaining files were kept, so the delete can be retried.")
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)
