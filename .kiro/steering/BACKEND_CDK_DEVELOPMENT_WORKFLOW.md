@@ -2750,6 +2750,20 @@ optional_table = dynamodb.Table(optional_table_name) if optional_table_name else
 
 **Upload records expire on `expiresAt`.** `AssetUploadsStorageTable` has a DynamoDB TTL on `expiresAt` (epoch seconds, set by every writer: 7 days from upload initialize, 1 day for workflow-output records). TTL removes an expired record only some time after it expires, so `complete_upload` still refuses a record whose `expiresAt` has passed. A new writer to the table sets `expiresAt` as a Number.
 
+### **Compliance Handler Environment Variables and Resource Keys**
+
+Mirrors `backend/CLAUDE.md` "Common Environment Variables" (the compliance paragraph). Each variable is set only on the Lambdas named:
+
+-   `EXECUTE_WORKFLOW_FUNCTION_NAME`: the evaluate-service, cascade-service and trigger Lambdas. `complianceEvaluationStore` reads it to launch a pipeline rule's workflow execution through a `lambdaCrossCall`.
+-   `COMPLIANCE_TRIGGER_QUEUE_URL`: the trigger's own queue. On it the trigger holds an upload completion's record back with ChangeMessageVisibility until the completion is `UPLOAD_COMPLETION_SETTLE_SECONDS` old, so the requests of one multi-request upload are evaluated once; unset, completions are evaluated at once. It is also set on `complianceSchemaBindingService`, which queues an asset override's `{databaseId, assetId}` evaluation under `complianceAutoEval`, and on `complianceJobs`, which queues a database binding change's evaluations there, paced by the apply record's own counts of evaluations sent and taken, never by the queue's approximate message count; unset, nothing is queued.
+-   `COMPLIANCE_JOB_QUEUE_URL`: the compliance job queue. `databaseService` queues a delete's `moveDeletedDatabaseCompliance` message, `complianceSchemaBindingService` a binding change's first `applyDatabaseBinding` message, and `complianceJobs` each continuation. `complianceTrigger` does not have it: a job message found on its own queue is logged with one WARNING and dropped (`drop_job_message`).
+-   `COMPLIANCE_JOB_DLQ_URL`: the job queue's dead-letter queue, from which a redrive resumes a move. `complianceJobs` puts a move stopped at its run limit there, and `databaseService` a delete's move message the job queue did not take.
+-   `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`: the five asset download Lambdas (`downloadAsset`, `streamAsset`, `assetExportService`, `streamAuxiliaryPreviewAsset`, `zipDownloadService`), set from `app.compliance.quarantineBlocksDownload`. The shared `common/compliance/quarantineGuard.py` reads it, resolves the compliance asset-state table only when it is `true`, and the handlers call its `check_quarantine_block()` only after Tier-1 and Tier-2 authorization.
+-   `ORCHESTRATION_BUS_ARN` and `ORCHESTRATION_EVENT_SOURCE_PREFIX`: set on the workflow Lambdas by `workflowFunctions.ts`. `sfn/processWorkflowExecutionOutput`, `sfn/handleExecutionError` and `executionService` publish the `workflow.execution.completed` event only when both are set.
+-   No table-name variables: every compliance table resolves through SSM (`ResourceKeys.COMPLIANCE_*_STORAGE_TABLE`; legacy override `COMPLIANCE_*_STORAGE_TABLE_NAME`), and the workflow callback resolves its output locations from the V2 execution records rather than a bucket variable.
+
+A compliance pipeline rule that names a system record is refused after the run-rights check ("A stored reference that the system later acts on is authorized when it is saved"): `system_pipeline_rule_refused` answers `400` with `systemRecords.SYSTEM_RECORD_PIPELINE_RULE_MESSAGE` and `ruleName` for a new or changed rule whose workflow, own pipeline or a pipeline its workflow runs is a system record (`systemRecords.names_system_record`), for every caller including `SYSTEM_USER`. `complianceEvaluationStore` never launches such a rule from a schema stored before the check: the result is an error with the same message, and a waiting one is closed.
+
 ### **AWS Client Configuration Pattern**
 
 ```python
