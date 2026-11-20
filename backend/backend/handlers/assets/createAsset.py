@@ -25,6 +25,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.tagScope import GLOBAL_SCOPE
 from common.snsTopicNames import asset_sns_topic_name
+from common.assetLocations import contains
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -370,22 +371,18 @@ def normalize_location_key(key):
 
 
 def keys_conflict(existing_key, target_key):
-    """Whether two stored S3 asset locations occupy the same place in the bucket.
+    """Whether two stored S3 asset locations hold a key in common.
 
-    Compared on prefix-folder semantics, so a conflict is an exact match or a
-    parent/child containment in either direction.
+    Decided by `common.assetLocations.contains` in both directions: an exact match,
+    a folder holding the other location, or a single-file location holding the other
+    one as its companion folder or as one of its own previews.
     """
     existing_key = normalize_location_key(existing_key)
     target_key = normalize_location_key(target_key)
     if not existing_key or not target_key:
         return False
 
-    existing_prefix = existing_key if existing_key.endswith('/') else existing_key + '/'
-    target_prefix = target_key if target_key.endswith('/') else target_key + '/'
-
-    return (existing_key == target_key
-            or target_prefix.startswith(existing_prefix)
-            or existing_prefix.startswith(target_prefix))
+    return contains(existing_key, target_key) or contains(target_key, existing_key)
 
 
 def prefix_roots_overlap(prefix_a, prefix_b):
