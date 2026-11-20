@@ -324,9 +324,10 @@ class TestIndexAttributes:
         assert all(key.startswith(c) for c in candidates)
 
     @pytest.mark.parametrize("prefix", ["", "/", "assets", "assets/", "/assets/", "/assets", "a/b", "a/b/"])
-    def test_base_prefix_normalizer_matches_the_create_path(self, prefix):
+    def test_the_create_path_uses_the_shared_base_prefix_normalizer(self, prefix):
         create_asset = _load_create_asset(fresh=True)
-        assert al.normalize_base_prefix(prefix) == create_asset.normalize_base_assets_prefix(prefix)
+        assert not hasattr(create_asset, "normalize_base_assets_prefix")
+        assert create_asset.normalize_base_prefix(prefix) == al.normalize_base_prefix(prefix)
 
     @pytest.mark.parametrize("prefix,expected", [
         ("/", "x1/"), ("", "x1/"), ("assets", "assets/x1/"), ("/assets/", "assets/x1/"),

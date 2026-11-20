@@ -28,7 +28,14 @@ from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
-from common.assetLocations import derive_location, location_attributes
+from common.assetLocations import (
+    LocationTooDeepError,
+    derive_location,
+    find_conflicts,
+    index_ready,
+    location_attributes,
+    normalize_base_prefix,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -103,23 +110,6 @@ def normalize_s3_path(asset_base_key, file_path):
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
-def normalize_base_assets_prefix(base_assets_prefix):
-    """Normalize a bucket record's baseAssetsPrefix to its canonical S3 form.
-
-    Bucket records can spell the same physical prefix root several ways
-    ("assets", "assets/", "/assets/"), so every comparison of one bucket record
-    against another goes through this single normalization: trailing slash
-    present, no leading slash.
-    """
-    if not base_assets_prefix:
-        return ''
-    if not base_assets_prefix.endswith('/'):
-        base_assets_prefix += '/'
-    if base_assets_prefix.startswith('/'):
-        base_assets_prefix = base_assets_prefix[1:]
-    return base_assets_prefix
-
-
 def get_default_bucket_details(databaseId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
     try:
@@ -144,7 +134,7 @@ def get_default_bucket_details(databaseId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
 
-        base_assets_prefix = normalize_base_assets_prefix(base_assets_prefix)
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -363,6 +353,21 @@ def check_s3_key_exists(bucket_name, key):
         logger.exception(f"Error checking S3 key existence: {e}")
         raise VAMSGeneralErrorResponse("Error validating S3 location")
 
+def check_s3_folder_has_objects(bucket_name, folder_key):
+    """Whether any current object is stored under ``folder_key`` (which ends in ``/``).
+
+    One ``list_objects_v2`` with ``MaxKeys=1``: S3 applies ``Prefix`` before ``MaxKeys``, so a
+    single entry answers the existence question, and every key it can return lies under the
+    folder because the prefix ends in ``/``.
+    """
+    try:
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=folder_key, MaxKeys=1)
+        return bool(response.get('Contents'))
+    except Exception as e:
+        logger.exception(f"Error checking S3 folder contents: {e}")
+        raise VAMSGeneralErrorResponse("Error validating S3 location")
+
+
 def normalize_location_key(key):
     """Normalize an S3 location key for comparison (strip leading slash).
 
@@ -401,8 +406,8 @@ def prefix_roots_overlap(prefix_a, prefix_b):
     an asset registered under either can occupy a key the other's assets reach.
     An empty prefix is the bucket root, which contains every prefix in it.
     """
-    prefix_a = normalize_base_assets_prefix(prefix_a)
-    prefix_b = normalize_base_assets_prefix(prefix_b)
+    prefix_a = normalize_base_prefix(prefix_a)
+    prefix_b = normalize_base_prefix(prefix_b)
     return (prefix_a == prefix_b
             or prefix_a.startswith(prefix_b)
             or prefix_b.startswith(prefix_a))
@@ -484,8 +489,43 @@ def log_unusable_location_record(item, context):
     )
 
 
-def assert_existing_key_not_owned(bucket_ids, resolved_s3_key):
+def assert_location_not_owned_by_index(bucket_name, resolved_s3_key):
+    """Refuse a location that shares a key with an asset in the location index.
+
+    The index covers every asset row of the bucket, live and archived, across every registration
+    of that bucket, so this replaces the BucketIdGSI walk once the backfill marker exists: the
+    ancestor lookups and one descendant query cost O(depth) instead of O(assets in the bucket).
+
+    Raises:
+        VAMSGeneralErrorResponse: with the same refusal as the walk when an asset owns a key the
+            location covers, and the generic validation error when the index cannot be read.
+    """
+    try:
+        conflicts = find_conflicts(asset_table, bucket_name, resolved_s3_key)
+    except LocationTooDeepError as e:
+        logger.error(f"Location {resolved_s3_key} cannot be checked against the location index: {e}")
+        raise VAMSGeneralErrorResponse("Error validating S3 location")
+    except Exception as e:
+        logger.exception(f"Error validating location ownership against the location index: {e}")
+        raise VAMSGeneralErrorResponse("Error validating S3 location")
+    if conflicts:
+        owner = conflicts[0]
+        logger.error(
+            f"bucketExistingKey {resolved_s3_key} conflicts with existing asset "
+            f"{owner.database_id}:{owner.asset_id} at {owner.location}"
+        )
+        raise VAMSGeneralErrorResponse(
+            "The specified bucketExistingKey is already in use by another asset"
+        )
+
+
+def assert_existing_key_not_owned(bucket_ids, resolved_s3_key, bucket_name=None):
     """Ensure no existing asset already points at the resolved S3 key.
+
+    Once the location index is ready for this deployment (``index_ready``) and the bucket name is
+    known, the check reads the index (``assert_location_not_owned_by_index``). Until then it walks
+    the colocated BucketIdGSI partitions as described below, because an index without the
+    backfill would miss the assets created before it.
 
     Because multiple databases can share one bucket and prefix root, an asset's
     S3 location is only unambiguously owned when a single asset record maps to it.
@@ -512,6 +552,10 @@ def assert_existing_key_not_owned(bucket_ids, resolved_s3_key):
     """
     target = normalize_location_key(resolved_s3_key)
     if not target:
+        return
+
+    if bucket_name and index_ready(asset_storage_table_name):
+        assert_location_not_owned_by_index(bucket_name, target)
         return
 
     try:
@@ -811,23 +855,30 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         resolved_as_prefix = normalize_location_key(s3_key)
         if resolved_as_prefix and not resolved_as_prefix.endswith('/'):
             resolved_as_prefix += '/'
-        if resolved_as_prefix == normalize_base_assets_prefix(s3_bucket_prefix):
+        if resolved_as_prefix == normalize_base_prefix(s3_bucket_prefix):
             error_msg = ("The specified bucketExistingKey is the S3 bucket location root for this "
                          "database. An asset must be located in a folder beneath it.")
             logger.error(
                 f"{error_msg}: resolved {s3_key} equals base prefix root "
-                f"{normalize_base_assets_prefix(s3_bucket_prefix)!r}")
+                f"{normalize_base_prefix(s3_bucket_prefix)!r}")
             raise VAMSGeneralErrorResponse(error_msg)
 
-        # Check if the key exists in S3 (full path: bucketPrefix/bucketExistingKey)
+        # The key names an object (a single-file location, even when objects also sit under
+        # `{key}/`, its companion folder), or a folder. A folder written by `aws s3 sync` or
+        # another tool has no folder-marker object, so a missed HeadObject falls back to whether
+        # anything is stored under `{key}/`; then the location is that folder.
         if not check_s3_key_exists(s3_bucket, s3_key):
-            error_msg = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"
-            logger.error(error_msg)
-            raise VAMSGeneralErrorResponse(error_msg)
+            folder_key = normalize_location_key(s3_key).rstrip('/') + '/'
+            if not check_s3_folder_has_objects(s3_bucket, folder_key):
+                error_msg = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"
+                logger.error(error_msg)
+                raise VAMSGeneralErrorResponse(error_msg)
+            logger.info(f"bucketExistingKey {s3_key} names a folder without a marker object; using {folder_key}")
+            s3_key = folder_key
 
         # Reject if another asset (in any database sharing this bucket) already owns
         # this S3 location, so an asset cannot be bound onto another asset's data.
-        assert_existing_key_not_owned(colocated_bucket_ids, s3_key)
+        assert_existing_key_not_owned(colocated_bucket_ids, s3_key, s3_bucket)
 
         logger.info(f"Using existing S3 key: {s3_key} in bucket: {s3_bucket}")
     else:
@@ -858,7 +909,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
                 error_msg = "Asset identifier is not unique for the given S3 bucket location"
                 logger.error(error_msg)
                 raise VAMSGeneralErrorResponse(error_msg)
-            assert_existing_key_not_owned(colocated_bucket_ids, s3_key)
+            assert_existing_key_not_owned(colocated_bucket_ids, s3_key, s3_bucket)
             logger.info(f"Binding S3-external asset to existing prefix: {s3_key} in bucket: {s3_bucket}")
         else:
             logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
