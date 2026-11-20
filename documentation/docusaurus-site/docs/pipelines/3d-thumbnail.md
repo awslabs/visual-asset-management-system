@@ -91,6 +91,8 @@ The same container also writes previews for images and video, through a second r
 
 Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
 
+The media pipeline skips `*.cog.tif`, the Cloud Optimized GeoTIFF that the [COG Conversion](cog-conversion.md) pipeline writes beside its source: the source `.tif` already has a preview, and a COG can exceed the pixel limit.
+
 ### What a run writes
 
 An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
@@ -195,7 +197,9 @@ A run that fails after the fetch (for example because a missing glTF buffer leav
 
 The run also records a result named `preview-incomplete.json` on the execution. It shows under **Output Results** on the execution's detail page in **Workflows**, and `vamscli execution details results <execution-id>` returns it. It holds the same message, the counts of skipped geometry layers, data files, and textures and other files, and up to 100 skipped files, each with the file that names it and the reason. `truncated` is `true` when more were skipped than the list holds. Paths are relative to the asset. A reference outside the asset is recorded by its reason and at most its bare file name; no bucket, host, port, share or folder is ever written. The full reference is in the job log.
 
-A run that fetched every referenced file ends with `Preview 3D Thumbnail pipeline executed successfully.` and records no result. To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
+A USD stage can also hold prims the preview does not draw: `Points`, `BasisCurves`, `NurbsCurves`, `HermiteCurves`, `NurbsPatch`, `Plane` and `TetMesh` prims (hair, grass, point clouds written as USD points, a ground `Plane`, tetrahedral volumes). The preview is the same with or without them, but the run now says what was left out: the job log has one warning per type with the count and the first five prim paths, the completion line reads `Preview generated, but incomplete: 3 Points prims and 1 BasisCurves prim are not drawn by the 3D Preview Thumbnail.` (after the fetched-files sentence when files were also skipped), and `preview-incomplete.json` gains `counts.skippedPrimTypes` (the count per type) and `skippedPrims` (the type, count and first five prim paths). Both keys are absent when no such prim was skipped, so the result is unchanged for every other run. The result stays within its 64 KB cap with these keys included: when it would not, the list of skipped files is shortened (`truncated` is `true`); a result without these keys is sized exactly as before. The run still succeeds. The types are joined the same way in the completion line and the error (`A, B and C`). A stage that holds only such prims, and nothing else to draw, fails with `No valid mesh geometry found in USD stage: the stage holds only 2 Points prims and 1 BasisCurves prim, which the 3D Preview Thumbnail does not draw`. Invisible, guide and proxy prims, and prims under a root prim left out as a thumbnail rig, are not counted.
+
+A run that fetched every referenced file and skipped no prim ends with `Preview 3D Thumbnail pipeline executed successfully.` and records no result. To read the job log, open the execution in **Workflows** and select its **Logs** tab, or run `vamscli execution logs`.
 
 :::note[Relative Path Preservation]
 If the input file is at `<assetId>/subfolder/model.glb`, the preview is written to `<assetId>/subfolder/model.glb.previewFile.gif`. The `assetId` is threaded through the pipeline from the workflow state to ensure correct path computation.
@@ -293,7 +297,7 @@ Each run executes on one of two AWS Fargate sizes, both submitted from one AWS B
 
 -   **Choosing the tier.** A run's `computeTier` parameter forces a tier; `auto` (the default) leaves the choice to the input size. When the input size cannot be read, the run uses the standard tier and logs a warning.
 -   **Sizing.** vCPU and memory are configured per tier (see [Configuration Options](#configuration-options)). Deployment validates each pair against the AWS Fargate Linux task sizes (4 vCPU: 8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in 8 GiB steps), because AWS Batch checks an override only when a job is submitted.
--   **Time bounds.** The attempt durations are fixed. The pipeline's state machine times out after 4 hours and the registered pipeline's task timeout is 14,400 seconds, so neither gives up on a large-tier job that AWS Batch still allows to run.
+-   **Time bounds.** The attempt durations are fixed and start when the job leaves the job queue. Each tier's AWS Batch state also has its own 3 hour 30 minute bound, which counts the time the job waited in the queue as well as its run; a job still waiting or running at that bound fails the run with a timeout cause and is ended, so a job that waited past the bound never runs; run the pipeline again later. The pipeline's state machine times out after 3 hours 45 minutes, inside the registered pipeline's task timeout of 14,400 seconds, so the run always reports its own outcome.
 -   **Ephemeral storage.** Both tiers have 200 GiB, the AWS Fargate maximum; ephemeral storage is a property of the job definition and cannot be overridden per job.
 -   **Concurrency.** The Fargate compute environment allows 256 vCPU at a time, so up to 64 standard-tier jobs or 16 large-tier jobs run at once; further jobs wait in the job queue. The account's AWS Fargate vCPU quota in the Region also applies.
 

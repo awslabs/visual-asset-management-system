@@ -111,6 +111,13 @@ export const ZIP_DOWNLOAD_USER_ASSET_INDEX = "UserAssetIndex";
 export const ZIP_DOWNLOAD_ASSET_INDEX = "AssetIndex";
 
 /**
+ * Sparse index of AuditLogQueriesStorageTable on openKey (the constant "open", written only while a
+ * search holds a concurrency slot and removed when it ends): lists the open searches for the
+ * VAMS-wide and per-user caps. Must equal OPEN_INDEX in backend/backend/handlers/audit/auditLogService.py.
+ */
+export const AUDIT_LOG_OPEN_QUERIES_INDEX = "OpenQueriesIndex";
+
+/**
  * Top-level auxiliary-bucket prefix of Download as Zip archives. Mirrored as
  * AUXILIARY_PREPARED_DOWNLOADS_PREFIX in backend/backend/common/s3PathPatterns.py.
  */
@@ -230,6 +237,7 @@ export interface storageResources {
         vectorEmbeddingsStorageTable: dynamodb.Table;
         largeObjectCopyJobsStorageTable: dynamodb.Table; // PK jobId; TTL expiresAt; copy jobs + ingestion batch rows of the large object copy engine
         zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; GSIs UserAssetIndex, AssetIndex; TTL expiresAt; Download as Zip jobs
+        auditLogQueriesStorageTable?: dynamodb.Table; // PK queryId; sparse GSI OpenQueriesIndex; TTL expiresAt; audit log search handles. Absent when app.auditLogging.search.enabled is false
         // Compliance tables
         complianceSchemaStorageTable: dynamodb.Table;
         complianceAssetStateStorageTable: dynamodb.Table;
@@ -1097,7 +1105,10 @@ export function storageResourcesBuilder(
             // its own on success and its pipelineEnd Lambda deletes them on failure; the objects a
             // crashed run leaves behind expire here. The bucket is versioned, so a delete only writes a
             // delete marker: the noncurrent expiry is what reclaims the storage, and the expired
-            // delete markers go with it. Other pipelines' working prefixes are untouched.
+            // delete markers go with it. Other pipelines' working prefixes are untouched. A lifecycle
+            // filter takes a literal prefix, so these rules cover runs under the registered pipeline id
+            // only; a workflow step with its own jobName writes under pipelines/<jobName>/, which no rule
+            // here expires.
             ...(config.app.pipelines.useGenAiVideoSopBom?.enabled
                 ? [
                       {
@@ -1809,6 +1820,31 @@ export function storageResourcesBuilder(
         indexName: ZIP_DOWNLOAD_ASSET_INDEX,
         partitionKey: { name: "assetKey", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "requestId", type: dynamodb.AttributeType.STRING },
+        projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Audit Log Queries — one row per audit log search (PK queryId, a UUID the service generates; the owner
+    // is the userId attribute). Holds the validated filters, the CloudWatch Logs Insights query id, the
+    // status, the deadline and the poll lease. OpenQueriesIndex (PK openKey = "open") is sparse: a row is
+    // in it only while its search holds a concurrency slot, so counting the index counts the open
+    // searches against app.auditLogging.search.maxConcurrentQueries. expiresAt (epoch seconds) is the TTL,
+    // app.auditLogging.search.handleRetentionMinutes after the last use of the search (the service writes
+    // it and treats a row past it as not found). The row also holds the contains terms of a search until
+    // the search is stopped or exported. Built only when app.auditLogging.search.enabled
+    // is true (the default); access is decided by authorization. Encrypted with the shared CMK when
+    // app.useKmsCmkEncryption is on (dynamodbDefaultProps); removal policy RETAIN like every VAMS table,
+    // and auto-named (no explicit tableName), so a retained table never collides with a redeploy.
+    const auditLogQueriesStorageTable = Config.isAuditSearchEnabled(config)
+        ? new dynamodb.Table(scope, "AuditLogQueriesStorageTable", {
+              ...dynamodbDefaultProps,
+              partitionKey: { name: "queryId", type: dynamodb.AttributeType.STRING },
+              timeToLiveAttribute: "expiresAt",
+          })
+        : undefined;
+    auditLogQueriesStorageTable?.addGlobalSecondaryIndex({
+        indexName: AUDIT_LOG_OPEN_QUERIES_INDEX,
+        partitionKey: { name: "openKey", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "createdAtEpoch", type: dynamodb.AttributeType.NUMBER },
         projectionType: dynamodb.ProjectionType.ALL,
     });
 
@@ -2981,6 +3017,7 @@ export function storageResourcesBuilder(
             vectorEmbeddingsStorageTable: vectorEmbeddingsStorageTable,
             largeObjectCopyJobsStorageTable: largeObjectCopyJobsStorageTable,
             zipDownloadRequestsStorageTable: zipDownloadRequestsStorageTable,
+            auditLogQueriesStorageTable: auditLogQueriesStorageTable,
             // Compliance tables
             complianceSchemaStorageTable: complianceSchemaStorageTable,
             complianceAssetStateStorageTable: complianceAssetStateStorageTable,
@@ -3636,6 +3673,13 @@ export function storageResourcesBuilder(
             storageResources.dynamo.largeObjectCopyJobsStorageTable.tableName,
         [RESOURCE_PARAM_KEYS.dynamoTables.zipDownloadRequestsStorage]:
             storageResources.dynamo.zipDownloadRequestsStorageTable.tableName,
+        // Only when audit log search is on: its handle table does not exist otherwise.
+        ...(storageResources.dynamo.auditLogQueriesStorageTable
+            ? {
+                  [RESOURCE_PARAM_KEYS.dynamoTables.auditLogQueriesStorage]:
+                      storageResources.dynamo.auditLogQueriesStorageTable.tableName,
+              }
+            : {}),
         // Compliance tables
         [RESOURCE_PARAM_KEYS.dynamoTables.complianceSchemaStorage]:
             storageResources.dynamo.complianceSchemaStorageTable.tableName,

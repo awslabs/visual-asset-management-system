@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Parsing audit records into rows: contract v1 records written by the real formatter, frozen legacy
-records of the v2.6.x format, and the forgery corpus (test plan section 2).
+records of the format before the record contract, and the forgery corpus (test plan section 2).
 
 None of the hostile inputs may change the matched user, database, entity or outcome, and the parser
 never raises.
@@ -100,6 +100,26 @@ class TestContractRecords:
         row = parse(record, "auditAuthorization")
         assert row.probe is True and row.outcome == "denied" and row.user == "bob"
 
+    def test_a_summary_probe_row_has_a_generic_label_and_names_no_group(self):
+        record = auditLogging.format_authorization_denial_record(
+            {"tokens": ["bob"], "roles": ["viewer"], "mfaEnabled": True}, "POST /audit/queries",
+            {"action": "GET", "obj": {"object__type": "auditLog",
+                                      "auditLogGroup": "auditAuthChanges,auditFileUpload"}})
+        row = parse(record, "auditAuthorization")
+        assert row.probe is True and row.outcome == "denied"
+        assert row.action == "permission probe (summary)"
+        assert row.entity == {"type": "auditLog", "id": None}
+        assert "method" not in row.request
+        text = json.dumps(row.to_dict())
+        assert "auditAuthChanges" not in text and "auditFileUpload" not in text and "GET" not in text
+
+    def test_a_probe_of_another_object_keeps_its_row_unchanged(self):
+        record = auditLogging.format_authorization_denial_record(
+            {"tokens": ["bob"], "roles": [], "mfaEnabled": True}, "GET /auth/routes/api/allowed",
+            {"action": "DELETE", "obj": {"object__type": "api", "route__path": "/x"}})
+        row = parse(record, "auditAuthorization")
+        assert row.action is None and row.request.get("method") == "DELETE"
+
     def test_an_unmarked_denial_is_not_a_probe(self, writer):
         auditLogging.log_authorization({"tokens": ["bob"], "roles": [], "mfaEnabled": True}, False,
                                        {"action": "DELETE", "obj": {"object__type": "api"}})
@@ -167,7 +187,7 @@ class TestContractRecords:
 
 
 # ---------------------------------------------------------------------------------------------------
-# Legacy: frozen v2.6.x records
+# Legacy: frozen records of the format before the record contract
 # ---------------------------------------------------------------------------------------------------
 
 @pytest.mark.unit

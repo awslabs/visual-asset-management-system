@@ -4,9 +4,13 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import ReasonModal, { REASON_REQUIRED_MESSAGE } from "./ReasonModal";
+import ReasonModal, {
+    MAX_REASON_LENGTH,
+    REASON_REQUIRED_MESSAGE,
+    reasonTooLongMessage,
+} from "./ReasonModal";
 
 const renderModal = (overrides: Partial<React.ComponentProps<typeof ReasonModal>> = {}) => {
     const onConfirm = jest.fn();
@@ -77,5 +81,38 @@ describe("ReasonModal", () => {
 
         await userEvent.type(screen.getByLabelText("Reason for rejection"), "x");
         expect(screen.queryByText(REASON_REQUIRED_MESSAGE)).not.toBeInTheDocument();
+    });
+});
+
+describe("ReasonModal length", () => {
+    const longReason = (length: number) => "r".repeat(length);
+
+    it("refuses a reason over 1,024 characters and keeps the text", async () => {
+        const { onConfirm } = renderModal();
+        const field = screen.getByLabelText("Reason for rejection");
+        fireEvent.change(field, { target: { value: longReason(1025) } });
+
+        expect(screen.getByText(reasonTooLongMessage(1025))).toBeInTheDocument();
+        await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+        expect(onConfirm).not.toHaveBeenCalled();
+        expect(field).toHaveValue(longReason(1025));
+    });
+
+    it("accepts a reason of exactly 1,024 characters", async () => {
+        const { onConfirm } = renderModal();
+        fireEvent.change(screen.getByLabelText("Reason for rejection"), {
+            target: { value: longReason(MAX_REASON_LENGTH) },
+        });
+        await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+        expect(onConfirm).toHaveBeenCalledWith(longReason(MAX_REASON_LENGTH));
+    });
+
+    it("counts the reason as the API does, without the spaces around it", async () => {
+        const { onConfirm } = renderModal();
+        fireEvent.change(screen.getByLabelText("Reason for rejection"), {
+            target: { value: `  ${longReason(MAX_REASON_LENGTH)}  ` },
+        });
+        await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+        expect(onConfirm).toHaveBeenCalledWith(longReason(MAX_REASON_LENGTH));
     });
 });

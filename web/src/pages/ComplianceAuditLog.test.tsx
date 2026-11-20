@@ -6,10 +6,11 @@
 import React from "react";
 import fs from "fs";
 import path from "path";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ComplianceAuditLog, { auditDetailLines, eventTypeOptions } from "./ComplianceAuditLog";
 import { COMPLIANCE_LISTING_PAGE_SIZE } from "../services/ComplianceService";
+import { appCache } from "../services/appCache";
 
 jest.mock("../services/ComplianceService", () => ({
     ...jest.requireActual("../services/ComplianceService"),
@@ -23,6 +24,12 @@ jest.mock("../features/orchestration/permissions/useAllowedRoutes", () => ({
         loading: false,
         can: (method: string, path: string) => mockAllowed.includes(`${method} ${path}`),
     }),
+}));
+
+// The API's web-route decision for the Audit Log Search page.
+let mockSearchPageAllowed = false;
+jest.mock("../hooks/useWebRouteAllowed", () => ({
+    useWebRouteAllowed: () => mockSearchPageAllowed,
 }));
 
 const service = () =>
@@ -303,6 +310,56 @@ describe("ComplianceAuditLog asset links", () => {
             "#/databases/db1/assets/asset-e1"
         );
     });
+    it("shows an entry of a deleted database's history as text, since no asset page opens", async () => {
+        mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            {
+                entries: [{ ...entry("e1", "someone"), databaseId: "db1#deleted" }],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceAuditLog />);
+        const asset = await screen.findByText("asset-e1");
+        expect(asset.closest("a")).toBeNull();
+    });
+
+    it("encodes the database id in the asset link", async () => {
+        mockAllowed = ["GET /database/{databaseId}/assets/{assetId}"];
+        service().fetchAuditLog.mockResolvedValue([
+            true,
+            {
+                entries: [{ ...entry("e1", "someone"), databaseId: "db 1" }],
+                nextToken: undefined,
+            },
+        ]);
+        render(<ComplianceAuditLog />);
+        expect(await screen.findByRole("link", { name: "asset-e1" })).toHaveAttribute(
+            "href",
+            "#/databases/db%201/assets/asset-e1"
+        );
+    });
+});
+
+describe("ComplianceAuditLog asset ID filter", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        service().fetchAuditLog.mockResolvedValue([true, { entries: [], nextToken: undefined }]);
+    });
+    afterEach(() => window.history.replaceState(null, "", "/"));
+
+    it("shows the asset ID of the URL after the URL changes", async () => {
+        window.history.replaceState(null, "", "/#/compliance/audit?databaseId=db1&assetId=a1");
+        render(<ComplianceAuditLog />);
+        const box = await screen.findByLabelText(/Filter by .* ID/);
+        expect(box).toHaveValue("a1");
+
+        act(() => {
+            window.history.pushState(null, "", "/#/compliance/audit?databaseId=db1");
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+        });
+        await waitFor(() => expect(screen.getByLabelText(/Filter by .* ID/)).toHaveValue(""));
+    });
 });
 
 describe("ComplianceAuditLog details", () => {
@@ -343,5 +400,35 @@ describe("ComplianceAuditLog details", () => {
         render(<ComplianceAuditLog />);
         expect(await screen.findByText("Legacy part", { exact: false })).toBeInTheDocument();
         expect(screen.queryByText('{"reason":"Legacy part"}')).not.toBeInTheDocument();
+    });
+});
+
+describe("ComplianceAuditLog link to Audit Log Search", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        window.history.replaceState(null, "", "/");
+        service().fetchAuditLog.mockResolvedValue([true, { entries: [], nextToken: undefined }]);
+    });
+
+    it("is hidden when the deployment switched Audit Log Search off, even if the route is allowed", async () => {
+        appCache.setItem("config", { featuresEnabled: [] });
+        mockSearchPageAllowed = true;
+        render(<ComplianceAuditLog />);
+        await waitFor(() => expect(service().fetchAuditLog).toHaveBeenCalled());
+        expect(screen.queryByRole("link", { name: "Audit Log Search" })).toBeNull();
+    });
+
+    it("is offered only when the web-route decision allows the search page", async () => {
+        appCache.setItem("config", { featuresEnabled: ["AUDITLOGSEARCH"] });
+        mockSearchPageAllowed = false;
+        const { unmount } = render(<ComplianceAuditLog />);
+        await waitFor(() => expect(service().fetchAuditLog).toHaveBeenCalled());
+        expect(screen.queryByRole("link", { name: "Audit Log Search" })).toBeNull();
+        unmount();
+
+        mockSearchPageAllowed = true;
+        render(<ComplianceAuditLog />);
+        const link = await screen.findByRole("link", { name: "Audit Log Search" });
+        expect(link).toHaveAttribute("href", "#/auth/audit-log-search/");
     });
 });

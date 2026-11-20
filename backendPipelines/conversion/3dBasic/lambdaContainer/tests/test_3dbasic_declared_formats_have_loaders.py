@@ -8,7 +8,7 @@ trimesh keeps its XML- and COLLADA-backed formats behind optional dependencies a
 ``ExceptionWrapper`` in place of the loader when they are absent, so a declared format whose dependency
 is missing is not a startup error -- it is a run that fails at the load, after the file has been
 downloaded. ``requirements.txt`` installs neither ``pycollada`` (COLLADA) nor ``lxml`` + ``networkx``
-(3MF, XAML, 3DXML), and ``poetry.lock`` resolves this container to exactly aws-lambda-powertools,
+(3MF, XAML, 3DXML), and ``uv.lock`` resolves this container to exactly aws-lambda-powertools,
 jmespath, numpy, pillow, trimesh and typing-extensions -- lxml, networkx and pycollada appear there only
 inside trimesh's optional ``easy`` extra.
 
@@ -156,6 +156,11 @@ def _pipeline_allow():
         return json.load(handle)["systemConfig"]["inputFileFilters"]["allow"]
 
 
+# Formats this container reads and writes with its own code rather than through a trimesh loader or
+# exporter: USD (usd_io.py, on usd-core), FBX (the Assimp tool) and STEP (cascadio, opt-in).
+_HANDLED_WITHOUT_TRIMESH = ("usd", "usda", "usdc", "usdz", "fbx", "step", "stp")
+
+
 def _format_key(pattern):
     """`*.3mf` / `.3mf` -> `3mf`, the key trimesh registers a loader under."""
     return pattern.lower().lstrip("*").lstrip(".")
@@ -168,13 +173,12 @@ def registries():
 
 @pytest.mark.unit
 class TestTheDependencySetIsTheOneThisTestAssumes:
-    def test_the_optional_format_dependencies_are_absent_from_requirements(self):
-        # The premise. If a later change installs them, the simulation empties and the guard below
-        # relaxes on its own rather than reporting a format as unloadable that now loads.
-        assert _simulated_absent(), (
-            "requirements.txt now installs every optional format dependency; nothing is simulated "
-            "away and the assertions below no longer describe the image")
-        assert "trimesh" in _requirement_names()
+    def test_the_optional_format_dependencies_are_installed_by_requirements(self):
+        # DAE (pycollada) and 3MF (lxml, networkx) are accepted formats, so the image installs the
+        # packages trimesh gates their loaders on. With all of them installed nothing is simulated
+        # away; removing one makes the guard below report the formats it gates as unloadable.
+        assert _simulated_absent() == {}, _simulated_absent()
+        assert {"trimesh", "usd-core", "pycollada", "lxml", "networkx"} <= _requirement_names()
 
     def test_the_probe_reports_the_formats_that_need_no_optional_dependency(self, registries):
         # The positive control for every absence assertion in this file.
@@ -193,14 +197,16 @@ class TestTheDependencySetIsTheOneThisTestAssumes:
 class TestEveryDeclaredFormatCanBeLoaded:
     def test_every_extension_in_the_bundle_filter_has_a_loader(self, registries):
         offenders = [pattern for pattern in _pipeline_allow()
-                     if _format_key(pattern) not in registries["loaders"]]
+                     if _format_key(pattern) not in registries["loaders"]
+                     and _format_key(pattern) not in _HANDLED_WITHOUT_TRIMESH]
         assert offenders == [], (
             f"declared in inputFileFilters.allow but trimesh has no loader for them with this "
             f"container's dependencies: {offenders}")
 
     def test_every_accepted_input_format_has_a_loader(self, registries):
         offenders = [extension for extension in sorted(_declared_formats("SUPPORTED_INPUT_FORMATS"))
-                     if _format_key(extension) not in registries["loaders"]]
+                     if _format_key(extension) not in registries["loaders"]
+                     and _format_key(extension) not in _HANDLED_WITHOUT_TRIMESH]
         assert offenders == [], offenders
 
 
@@ -210,16 +216,24 @@ class TestEveryOfferedTargetCanBeWritten:
         # Loading a format is not the same as writing it, and the requested output type is checked
         # against this set -- so an unwritable target is accepted at the gate and fails at the export.
         offenders = [extension for extension in sorted(_declared_formats("SUPPORTED_OUTPUT_FORMATS"))
-                     if _format_key(extension) not in registries["exporters"]]
+                     if _format_key(extension) not in registries["exporters"]
+                     and _format_key(extension) not in _HANDLED_WITHOUT_TRIMESH]
         assert offenders == [], offenders
 
     def test_every_template_target_has_an_exporter(self, registries):
         templates = sorted(name for name in os.listdir(os.path.join(_SCHEMA_ROOT, "templates"))
                            if name.endswith(".json"))
         # Asserted in-band: a listing that matched nothing would leave this test checking no template.
-        assert len(templates) == 5, templates
+        assert len(templates) == 7, templates
         for name in templates:
             with open(os.path.join(_SCHEMA_ROOT, "templates", name), encoding="utf-8") as handle:
                 template = json.load(handle)
-            output_type = json.loads(template["configBody"])["outputType"]
-            assert _format_key(output_type) in registries["exporters"], (name, output_type)
+            body = json.loads(template["configBody"])
+            output_types = [body["outputType"]]
+            if body["outputType"].startswith("{{"):
+                tag = body["outputType"].strip("{}")
+                output_types = next(entry["enumValues"] for entry in template["tagSchema"]
+                                    if entry["tagKey"] == tag)
+            for output_type in output_types:
+                assert (_format_key(output_type) in registries["exporters"]
+                        or _format_key(output_type) in _HANDLED_WITHOUT_TRIMESH), (name, output_type)

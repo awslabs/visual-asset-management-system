@@ -16,7 +16,7 @@ jest.mock("./apiClient", () => ({
     apiClient: { get: jest.fn(), post: jest.fn(), put: jest.fn(), del: jest.fn() },
 }));
 
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, NETWORK_FAILURE_MESSAGE } from "./apiClient";
 import {
     approveCascade,
     bindSchemaToAsset,
@@ -285,7 +285,21 @@ describe("a compliance call reads the API's answer, not its message text (D188)"
         "%s: a refused request (non-2xx) reads as a failure with the API's message",
         async (_name, entry) => {
             mocked(entry.method).mockRejectedValue(new ApiError("Not Authorized", 403));
-            expect(await entry.call()).toEqual([false, "Not Authorized"]);
+            // A read may add the status after the message (getDatabaseBindings).
+            expect((await entry.call()).slice(0, 2)).toEqual([false, "Not Authorized"]);
+        }
+    );
+
+    it("getDatabaseBindings: a refused read carries its status", async () => {
+        mocked("get").mockRejectedValue(new ApiError("Not Authorized", 403));
+        expect(await getDatabaseBindings("db1")).toEqual([false, "Not Authorized", 403]);
+    });
+
+    it.each(CALLS.map((entry) => [entry.name, entry]))(
+        "%s: a request that got no response reads as a failure with the network message",
+        async (_name, entry) => {
+            mocked(entry.method).mockRejectedValue(new TypeError("Failed to fetch"));
+            expect((await entry.call()).slice(0, 2)).toEqual([false, NETWORK_FAILURE_MESSAGE]);
         }
     );
 });

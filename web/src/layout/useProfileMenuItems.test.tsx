@@ -120,28 +120,43 @@ describe("useProfileMenuItems", () => {
             window.location.hash = "";
         });
 
-        it("shows the page the user is on as checked, matching on the path and ignoring the query", async () => {
+        it("marks the page the user is on as the current page, and keeps it a link", async () => {
             allowRoutes("/auth/api-keys");
             window.location.hash = "#/auth/api-keys/?mode=user";
             const { result } = renderHook(() => useProfileMenuItems());
             await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
 
             const [item] = pageItems(result.current as any[]);
-            expect(item).toMatchObject({
+            expect(item).toEqual({
                 id: "page:#/auth/api-keys/?mode=user",
-                itemType: "checkbox",
-                checked: true,
+                text: "API Key Management",
+                href: "#/auth/api-keys/?mode=user",
+                labelTag: "Current page",
+                ariaLabel: "API Key Management, current page",
             });
-            // A checkbox item takes no href; App.tsx follows it through onItemClick.
-            expect(item.href).toBeUndefined();
+            // Not a toggle: nothing is announced as a checked checkbox.
+            expect(item.itemType).toBeUndefined();
+            expect(item.checked).toBeUndefined();
         });
 
-        it("matches a path without the trailing slash or query", async () => {
+        it("matches a path without the trailing slash", async () => {
             allowRoutes("/auth/api-keys");
-            window.location.hash = "#/auth/api-keys";
+            window.location.hash = "#/auth/api-keys?mode=user";
             const { result } = renderHook(() => useProfileMenuItems());
             await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
-            expect(pageItems(result.current as any[])[0].checked).toBe(true);
+            expect(pageItems(result.current as any[])[0].labelTag).toBe("Current page");
+        });
+
+        it("does not mark API Key Management on the admin view of the same page", async () => {
+            allowRoutes("/auth/api-keys");
+            window.location.hash = "#/auth/api-keys/?mode=admin";
+            const { result } = renderHook(() => useProfileMenuItems());
+            await waitFor(() => expect(pageItems(result.current as any[])).toHaveLength(1));
+            expect(pageItems(result.current as any[])[0]).toEqual({
+                id: "page:#/auth/api-keys/?mode=user",
+                text: "API Key Management",
+                href: "#/auth/api-keys/?mode=user",
+            });
         });
 
         it("leaves the page a link while the user is elsewhere, and updates on hashchange", async () => {
@@ -159,30 +174,34 @@ describe("useProfileMenuItems", () => {
                 window.location.hash = "#/auth/api-keys/?mode=user";
                 window.dispatchEvent(new HashChangeEvent("hashchange"));
             });
-            await waitFor(() => expect(pageItems(result.current as any[])[0].checked).toBe(true));
+            await waitFor(() =>
+                expect(pageItems(result.current as any[])[0].labelTag).toBe("Current page")
+            );
 
             act(() => {
                 window.location.hash = "#/pipelines/";
                 window.dispatchEvent(new HashChangeEvent("hashchange"));
             });
             await waitFor(() =>
-                expect(pageItems(result.current as any[])[0].checked).toBeUndefined()
+                expect(pageItems(result.current as any[])[0].labelTag).toBeUndefined()
             );
         });
 
         it("marks My Download Queue on its page and leaves API Key Management a link (combined: both profile entries)", () => {
             const entries = entriesFor("profile", ["ZIPDOWNLOADS"]);
-            const section = (path: string) => (toMenuItems(entries, path)[0] as any).items as any[];
-            const onQueue = section("/zipdownloads");
+            const section = (hash: string) => (toMenuItems(entries, hash)[0] as any).items as any[];
+            const onQueue = section("#/zipdownloads/");
             expect(onQueue.find((i) => i.text === "My Download Queue")).toMatchObject({
-                itemType: "checkbox",
-                checked: true,
+                labelTag: "Current page",
+                href: "#/zipdownloads/",
             });
-            expect(onQueue.find((i) => i.text === "API Key Management").href).toBe(
-                "#/auth/api-keys/?mode=user"
-            );
-            const elsewhere = section("/databases");
-            expect(elsewhere.every((i) => !i.checked && i.href)).toBe(true);
+            expect(onQueue.find((i) => i.text === "API Key Management")).toEqual({
+                id: "page:#/auth/api-keys/?mode=user",
+                text: "API Key Management",
+                href: "#/auth/api-keys/?mode=user",
+            });
+            const elsewhere = section("#/databases/");
+            expect(elsewhere.every((i) => !i.labelTag && i.href)).toBe(true);
         });
 
         it("never marks Sign out", async () => {

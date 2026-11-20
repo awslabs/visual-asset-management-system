@@ -247,15 +247,27 @@ class FakeEdhClient:
 
 
 class FakeInstanceTypesEc2:
-    """Amazon EC2's DescribeInstanceTypes as the workstation service reads it: answers the ``instance-type`` filter
+    """Amazon EC2 as the workstation service reads it. DescribeInstanceTypes answers the ``instance-type`` filter
     from ``records`` (instance type -> DescribeInstanceTypes record), in the order the filter names them, at most
-    ``page_size`` records a page with a NextToken for the rest, or raises ``failure``. Records every request."""
+    ``page_size`` records a page with a NextToken for the rest, or raises ``failure``. DescribeInstances answers from
+    ``instances`` (instance id -> DescribeInstances instance record), or raises ``instances_failure``. Records every
+    request."""
 
-    def __init__(self, records=None, failure=None, page_size=100):
+    def __init__(self, records=None, failure=None, page_size=100, instances=None, instances_failure=None):
         self.records = dict(records or {})
         self.failure = failure
         self.page_size = page_size
+        self.instances = dict(instances or {})
+        self.instances_failure = instances_failure
         self.requests = []
+        self.instance_requests = []
+
+    def describe_instances(self, **kwargs):
+        self.instance_requests.append(kwargs)
+        if self.instances_failure is not None:
+            raise self.instances_failure
+        found = [self.instances[i] for i in kwargs.get("InstanceIds", []) if i in self.instances]
+        return {"Reservations": [{"Instances": found}] if found else []}
 
     def describe_instance_types(self, **kwargs):
         self.requests.append(kwargs)

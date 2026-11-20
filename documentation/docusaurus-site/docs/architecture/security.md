@@ -243,7 +243,8 @@ VAMS uses the Casbin policy engine to enforce fine-grained attribute-based acces
 flowchart TD
     REQ["Incoming Request"] --> AUTH["Custom Lambda Authorizer"]
     AUTH -->|Valid JWT| HANDLER["Lambda Handler"]
-    AUTH -->|Invalid| DENY1["403 Forbidden"]
+    AUTH -->|Credential not accepted| DENY0["401 Unauthorized"]
+    AUTH -->|IP not allowed or user has no roles| DENY1["403 Forbidden"]
 
     HANDLER --> CLAIMS["Extract User Claims + Roles"]
     CLAIMS --> T1{"Tier 1: API Route Auth"}
@@ -303,6 +304,12 @@ A pipeline's `name` and `pipelineExecutionType` are stored structurally on the p
 (`pipelineName` and `executionConfig.executionType`) and are surfaced as these flat fields on the Tier 2
 object before enforcement, so a constraint on either one evaluates against the real value.
 :::
+
+### Audit log access
+
+Audit log search authorizes twice: the `/audit` route, then the `auditLog` object with the `auditLogGroup` field once per requested log group. A refused or unknown group returns one generic `403`, and a handle that is not the caller's returns one generic `404`. The search function can read the audit log groups and nothing more: no role holds an action that modifies or deletes audit records.
+
+The free-text terms an auditor types into a search are restricted-charset text (letters, digits and a few punctuation marks, at most 128 characters each). The search must apply them again to every page, so they are stored in the search's handle row in the KMS-encrypted `AuditLogQueriesStorageTable`, readable only by the search function. The row expires `app.auditLogging.search.handleRetentionMinutes` (default 60) after its last use, a row past its expiry is treated as not found before DynamoDB deletes it, and the terms are removed as soon as the search is stopped, fails, times out or its export is complete. Audit records and function logs of the search hold only the term count, total length and a SHA-256 digest. Do not put secrets in search terms; the terms are not redacted in the handle row.
 
 ### MFA-Aware Roles
 

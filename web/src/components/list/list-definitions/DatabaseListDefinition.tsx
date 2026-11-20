@@ -5,7 +5,8 @@
 
 import React from "react";
 import ListDefinition from "./types/ListDefinition";
-import { Box, Link } from "@cloudscape-design/components";
+import { Link } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
 import ColumnDefinition from "./types/ColumnDefinition";
 import Synonyms from "../../../synonyms";
 

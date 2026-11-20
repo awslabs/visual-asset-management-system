@@ -82,6 +82,44 @@ jobs:
             - name: eslint
               run: npm run lint
 
+    # Lock check and vulnerability audit of every Python project that has a uv.lock. The script finds
+    # the projects with `git ls-files`, so a new uv.lock is audited without editing this job, and
+    # infra/test/ci/pythonDependencyLocks.test.ts fails a new Python dependency set that has neither a
+    # uv.lock nor an exemption. Per project: `uv lock --check`, regeneration of each committed export
+    # (requirements.txt) with a diff, and pip-audit of the exports. Any advisory not on
+    # .github/python-audit-allowlist.json fails the job, as does an allowlist entry with no reason, a
+    # past review date or no matching finding, and an advisory service that cannot be reached. One job
+    # loops over the projects (no matrix): each check takes seconds, and one job writes one summary.
+    python-dependency-audit:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python Version
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.13
+
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the audit resolves nothing new.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            - name: Check and audit every uv.lock
+              env:
+                  PIP_AUDIT_VERSION: "2.10.1"
+              run: python .github/scripts/python_dependency_audit.py
+
     # Security scan of the source tree. Findings are report-only; a scan that does not run fails the
     # job. It runs before any dependency install, so it scans the checked-out source only.
     ash:
@@ -264,7 +302,7 @@ jobs:
                   path: ash-output/
                   retention-days: 7
 
-    # The VamsCLI suite. Its build backend is setuptools, so no Poetry install is needed.
+    # The VamsCLI suite. Its build backend is setuptools, so pip installs it directly.
     vamscli-test:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest
@@ -290,6 +328,13 @@ jobs:
               working-directory: tools/VamsCLI
               run: |
                   pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
+
+            - name: Run permissionsSetup pytest tests
+              run: pytest -q --tb=short -p no:cacheprovider tools/permissionsSetup/tests
+
+            - name: Run Isaac Sim connector pytest tests
+              working-directory: tools/ExternalIntegrations/isaacsim_vams_integration
+              run: pytest -q --tb=short
 
             - name: Upload VamsCLI test results
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
@@ -350,6 +395,41 @@ jobs:
                   if-no-files-found: error
                   include-hidden-files: true
                   retention-days: 1
+
+    # Builds the documentation site on every pull request and on pushes to development and
+    # development-*, without deploying it. The site fails its build on a broken link or anchor
+    # (docusaurus.config.ts), and docs.yml builds it only on pushes to main and release/**, so without
+    # this job a broken link merged on development would first fail at release time. Pushes to main
+    # and release/** skip it: docs.yml builds the site there.
+    docs-build:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) && !(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+                  cache-dependency-path: documentation/docusaurus-site/package-lock.json
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci documentation site
+              working-directory: documentation/docusaurus-site
+              run: npm ci
+
+            - name: Build documentation site
+              working-directory: documentation/docusaurus-site
+              run: npm run build
 
     # One TypeScript type check over all of infra (lib, bin, config, test). The infra Jest suite
     # compiles transpile-only (infra/tsconfig.json sets isolatedModules), so a type error fails here and
@@ -544,11 +624,11 @@ jobs:
     #
     # `backendPipelines` runs in the pipelines-test job below, not here.
     #
-    # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
-    # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
-    # because it is exported from a lock resolved under that constraint. Under an older interpreter
-    # every marker evaluates FALSE, so `pip install -r requirements-dev.txt` installs nothing,
-    # exits 0, and pytest then fails at collection.
+    # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4").
+    # requirements-dev.txt is the pinned export of backend/uv.lock (dev group included), and pip
+    # installs that file so the suite runs on exactly the versions backend/tests/
+    # test_base_layer_dependency_parity.py compares with the base layer. The lock is resolved for
+    # Python 3.13 and newer, so keep setup-python on 3.13.
     backend-test:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest
@@ -631,6 +711,39 @@ jobs:
                   name: pipelines-test-logs-${{ matrix.group }}
                   path: ${{ runner.temp }}/pipeline-tests/logs/
                   retention-days: 7
+
+    # Golden round trip of the 3D Basic Conversion image: builds the container exactly as CDK does,
+    # runs it under the Lambda runtime interface emulator against an S3 stand-in (moto), and converts a
+    # generated fixture of every accepted input format to every written output format, checking triangle
+    # and point counts, bounding box and textures. The unit suite in pipelines-test stubs or bypasses the
+    # image; this job is what proves the image's own dependency set converts. The fixtures are generated
+    # by tests/test_3dbasic_golden_round_trip.py, so nothing is downloaded. Python 3.12 matches the image.
+    conversion-3dbasic-golden:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.12.16
+
+            # The image's own locked packages (to generate fixtures and load results with the same trimesh
+            # the image ships), then the test tools that are not part of the image.
+            - name: Install the test environment
+              run: |
+                  python -m pip install --require-hashes -r backendPipelines/conversion/3dBasic/lambdaContainer/requirements.txt
+                  python -m pip install pytest==9.2.0 boto3==1.44.5 "moto[server,s3]==5.2.5"
+
+            - name: Build the image and run the golden round trip
+              run: bash backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh
 
     # The VamsMCP suite. The server imports vamscli, which is not on PyPI, so VamsCLI is installed from
     # its directory first. The mcp SDK needs Pydantic v2, so this suite has a job of its own rather

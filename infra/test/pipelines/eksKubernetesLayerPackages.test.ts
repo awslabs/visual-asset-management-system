@@ -16,9 +16,9 @@
  *
  * Three claims are asserted:
  *
- *   1. the Kubernetes layer's `pyproject.toml`, `poetry.lock` and exported `requirements.txt` name none
- *      of the SDK packages, so the base layer is the function's only SDK (the layer build re-exports
- *      the lock, so the lock is what ships);
+ *   1. the Kubernetes layer's `pyproject.toml`, `uv.lock` and committed `requirements.txt` name none
+ *      of the SDK packages, so the base layer is the function's only SDK (the layer build installs the
+ *      committed export of the lock, so the lock is what ships);
  *   2. every other package both layers' locks carry is locked at the same version;
  *   3. in the synthesized template, every Lambda function that lists the Kubernetes layer also lists
  *      the base layer, which (1) depends on.
@@ -37,7 +37,7 @@ const KUBERNETES_LAYER_DIR = path.join(
     VAMS_ROOT,
     "backendPipelines/multi/rapidPipelineEKS/lambdaLayer"
 );
-const BASE_LAYER_LOCK = path.join(VAMS_ROOT, "backend/lambdaLayers/base/poetry.lock");
+const BASE_LAYER_LOCK = path.join(VAMS_ROOT, "backend/lambdaLayers/base/uv.lock");
 const SDK_PACKAGES = ["boto3", "botocore", "s3transfer"];
 
 /** PEP 503 normalized project name, so `typing_extensions` and `typing-extensions` match. */
@@ -46,7 +46,7 @@ const normalize = (name: string): string => name.replace(/[-_.]+/g, "-").toLower
 const readLayerFile = (file: string): string =>
     fs.readFileSync(path.join(KUBERNETES_LAYER_DIR, file), "utf8");
 
-/** {normalized name: version} for every `[[package]]` table in a poetry.lock. */
+/** {normalized name: version} for every `[[package]]` table in a uv.lock. */
 function lockedVersions(lock: string): Map<string, string> {
     const versions = new Map<string, string>();
     for (const m of lock.matchAll(
@@ -57,7 +57,7 @@ function lockedVersions(lock: string): Map<string, string> {
     return versions;
 }
 
-/** Every `name==version` pin in a Poetry-exported requirements file. */
+/** Every `name==version` pin in a uv-exported requirements file. */
 function pinnedPackages(requirements: string): string[] {
     return requirements
         .split(/\r?\n/)
@@ -66,17 +66,23 @@ function pinnedPackages(requirements: string): string[] {
         .map((m) => normalize(m[1]));
 }
 
-/** The keys of `[tool.poetry.dependencies]` in a pyproject.toml. */
+/** {normalized name: version} for every `name==version` pin in an exported requirements file. */
+function pinnedVersions(requirements: string): Map<string, string> {
+    const versions = new Map<string, string>();
+    for (const line of requirements.split(/\r?\n/)) {
+        const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;]+)/.exec(line.trim());
+        if (m) versions.set(normalize(m[1]), m[2]);
+    }
+    return versions;
+}
+
+/** The package names in the `dependencies` array of a pyproject.toml `[project]` table. */
 function declaredDependencies(pyproject: string): string[] {
-    const section = /^\[tool\.poetry\.dependencies\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(
-        pyproject
-    );
+    const section = /^dependencies\s*=\s*\[([\s\S]*?)^\]/m.exec(pyproject);
     if (!section) return [];
-    return section[1]
-        .split(/\r?\n/)
-        .map((line) => /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*=/.exec(line))
-        .filter((m): m is RegExpExecArray => m !== null)
-        .map((m) => normalize(m[1]));
+    return Array.from(section[1].matchAll(/^\s*"([A-Za-z0-9][A-Za-z0-9._-]*)/gm)).map((m) =>
+        normalize(m[1])
+    );
 }
 
 /** [name, Kubernetes layer version, base layer version] for each shared package at different versions. */
@@ -95,7 +101,12 @@ function versionDrift(
 }
 
 describe("RapidPipeline EKS Kubernetes layer: packages it shares with the base layer", () => {
-    const kubernetesLock = (): Map<string, string> => lockedVersions(readLayerFile("poetry.lock"));
+    // uv.lock also lists the project itself (the layer's own name), which the export leaves out.
+    const kubernetesLock = (): Map<string, string> => {
+        const locked = lockedVersions(readLayerFile("uv.lock"));
+        locked.delete("kubernetes-layer");
+        return locked;
+    };
     const baseLock = (): Map<string, string> =>
         lockedVersions(fs.readFileSync(BASE_LAYER_LOCK, "utf8"));
 
@@ -115,7 +126,7 @@ describe("RapidPipeline EKS Kubernetes layer: packages it shares with the base l
         expect(SDK_PACKAGES.filter((p) => declared.includes(p))).toEqual([]);
     });
 
-    test("poetry.lock locks no AWS SDK package", () => {
+    test("uv.lock locks no AWS SDK package", () => {
         const locked = kubernetesLock();
         expect(SDK_PACKAGES.filter((p) => locked.has(p))).toEqual([]);
     });
@@ -123,6 +134,17 @@ describe("RapidPipeline EKS Kubernetes layer: packages it shares with the base l
     test("the exported requirements.txt pins no AWS SDK package", () => {
         const pinned = pinnedPackages(readLayerFile("requirements.txt"));
         expect(SDK_PACKAGES.filter((p) => pinned.includes(p))).toEqual([]);
+    });
+
+    // The layer bundling command installs the committed requirements.txt and never re-exports the lock,
+    // so a stale export would ship silently.
+    test("the committed requirements.txt pins exactly the versions uv.lock locks", () => {
+        const exported = pinnedVersions(readLayerFile("requirements.txt"));
+        const locked = kubernetesLock();
+        // Control: both sides are read, so an empty comparison cannot pass.
+        expect(exported.size).toBeGreaterThan(5);
+        expect(exported.get("kubernetes")).toBeDefined();
+        expect(Array.from(exported.entries()).sort()).toEqual(Array.from(locked.entries()).sort());
     });
 
     test("the comparison reports a drifted pin (control)", () => {
@@ -143,8 +165,8 @@ describe("RapidPipeline EKS Kubernetes layer: packages it shares with the base l
 
     test("every package both layers lock is at the base layer's version", () => {
         // On a failure, re-lock the Kubernetes layer to the base layer's version: add a temporary
-        // exact constraint to its pyproject.toml, `poetry lock`, remove it, `poetry lock` again, and
-        // re-export (backend/CLAUDE.md "Updating Python Dependencies").
+        // exact constraint to its pyproject.toml, `uv lock`, remove it, `uv lock` again, and
+        // re-export (backend/CLAUDE.md "Updating Python Dependencies"). The base layer's lock is a uv.lock.
         expect(versionDrift(kubernetesLock(), baseLock())).toEqual([]);
     });
 });

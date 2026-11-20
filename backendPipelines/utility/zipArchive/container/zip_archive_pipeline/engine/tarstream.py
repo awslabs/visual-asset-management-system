@@ -12,6 +12,8 @@ through ``gzip.GzipFile`` for tar.gz); neither ever seeks while writing.
 import gzip as _gzip
 import tarfile
 
+from .zipstream import check_member_name
+
 
 class _ChunkReader:
     """A read()-able view over an iterable of byte chunks, for ``tarfile.addfile``."""
@@ -92,10 +94,7 @@ class TarStreamWriter:
         return self._count
 
     def _check(self, name):
-        if not name or name.startswith("/") or "\\" in name or "\x00" in name:
-            raise ValueError("archive member names are relative POSIX paths")
-        if any(part in ("..", ".") for part in name.rstrip("/").split("/")):
-            raise ValueError("archive member names must not contain '.' or '..' segments")
+        check_member_name(name)
         if name in self._names:
             raise ValueError("duplicate archive member name")
         self._names.add(name)

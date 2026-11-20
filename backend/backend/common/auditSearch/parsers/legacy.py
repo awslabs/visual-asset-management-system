@@ -4,7 +4,7 @@
 """
 The legacy adapters: records written without ``auditVersion``.
 
-These are the records of v2.6.x (``main``) and of development before the record contract: the same
+These are the records written before the record contract: the same
 bracketed prefix and a payload whose keys depend on the writing function. One adapter per prefix
 family, named by ``AuditLogGroup.legacy_parser``:
 
@@ -54,6 +54,10 @@ _CONSUMED_KEYS = frozenset({
     "sessionId", "targetDatabaseId", "targetAssetId", "targetFilePath", "schemaName", "cascadeId",
     "evaluationId",
 })
+
+# The label and entity type of a permission-probe summary row (see :func:`authorization`).
+PROBE_SUMMARY_ACTION = "permission probe (summary)"
+PROBE_SUMMARY_ENTITY_TYPE = "auditLog"
 
 _HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
@@ -108,6 +112,16 @@ def authorization(record: Record, group: AuditLogGroup, timestamp: Any) -> Audit
     reason = text_scalar(payload.get("failureReason"), 128)
     if reason:
         row.reason = reason
+    obj = payload.get("obj")
+    if row.probe and isinstance(obj, dict) and obj.get("object__type") == "auditLog":
+        # The summary denial of an audit search or group listing: its object names the groups the caller
+        # may NOT search (and so their number), and its action is the check's own. A viewer must learn
+        # neither, so the row gets a generic label and entity and the object loses the group keys.
+        row.action = PROBE_SUMMARY_ACTION
+        row.entity = {"type": PROBE_SUMMARY_ENTITY_TYPE, "id": None}
+        rest = {key: value for key, value in payload.items() if key not in ("action", "obj")}
+        rest["obj"] = {"object__type": "auditLog"}
+        return _finish(row, rest)
     method = payload.get("action")
     if isinstance(method, str) and method.upper() in _HTTP_METHODS and "method" not in row.request:
         row.request["method"] = method.upper()

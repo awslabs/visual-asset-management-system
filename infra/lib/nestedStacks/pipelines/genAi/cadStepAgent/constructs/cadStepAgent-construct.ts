@@ -443,6 +443,10 @@ export class CadStepAgentConstruct extends Construct {
                         props.config.app.baseStackName,
                     // One STEP input, a handful of script attempts and their outputs; 40 GiB is ample.
                     ephemeralStorageGiB: 40,
+                    // The agent waits on model calls and runs one script at a time under an 8 GiB
+                    // address-space limit: 2 vCPU / 16 GiB.
+                    cpu: 2,
+                    memoryMiB: 16384,
                     logGroup: containerLogGroup,
                     environment: containerEnvironment,
                     // No ECS init process (`initProcessEnabled`): the image's own ENTRYPOINT is PID 1,

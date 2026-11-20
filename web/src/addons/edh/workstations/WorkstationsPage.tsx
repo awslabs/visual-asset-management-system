@@ -45,7 +45,6 @@ import WorkstationStatusBadge, {
 } from "../components/WorkstationStatusBadge";
 import CapacityDetail from "../components/CapacityDetail";
 import DeleteWorkstationDialog from "../components/DeleteWorkstationDialog";
-import NotEnabledPanel from "../components/NotEnabledPanel";
 import { useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useMinWidth } from "../components/useMinWidth";
@@ -56,6 +55,7 @@ import {
     useRemovedRowRef,
 } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
+import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     RecordCard,
     RecordCardFields,
@@ -275,13 +275,17 @@ const RowActions: React.FC<RowActionsProps> = ({
         row.state === "STOPPED" && row.edhState && row.edhState !== "stopped"
             ? `The workstation is still ${row.edhState}; it can be started once it has stopped.`
             : undefined;
+    // A workstation that has run which EDH reports in error (`connectionUnavailableReason`
+    // `DESKTOP_ERROR`, from the service): EDH's stop takes it in any state VAMS keeps, and its start
+    // only once EDH reports it stopped, so Stop is offered and Start is not, as the reason says.
+    const desktopError = row.connectionUnavailableReason === "DESKTOP_ERROR";
     // The menu offers only the one of Stop and Start that applies, and neither while the workstation
     // is being created, started or stopped (`activity`). A start EDH accepted and has not finished
     // after 30 minutes (`isStartStalled`) leaves the row CREATING with no activity; the service stops
     // it like an active one, so Stop is offered for it.
     const changing = !!row.activity;
-    const stoppable = !changing && (row.state === "ACTIVE" || isStartStalled(row));
-    const startable = !changing && row.state === "STOPPED";
+    const stoppable = !changing && (row.state === "ACTIVE" || isStartStalled(row) || desktopError);
+    const startable = !changing && row.state === "STOPPED" && !desktopError;
     const items: ContextMenuItem[] = [
         {
             label: "Stop",
@@ -353,6 +357,7 @@ const StatusCell: React.FC<{ row: WorkstationRecord }> = ({ row }) => (
             sessionId={row.sessionId}
             instanceType={row.instanceType}
             startFailure={row.startFailure}
+            connectionUnavailableReason={row.connectionUnavailableReason}
         />
         {(row.state === "ORPHANED" || row.lastError === "LEASE_EXPIRED") && (
             <span className="block text-xs text-text-secondary">
@@ -775,11 +780,13 @@ const WorkstationsBoard: React.FC<WorkstationsBoardProps> = ({ embedded = false 
                 </div>
             )}
 
+            {!loading && error && data && <RefreshFailedNotice error={error} />}
+
             {loading ? (
                 <div role="status" className="p-8 text-center text-text-secondary">
                     Loading workstations...
                 </div>
-            ) : error ? (
+            ) : error && !data ? (
                 <div role="alert" className="p-4 text-vams-error">
                     Error loading workstations: {toastErrorMessage(error)}
                 </div>
@@ -897,20 +904,12 @@ const WorkstationsAndSimulations: React.FC = () => {
 };
 
 /**
- * The web route is visible to anyone whose `web` constraints allow it (the seeded admin role allows
- * every route), while the API routes exist only where the add-on stack is deployed — so the page
- * gates itself on the feature flag and says so rather than failing every request.
+ * The route is mounted only where `EDH_WORKSTATIONS` is on (`addons/addonRoutes.tsx`), so a
+ * bookmarked URL on a deployment without the add-on shows "Page not found". The Simulations tab
+ * follows `EDH_CONTAINERS`.
  */
 const WorkstationsPage: React.FC = () => {
     const enabledFeatures = useFeaturesEnabled();
-    if (!enabledFeatures.includes(addonFeaturesEnabled.EDH_WORKSTATIONS)) {
-        return (
-            <div className="orchestration-root orchestration-page space-y-4 bg-surface min-h-full">
-                <h1 className="text-text-primary">Workstations</h1>
-                <NotEnabledPanel />
-            </div>
-        );
-    }
     if (!enabledFeatures.includes(addonFeaturesEnabled.EDH_CONTAINERS)) {
         return <WorkstationsBoard />;
     }

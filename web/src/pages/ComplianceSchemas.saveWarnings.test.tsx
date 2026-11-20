@@ -76,7 +76,7 @@ describe("the Schemas page after a save that returned warnings", () => {
     it("shows the missing-parent warning the server returned, word for word", async () => {
         // D150: decided by the API from what the caller may read; the page only shows it.
         const missingParent =
-            "The parent schema 'base-standard' was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.";
+            "The parent schema named in `extends` was not found as a vams-rules-v1 schema you may read. If it does not exist or is not vams-rules-v1, this schema is evaluated with its own rules only.";
         await createWith({
             message: "Schema 's1' registered as v1",
             schemaName: "s1",
@@ -98,8 +98,8 @@ describe("the Schemas page after a save that returned warnings", () => {
 describe("the Schemas page after a save refused for a pipeline rule", () => {
     beforeEach(() => jest.clearAllMocks());
 
-    it("keeps the editor open and names the rule whose workflow the caller may not run", async () => {
-        const refusal = "Not authorized to run the workflow of pipeline rule 'residual-bound'";
+    it("keeps the editor open and shows which rule's workflow the caller may not run", async () => {
+        const refusal = "Not authorized to run the workflow of pipeline rule rules[0]";
         service().createComplianceSchema.mockResolvedValue([false, refusal]);
         render(<ComplianceSchemas />);
         await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));

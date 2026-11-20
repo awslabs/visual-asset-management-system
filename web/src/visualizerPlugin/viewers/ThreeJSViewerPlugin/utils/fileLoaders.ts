@@ -9,7 +9,8 @@
  */
 
 import { createLoadingManager, isolatedUrlModifier } from "./assetDependencyResolver";
-import { checkUsdzSize, isUsdzBytes } from "./usdDependencies";
+import { checkZipSize, isUsdzBytes } from "./usdDependencies";
+import { isOcctNoGeometryError, loadOCCTFile } from "./occtLoader";
 
 export interface LoaderResult {
     object: any; // THREE.Object3D or THREE.Group
@@ -346,16 +347,23 @@ export async function load3DS(
 }
 
 /**
- * Load 3MF file
+ * Load a 3MF file. A 3MF is a zip package: its entry count and declared size are checked against
+ * ZIP_LIMITS before it is parsed, whatever its first bytes are, and it is not parsed when the
+ * bundle has no zip reader to check it with.
  */
 export async function load3MF(
     arrayBuffer: ArrayBuffer,
     fileName: string,
     ThreeMFLoader: any,
-    manager?: any
+    manager?: any,
+    unzipSync?: (data: Uint8Array, opts: any) => any
 ): Promise<LoaderResult> {
     return new Promise((resolve, reject) => {
         try {
+            if (!unzipSync) {
+                throw new Error("this viewer bundle cannot check the 3MF package's size");
+            }
+            checkZipSize(new Uint8Array(arrayBuffer), unzipSync, "3MF");
             const loader = new ThreeMFLoader(manager);
             const object = loader.parse(arrayBuffer);
             resolve({ object });
@@ -383,7 +391,7 @@ export async function loadUSD(
             }
             const bytes = new Uint8Array(arrayBuffer);
             if (isUsdzBytes(bytes) && unzipSync) {
-                checkUsdzSize(bytes, unzipSync);
+                checkZipSize(bytes, unzipSync);
             }
             const loader = new USDLoader(manager);
             loader.parse(
@@ -446,8 +454,6 @@ export async function loadFile(
 
         // Try to load with OCCT loader
         try {
-            const { loadOCCTFile } = await import("./occtLoader");
-
             // Create blob URL from arrayBuffer for OCCT loader
             const blob = new Blob([arrayBuffer]);
             const blobUrl = URL.createObjectURL(blob);
@@ -470,6 +476,11 @@ export async function loadFile(
                         `CAD format viewing is blocked by the Content Security Policy. The OpenCascade loader used for STEP, IGES and BREP files needs app.webUi.allowUnsafeEvalFeatures set to true in the deployment configuration.\n\n` +
                         `Please contact your administrator to enable CAD format support for this viewer.`
                 );
+            }
+            // A file with no drawable geometry already says what to do; the viewer recognizes it
+            // only without a prefix (#1734).
+            if (isOcctNoGeometryError(error?.message ?? "")) {
+                throw error;
             }
             throw new Error(`Failed to load CAD file: ${error.message || error}`);
         }
@@ -515,7 +526,7 @@ export async function loadFile(
         case "3ds":
             return load3DS(arrayBuffer, fileName, TDSLoader, loadingManager);
         case "3mf":
-            return load3MF(arrayBuffer, fileName, ThreeMFLoader, loadingManager);
+            return load3MF(arrayBuffer, fileName, ThreeMFLoader, loadingManager, fflate?.unzipSync);
         case "usd":
         case "usda":
         case "usdc":

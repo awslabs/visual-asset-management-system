@@ -1,9 +1,9 @@
 """The compliance tools.
 
-Two response shapes. The schema and pending-cascade listings return their WHOLE list in one
-response under a route-specific field with no ``message`` envelope and no continuation token
-(``paginate()`` would find zero rows and ``unwrap_message`` has nothing to unwrap). Every other
-list — the evaluation history, the two audit trails, the quarantine listing — is a real
+Two response shapes. The schema listing returns its WHOLE list in one response under a
+route-specific field with no ``message`` envelope and no continuation token (``paginate()`` would
+find zero rows and ``unwrap_message`` has nothing to unwrap). Every other list — the cascades, the
+evaluation history, the two audit trails, the quarantine listing — is a real
 ``maxItems`` / ``startingToken`` / ``NextToken`` page that reads its page size from ``maxItems``
 rather than ``pageSize``; the database overview and the bindings read are paged the same way but
 returned as the route's own page, because their summary fields describe the full set. Each is
@@ -1056,10 +1056,10 @@ def test_the_schema_save_docstring_names_the_run_rights_refusal(gated):
     assert "Not authorized to run the workflow of pipeline rule" in _docstring_of(
         "create_compliance_schema")
     client.api.create_compliance_schema.side_effect = PermissionError(
-        "Access forbidden. Not authorized to run the workflow of pipeline rule 'convert'")
+        "Access forbidden. Not authorized to run the workflow of pipeline rule rules[0]")
     result = srv.create_compliance_schema("s", schema_body={"schemaFormat": "vams-rules-v1",
                                                             "rules": {}})
-    assert "pipeline rule 'convert'" in str(result)
+    assert "pipeline rule rules[0]" in str(result)
 
 
 def test_the_history_tool_explains_an_evaluation_closed_without_a_verdict():

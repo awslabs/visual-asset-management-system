@@ -204,9 +204,6 @@ ALLOWED_SITES = {
     ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "process_metadata_file", "046a464f"):
         "`body.get('message')` reads the 200 response of the metadata service, whose model default is "
         "the fixed text 'Success'; it holds no request text",
-    ("models/common.py", "authorization_error", "75e5a70a"):
-        "`errorBody` is the generic response body the handler returns (a fixed message), "
-        "not the request",
     ("models/common.py", "internal_error", "7fee03a8"):
         "`errorBody` is the generic response body the handler returns (a fixed message), "
         "not the request",

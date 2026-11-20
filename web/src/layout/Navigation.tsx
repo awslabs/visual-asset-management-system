@@ -6,11 +6,15 @@
 import React, { useEffect, useMemo } from "react";
 import { useState } from "react";
 import { SideNavigation, SideNavigationProps, Spinner } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
+import SpaceBetween from "@cloudscape-design/components/space-between";
+import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { checkWebRoutesAllowed } from "../services/webRoutesCheck";
 import config from "../config";
 import { useFeaturesEnabled } from "../context/RuntimeConfigContext";
 import { allowedEntriesFor, webRouteChecksFor } from "./navigationRegistry";
+import { ALLOWED_API_ROUTES_CACHED_EVENT } from "../FedAuth/allowedApiRoutesCache";
 
 const navHeader: { href: string; logo?: { alt: string; src: string } } = {
     href: "#/",
@@ -62,6 +66,14 @@ export function Navigation({
     const [loading, setLoading] = useState(true);
     const [loadFailed, setLoadFailed] = useState(false);
     const [loadAttempt, setLoadAttempt] = useState(0);
+    // Render again when the auth flow caches the API allowed-routes listing, so a link gated on it
+    // (`requiresApiRoute`) appears as soon as the listing lands rather than on the next navigation.
+    const [, setListingTick] = useState(0);
+    useEffect(() => {
+        const onListingCached = () => setListingTick((tick) => tick + 1);
+        window.addEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+        return () => window.removeEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+    }, []);
 
     // Re-checked whenever the feature switches change (one arriving after mount adds links that were
     // never checked) or on Retry. A check that resolves after a newer one started is discarded.
@@ -95,6 +107,10 @@ export function Navigation({
     const navigationItems = allowedPaths
         ? allowedEntriesFor("side", allowedPaths, enabledFeatures)
         : [];
+    // Home is always listed, so the empty states below look at the pages beyond it.
+    const hasSidePages = navigationItems.some(
+        (item: any) => item.type !== "divider" && !(item.type === "link" && item.href === "#/")
+    );
     const hasProfilePages =
         allowedPaths !== null &&
         allowedEntriesFor("profile", allowedPaths, enabledFeatures).length > 0;
@@ -108,22 +124,23 @@ export function Navigation({
     return loading ? (
         <CenterSpinner />
     ) : loadFailed ? (
-        <div
-            style={{
-                padding: "20px",
-                textAlign: "center",
-                color: "var(--vams-text-secondary)",
-            }}
-        >
-            <div style={{ marginBottom: "10px", fontSize: "16px", fontWeight: "bold" }}>
-                Navigation could not be loaded
-            </div>
-            <div style={{ marginBottom: "10px", fontSize: "14px", lineHeight: "1.5" }}>
-                The check for which pages you can open did not complete.
-            </div>
-            <Button onClick={retryLoad}>Retry</Button>
-        </div>
-    ) : navigationItems.length === 0 && hasProfilePages ? (
+        // A status live region, so a screen reader is told the navigation failed to load.
+        <Box padding="l" textAlign="center">
+            <SpaceBetween size="s">
+                <div role="status">
+                    <SpaceBetween size="xs">
+                        <StatusIndicator type="error">
+                            Navigation could not be loaded
+                        </StatusIndicator>
+                        <Box variant="p" color="text-body-secondary">
+                            The check for which pages you can open did not complete.
+                        </Box>
+                    </SpaceBetween>
+                </div>
+                <Button onClick={retryLoad}>Retry</Button>
+            </SpaceBetween>
+        </Box>
+    ) : !hasSidePages && hasProfilePages ? (
         <div
             style={{
                 padding: "20px",
@@ -138,7 +155,7 @@ export function Navigation({
                 Open the menu with your user name in the top bar to reach them.
             </div>
         </div>
-    ) : navigationItems.length === 0 ? (
+    ) : !hasSidePages ? (
         <div
             style={{
                 padding: "20px",

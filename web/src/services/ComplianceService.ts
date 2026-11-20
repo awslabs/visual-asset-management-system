@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from "./apiClient";
+import { requestFailureMessage } from "./networkFailure";
 
 // --- Schema body (vams-rules-v1) ---
 
@@ -924,7 +925,7 @@ export const fetchComplianceSchemas = async (
         return [true, response.schemas || response.Items || []];
     } catch (error: any) {
         console.log("fetchComplianceSchemas error:", error);
-        return [false, error?.message || "Failed to fetch compliance schemas"];
+        return [false, requestFailureMessage(error, "Failed to fetch compliance schemas")];
     }
 };
 
@@ -951,7 +952,7 @@ export const fetchComplianceSchemaListing = async (): Promise<
         ];
     } catch (error: any) {
         console.log("fetchComplianceSchemaListing error:", error);
-        return [false, error?.message || "Failed to fetch compliance schemas"];
+        return [false, requestFailureMessage(error, "Failed to fetch compliance schemas")];
     }
 };
 
@@ -966,7 +967,7 @@ export const fetchComplianceSchema = async (
         return [true, response];
     } catch (error: any) {
         console.log("fetchComplianceSchema error:", error);
-        return [false, error?.message || "Failed to fetch compliance schema"];
+        return [false, requestFailureMessage(error, "Failed to fetch compliance schema")];
     }
 };
 
@@ -983,7 +984,7 @@ export const createComplianceSchema = async (
         return [true, response];
     } catch (error: any) {
         console.log("createComplianceSchema error:", error);
-        return [false, error?.message || "Failed to create compliance schema"];
+        return [false, requestFailureMessage(error, "Failed to create compliance schema")];
     }
 };
 
@@ -1001,7 +1002,7 @@ export const updateComplianceSchema = async (
         return [true, response];
     } catch (error: any) {
         console.log("updateComplianceSchema error:", error);
-        return [false, error?.message || "Failed to update compliance schema"];
+        return [false, requestFailureMessage(error, "Failed to update compliance schema")];
     }
 };
 
@@ -1021,7 +1022,7 @@ export const evaluateAssetCompliance = async (
         return [true, response];
     } catch (error: any) {
         console.log("evaluateAssetCompliance error:", error);
-        return [false, error?.message || "Failed to evaluate asset compliance"];
+        return [false, requestFailureMessage(error, "Failed to evaluate asset compliance")];
     }
 };
 
@@ -1080,7 +1081,7 @@ export const evaluateDatabaseCompliance = async (
         return [true, response];
     } catch (error: any) {
         console.log("evaluateDatabaseCompliance error:", error);
-        return [false, error?.message || "Failed to evaluate the assets"];
+        return [false, requestFailureMessage(error, "Failed to evaluate the assets")];
     }
 };
 
@@ -1099,7 +1100,7 @@ export const sweepSchema = async (
         return [true, response];
     } catch (error: any) {
         console.log("sweepSchema error:", error);
-        return [false, error?.message || "Failed to sweep schema"];
+        return [false, requestFailureMessage(error, "Failed to sweep schema")];
     }
 };
 
@@ -1124,7 +1125,7 @@ export const fetchEvaluationHistory = async (
         ];
     } catch (error: any) {
         console.log("fetchEvaluationHistory error:", error);
-        return [false, error?.message || "Failed to fetch evaluation history"];
+        return [false, requestFailureMessage(error, "Failed to fetch evaluation history")];
     }
 };
 
@@ -1140,7 +1141,7 @@ export const fetchComplianceState = async (
         return [true, response];
     } catch (error: any) {
         console.log("fetchComplianceState error:", error);
-        return [false, error?.message || "Failed to fetch compliance state"];
+        return [false, requestFailureMessage(error, "Failed to fetch compliance state")];
     }
 };
 
@@ -1210,7 +1211,10 @@ export const fetchDatabaseComplianceOverview = async (
         ];
     } catch (error: any) {
         console.log("fetchDatabaseComplianceOverview error:", error);
-        return [false, error?.message || "Failed to fetch database compliance overview"];
+        return [
+            false,
+            requestFailureMessage(error, "Failed to fetch database compliance overview"),
+        ];
     }
 };
 
@@ -1252,7 +1256,7 @@ export const fetchQuarantinedAssets = async (
         ];
     } catch (error: any) {
         console.log("fetchQuarantinedAssets error:", error);
-        return [false, error?.message || "Failed to fetch quarantined assets"];
+        return [false, requestFailureMessage(error, "Failed to fetch quarantined assets")];
     }
 };
 
@@ -1276,7 +1280,7 @@ export const releaseFromQuarantine = async (
         return [true, response.message || "Released from quarantine"];
     } catch (error: any) {
         console.log("releaseFromQuarantine error:", error);
-        return [false, error?.message || "Failed to release from quarantine"];
+        return [false, requestFailureMessage(error, "Failed to release from quarantine")];
     }
 };
 
@@ -1296,7 +1300,7 @@ export const grantException = async (
         return [true, response.message || "Exception granted"];
     } catch (error: any) {
         console.log("grantException error:", error);
-        return [false, error?.message || "Failed to grant exception"];
+        return [false, requestFailureMessage(error, "Failed to grant exception")];
     }
 };
 
@@ -1336,7 +1340,7 @@ export const revokeException = async (
         ];
     } catch (error: any) {
         console.log("revokeException error:", error);
-        return [false, error?.message || "Failed to revoke exception"];
+        return [false, requestFailureMessage(error, "Failed to revoke exception")];
     }
 };
 
@@ -1378,7 +1382,7 @@ export const fetchCascades = async (
         ];
     } catch (error: any) {
         console.log("fetchCascades error:", error);
-        return [false, error?.message || "Failed to fetch cascades"];
+        return [false, requestFailureMessage(error, "Failed to fetch cascades")];
     }
 };
 
@@ -1393,7 +1397,7 @@ export const fetchCascade = async (
         return [true, response];
     } catch (error: any) {
         console.log("fetchCascade error:", error);
-        return [false, error?.message || "Failed to fetch cascade"];
+        return [false, requestFailureMessage(error, "Failed to fetch cascade")];
     }
 };
 
@@ -1422,7 +1426,7 @@ export const approveCascade = async (
         ];
     } catch (error: any) {
         console.log("approveCascade error:", error);
-        return [false, error?.message || "Failed to approve cascade"];
+        return [false, requestFailureMessage(error, "Failed to approve cascade")];
     }
 };
 
@@ -1440,7 +1444,7 @@ export const rejectCascade = async (
         return [true, response.message || "Cascade rejected"];
     } catch (error: any) {
         console.log("rejectCascade error:", error);
-        return [false, error?.message || "Failed to reject cascade"];
+        return [false, requestFailureMessage(error, "Failed to reject cascade")];
     }
 };
 
@@ -1460,7 +1464,7 @@ export const bindSchemaToDatabase = async (
         return [true, response.message || "Schema bound to database", response || undefined];
     } catch (error: any) {
         console.log("bindSchemaToDatabase error:", error);
-        return [false, error?.message || "Failed to bind schema to database"];
+        return [false, requestFailureMessage(error, "Failed to bind schema to database")];
     }
 };
 
@@ -1501,7 +1505,7 @@ export const unbindSchemaFromDatabase = async (
         return [true, response.message || "Schema unbound from database", response || undefined];
     } catch (error: any) {
         console.log("unbindSchemaFromDatabase error:", error);
-        return [false, error?.message || "Failed to unbind schema from database"];
+        return [false, requestFailureMessage(error, "Failed to unbind schema from database")];
     }
 };
 
@@ -1520,7 +1524,7 @@ export const bindSchemaToAsset = async (
         return [true, response.message || "Schema bound to asset"];
     } catch (error: any) {
         console.log("bindSchemaToAsset error:", error);
-        return [false, error?.message || "Failed to bind schema to asset"];
+        return [false, requestFailureMessage(error, "Failed to bind schema to asset")];
     }
 };
 
@@ -1536,7 +1540,7 @@ export const unbindSchemaFromAsset = async (
         return [true, response.message || "Schema unbound from asset"];
     } catch (error: any) {
         console.log("unbindSchemaFromAsset error:", error);
-        return [false, error?.message || "Failed to unbind schema from asset"];
+        return [false, requestFailureMessage(error, "Failed to unbind schema from asset")];
     }
 };
 
@@ -1563,10 +1567,15 @@ export interface DatabaseBindings {
     apply?: ComplianceBindingApply | null;
 }
 
+/**
+ * The database's binding and its asset overrides. A failed read carries the HTTP status as its
+ * third element when the API answered, so a caller can tell a final refusal (403, 404) from a
+ * failure that may pass.
+ */
 export const getDatabaseBindings = async (
     databaseId: string,
     paging?: PagingParams
-): Promise<[boolean, DatabaseBindings | string]> => {
+): Promise<[boolean, DatabaseBindings | string, number?]> => {
     try {
         const response = await apiClient.get(`compliance/bind/${databaseId}`, {
             queryStringParameters: pagingQuery(paging),
@@ -1587,7 +1596,11 @@ export const getDatabaseBindings = async (
         ];
     } catch (error: any) {
         console.log("getDatabaseBindings error:", error);
-        return [false, error?.message || "Failed to get database bindings"];
+        return [
+            false,
+            requestFailureMessage(error, "Failed to get database bindings"),
+            typeof error?.status === "number" ? error.status : undefined,
+        ];
     }
 };
 
@@ -1645,7 +1658,7 @@ export const fetchAssetAuditHistory = async (
         return [true, pagedEntries(response)];
     } catch (error: any) {
         console.log("fetchAssetAuditHistory error:", error);
-        return [false, error?.message || "Failed to fetch audit history"];
+        return [false, requestFailureMessage(error, "Failed to fetch audit history")];
     }
 };
 
@@ -1662,6 +1675,6 @@ export const fetchAuditLog = async (
         return [true, pagedEntries(response)];
     } catch (error: any) {
         console.log("fetchAuditLog error:", error);
-        return [false, error?.message || "Failed to fetch audit log"];
+        return [false, requestFailureMessage(error, "Failed to fetch audit log")];
     }
 };

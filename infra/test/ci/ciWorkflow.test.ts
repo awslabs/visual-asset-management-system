@@ -150,7 +150,7 @@ describe("CI workflow", () => {
         expect(pytestRuns.length).toBe(1);
         expect(pytestRuns[0]).toMatch(/(^|\s)-n auto(\s|$)/);
         expect(pytestRuns[0]).toMatch(/(^|\s)--dist loadfile(\s|$)/);
-        expect(read("backend/requirements-dev.txt")).toMatch(/^pytest-xdist==\d+\.\d+\.\d+ ;/m);
+        expect(read("backend/requirements-dev.txt")).toMatch(/^pytest-xdist==\d+\.\d+\.\d+(\s|$)/m);
     });
 
     test("push and pull_request both filter on main, release, development and development-*", () => {
@@ -174,6 +174,44 @@ describe("CI workflow", () => {
     test("the infra shards install the root packages the docs prettier test resolves", () => {
         const infraJob = /^ {4}infra-test:\n([\s\S]*?)\n {4}\S/m.exec(text)?.[1] ?? "";
         expect(infraJob).toMatch(/- name: Npm ci root directory\n\s+run: npm ci/);
+    });
+
+    describe("documentation site build", () => {
+        const docsJob = (): string =>
+            /^ {4}docs-build:\n([\s\S]*?)(?=\n {4}\S|$(?![\s\S]))/m.exec(text)?.[1] ?? "";
+
+        test("the site fails its build on a broken link or anchor (control: why CI builds it)", () => {
+            const config = read("documentation/docusaurus-site/docusaurus.config.ts");
+            expect(config).toMatch(/onBrokenLinks: "throw"/);
+            expect(config).toMatch(/onBrokenAnchors: "throw"/);
+        });
+
+        test("a CI job installs and builds the site from its own directory", () => {
+            const job = docsJob();
+            expect(job).toMatch(
+                /working-directory: documentation\/docusaurus-site\n\s+run: npm ci$/m
+            );
+            expect(job).toMatch(
+                /working-directory: documentation\/docusaurus-site\n\s+run: npm run build$/m
+            );
+        });
+
+        test("the build job skips pushes to main and release/**, where docs.yml builds the site", () => {
+            const condition = /^\s+if:\s*(.*)$/m.exec(docsJob())?.[1] ?? "";
+            expect(condition).toContain(
+                "!(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')))"
+            );
+            // Control: docs.yml really is the build on those branches.
+            const docs = read(".github/workflows/docs.yml");
+            expect(docs).toMatch(/push:\n\s+branches:\n\s+- main\n\s+- "release\/\*"/);
+        });
+
+        test("the build job deploys nothing and keeps the read-only token", () => {
+            const job = docsJob();
+            expect(job).not.toBe("");
+            expect(job).not.toMatch(/gh-pages|permissions:/);
+            expect(text).toMatch(/^permissions:\n\s+contents: read$/m);
+        });
     });
 
     describe("infra type check", () => {
@@ -247,7 +285,71 @@ describe("CI workflow", () => {
         });
     });
 
+    describe("Python dependency audit", () => {
+        const auditJob =
+            /^ {4}python-dependency-audit:\n([\s\S]*?)(?=\n {4}\S|$(?![\s\S]))/m.exec(text)?.[1] ??
+            "";
+        const script = read(".github/scripts/python_dependency_audit.py");
+
+        test("the job exists, carries the release-head guard and grants no extra permissions", () => {
+            expect(auditJob).not.toBe("");
+            expect(auditJob).toContain(
+                "if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}"
+            );
+            expect(auditJob).not.toMatch(/permissions:/);
+        });
+
+        test("uv is installed by a SHA-pinned setup-uv at an exact version with its checksum", () => {
+            expect(auditJob).toMatch(
+                /uses: astral-sh\/setup-uv@[0-9a-f]{40} # v\d+\.\d+\.\d+\n\s+with:\n\s+version: "\d+\.\d+\.\d+"\n\s+checksum: [0-9a-f]{64}\b/
+            );
+            expect(auditJob).toMatch(/enable-cache: false/);
+        });
+
+        test("pip-audit runs at an exact version through the audit script", () => {
+            expect(auditJob).toMatch(/PIP_AUDIT_VERSION: "\d+\.\d+\.\d+"/);
+            expect(runCommands(auditJob)).toContain(
+                "python .github/scripts/python_dependency_audit.py"
+            );
+        });
+
+        test("the script finds the projects with git ls-files, not a hand-kept list", () => {
+            expect(script).toContain('["git", "ls-files", "-z"]');
+            expect(script).toContain('os.path.basename(p) == "uv.lock"');
+        });
+
+        test("the script checks each lock, regenerates each export and audits strictly", () => {
+            expect(script).toContain('["uv", "lock", "--check"]');
+            expect(script).toContain('["uv", "export"] + flags');
+            expect(script).toMatch(/"--no-deps", "--disable-pip", "--strict"/);
+            // A cached advisory response must not stand in for the live service.
+            expect(script).toContain('tempfile.mkdtemp(prefix="pip-audit-cache-")');
+        });
+
+        test("a requirements file beside a lock that is not a uv export fails the audit", () => {
+            expect(script).toContain(
+                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.txt$")'
+            );
+            expect(script).toContain("is not a uv export");
+        });
+
+        test("annotations escape %, CR and LF, and package names compare PEP 503-normalised", () => {
+            expect(script).toContain(
+                '.replace("%", "%25").replace("\\r", "%0D").replace("\\n", "%0A")'
+            );
+            expect(script).toContain('re.sub(r"[-_.]+", "-", str(name)).lower()');
+            // One helper writes every annotation, so none bypasses the escaping.
+            expect(script.match(/::error/g) ?? []).toHaveLength(1);
+        });
+    });
+
     describe("pipeline and VamsMCP suites", () => {
+        test("the 3D Basic golden job builds the image through its runner script", () => {
+            expect(runCommands(job("conversion-3dbasic-golden")).join("\n")).toContain(
+                "backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh"
+            );
+        });
+
         const job = (name: string): string =>
             new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
                 text
@@ -293,8 +395,8 @@ describe("CI workflow", () => {
             expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
         });
 
-        test("both jobs carry a timeout", () => {
-            ["pipelines-test", "vamsmcp-test"].forEach((name) => {
+        test("the suite jobs and the 3D Basic golden job carry a timeout", () => {
+            ["pipelines-test", "vamsmcp-test", "conversion-3dbasic-golden"].forEach((name) => {
                 expect(job(name)).toMatch(/^ {8}timeout-minutes: \d+$/m);
             });
         });

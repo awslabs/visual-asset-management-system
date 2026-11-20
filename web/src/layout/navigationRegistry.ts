@@ -150,6 +150,15 @@ function coreAdminNavEntries(): NavEntry[] {
                           },
                       ]
                     : []),
+                // Shown when the deployment has Audit Log Search (the AUDITLOGSEARCH switch, on by
+                // default) and the API's web-route decision allows the page (admins by seed, others
+                // through the audit-reader template). The switch grants nothing.
+                {
+                    type: "link",
+                    text: "Audit Log Search",
+                    href: "#/auth/audit-log-search/",
+                    featuresEnabledRestriction: [featuresEnabled.AUDITLOGSEARCH],
+                },
                 {
                     // The tenant-wide view of the API keys page. The web route is the same as the
                     // profile entry's, so the admin decision comes from the API listing.
@@ -321,7 +330,7 @@ function profileLinksOnly(entry: NavEntry): NavEntry {
  * `requiresApiRoute` the cached API listing does not allow are dropped (an unknown listing drops
  * them too), unsupported profile shapes are skipped with a warning, and the registry-only fields are
  * stripped. Evaluated on every call, so a listing cached after the first render is picked up on the
- * next one.
+ * next one (the side navigation and the profile menu render again when a listing is cached).
  */
 export function entriesFor(placement: NavPlacement, enabledFeatures: string[] = []): NavEntry[] {
     const raw = rawEntriesFor(placement, enabledFeatures);
@@ -387,8 +396,9 @@ export function webRouteChecksFor(
 
 /**
  * Recursively filters navigation items based on allowed routes.
- * For expandable-link-group, filters inner items and removes the group if empty.
- * Top-level links (e.g. Home) are kept if their href is allowed.
+ * A section or expandable-link-group keeps only its allowed items, at any depth, and is removed
+ * when none remain. A link is kept if its href is allowed; Home ("/") always is, as the router
+ * always allows it.
  */
 export function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
     const result: any[] = [];
@@ -398,16 +408,15 @@ export function filterNavItems(items: any[], allowedRoutes: any[]): any[] {
             continue;
         }
         if (item.type === "section" || item.type === "expandable-link-group") {
-            const filteredChildren = (item.items || []).filter((child: any) =>
-                allowedRoutes.includes(normaliseHref(child.href))
-            );
-            if (filteredChildren.length > 0) {
+            const filteredChildren = filterNavItems(item.items || [], allowedRoutes);
+            if (filteredChildren.some((child) => child.type !== "divider")) {
                 result.push({ ...item, items: filteredChildren });
             }
             continue;
         }
         if (item.type === "link" && item.href) {
-            if (allowedRoutes.includes(normaliseHref(item.href))) {
+            const path = normaliseHref(item.href);
+            if (path === "/" || allowedRoutes.includes(path)) {
                 result.push(item);
             }
             continue;

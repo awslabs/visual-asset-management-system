@@ -180,6 +180,7 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
 
     const isolatedSubnetBatchFlags = [
         "useConversionCoordinateTransform",
+        "useCogConversion",
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
         "useSystemGenAiMetadata.useFargateRenderer",
@@ -269,6 +270,7 @@ describe("core stack nested-stack dependencies", () => {
         "authBuilderNestedStack",
         "apiBuilderNestedStack",
         "apiBuilder2NestedStack",
+        "apiBuilder3NestedStack",
         "searchBuilderNestedStack",
         "addonBuilderNestedStack",
         "customBuilderNestedStack",

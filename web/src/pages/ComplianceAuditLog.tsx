@@ -28,15 +28,20 @@ import {
     listedBefore,
     listingEmptyText,
     loadFailureMessage,
+    pageReachable,
+    tokenPagerCounts,
 } from "../components/compliance/listingStates";
 import Link from "@cloudscape-design/components/link";
 import Synonyms from "../synonyms";
 import {
     fetchAuditLog,
     AuditEntry,
+    ARCHIVED_DATABASE_ID_SUFFIX,
     COMPLIANCE_LISTING_PAGE_SIZE,
 } from "../services/ComplianceService";
 import { useAssetPageAccess } from "../hooks/useAssetPageAccess";
+import { useWebRouteAllowed } from "../hooks/useWebRouteAllowed";
+import { isAuditLogSearchEnabled } from "../components/auditLogs/auditSearchEnabled";
 
 /** One value of an audit entry's details as a reader sees it: text as is, lists joined, objects as
  * `key value` pairs, and anything else as JSON. */
@@ -122,9 +127,13 @@ export const AUDIT_FILTER_KEYS = [
 /** The page's route (routes.tsx); its filters are read from and written to this route's URL only. */
 export const AUDIT_PAGE_ROUTE = "/compliance/audit";
 
-/** A day filter as the inclusive timestamp bound the route takes. */
+/**
+ * A day filter as the inclusive timestamp bound the route takes. The end bound carries the last
+ * microsecond of the day: the route compares bounds with the stored timestamps, which carry
+ * microseconds, so a bound at 23:59:59 would leave out entries from the day's last second.
+ */
 export const dayBound = (day: string, end: boolean): string | undefined =>
-    day ? `${day}T${end ? "23:59:59" : "00:00:00"}Z` : undefined;
+    day ? `${day}T${end ? "23:59:59.999999" : "00:00:00"}Z` : undefined;
 
 /**
  * Minimum widths (px) of the two columns that hold identifiers. Without them the wrapping table
@@ -139,6 +148,10 @@ export const AUDIT_DETAILS_MIN_WIDTH = 210;
 const ComplianceAuditLog: React.FC = () => {
     // Asset ids link to the asset page only when the caller may open it.
     const { canOpenAsset } = useAssetPageAccess();
+    // The link to Audit Log Search shows only when the deployment has the feature (the AUDITLOGSEARCH
+    // switch) and the API's web-route decision allows that page.
+    const webRouteAllowsAuditSearch = useWebRouteAllowed("/auth/audit-log-search");
+    const canSearchAuditLogs = isAuditLogSearchEnabled() && webRouteAllowsAuditSearch;
     const [items, setItems] = useState<AuditEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -150,10 +163,14 @@ const ComplianceAuditLog: React.FC = () => {
         eventTypeOptions.find((option) => option.value === filters.eventType) ||
         eventTypeOptions[0];
     const [assetDraft, setAssetDraft] = useState(filters.assetId);
+    // The box follows the filter when the URL changes it (Back, a link, the database cleared).
+    useEffect(() => {
+        setAssetDraft(filters.assetId);
+    }, [filters.assetId]);
 
     // Server-side token paging: tokens[i] is the startingToken that fetches page i
-    // (tokens[0] is undefined). hasMore tracks whether the loaded page reported a
-    // NextToken, which is what Pagination's openEnd renders.
+    // (tokens[0] is undefined). hasMore tracks whether the page shown reported a NextToken
+    // (the counter's "+"); the pager follows the end of the walk (tokenPagerCounts).
     const [tokens, setTokens] = useState<Record<number, string | undefined>>({});
     const [hasMore, setHasMore] = useState(false);
     const [currentPageIndex, setCurrentPageIndex] = useState(1);
@@ -232,6 +249,7 @@ const ComplianceAuditLog: React.FC = () => {
 
     const handlePageChange = ({ detail }: { detail: { currentPageIndex: number } }) => {
         const newIndex = detail.currentPageIndex;
+        if (!pageReachable(tokens, newIndex)) return;
         setCurrentPageIndex(newIndex);
         loadPage(newIndex - 1, tokens[newIndex - 1]);
     };
@@ -255,7 +273,21 @@ const ComplianceAuditLog: React.FC = () => {
                             counter={
                                 loadFailed ? undefined : `(${items.length}${hasMore ? "+" : ""})`
                             }
-                            description={isPaging ? PAGE_SORTING_NOTE : undefined}
+                            description={
+                                <>
+                                    {isPaging ? PAGE_SORTING_NOTE : null}
+                                    {isPaging && canSearchAuditLogs ? " " : null}
+                                    {canSearchAuditLogs ? (
+                                        <>
+                                            Looking for who called the API? Open{" "}
+                                            <Link href="#/auth/audit-log-search/">
+                                                Audit Log Search
+                                            </Link>
+                                            .
+                                        </>
+                                    ) : null}
+                                </>
+                            }
                         >
                             Compliance Audit Log
                         </Header>
@@ -336,8 +368,7 @@ const ComplianceAuditLog: React.FC = () => {
                     pagination={
                         <Pagination
                             currentPageIndex={currentPageIndex}
-                            pagesCount={hasMore ? loadedPages + 1 : loadedPages}
-                            openEnd={hasMore}
+                            {...tokenPagerCounts(tokens, loadedPages)}
                             onChange={handlePageChange}
                             disabled={loading}
                             ariaLabels={{
@@ -415,17 +446,24 @@ const ComplianceAuditLog: React.FC = () => {
                             id: "assetId",
                             header: Synonyms.Asset,
                             cell: (item) => {
+                                // An entry of a deleted database's history (`<id>#deleted`) has no
+                                // asset page to open, so it is shown as text.
+                                const { assetId, databaseId } = item;
                                 const label =
-                                    item.assetId && item.assetId !== "*" && canOpenAsset ? (
+                                    assetId &&
+                                    assetId !== "*" &&
+                                    canOpenAsset &&
+                                    databaseId &&
+                                    !databaseId.endsWith(ARCHIVED_DATABASE_ID_SUFFIX) ? (
                                         <Link
-                                            href={`#/databases/${
-                                                item.databaseId
-                                            }/assets/${encodeURIComponent(item.assetId)}`}
+                                            href={`#/databases/${encodeURIComponent(
+                                                databaseId
+                                            )}/assets/${encodeURIComponent(assetId)}`}
                                         >
-                                            {item.assetName || item.assetId}
+                                            {item.assetName || assetId}
                                         </Link>
                                     ) : (
-                                        item.assetName || item.assetId || "-"
+                                        item.assetName || assetId || "-"
                                     );
                                 // The name recorded with the entry, with the id beneath it.
                                 return item.assetName ? (

@@ -29,8 +29,8 @@ BUILD_TIMED_OUT = recipes.BUILD_TIMEOUT_MINUTES + 5
 FORBIDDEN = type("ForbiddenException", (Exception,), {})
 
 PARAMETER_MISSING = ClientError({"Error": {"Code": "ParameterNotFound", "Message": "missing"}}, "GetParameter")
-PARENT_UNREADABLE = ("not started: SSM parameter /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 "
-                     "could not be read (ParameterNotFound)")
+# The build row records the fixed refusal; the parameter name and error code are logged only.
+PARENT_UNREADABLE = "not started: the parent image's SSM parameter could not be read"
 
 ARN_BEFORE_CLAIMS = "arn:aws:imagebuilder:us-east-1:123456789012:image/x/1.0.0/7"
 
@@ -301,7 +301,8 @@ class TestAdminRecipes:
         body = {**RECIPE_BODY, "recipeId": "names-prefix",
                 "components": [RECIPE_BODY["components"][0], {"name": "big", "data": data}]}
         monkeypatch.setenv("EDH_SESSION_SECRET_PREFIX", "")
-        with pytest.raises(recipes.RecipeConflict, match="unresolved placeholder.*DEPLOY_sessionSecretPrefix"):
+        unresolved = "^a component document names a placeholder the recipe does not declare$"
+        with pytest.raises(recipes.RecipeConflict, match=unresolved):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("names-prefix") is None
         # A value as long as its token keeps the document at 16000 characters; one more is refused.
@@ -315,12 +316,14 @@ class TestAdminRecipes:
     def test_an_undeclared_placeholder_is_refused_at_create_and_at_update(self, world):
         body = {**RECIPE_BODY, "recipeId": "typo",
                 "components": [{"name": "baseline", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}]}
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        # The refusal names no placeholder from the recipe (Rule 11); the builder logs which.
+        refusal = "^a component document names a placeholder the recipe does not declare$"
+        with pytest.raises(recipes.RecipeConflict, match=refusal):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("typo") is None
         admin_row = recipes.create_admin_recipe(
             AmiRecipeRequestModel(**{**body, "parameters": {"missing": "x"}}), "carol")
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        with pytest.raises(recipes.RecipeConflict, match=refusal):
             recipes.update_admin_recipe(admin_row, AmiRecipeRequestModel(**body), "dave")
         assert store.get_recipe("typo")["parameters"] == {"missing": "x"}
 
@@ -387,7 +390,7 @@ class TestDuplicateRecipes:
         with pytest.raises(recipes.RecipeConflict) as err:
             recipes.create_admin_recipe(
                 AmiRecipeRequestModel(**{**self.COPY, "stackName": self.SOURCE["stackName"]}), "carol")
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("al2023-copy") is None
 
     def test_without_duplicate_of_assets_are_still_refused(self, source):
@@ -449,7 +452,7 @@ class TestStackNameUniqueness:
         for name in ("VAMS AL2023 Desktop", "vams al2023 DESKTOP", "  VAMS AL2023 Desktop "):
             with pytest.raises(recipes.RecipeConflict) as err:
                 recipes.create_admin_recipe(AmiRecipeRequestModel(**{**self.MINE, "stackName": name}), "carol")
-            assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+            assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("mine") is None
         created = recipes.create_admin_recipe(
             AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop 2"}), "carol")
@@ -461,7 +464,17 @@ class TestStackNameUniqueness:
         with pytest.raises(recipes.RecipeConflict) as err:
             recipes.create_admin_recipe(
                 AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop"}), "carol")
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
+
+    def test_the_refusal_names_no_other_recipe_and_the_log_does(self, world, monkeypatch):
+        seeded()
+        log = MagicMock()
+        monkeypatch.setattr(recipes, "logger", log)
+        with pytest.raises(recipes.RecipeConflict) as err:
+            recipes.create_admin_recipe(
+                AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop"}), "carol")
+        assert "al2023-desktop" not in str(err.value)
+        assert "al2023-desktop" in " ".join(str(call.args[0]) for call in log.info.call_args_list)
 
     def test_update_refuses_another_recipes_stack_name_and_keeps_its_own(self, world):
         seeded()
@@ -471,7 +484,7 @@ class TestStackNameUniqueness:
             recipes.update_admin_recipe(
                 row, AmiRecipeRequestModel(**{**self.MINE, "stackName": "vams al2023 desktop"}), "dave")
 
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("mine")["stackName"] == "Mine"
         updated = recipes.update_admin_recipe(row, AmiRecipeRequestModel(**{**self.MINE, "rootSizeGb": 80}), "dave")
         assert updated["stackName"] == "Mine" and updated["rootSizeGb"] == 80
@@ -531,13 +544,15 @@ class TestStartBuild:
 
     def test_an_unresolvable_parent_is_a_conflict(self, world):
         row = seeded(parentImage="edhStack:Nope")
-        with pytest.raises(recipes.RecipeConflict, match="Nope"):
+        with pytest.raises(recipes.RecipeConflict) as err:
             recipes.start_build(row, "carol", only_if_changed=False)
+        assert str(err.value) == "EDH lists no stack of the recipe's kind with the parent image's name"
 
     def test_an_unresolved_component_placeholder_is_a_conflict(self, world):
         row = seeded(components=[{"name": "broken", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}])
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        with pytest.raises(recipes.RecipeConflict) as err:
             recipes.start_build(row, "carol", only_if_changed=False)
+        assert str(err.value) == "a component document names a placeholder the recipe does not declare"
         assert not store.list_builds(row["recipeId"])
 
 

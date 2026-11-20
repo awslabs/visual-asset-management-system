@@ -111,6 +111,30 @@ aws bedrock-agentcore-control list-agent-runtimes \
 
 An add-on can create objects outside the VAMS stack, in an external system or at run time, that `cdk destroy` does not remove. When the deployment enables an add-on whose pages describe removal steps, complete them while the deployment is still running, before [Step 1](#step-1-destroy-the-cdk-stack). The [Add-ons Overview](../developer/addons-overview.md) lists each add-on with a link to its pages.
 
+## Pre-uninstall: Lambda functions created for pipelines
+
+A Lambda-type pipeline created through the API or the web interface without naming an existing function gets an AWS Lambda function that VAMS creates at that moment, named `vams-` followed by the pipeline ID's letters and digits and eight random characters, and run with the deployment's pipeline Lambda role. These functions are not stack resources, so `cdk destroy` leaves them, and deleting or archiving the pipeline leaves its function too. On a deployment with a VPC they are attached to the VAMS subnets and pipeline security group, and their network interfaces can keep AWS CloudFormation from deleting those. Delete them while the stack still exists, before [Step 1](#step-1-destroy-the-cdk-stack), using the `vams-nested-stack-resources.txt` file from [Record stack resource identifiers](#record-stack-resource-identifiers):
+
+```bash
+# The deployment's pipeline Lambda role (its logical ID begins with lambdaPipelineRole)
+ROLE_NAME=$(awk -F'\t' '$1 == "AWS::IAM::Role" && $2 ~ /^lambdaPipelineRole/ { print $3 }' \
+    vams-nested-stack-resources.txt)
+ROLE_ARN=$(aws iam get-role --role-name "${ROLE_NAME}" --query Role.Arn --output text)
+
+# The functions that run with that role; review the list before deleting anything
+aws lambda list-functions \
+    --query "Functions[?Role=='${ROLE_ARN}'].FunctionName" \
+    --output text | tr '\t' '\n' > vams-pipeline-functions.txt
+cat vams-pipeline-functions.txt
+
+# Delete each function and its log group (a function that never ran has no log group)
+while read -r FN; do
+    [ -n "${FN}" ] || continue
+    aws lambda delete-function --function-name "${FN}"
+    aws logs delete-log-group --log-group-name "/aws/lambda/${FN}" || true
+done < vams-pipeline-functions.txt
+```
+
 ## Step 1: Destroy the CDK stack
 
 Run the CDK destroy command from the `infra` directory. This removes all CloudFormation-managed resources.
@@ -229,7 +253,7 @@ VAMS creates the following S3 buckets. The asset, auxiliary, artefacts, access l
 | Auxiliary bucket           | Retained (manual)       | No — auto-named                     | Stores auto-generated previews, pipeline working files, staged asset export payloads, and viewer data. Staged export payloads under the `vams.assetExports/` prefix expire 8 days after creation, with their noncurrent versions and delete markers. Download as Zip archives under the `vams.preparedDownloads/` prefix expire 7 days after creation and need no backup. When the Video SOP/BOM Extraction pipeline is enabled, objects under the `pipelines/genai-video-sop-bom/` prefix (that pipeline's working files) expire 30 days after creation, their noncurrent versions one day after deletion, and their delete markers with them; the bucket itself, and everything outside those prefixes, is retained. |
 | Artefacts bucket           | Retained (manual)       | No — auto-named                     | Stores CDK deployment artefacts and pipeline registration bundles.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Access logs bucket         | Retained (manual)       | No — auto-named                     | Stores S3 server access logs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos and NVIDIA GR00T pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, or `useNvidiaGr00t` was enabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Model cache bucket(s)      | Retained (manual)       | No — auto-named                     | Caches downloaded model weights for the NVIDIA Cosmos, NVIDIA GR00T and Image to 3D pipelines. Present only when `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, or `useImageTo3d` was enabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Web app bucket             | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores the built frontend static files (for both CloudFront and ALB deployments).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Web app access logs bucket | Deleted (emptied first) | ALB only — fixed name (domain host) | Stores access logs for the web app bucket and ALB.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
@@ -257,7 +281,7 @@ A model cache bucket holds the model weights the GPU pipelines download on first
 
 ## Step 3: Delete DynamoDB tables
 
-VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern. The listing includes the vector embeddings table, which is created in every deployment and holds items only after vector search has been enabled (it is kept while the feature is off so that the embeddings survive an off-on cycle); its vector index is part of the table and is deleted with it. The listing also includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one. The large object copy jobs table (`LargeObjectCopyJobsStorageTable`) is the same: it holds the progress of copies into assets, which expire 30 days after they finish, and needs no backup. The zip download requests table (`ZipDownloadRequestsStorageTable`) holds only Download as Zip jobs, which expire after 7 days, and needs no backup either.
+VAMS DynamoDB tables use a `RETAIN` removal policy, so they and their contents survive stack teardown and require manual deletion. This protects against accidental data loss. Every table is auto-named by AWS CloudFormation, so a retained table never blocks a redeploy with the same configuration name — delete the tables only when you intend to permanently remove the stored data. This includes the five compliance tables (`Compliance{Schema,AssetState,Evaluation,Cascade,Audit}StorageTable`), which follow the same retained, auto-named pattern. The listing includes the vector embeddings table, which is created in every deployment and holds items only after vector search has been enabled (it is kept while the feature is off so that the embeddings survive an off-on cycle); its vector index is part of the table and is deleted with it. The listing also includes the workflow execution locks table (`WorkflowExecutionLocksStorageTable` in the generated name), which holds only short-lived concurrency locks of running executions: nothing in it needs a backup, and a redeploy creates a new, empty one. The large object copy jobs table (`LargeObjectCopyJobsStorageTable`) is the same: it holds the progress of copies into assets, which expire 30 days after they finish, and needs no backup. The zip download requests table (`ZipDownloadRequestsStorageTable`) holds only Download as Zip jobs, which expire after 7 days, and needs no backup either. This includes `AuditLogQueriesStorageTable` (audit search handles, auto-named, seven-day TTL); it holds no audit records and can be deleted by hand. It exists only while `app.auditLogging.search.enabled` is `true`; a deployment that never enabled it has no such table, and one that turned it off keeps the table until it is deleted.
 
 ```bash
 # List remaining VAMS tables
@@ -735,9 +759,10 @@ aws opensearch delete-domain \
 ## Step 11: Delete the AWS CodeArtifact domain
 
 The Image to 3D pipeline creates a CodeArtifact domain and a `pypi-store` repository so that its
-container builds pull Python packages through a cache rather than depending on the public package CDN.
+container builds pull Python packages through a cache rather than depending on the public package CDN,
+in the Regions that offer AWS CodeArtifact; elsewhere there is nothing to delete in this step.
 Both are removed with the stack. The domain carries an **explicit name**
-(`<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>-imageto3d`, lower-cased, with each character other than a letter, digit or `-` replaced by `-`, and cut to 50 characters), so an orphan left by a failed teardown blocks a redeploy
+(`<CONFIG_NAME>-<BASE_STACK_NAME>-imageto3d`, lower-cased, with each character other than a letter, digit or `-` replaced by `-`, and cut to 50 characters; with the CMK on, cut to 46 characters and followed by `-kms`), so an orphan left by a failed teardown blocks a redeploy
 using the same configuration name.
 
 ```bash
@@ -795,14 +820,17 @@ aws s3 ls | grep <STACK_NAME>
 aws dynamodb list-tables \
     --query "TableNames[?contains(@, '<STACK_NAME>')]"
 
-# Check for remaining Lambda functions
+# Check for remaining Lambda functions. A function name AWS CloudFormation generated holds only
+# the first 25 characters of a longer stack name, so match on those; a function of another
+# deployment whose stack name starts with the same 25 characters also matches
+PREFIX=$(printf '%s' "<STACK_NAME>" | cut -c1-25)
 aws lambda list-functions \
-    --query "Functions[?contains(FunctionName, '<STACK_NAME>')].[FunctionName]" \
+    --query "Functions[?starts_with(FunctionName, '${PREFIX}')].[FunctionName]" \
     --output text
 
 # Check for remaining log groups
 aws logs describe-log-groups \
-    --log-group-name-prefix "/aws/lambda/<STACK_NAME>" \
+    --log-group-name-prefix "/aws/lambda/${PREFIX}" \
     --query 'logGroups[].logGroupName'
 ```
 

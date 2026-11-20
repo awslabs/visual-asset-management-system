@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from common.auditActionTypes import AuditLogGroup
 from common.auditSearch import redaction
-from common.auditSearch.rowModel import OTHER_ID_KEYS, OUTCOMES, AuditRow
+from common.auditSearch.rowModel import OTHER_ID_KEYS, OUTCOMES, AuditRow, normalize_time
 
 TRUNCATION_MARKER = " ...[truncated]"
 ECHO_SEPARATOR = " --- [event: "
@@ -177,7 +177,7 @@ def event_time(value: Any) -> Optional[str]:
 
 def base_row(record: Record, group: AuditLogGroup, timestamp: Optional[str]) -> AuditRow:
     """A row with what every record carries: group, prefix, prefix user and probe marker."""
-    row = AuditRow(timestamp=text_scalar(timestamp, 64), groupKey=group.key, groupLabel=group.label)
+    row = AuditRow(timestamp=normalize_time(text_scalar(timestamp, 64)), groupKey=group.key, groupLabel=group.label)
     prefix = record.prefix
     if prefix is not None:
         row.prefix = prefix.label

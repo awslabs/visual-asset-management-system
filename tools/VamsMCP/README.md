@@ -138,7 +138,8 @@ The default tool set is the read-only `consumer` set, and each call has a time b
 (`VAMS_MCP_TOOL_TIMEOUT`, 240 seconds): a list stops early with a `NextToken` rather than run past it. A write,
 delete or compute call still running at the budget may yet complete, so its answer says the outcome is
 unknown (`outcomeUnknown`) and names the read tool to check with (`checkWith`) instead of inviting a
-retry. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
+retry. A call that could not start before its budget ran out is answered `ServerBusy`: nothing ran,
+so it can be called again. One user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in progress.
 
 ## Configure (optional)
 
@@ -172,12 +173,23 @@ most 100 tools per connection.
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
-| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions, API keys                                         |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, executions, the subscription list, API keys                     |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades, the compliance audit trail                        |
+| `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop`. Opt-in, see below                        |
 | `edh`        | EDH Workstations add-on: workstations, catalog and container jobs                                                                             |
 | `edh-admin`  | EDH Workstations add-on: images, AMI recipes, capacity reservations, instances, settings                                                      |
 | `custom`     | The tools a fork adds in `custom_tools.py`                                                                                                    |
-| `all`        | Every tool the gates allow (the stdio default)                                                                                                |
+| `all`        | Every tool the gates allow, except the `audit` tools (the stdio default)                                                                      |
+
+The `audit` set is opt-in on both transports: name it (`VAMS_MCP_TOOLSETS=consumer,audit`) and the four
+audit tools register. It is not part of `consumer`, `operator`, `admin` or `all`, because a search starts a
+billable Amazon CloudWatch Logs Insights query and audit records may be sensitive. Audit search is core
+VAMS, on by default (a deployment can turn it off with `app.auditLogging.search.enabled`; the EU Sovereign
+Cloud template does), and the tools need no write or destructive gate. On a deployment without it (no
+`AUDITLOGSEARCH` in the feature list read at sign-in) a local server registers no audit tool and
+`vams_status` adds `gates.auditSearch` with the sentence "Audit Log Search is not enabled on this deployment" (the key is absent while the feature is on); a remote server answers each audit call with "Audit Log Search is
+not enabled on this deployment". Sign in again and restart the server after the setting changes; the API decides which log
+groups and rows a caller may see.
 
 `vams_status` reports the selected sets in `gates.toolsets`. `vams_mcp/toolsets.py` lists each set's
 tools; `tests/test_toolsets.py` holds every set to the limits.
@@ -356,6 +368,26 @@ CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
 API's 404) every zip tool returns `error_type` `ZipDownloadDisabledError` with
 "Zip downloads are not available for this deployment".
+
+Audit log search (the opt-in `audit` set): `vams_audit_groups`, `vams_audit_search`,
+`vams_audit_results`, `vams_audit_stop`. `vams_audit_groups` lists the log groups the caller may search,
+the action names, entity types and outcomes the filters accept, and the deployment's limits.
+`vams_audit_search` starts a search with the same filters as `vamscli audit search` (log groups, actions,
+entity types and ids, users, API key ids, databases, assets, outcomes, request ids, `contains`
+terms (the most terms and the longest term are the deployment's limits from `vams_audit_groups`), a time range such as `24h` or ISO 8601, probe records, sort) and waits on the server
+for about 20 seconds; when the search is Complete it returns up to `max_rows` rows (25 by default, at
+most 200) with `statistics`, and `NextToken` and `truncated` when more exist. A search still Running
+returns its `queryId`: `vams_audit_results` waits up to about 20 seconds more, or pages a Complete search
+(`starting_token`). `vams_audit_stop` stops the caller's own search and frees its slot; it removes no
+data and is not read-only, but it is registered with the set alone, like the three reads. A stopped
+search returns no rows, and a finished search that used `contains` can no longer be read once it is
+stopped; a handle expires an hour after its last use, and a refusal for an unknown,
+expired or not-yours handle is one generic not-found. No tool reports a count of records the caller may
+not see: `statistics.candidateLimitReached` says the search reached its row limit with a filter the query
+could not apply itself, so narrow the time range. Over the remote server each call carries the signed-in
+user's own token, runs inside the call's time budget (`VAMS_MCP_TOOL_TIMEOUT`) and counts toward the
+per-user limit of concurrent calls. Exports (CSV, NDJSON) stay in `vamscli audit export` and the web page.
+All four stay out of `autoApprove`: a search is billable and the records may be sensitive.
 
 Compliance: `list_compliance_schemas`, `get_compliance_schema`,
 `get_compliance_bindings`, `get_asset_compliance_state`,
@@ -652,8 +684,8 @@ Keep all three out of `autoApprove`, and confirm a group abort with the user fir
 `rerun_execution` re-runs ONE execution; its `execution_group_id` assigns the new
 execution's group membership rather than selecting a group to re-run. It reads
 each input file at the version the original launch pinned (a `versionId` someone
-chose) and every other file at its current version; executions recorded before
-2.7.0 re-run every file on its current version.
+chose) and every other file at its current version; an execution recorded before
+versions were pinned re-runs every file on its current version.
 `abort_execution` returns `warnings` and `notAbortable` beside `message` when a
 registered sub-process could not be stopped: each `notAbortable` entry
 (`resourceType`, `label`, `stageName`, `locator`) is compute of a type VAMS has no
@@ -1117,6 +1149,11 @@ A running workstation whose remote display session has ended is refused with a
 `DISPLAY_SESSION_ENDED`: stop it, then start it again, to reconnect. Its record
 then carries `connectionUnavailableReason` `DISPLAY_SESSION_ENDED` (null
 otherwise), and its `activity` is null: it is running, not starting.
+A workstation that has run which EDH reports in its error state (its remote
+display stopped responding) keeps its state, disk and data; its record carries
+`connectionUnavailableReason` `DESKTOP_ERROR` and its connect (and a start of it)
+is refused with a 409 returned as `error_type` `EdhDesktopErrorError`, `code`
+`DESKTOP_ERROR`: wait a few minutes, or stop it, then start it again.
 Each call makes EDH issue at most one connection token per request EDH answers,
 for that desktop; VAMS repeats a read once after a transport failure or a gateway
 error, which can make a second. `list_edh_workstations` and `get_edh_workstation`
@@ -1141,8 +1178,11 @@ row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
 returns the stored record (HTTP 200) and launches nothing, while one that another
 user's launch holds is refused (409).
 Its `os_family` (`linux` or `windows`) is the chosen catalog image's `osFamily`
-and is required; its `bootstrap_id` is the idempotency key — re-send the one from
-a call that timed out rather than launching again. Its optional `lease_hours` (1 up to the
+and is required; its `bootstrap_id` is the idempotency key, and an error carries
+the `bootstrapId` that was sent (generated when the call gave none). When the
+answer was lost (`outcomeUnknown`, a timeout), look that id up with
+`get_edh_workstation` and re-send it only if it is not found, rather than
+launching again. Its optional `lease_hours` (1 up to the
 policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch; it is
 refused (400) when leases are disabled and ignored when the policy is `forced`. An
 `instance_type` the image's profile lists only under architectures of another family
@@ -1212,7 +1252,10 @@ until it finishes or is killed; like the workstation tools it stays out of
 cluster for the experimental `eks` backend), its `command` is a token list and
 `environment` a name→value map, sent under the request model's `command` /
 `environment` keys, and `memory` is in MiB (at least 512). It answers 202 with
-the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes.
+the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes. When
+EDH's quota is used up it answers `error_type` `EdhQuotaExceededError` (HTTP 429,
+`The EDH quota for this operation has been reached.`): the client does not resend
+it, and submitting again fails until a job ends (`list_edh_container_jobs`).
 `start_edh_ami_recipe_build` starts an EC2 Image Builder build instance that is
 billed until the image completes; like the other compute tools it stays out of
 `autoApprove`.

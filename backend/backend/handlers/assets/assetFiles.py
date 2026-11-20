@@ -1570,12 +1570,10 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
@@ -1615,12 +1613,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"

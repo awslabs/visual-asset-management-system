@@ -1172,7 +1172,7 @@ def _require_vector_search(profile_manager) -> None:
               help='Number of hits to return (1-100, default: 25)')
 @click.option('--file-class', 'file_classes', multiple=True,
               help='Hard filter on the indexed file class (repeatable): image, video, audio, document, '
-                   'text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc or other; 3D models are '
+                   'text, data, tiles3d, raster, mesh, usd, cad, pointcloud, splat, ifc or other; 3D models are '
                    'mesh, usd or cad')
 @click.option('--file-ext', 'file_exts', multiple=True,
               help='Hard filter on the file extension, e.g. glb (repeatable)')
