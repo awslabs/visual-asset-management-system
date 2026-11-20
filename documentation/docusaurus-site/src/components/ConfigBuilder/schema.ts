@@ -2586,7 +2586,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "compliance",
         advanced: true,
-        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
+        help: "When on, a quarantined asset cannot be downloaded, its files cannot be copied to another asset and a user's workflow run cannot take them as input, unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
 

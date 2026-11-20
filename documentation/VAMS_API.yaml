@@ -3540,7 +3540,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400. With app.compliance.quarantineBlocksDownload, a copy to another asset or database of a file whose asset is quarantined without an exception answers "Asset is quarantined and its files cannot be copied to another asset".
                     content:
                         application/json:
                             schema:
@@ -4767,9 +4767,13 @@ paths:
                         execution holds on one of the selected assets, files, or file versions; the
                         message is "A conflicting execution of this workflow is already running for this
                         asset.", "... for this file." or "... for this file version." and names no
-                        execution, asset or file), and a recorded
+                        execution, asset or file), a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
-                        metadata-source entities). A template-resolution failure returns
+                        metadata-source entities), and an input file's asset that is quarantined
+                        without an exception when the deployment sets
+                        app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files
+                        cannot be used as workflow input"; a run VAMS starts itself is not refused).
+                        A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
                         one carrying executionValidationErrors — so the 400 body's message is an object
                         holding a list of strings rather than a string on those two paths.
@@ -9087,7 +9091,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
-                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
+                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, a deployment in which re-run is not available, or an input file's asset that is quarantined without an exception when the deployment sets app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files cannot be used as workflow input", as on the execute route).
                     content:
                         application/json:
                             schema:

@@ -401,6 +401,17 @@ _cw_pkg = __import__('types').ModuleType('common.workflows')
 _cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
 sys.modules['common.workflows'] = _cw_pkg
 sys.modules['common'].workflows = _cw_pkg
+# The REAL common.compliance package, for the same reason: the workflow execute handler and assetFiles
+# import common.compliance.quarantineGuard at module level, and the handlers suites that import them
+# outside the directories registering it (assets, zipDownloads, compliance; each registers it only when
+# absent, so they share this object) would otherwise fail collection with "'common' is not a package".
+if 'common.compliance' not in sys.modules:
+    _cc_pkg = __import__('types').ModuleType('common.compliance')
+    _cc_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common',
+                                     'compliance')]
+    _cc_pkg.__package__ = 'common.compliance'
+    sys.modules['common.compliance'] = _cc_pkg
+sys.modules['common'].compliance = sys.modules['common.compliance']
 # executionRecords is pure helpers (no AWS deps), so load the REAL module by path
 # rather than a MagicMock (same approach as s3MetadataKeys above).
 _execrec_spec = _s3mk_importlib_util.spec_from_file_location(

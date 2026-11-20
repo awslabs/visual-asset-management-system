@@ -282,7 +282,7 @@ The following fields can be used in ABAC policy rules:
 | `metadataSchemaName`       | Metadata schema name                                                                                                  |
 | `metadataSchemaEntityType` | Metadata entity type                                                                                                  |
 | `complianceSchemaName`     | Compliance schema name                                                                                                |
-| `complianceState`          | Asset compliance state (for example `quarantined`)                                                                    |
+| `complianceState`          | Asset compliance state (for example `quarantined`); set on the quarantine routes and one asset's state read only      |
 | `cascadeId`                | Compliance cascade identifier                                                                                         |
 | `auditLogGroup`            | Audit log group key, on the `auditLog` object type; the seeded `admin` role is the only role that holds it by default |
 | `object__type`             | Entity type for Tier 2 enforcement                                                                                    |

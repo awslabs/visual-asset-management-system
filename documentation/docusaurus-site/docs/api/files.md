@@ -238,11 +238,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description                                                                                      |
-| ------ | ------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to copy files.                                                                    |
-| `500`  | Internal server error.                                                                           |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. A copy to another asset or database of a file whose asset is quarantined without an exception, when the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and its files cannot be copied to another asset"); a copy within the asset is not refused. |
+| `403`  | Not authorized to copy files. A caller who may not read the source asset or write the destination asset receives `403` whatever the asset's compliance state.                                                                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---
 
