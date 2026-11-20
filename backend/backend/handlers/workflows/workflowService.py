@@ -403,7 +403,7 @@ def _deploy_fields(database_id, workflow_id, ref_records, item=None):
                         if _same_steps(item.get("specifiedPipelines"), ref_records) else None)
     workflow_arn, job_names, version_arn = workflowAsl.deploy_state_machine(
         database_id, workflow_id, ref_records, existing_arn=item.get("workflow_arn", ""),
-        job_names=stored_job_names)
+        job_names=stored_job_names, recorded_version_arn=item.get("workflowVersionArn", ""))
     return {
         "workflow_arn": workflow_arn or item.get("workflow_arn", ""),
         "workflowVersionArn": version_arn or "",

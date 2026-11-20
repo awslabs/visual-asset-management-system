@@ -13,6 +13,15 @@ import Textarea from "@cloudscape-design/components/textarea";
 
 export const REASON_REQUIRED_MESSAGE = "A reason is required.";
 
+/** The longest reason the compliance API records (MAX_REASON_LENGTH in models/compliance.py). */
+export const MAX_REASON_LENGTH = 1024;
+
+/** Shown while the reason is longer than the API accepts; the text is kept for the user to shorten. */
+export const reasonTooLongMessage = (length: number): string =>
+    `Use ${MAX_REASON_LENGTH.toLocaleString("en-US")} characters or fewer (${length.toLocaleString(
+        "en-US"
+    )} now).`;
+
 export interface ReasonModalProps {
     visible: boolean;
     /** Dialog title, e.g. "Reject cascade". */
@@ -37,7 +46,9 @@ export interface ReasonModalProps {
 /**
  * Collects a free-text reason for a compliance action. Mandatory by default (granting a quarantine
  * exception, releasing from quarantine): confirming with an empty field keeps the dialog open and
- * flags the field. With `optional` (approving or rejecting a cascade) it may be left empty.
+ * flags the field. With `optional` (approving or rejecting a cascade) it may be left empty. A
+ * reason longer than the API records is refused here, with the text kept, rather than sent to be
+ * refused after the dialog closes.
  */
 const ReasonModal: React.FC<ReasonModalProps> = ({
     visible,
@@ -62,8 +73,12 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
         }
     }, [visible]);
 
+    // Counted as the API counts it: without the spaces around it.
+    const tooLong = reason.trim().length > MAX_REASON_LENGTH;
+
     const handleConfirm = () => {
         const trimmed = reason.trim();
+        if (tooLong) return;
         if (!trimmed && !optional) {
             setErrorText(REASON_REQUIRED_MESSAGE);
             return;
@@ -93,8 +108,10 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
             <FormField
                 label={label}
                 description={description}
-                errorText={errorText}
-                constraintText={optional ? "Optional." : "Required."}
+                errorText={tooLong ? reasonTooLongMessage(reason.trim().length) : errorText}
+                constraintText={`${
+                    optional ? "Optional." : "Required."
+                } Up to ${MAX_REASON_LENGTH.toLocaleString("en-US")} characters.`}
                 stretch
             >
                 <Textarea
@@ -107,7 +124,7 @@ const ReasonModal: React.FC<ReasonModalProps> = ({
                     }}
                     placeholder={placeholder}
                     ariaRequired={!optional}
-                    invalid={!!errorText}
+                    invalid={!!errorText || tooLong}
                     rows={3}
                     autoFocus
                 />

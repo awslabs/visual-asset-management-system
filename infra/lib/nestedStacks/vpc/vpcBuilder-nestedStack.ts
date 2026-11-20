@@ -704,6 +704,7 @@ export class VPCBuilderNestedStack extends NestedStack {
                 (props.config.app.pipelines.useSystemGenAiMetadata.enabled &&
                     props.config.app.pipelines.useSystemGenAiMetadata.useFargateRenderer) ||
                 props.config.app.pipelines.useConversionCoordinateTransform?.enabled ||
+                props.config.app.pipelines.useCogConversion?.enabled ||
                 props.config.app.pipelines.useGenAiVideoSopBom?.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEcs.enabled ||
                 props.config.app.pipelines.useRapidPipeline.useEks.enabled ||

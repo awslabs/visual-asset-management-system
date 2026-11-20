@@ -113,6 +113,9 @@ export default function Databases() {
                     </Header>
                 }
             >
+                {/* Metadata removal is not gated on the listing here: the database-user template
+                    grants DELETE on this route for its own database only, which the listing cannot
+                    report (web/CLAUDE.md 6.4), and the API allows that role's removals. */}
                 {metadataModalDatabaseId && (
                     <MetadataContainer
                         entityType="database"

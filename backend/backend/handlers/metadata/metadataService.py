@@ -693,6 +693,30 @@ def check_multi_action_authorization(entity: dict, actions: list, claims_and_rol
         return False
 
 
+def require_route_delete_to_remove_keys(event, keys_to_remove, claims_and_roles: dict) -> None:
+    """Refuse a replace-all update that removes stored keys unless the route's DELETE is granted.
+
+    The Tier-1 check in lambda_handler covers the request's own method (PUT). Removing keys is what
+    the route's DELETE does, so a replace-all that would remove any stored key also needs Tier-1
+    DELETE on the same route, decided by the same enforceAPI check. ``keys_to_remove`` is computed
+    from the keys the replace-all read from the table, never from the request. A replace-all that
+    removes nothing is not checked. Raises PermissionError (403) before any write; without a
+    request event to check, it refuses.
+    """
+    if not keys_to_remove:
+        return
+    allowed = False
+    try:
+        if event is not None and len(claims_and_roles.get("tokens", [])) > 0:
+            allowed = bool(CasbinEnforcer(claims_and_roles).enforceAPI(event, 'DELETE'))
+    except Exception as e:
+        logger.exception(f"Error checking the route DELETE permission: {e}")
+        allowed = False
+    if not allowed:
+        raise PermissionError(
+            "REPLACE_ALL that removes existing keys requires DELETE permission on this route")
+
+
 #######################
 # Entity Validation Functions
 #######################
@@ -1245,13 +1269,14 @@ def create_asset_link_metadata(asset_link_id: str, request_model: CreateAssetLin
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLinkMetadataRequestModel, claims_and_roles: dict) -> BulkOperationResponseModel:
+def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLinkMetadataRequestModel, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Update metadata for an asset link (bulk operation) - Supports UPDATE and REPLACE_ALL modes
     
     Args:
         asset_link_id: The asset link ID
         request_model: The update request model with metadata items and updateType
         claims_and_roles: User claims and roles
+        event: The request event; a REPLACE_ALL that removes stored keys checks the route's DELETE on it
         
     Returns:
         BulkOperationResponseModel with operation results
@@ -1385,7 +1410,7 @@ def update_asset_link_metadata(asset_link_id: str, request_model: UpdateAssetLin
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_asset_link_metadata(asset_link_id, request_model.metadata, claims_and_roles)
+            return _replace_all_asset_link_metadata(asset_link_id, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_asset_link_metadata(asset_link_id, request_model.metadata, claims_and_roles)
@@ -1465,7 +1490,7 @@ def _upsert_asset_link_metadata(asset_link_id: str, metadata_items: list, claims
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all asset link metadata with rollback on failure"""
     try:
         # Step 1: Fetch all existing metadata
@@ -1486,6 +1511,8 @@ def _replace_all_asset_link_metadata(asset_link_id: str, metadata_items: list, c
         provided_keys = {item.metadataKey for item in metadata_items}
         existing_keys = {item['metadataKey'] for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -1951,7 +1978,7 @@ def handle_asset_link_metadata_put(event):
         request_model = parse(body, model=UpdateAssetLinkMetadataRequestModel)
         
         # Update metadata
-        response = update_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles)
+        response = update_asset_link_metadata(path_request_model.assetLinkId, request_model, claims_and_roles, event)
         _log_metadata_write(event, "metadataUpdate", response, request_model,
                             assetLinkId=path_request_model.assetLinkId)
         return success(body=response.dict())
@@ -2439,7 +2466,7 @@ def create_asset_metadata(database_id: str, asset_id: str, request_model: Create
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_asset_metadata(database_id: str, asset_id: str, request_model: UpdateAssetMetadataRequestModel, claims_and_roles: dict) -> BulkOperationResponseModel:
+def update_asset_metadata(database_id: str, asset_id: str, request_model: UpdateAssetMetadataRequestModel, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Update metadata for an asset (bulk operation) - Supports UPDATE and REPLACE_ALL modes
     
     Args:
@@ -2447,6 +2474,7 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
         asset_id: The asset ID
         request_model: The update request model with metadata items and updateType
         claims_and_roles: User claims and roles
+        event: The request event; a REPLACE_ALL that removes stored keys checks the route's DELETE on it
         
     Returns:
         BulkOperationResponseModel with operation results
@@ -2572,7 +2600,7 @@ def update_asset_metadata(database_id: str, asset_id: str, request_model: Update
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_asset_metadata(database_id, asset_id, request_model.metadata, claims_and_roles)
+            return _replace_all_asset_metadata(database_id, asset_id, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_asset_metadata(database_id, asset_id, request_model.metadata, claims_and_roles)
@@ -2655,7 +2683,7 @@ def _upsert_asset_metadata(database_id: str, asset_id: str, metadata_items: list
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all asset metadata with rollback on failure"""
     try:
         composite_key = f"{database_id}:{asset_id}:/"
@@ -2680,6 +2708,8 @@ def _replace_all_asset_metadata(database_id: str, asset_id: str, metadata_items:
         provided_keys = {item.metadataKey for item in metadata_items}
         existing_keys = {item['metadataKey'] for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -3101,7 +3131,7 @@ def handle_asset_metadata_put(event):
         request_model = parse(body, model=UpdateAssetMetadataRequestModel)
         
         # Update metadata
-        response = update_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        response = update_asset_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles, event)
         _log_metadata_write(event, "metadataUpdate", response, request_model,
                             database_id=path_request_model.databaseId, asset_id=path_request_model.assetId)
         return success(body=response.dict())
@@ -3597,8 +3627,11 @@ def create_file_metadata(database_id: str, asset_id: str, request_model: CreateF
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateFileMetadataRequestModel, claims_and_roles: dict):
-    """Update metadata or attributes for a file (bulk operation) - Supports UPDATE and REPLACE_ALL modes"""
+def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateFileMetadataRequestModel, claims_and_roles: dict, event=None):
+    """Update metadata or attributes for a file (bulk operation) - Supports UPDATE and REPLACE_ALL modes
+
+    A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
+    """
     try:
         validate_file_exists(database_id, asset_id, request_model.filePath)
         asset = validate_asset_exists(database_id, asset_id)
@@ -3729,7 +3762,7 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_file_metadata(database_id, asset_id, request_model.filePath, request_model.type, request_model.metadata, claims_and_roles)
+            return _replace_all_file_metadata(database_id, asset_id, request_model.filePath, request_model.type, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_file_metadata(database_id, asset_id, request_model.filePath, request_model.type, request_model.metadata, claims_and_roles)
@@ -3823,7 +3856,7 @@ def _upsert_file_metadata(database_id: str, asset_id: str, file_path: str, metad
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all file metadata/attributes with rollback on failure"""
     try:
         composite_key = f"{database_id}:{asset_id}:{file_path}"
@@ -3852,6 +3885,8 @@ def _replace_all_file_metadata(database_id: str, asset_id: str, file_path: str, 
         else:  # attribute
             existing_keys = {item.get('attributeKey', item.get('metadataKey')) for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -4284,7 +4319,7 @@ def handle_file_metadata_put(event):
             request_model.filePath = request_model.filePath[len(path_request_model.assetId)+1:]
             logger.info(f"Stripped assetId prefix from filePath")
         
-        response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles)
+        response = update_file_metadata(path_request_model.databaseId, path_request_model.assetId, request_model, claims_and_roles, event)
         _log_metadata_write(event, "metadataUpdate", response, request_model,
                             database_id=path_request_model.databaseId, asset_id=path_request_model.assetId,
                             file_path=request_model.filePath)
@@ -4621,8 +4656,11 @@ def create_database_metadata(database_id: str, request_model: CreateDatabaseMeta
         raise VAMSGeneralErrorResponse("Error creating metadata")
 
 
-def update_database_metadata(database_id: str, request_model: UpdateDatabaseMetadataRequestModel, claims_and_roles: dict):
-    """Update metadata for a database (bulk operation) - Supports UPDATE and REPLACE_ALL modes"""
+def update_database_metadata(database_id: str, request_model: UpdateDatabaseMetadataRequestModel, claims_and_roles: dict, event=None):
+    """Update metadata for a database (bulk operation) - Supports UPDATE and REPLACE_ALL modes
+
+    A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
+    """
     try:
         database = validate_database_exists(database_id)
         database.update({"object__type": "database"})
@@ -4741,7 +4779,7 @@ def update_database_metadata(database_id: str, request_model: UpdateDatabaseMeta
         # Route to appropriate operation based on updateType
         if request_model.updateType == UpdateType.REPLACE_ALL:
             # REPLACE_ALL: Delete unlisted keys, then upsert all provided
-            return _replace_all_database_metadata(database_id, request_model.metadata, claims_and_roles)
+            return _replace_all_database_metadata(database_id, request_model.metadata, claims_and_roles, event)
         else:
             # UPDATE: Upsert provided metadata (create or update)
             return _upsert_database_metadata(database_id, request_model.metadata, claims_and_roles)
@@ -4821,7 +4859,7 @@ def _upsert_database_metadata(database_id: str, metadata_items: list, claims_and
         raise VAMSGeneralErrorResponse("Error upserting metadata")
 
 
-def _replace_all_database_metadata(database_id: str, metadata_items: list, claims_and_roles: dict) -> BulkOperationResponseModel:
+def _replace_all_database_metadata(database_id: str, metadata_items: list, claims_and_roles: dict, event=None) -> BulkOperationResponseModel:
     """Internal helper: Replace all database metadata with rollback on failure"""
     try:
         # Step 1: Fetch all existing metadata
@@ -4843,6 +4881,8 @@ def _replace_all_database_metadata(database_id: str, metadata_items: list, claim
         provided_keys = {item.metadataKey for item in metadata_items}
         existing_keys = {item['metadataKey'] for item in existing_metadata}
         keys_to_delete = existing_keys - provided_keys
+        # Removing stored keys also needs the route's DELETE grant (refused before any write)
+        require_route_delete_to_remove_keys(event, keys_to_delete, claims_and_roles)
         
         # Store items to delete for potential rollback
         deleted_items_backup = [
@@ -5182,7 +5222,7 @@ def handle_database_metadata_put(event):
                 return validation_error(body={'message': "Invalid JSON in request body"}, event=event)
         
         request_model = parse(body, model=UpdateDatabaseMetadataRequestModel)
-        response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles)
+        response = update_database_metadata(path_request_model.databaseId, request_model, claims_and_roles, event)
         _log_metadata_write(event, "metadataUpdate", response, request_model, database_id=path_request_model.databaseId)
         return success(body=response.dict())
     except ValidationError as v:

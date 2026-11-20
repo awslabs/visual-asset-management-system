@@ -172,6 +172,37 @@ const buildVersionCompareFiles = (
     return [toFileInfo(file.version1File), toFileInfo(file.version2File)];
 };
 
+/**
+ * The asset's current files from the list-files API, keyed as a version snapshot keys its files.
+ * The API names a file by `relativePath`, which starts with "/", while a snapshot's `relativeKey`
+ * usually has no leading slash and lists no folders, so folders are skipped and the slash is
+ * dropped. A snapshot created with an explicit file list may keep a leading "/", so its keys are
+ * matched without it too.
+ */
+/** A file's path without its leading "/", the form both sides are matched in. */
+const withoutLeadingSlash = (path: unknown): string => String(path ?? "").replace(/^\/+/, "");
+
+const currentFilesByRelativeKey = (files: any[]): Map<string, FileVersion> => {
+    const byKey = new Map<string, FileVersion>();
+    files.forEach((file: any) => {
+        const relativeKey = withoutLeadingSlash(file?.relativePath);
+        if (file?.isFolder || !relativeKey) {
+            return;
+        }
+        byKey.set(relativeKey, {
+            relativeKey,
+            versionId: file.versionId,
+            isArchived: Boolean(file.isArchived),
+            exists: true,
+            isPermanentlyDeleted: file.isPermanentlyDeleted,
+            size: file.size,
+            lastModified: file.dateCreatedCurrentVersion,
+            etag: file.etag,
+        });
+    });
+    return byKey;
+};
+
 // Original standalone component for comparing with current files
 const AssetVersionComparison: React.FC<ComparisonProps> = ({
     databaseId,
@@ -254,23 +285,24 @@ const AssetVersionComparison: React.FC<ComparisonProps> = ({
                             // Create a comparison object manually
                             const fileComparisons: FileComparison[] = [];
                             const allKeys = new Set<string>();
+                            const currentByKey = currentFilesByRelativeKey(files);
 
                             // Add all keys from version files
                             versionDetails.files.forEach((file: FileVersion) => {
-                                allKeys.add(file.relativeKey);
+                                allKeys.add(withoutLeadingSlash(file.relativeKey));
                             });
 
                             // Add all keys from current files
-                            files.forEach((file: any) => {
-                                allKeys.add(file.relativeKey);
+                            currentByKey.forEach((_file, key) => {
+                                allKeys.add(key);
                             });
 
                             // Create comparison objects
                             allKeys.forEach((key) => {
                                 const versionFile = versionDetails.files.find(
-                                    (f: FileVersion) => f.relativeKey === key
+                                    (f: FileVersion) => withoutLeadingSlash(f.relativeKey) === key
                                 );
-                                const currentFile = files.find((f: any) => f.relativeKey === key);
+                                const currentFile = currentByKey.get(key);
 
                                 let status: "added" | "removed" | "modified" | "unchanged" =
                                     "unchanged";

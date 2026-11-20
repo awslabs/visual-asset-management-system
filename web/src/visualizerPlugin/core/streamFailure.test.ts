@@ -10,7 +10,13 @@
  * limit refused before the API answered the CORS preflight), a WAF block the API stage rendered, a
  * permission denial, a missing file, a throttle, or another status.
  */
-import { describeStreamFailure, probeStreamFailure } from "./streamFailure";
+import {
+    describeStreamFailure,
+    DOWNLOAD_ROUTE_FILE_NOT_FOUND,
+    isFileNotFoundAnswer,
+    probeStreamFailure,
+} from "./streamFailure";
+import fileNotFound from "./fileNotFoundBody.testdata.json";
 
 const SUBJECT = "the point cloud preview";
 const WAF_BODY = {
@@ -146,5 +152,23 @@ describe("probeStreamFailure", () => {
     it("returns no status when the request itself fails", async () => {
         fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
         await expect(probeStreamFailure(URL, HEADERS)).resolves.toEqual({});
+    });
+});
+
+// The body is the download route's real answer for a missing key: the backend handler test
+// `test_missing_single_file_answer_is_the_web_test_data` compares the route's response with the same
+// file, so a rewording on either side fails a test instead of turning missing files into refusals.
+describe("isFileNotFoundAnswer", () => {
+    it("reads the download route's missing-file answer as a missing file", () => {
+        expect(fileNotFound.body.message.endsWith(DOWNLOAD_ROUTE_FILE_NOT_FOUND)).toBe(true);
+        expect(isFileNotFoundAnswer(fileNotFound.statusCode, fileNotFound.body.message)).toBe(true);
+    });
+
+    it("[control] reads no other refusal or status as a missing file", () => {
+        expect(isFileNotFoundAnswer(400, "Asset is quarantined and cannot be downloaded")).toBe(
+            false
+        );
+        expect(isFileNotFoundAnswer(403, fileNotFound.body.message)).toBe(false);
+        expect(isFileNotFoundAnswer(undefined, fileNotFound.body.message)).toBe(false);
     });
 });

@@ -236,6 +236,29 @@ class TestOutageAndConfigurationKinds:
         assert res["failure"] == FORBID
         assert res["reason"] == "IP address not authorized"
 
+    def test_an_unreadable_allow_list_admits_no_caller(self):
+        with patch.object(core, "ALLOWED_IP_RANGES", None):
+            res = _auth(_evt(auth=None, source_ip="203.0.113.9"))
+        assert res["authorized"] is False
+        assert res["failure"] == FORBID
+        assert res["reason"] == "IP address not authorized"
+
+
+@pytest.mark.unit
+class TestAllowedIpRangesParsing:
+    @pytest.mark.parametrize("raw", [None, ""])
+    def test_unset_means_no_ip_restriction(self, raw):
+        assert core.parse_allowed_ip_ranges(raw) == []
+
+    def test_a_json_array_is_kept(self):
+        assert core.parse_allowed_ip_ranges('[["203.0.113.0", "203.0.113.255"]]') == [
+            ["203.0.113.0", "203.0.113.255"]]
+        assert core.parse_allowed_ip_ranges("[]") == []
+
+    @pytest.mark.parametrize("raw", ["not json", '{"a": 1}', "{}", '"203.0.113.0"', "7"])
+    def test_a_value_that_is_not_a_json_array_admits_no_caller(self, raw):
+        assert core.parse_allowed_ip_ranges(raw) is None
+
 
 class _RolesTable:
     def __init__(self, items):
@@ -340,9 +363,9 @@ class TestApiKeyLookupOutage:
             with pytest.raises(core.ApiKeyLookupUnavailableError):
                 core._lookup_api_key_by_hash("h1")
 
-    def test_query_error_with_a_cached_entry_serves_it(self):
+    def test_query_error_with_a_recently_expired_entry_serves_it(self):
         record = _record()
-        core._api_key_cache["h1"] = {"record": record, "expiry": 0}
+        core._api_key_cache["h1"] = {"record": record, "expiry": time.time() - 1}
 
         class _Broken:
             def query(self, **kwargs):
@@ -350,6 +373,21 @@ class TestApiKeyLookupOutage:
 
         with patch.object(core, "_get_api_key_table", return_value=_Broken()):
             assert core._lookup_api_key_by_hash("h1") == record
+
+    def test_query_error_with_an_entry_past_the_fallback_window_raises(self):
+        core._api_key_cache["h1"] = {
+            "record": _record(), "expiry": time.time() - core.API_KEY_STALE_FALLBACK_SECONDS - 1}
+
+        class _Broken:
+            def query(self, **kwargs):
+                raise RuntimeError("throttled")
+
+        with patch.object(core, "_get_api_key_table", return_value=_Broken()):
+            with pytest.raises(core.ApiKeyLookupUnavailableError):
+                core._lookup_api_key_by_hash("h1")
+
+    def test_the_fallback_window_is_bounded(self):
+        assert 0 < core.API_KEY_STALE_FALLBACK_SECONDS <= 4 * core.API_KEY_CACHE_TTL
 
     def test_not_found_still_returns_none(self):
         with patch.object(core, "_get_api_key_table", return_value=_RolesTable([])):

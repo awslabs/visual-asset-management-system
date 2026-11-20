@@ -149,10 +149,10 @@ Create one or more metadata items on an entity. Each item must include a `metada
 
 Update existing metadata items. VAMS supports two update modes:
 
-| Update Type        | Behavior                                                                                                                                 |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `update` (default) | Merge the provided items with existing metadata. Only the specified keys are updated; other keys remain unchanged.                       |
-| `replace_all`      | Replace all existing metadata with the provided items. Keys not included in the request are deleted. Limited to 500 items per operation. |
+| Update Type        | Behavior                                                                                                                                                                                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `update` (default) | Merge the provided items with existing metadata. Only the specified keys are updated; other keys remain unchanged.                                                                                                                                                                  |
+| `replace_all`      | Replace all existing metadata with the provided items. Keys not included in the request are deleted. Removing stored keys also requires the `DELETE` method on the metadata route; without it the request answers `403` and nothing is written. Limited to 500 items per operation. |
 
 ### Delete
 

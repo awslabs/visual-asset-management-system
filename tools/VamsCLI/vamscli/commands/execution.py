@@ -29,8 +29,17 @@ from ..utils.api_client import APIClient
 from ..utils.json_output import output_status, output_result, output_error, output_warning
 from ..utils.system_records import system_runs_hidden_hint
 from ..utils.exceptions import (
-    ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
+    BusinessLogicError, ExecutionNotFoundError, ExecutionInProgressError, InvalidExecutionDataError,
 )
+
+
+def _resumable(error: BusinessLogicError, token: Optional[str], **fields: Any) -> BusinessLogicError:
+    """``error`` carrying, in its own ``json_fields``, the token that re-reads the page that failed
+    (``startingToken``, absent when it was the first page) and ``fields`` describing what was kept."""
+    existing = getattr(error, 'json_fields', None)
+    error.json_fields = {**(existing if isinstance(existing, dict) else {}), **fields,
+                         **({'startingToken': token} if token else {})}
+    return error
 
 
 def _api(ctx: click.Context) -> APIClient:
@@ -600,9 +609,10 @@ def details(ctx: click.Context, include_sub_executions: bool, json_output: bool)
               default='input',
               help='Which metadata collection to page: input (asset/file), inputDatabase, or output')
 @click.option('--pipeline-id', help="Only rows produced by this pipeline (one workflow step)")
-@click.option('--page-size', type=int,
+@click.option('--page-size', type=click.IntRange(min=1),
               help=f'Rows per page (max {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE})')
-@click.option('--max-items', type=int, help='Maximum total rows to fetch (only with --auto-paginate)')
+@click.option('--max-items', type=click.IntRange(min=1),
+              help='Maximum total rows to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all rows')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -745,9 +755,11 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
                      helpful_message="Use 'vamscli execution list' to see available executions.")
         raise click.ClickException(str(e))
     except InvalidExecutionDataError as e:
+        # The route also answers 400 for an invalid --pipeline-id or --page-size, so the token hint
+        # is given only when a token was sent.
         output_error(e, json_output, error_type="Invalid Metadata Page Request",
-                     helpful_message="A pagination token is only valid with the --collection and "
-                                     "--pipeline-id it was issued for.")
+                     helpful_message=("A pagination token is only valid with the --collection and "
+                                      "--pipeline-id it was issued for." if starting_token else None))
         raise click.ClickException(str(e))
 
 
@@ -758,9 +770,10 @@ def details_metadata(ctx: click.Context, execution_id: str, collection: str,
               help='Which file collection to page: input (workflow-level input files) or output '
                    '(per-pipeline output files)')
 @click.option('--pipeline-id', help="Only output rows produced by this pipeline (one workflow step)")
-@click.option('--page-size', type=int,
+@click.option('--page-size', type=click.IntRange(min=1),
               help=f'Rows per page (max {MAX_EXECUTION_DETAIL_METADATA_PAGE_SIZE})')
-@click.option('--max-items', type=int, help='Maximum total rows to fetch (only with --auto-paginate)')
+@click.option('--max-items', type=click.IntRange(min=1),
+              help='Maximum total rows to fetch (only with --auto-paginate)')
 @click.option('--starting-token', help='Token for pagination (manual pagination)')
 @click.option('--auto-paginate', is_flag=True, help='Automatically fetch all rows')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
@@ -853,7 +866,12 @@ def details_files(ctx: click.Context, execution_id: str, collection: str,
                 params = _base_params()
                 if next_token:
                     params['startingToken'] = next_token
-                page = _message(api_client.get_execution_details_files(execution_id, params=params))
+                try:
+                    page = _message(api_client.get_execution_details_files(execution_id, params=params))
+                except BusinessLogicError as e:
+                    if page_count == 1:
+                        raise
+                    raise _resumable(e, next_token, rowsRead=len(all_items))
                 all_items.extend(page.get('Items', []))
                 if not json_output:
                     output_status(f"Fetched {len(all_items)} file(s) (page {page_count})...", False)
@@ -889,9 +907,20 @@ def details_files(ctx: click.Context, execution_id: str, collection: str,
                      helpful_message="Use 'vamscli execution list' to see available executions.")
         raise click.ClickException(str(e))
     except InvalidExecutionDataError as e:
+        # The route also answers 400 for an invalid --pipeline-id or --page-size, so the token hint
+        # is given only when a token was sent.
         output_error(e, json_output, error_type="Invalid File Page Request",
-                     helpful_message="A pagination token is only valid with the --collection and "
-                                     "--pipeline-id it was issued for.")
+                     helpful_message=("A pagination token is only valid with the --collection and "
+                                      "--pipeline-id it was issued for." if starting_token else None))
+        raise click.ClickException(str(e))
+    except BusinessLogicError as e:
+        fields = getattr(e, 'json_fields', None) or {}
+        if 'startingToken' not in fields:
+            raise
+        output_error(e, json_output, error_type="File Page Failed",
+                     helpful_message=f"{fields.get('rowsRead', 0)} row(s) were read before it. Resume with "
+                                     f"--starting-token {fields['startingToken']} and the same "
+                                     "--collection and --pipeline-id.")
         raise click.ClickException(str(e))
 
 
@@ -938,29 +967,67 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
         page = _message(api_client.get_execution_results(execution_id, params=params))
         return page if isinstance(page, dict) else {}
 
+    def _open_output() -> Any:
+        try:
+            return open(output_file, 'w', encoding='utf-8')
+        except OSError as e:
+            output_error(e, json_output, error_type="Results File Write Failed",
+                         helpful_message="Check that the --output path is writable.")
+            raise click.ClickException(f"Could not write results to {output_file}: {e}")
+
     output_status(f"Retrieving results for execution '{execution_id}'"
                   f"{' (auto-paginating)' if auto_paginate else ''}...", json_output)
+    streamed = False
     try:
         if auto_paginate:
-            parts = []
+            # With --output each page is written as it arrives, so a page that fails keeps what was
+            # read; the text is held in memory only when stdout must carry it. The file is opened once
+            # the first page has arrived, so a first page that fails leaves an existing file as it was.
+            out = None
+            streamed = bool(output_file)
+            parts = [] if (json_output or not output_file) else None
             truncated = False
             row_count = byte_len = page_count = 0
             next_token = starting_token
-            while True:
-                page_count += 1
-                page = _page(next_token)
-                parts.append(page.get('resultContent', '') or '')
-                truncated = truncated or bool(page.get('resultContentTruncated'))
-                row_count += page.get('resultRowCount', 0) or 0
-                byte_len += page.get('resultContentBytes', 0) or 0
-                next_token = page.get('NextToken')
-                if not json_output and next_token:
-                    output_status(f"Fetched {row_count} row(s) (page {page_count})...", False)
-                if not next_token or page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
-                    break
-            result = {'resultContent': ''.join(parts), 'resultContentTruncated': truncated,
+            try:
+                while True:
+                    page_count += 1
+                    try:
+                        page = _page(next_token)
+                    except BusinessLogicError as e:
+                        if page_count == 1:
+                            raise
+                        kept = {'rowsWritten': row_count, 'outputFile': output_file} if out else {}
+                        raise _resumable(e, next_token, pagesRead=page_count - 1, **kept)
+                    piece = page.get('resultContent', '') or ''
+                    if output_file and out is None:
+                        out = _open_output()
+                    if out is not None:
+                        try:
+                            out.write(piece)
+                            out.flush()
+                        except OSError as e:
+                            output_error(e, json_output, error_type="Results File Write Failed",
+                                         helpful_message="Check that the --output path is writable.")
+                            raise click.ClickException(f"Could not write results to {output_file}: {e}")
+                    if parts is not None:
+                        parts.append(piece)
+                    truncated = truncated or bool(page.get('resultContentTruncated'))
+                    row_count += page.get('resultRowCount', 0) or 0
+                    byte_len += page.get('resultContentBytes', 0) or 0
+                    next_token = page.get('NextToken')
+                    if not json_output and next_token:
+                        output_status(f"Fetched {row_count} row(s) (page {page_count})...", False)
+                    if not next_token or page_count >= MAX_EXECUTION_AUTO_PAGINATE_PAGES:
+                        break
+            finally:
+                if out is not None:
+                    out.close()
+            result = {'resultContentTruncated': truncated,
                       'resultRowCount': row_count, 'resultContentBytes': byte_len,
                       'autoPaginated': True, 'pageCount': page_count}
+            if parts is not None:
+                result = {'resultContent': ''.join(parts), **result}
             if next_token:
                 result['NextToken'] = next_token
                 result['note'] = (
@@ -975,16 +1042,11 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
         byte_len = result.get('resultContentBytes', 0) or 0
         next_token = result.get('NextToken')
 
-        if output_file:
+        if output_file and not streamed:
             # Write the returned text to disk in BOTH output modes; stdout still carries the caption
             # (CLI mode) or the JSON result (--json-output), so the file never replaces it.
-            try:
-                with open(output_file, 'w', encoding='utf-8') as fh:
-                    fh.write(content)
-            except OSError as e:
-                output_error(e, json_output, error_type="Results File Write Failed",
-                             helpful_message="Check that the --output path is writable.")
-                raise click.ClickException(f"Could not write results to {output_file}: {e}")
+            with _open_output() as fh:
+                fh.write(content)
 
         def _fmt(_r):
             out = []
@@ -1016,6 +1078,17 @@ def details_results(ctx: click.Context, execution_id: str, output_file: Optional
         output_error(e, json_output, error_type="Invalid Results Request",
                      helpful_message="A pagination token is only valid for the results of the "
                                      "execution it was issued for.")
+        raise click.ClickException(str(e))
+    except BusinessLogicError as e:
+        fields = getattr(e, 'json_fields', None) or {}
+        if 'startingToken' not in fields:
+            raise
+        kept = (f"The first {fields.get('pagesRead', 0)} page(s) were written to {output_file}. "
+                if fields.get('outputFile') else "")
+        output_error(e, json_output, error_type="Results Page Failed",
+                     helpful_message=f"{kept}Resume with --starting-token {fields['startingToken']}"
+                                     + (" (into another --output file)" if fields.get('outputFile') else "")
+                                     + ".")
         raise click.ClickException(str(e))
 
 

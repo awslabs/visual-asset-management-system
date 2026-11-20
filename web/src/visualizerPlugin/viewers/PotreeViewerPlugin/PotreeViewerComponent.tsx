@@ -82,9 +82,12 @@ const PotreeViewerComponent: React.FC<ViewerPluginProps> = ({
                     relativeAssetKey = relativeAssetKey.slice(assetId.length + 1);
                 }
                 const fileKey = relativeAssetKey + "/preview/PotreeViewer/metadata.json";
+                // Each segment is encoded and the slashes kept: Potree resolves the sibling files
+                // relative to metadata.json.
+                const encodedFileKey = fileKey.split("/").map(encodeURIComponent).join("/");
                 const url = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
                     assetId
-                )}/auxiliaryPreviewAssets/stream/${fileKey}`;
+                )}/auxiliaryPreviewAssets/stream/${encodedFileKey}`;
 
                 // Get a valid, fresh authorization header (automatically refreshes token if expired)
                 const authorizationHeader = await getDualAuthorizationHeader();

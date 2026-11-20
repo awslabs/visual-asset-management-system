@@ -123,6 +123,30 @@ class TestRecipes:
         assert service.lambda_handler(make_event("GET", recipe_path("nope"), path_params={"recipeId": "nope"}), {})["statusCode"] == 404
         assert service.lambda_handler(make_event("GET", recipe_path("Bad_Id"), path_params={"recipeId": "Bad_Id"}), {})["statusCode"] == 400
 
+    @pytest.mark.parametrize("method,action", [("GET", "GET"), ("PUT", "PUT"), ("DELETE", "DELETE")])
+    def test_a_caller_limited_to_one_os_family_gets_one_answer_for_a_missing_and_a_refused_recipe(
+            self, monkeypatch, method, action):
+        # The role may act on Linux recipes only; the stored recipe is a Windows one.
+        def linux_only(obj, act):
+            return obj.get("edhOsFamily") == "linux"
+        body = {**RECIPE_BODY, "recipeId": "ignored"} if method == "PUT" else None
+        answers = []
+        for stored in ({**RECIPE, "osFamily": "windows"}, None):
+            install(monkeypatch, recipe=stored, enforce=linux_only)
+            response = service.lambda_handler(
+                make_event(method, recipe_path("team-recipe"), body=body, path_params={"recipeId": "team-recipe"}), {})
+            answers.append((response["statusCode"], response_body(response)))
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 403
+
+    def test_a_caller_allowed_on_every_os_family_is_told_a_recipe_is_missing(self, monkeypatch):
+        fakes = install(monkeypatch, recipe=None)
+        response = service.lambda_handler(
+            make_event("GET", recipe_path("nope"), path_params={"recipeId": "nope"}), {})
+        assert response["statusCode"] == 404
+        decided = {(call.args[0]["edhOsFamily"], call.args[1]) for call in fakes.enforcer.enforce.call_args_list}
+        assert {("linux", "GET"), ("windows", "GET")} <= decided
+
     def test_put_uses_the_put_action_and_the_path_id(self, monkeypatch):
         fakes = install(monkeypatch)
         response = service.lambda_handler(
@@ -219,6 +243,19 @@ class TestDuplicate:
         assert response["statusCode"] == 409
         assert response_body(response)["message"] == "the recipe to duplicate does not exist"
         fakes.recipes.create_admin_recipe.assert_not_called()
+
+    def test_a_caller_who_may_not_read_the_source_gets_one_answer_whether_or_not_it_exists(self, monkeypatch):
+        # POST on the new (Linux) recipe; GET on Linux recipes only. The stored source is a Windows one.
+        def enforce(obj, act):
+            return obj.get("edhOsFamily") == "linux"
+        answers = []
+        for stored in (SOURCE_RECIPE, None):
+            fakes = install(monkeypatch, recipe=stored, enforce=enforce)
+            response = service.lambda_handler(make_event("POST", RECIPES_PATH, body=COPY_BODY), {})
+            answers.append((response["statusCode"], response_body(response)))
+            fakes.recipes.create_admin_recipe.assert_not_called()
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 403
 
     def test_an_invalid_source_id_is_400(self, monkeypatch):
         fakes = install(monkeypatch, recipe=SOURCE_RECIPE)

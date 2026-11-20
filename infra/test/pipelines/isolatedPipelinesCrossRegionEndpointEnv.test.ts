@@ -20,6 +20,7 @@ import * as Config from "../../config/config";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
+import { CogConvertConstruct } from "../../lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { VideoSopBomConstruct } from "../../lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct";
 import { makePipelineHarness, PipelineHarness } from "../support/pipelineConstructHarness";
@@ -93,6 +94,30 @@ const ISOLATED_PIPELINES: {
                     importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
                 })
             ),
+    },
+    {
+        name: "conversion/cogConvert",
+        handler: "vamsExecuteCogConvertPipeline.lambda_handler",
+        enable: (c) => {
+            c.app.pipelines.useCogConversion.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useCogConversion.useCodeBuild = true;
+            c.app.pipelines.useCogConversion.autoRegisterWithVAMS = false;
+        },
+        build: (h) => {
+            new CogConvertConstruct(h.stack, "CogConvertPipeline", {
+                config: h.config,
+                vpc: h.vpc,
+                pipelineSubnets: h.subnets,
+                pipelineSecurityGroups: h.securityGroups,
+                lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+                assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+                storageResources: h.storage,
+                kmsKey: h.kmsKey,
+                importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+            });
+            return Template.fromStack(h.stack);
+        },
     },
     {
         name: "conversion/coordinateTransform",

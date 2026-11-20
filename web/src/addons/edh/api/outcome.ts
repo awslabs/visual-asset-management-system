@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { unwrapMessage } from "../../../features/orchestration/api/client";
+import {
+    failureStatus,
+    ServiceCallError,
+    unwrapMessage,
+} from "../../../features/orchestration/api/client";
+import { requestFailureMessage } from "../../../services/networkFailure";
 
 /** The parsed body of a failed EDH request. */
 export interface EdhErrorBody {
@@ -32,9 +37,38 @@ export class EdhRequestError extends Error {
     }
 }
 
-/** An `apiClient` rejection as an `EdhRequestError`, keeping whatever status and body it carried. */
+/**
+ * Throws a failed service tuple for a query's error state, as the orchestration hooks do
+ * (web/CLAUDE.md 4.1 item 7). An `EdhRequestError` is thrown as it is: its status and body say
+ * whether EDH confirmed it. A message is thrown as a `ServiceCallError` carrying the call's HTTP
+ * status, so the query client's retry rule (utils/queryRetry.ts) gives up at once on a final answer
+ * such as a 403 or 404.
+ */
+export async function callService<T>(
+    serviceFn: () => Promise<[boolean, T | string | EdhRequestError]>
+): Promise<T> {
+    const result = await serviceFn();
+    const [ok, data] = result;
+    if (!ok) {
+        if (data instanceof Error) throw data;
+        throw new ServiceCallError(
+            typeof data === "string" ? data : "Service call failed",
+            failureStatus(result)
+        );
+    }
+    return data as T;
+}
+
+/**
+ * An `apiClient` rejection as an `EdhRequestError`, keeping whatever status and body it carried. A
+ * request that got no response carries `NETWORK_FAILURE_MESSAGE` and no status.
+ */
 export function edhRequestError(e: any): EdhRequestError {
-    return new EdhRequestError(e?.message || "Request failed", e?.status, e?.body ?? undefined);
+    return new EdhRequestError(
+        requestFailureMessage(e, "Request failed"),
+        e?.status,
+        e?.body ?? undefined
+    );
 }
 
 /**

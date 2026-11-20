@@ -202,7 +202,16 @@ SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_M
 
 
 class ZipRefusal(VAMSGeneralErrorResponse):
-    """A refused create (400, or the given status)."""
+    """A refused create (400, or the given status). Its text is the refusal sentence alone, as the
+    API pages quote it and as the URL route already answers it, without the "VAMS General Error: "
+    prefix the base class adds."""
+
+    def __init__(self, message, status_code=400):
+        super().__init__(message, status_code=status_code)
+        self.message = message
+
+    def __str__(self):
+        return self.message
 
 
 def _refusal_message(error) -> str:
@@ -524,7 +533,8 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
         asset_version_id = resolve_asset_version_id_from_alias(database_id, asset_id,
                                                                request.assetVersionIdAlias)
     validate_asset_version_exists(database_id, asset_id, asset_version_id)
-    snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id) or {}
+    # A failed read raises (answered 500), so it is never reported as a selection the version lacks.
+    snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id, raise_errors=True) or {}
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = (f.get("relativeKey") or "").lstrip("/")
@@ -584,6 +594,7 @@ def _resolve_current(bucket, base_key, request):
                          f"folder")
     sizes = _check_members(bucket, explicit) if explicit else []
     files, total, complete = len(explicit), sum(sizes), True
+    _enforce_limits(files, total)
     deadline = time.monotonic() + PRESCAN_MAX_SECONDS
     budget = [PRESCAN_MAX_OBJECTS]
     for record in entries:

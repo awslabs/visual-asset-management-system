@@ -37,6 +37,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 MANIFEST_HELPER_COPIES = (
     "backendPipelines/3dRecon/splatToolbox/lambda/manifestHelper.py",
     "backendPipelines/conversion/3dBasic/lambda/manifestHelper.py",
+    "backendPipelines/conversion/cogConvert/lambda/manifestHelper.py",
     "backendPipelines/conversion/coordinateTransform/lambda/manifestHelper.py",
     "backendPipelines/genAi/cadStepAgent/lambda/manifestHelper.py",
     "backendPipelines/genAi/imageTo3d/lambda/manifestHelper.py",
@@ -62,6 +63,7 @@ ISOLATED_SUBNET_VAMS_EXECUTE = (
     "backendPipelines/system/genAiMetadata/lambda/vamsExecuteSystemGenAiMetadataPipeline.py",
     "backendPipelines/conversion/coordinateTransform/lambda/vamsExecuteCoordinateTransformPipeline.py",
     "backendPipelines/conversion/3dBasic/lambda/vamsExecuteConversion3dBasicPipeline.py",
+    "backendPipelines/conversion/cogConvert/lambda/vamsExecuteCogConvertPipeline.py",
     "backendPipelines/genAi/videoSopBom/lambda/vamsExecuteVideoSopBomPipeline.py",
     "backendPipelines/utility/zipArchive/lambda/vamsExecuteZipArchivePipeline.py",
 )

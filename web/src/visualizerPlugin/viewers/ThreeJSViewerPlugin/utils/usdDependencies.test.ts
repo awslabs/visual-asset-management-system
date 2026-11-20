@@ -17,13 +17,13 @@ import {
 } from "./assetDependencyResolver";
 import {
     buildUsdPackage,
-    checkUsdzSize,
+    checkZipSize,
     collectUsdLayerPaths,
     composerKey,
     extractUsdAssetPaths,
     isUsdcBytes,
     isUsdzBytes,
-    USDZ_LIMITS,
+    ZIP_LIMITS,
 } from "./usdDependencies";
 import { clearPresignedUrlCache } from "../../../core/presignedFetch";
 
@@ -309,7 +309,7 @@ describe("composerKey", () => {
     });
 });
 
-describe("checkUsdzSize", () => {
+describe("checkZipSize", () => {
     const zipOf = (count: number, size: number) => ({
         bytes: new Uint8Array(1024),
         unzipSync: jest.fn((_data: Uint8Array, opts: any) => {
@@ -322,23 +322,23 @@ describe("checkUsdzSize", () => {
 
     it("accepts a normal package without inflating anything", () => {
         const { bytes, unzipSync } = zipOf(3, 100);
-        expect(() => checkUsdzSize(bytes, unzipSync)).not.toThrow();
+        expect(() => checkZipSize(bytes, unzipSync)).not.toThrow();
         expect(unzipSync).toHaveBeenCalledTimes(1);
     });
 
     it("rejects a package that declares too many uncompressed bytes", () => {
-        const { bytes, unzipSync } = zipOf(1, USDZ_LIMITS.expansionAllowanceBytes + 4 * 1024 + 1);
-        expect(() => checkUsdzSize(bytes, unzipSync)).toThrow(/expands to/);
+        const { bytes, unzipSync } = zipOf(1, ZIP_LIMITS.expansionAllowanceBytes + 4 * 1024 + 1);
+        expect(() => checkZipSize(bytes, unzipSync)).toThrow(/expands to/);
     });
 
     it("rejects a package with too many entries", () => {
-        const { bytes, unzipSync } = zipOf(USDZ_LIMITS.maxEntries + 1, 0);
-        expect(() => checkUsdzSize(bytes, unzipSync)).toThrow(/entries/);
+        const { bytes, unzipSync } = zipOf(ZIP_LIMITS.maxEntries + 1, 0);
+        expect(() => checkZipSize(bytes, unzipSync)).toThrow(/entries/);
     });
 
     it("reports an unreadable archive", () => {
         expect(() =>
-            checkUsdzSize(new Uint8Array(4), () => {
+            checkZipSize(new Uint8Array(4), () => {
                 throw new Error("invalid zip data");
             })
         ).toThrow(/could not be read: invalid zip data/);

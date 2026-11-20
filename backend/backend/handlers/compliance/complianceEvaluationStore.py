@@ -248,9 +248,11 @@ def load_schema_body(schema_name: str) -> Optional[Dict[str, Any]]:
     return engine.parse_schema_body(item.get("schemaBody", "{}"))
 
 
-def resolve_schema_rules(schema_body: Dict[str, Any]) -> Dict[str, Any]:
-    """Merged raw rules for a schema body, following its `extends` chain through the table."""
-    return engine.resolve_rules(schema_body, load_schema_body)
+def resolve_schema_rules(schema_body: Dict[str, Any],
+                         unresolved: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Merged raw rules for a schema body, following its `extends` chain through the table; a
+    parent the chain does not resolve is appended to `unresolved` when one is given."""
+    return engine.resolve_rules(schema_body, load_schema_body, unresolved=unresolved)
 
 
 # --- Asset reads ---
@@ -1763,7 +1765,10 @@ def run_evaluation(
                              "Schema is not vams-rules-v1 format", evaluated_at, actor)
     schema_version = engine.schema_version_number(schema_item.get("internalVersion"))
 
-    typed_rules = engine.parse_resolved_rules(resolve_schema_rules(schema_body))
+    unresolved_parents: List[str] = []
+    raw_rules = resolve_schema_rules(schema_body, unresolved_parents)
+    typed_rules = engine.parse_resolved_rules(raw_rules)
+    unreadable_results = engine.unreadable_rule_results(raw_rules, typed_rules, unresolved_parents)
     groups = engine.split_rules(typed_rules)
 
     asset_metadata = get_asset_metadata(database_id, asset_id)
@@ -1802,6 +1807,7 @@ def run_evaluation(
         current_files=current_files, versioned_file_keys=versioned_file_keys,
         asset_row=asset_row, file_metadata_by_path=file_metadata_by_path,
         file_attributes_by_path=file_attributes_by_path, link_metadata_by_id=link_metadata_by_id)
+    rule_results = unreadable_results + rule_results
 
     base_record = _evaluation_record_base(evaluation_id, database_id, asset_id, schema_name,
                                           schema_version, evaluated_at, actor)

@@ -47,14 +47,13 @@ const pendingCascade = () => ({
     requireApproval: true,
 });
 
-// Approve from the queue: the row's button opens the reason dialog, whose confirm button shares the
-// label (the table's button comes first in the DOM, the modal portal's last). The reason is left
-// empty: it is optional.
+// Approve from the queue: the row's button (named with the cascade) opens the reason dialog, whose
+// confirm button is the bare verb. The reason is left empty: it is optional.
 const approveFromQueue = async (
     user: { click: (element: Element) => Promise<void> } = userEvent
 ) => {
     await screen.findByText("manual trigger");
-    await user.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+    await user.click(screen.getByRole("button", { name: /^Approve cascade / }));
     expect(screen.getByText(`Approve cascade ${CASCADE_ID.slice(0, 8)}...`)).toBeInTheDocument();
     const confirm = screen.getAllByRole("button", { name: "Approve" });
     await user.click(confirm[confirm.length - 1]);
@@ -71,13 +70,12 @@ describe("ComplianceCascades", () => {
 
         render(<ComplianceCascades />);
         await screen.findByText("manual trigger");
-        // The modal's confirm button shares the label; the table's button comes first in the DOM,
-        // the modal portal's last.
-        const tableReject = screen.getAllByRole("button", { name: "Reject" })[0];
+        // The table's button names the cascade; the modal's confirm button is the bare verb.
+        const tableReject = screen.getByRole("button", { name: /^Reject cascade / });
         await userEvent.click(tableReject);
 
         // The reason is optional (the API records "rejected"): the field says so.
-        expect(screen.getAllByText("Optional.").length).toBeGreaterThan(0);
+        expect(screen.getAllByText(/^Optional\./).length).toBeGreaterThan(0);
         await userEvent.type(screen.getByLabelText("Reason for rejection"), "Not needed");
         const confirm = screen.getAllByRole("button", { name: "Reject" });
         await userEvent.click(confirm[confirm.length - 1]);
@@ -93,7 +91,7 @@ describe("ComplianceCascades", () => {
         service().rejectCascade.mockResolvedValue([true, "Cascade rejected"]);
         render(<ComplianceCascades />);
         await screen.findByText("manual trigger");
-        await userEvent.click(screen.getAllByRole("button", { name: "Reject" })[0]);
+        await userEvent.click(screen.getByRole("button", { name: /^Reject cascade / }));
         const confirm = screen.getAllByRole("button", { name: "Reject" });
         await userEvent.click(confirm[confirm.length - 1]);
         await waitFor(() =>
@@ -113,7 +111,7 @@ describe("ComplianceCascades", () => {
         ]);
         render(<ComplianceCascades />);
         await screen.findByText("manual trigger");
-        await userEvent.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+        await userEvent.click(screen.getByRole("button", { name: /^Approve cascade / }));
         expect(service().approveCascade).not.toHaveBeenCalled();
         await userEvent.type(screen.getByLabelText("Reason for approval"), "Parent fixed");
         const confirm = screen.getAllByRole("button", { name: "Approve" });

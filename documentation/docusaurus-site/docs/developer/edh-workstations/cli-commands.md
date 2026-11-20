@@ -81,7 +81,7 @@ vamscli edh workstation create --image-id <ID> --instance-type <TYPE> --name <NA
 | `--root-size-gb`            | INTEGER | Yes      | Root volume size in GiB, 10 to 2048, and at least the image's `rootSize` from `edh catalog images`                                                                                                                                                                                         |
 | `--os-family`               | CHOICE  | Yes      | `linux` or `windows`: the chosen image's `osFamily` from `edh catalog images`                                                                                                                                                                                                              |
 | `--lease-hours`             | INTEGER | No       | Lease in hours, 1 up to the policy's `leaseHours` (`edh catalog lease`). Honoured only while the lease policy is enabled and not forced — omitted, the workstation has no lease; overridden when the policy is forced, and refused with HTTP 400 when leases are off or above `leaseHours` |
-| `--bootstrap-id`            | UUID    | No       | Idempotency key (UUID); generated when omitted. Re-send it only when the create response was lost: a repeat returns the existing record and launches nothing                                                                                                                               |
+| `--bootstrap-id`            | UUID    | No       | Idempotency key (UUID); generated when omitted, printed before the request and carried in any error (`bootstrapId`). Re-send it only when the create response was lost: a repeat returns the existing record and launches nothing                                                          |
 | `--capacity-reservation-id` | TEXT    | No       | A registered capacity reservation to launch into (`cr-` and 17 hex digits; `edh catalog capacity-reservations`). Its instance type must equal `--instance-type` and its platform suit `--os-family`. Omitted, the launch is on-demand                                                      |
 | `--json-output`             | Flag    | No       | Output raw JSON response                                                                                                                                                                                                                                                                   |
 
@@ -675,7 +675,7 @@ vamscli edh admin ami-recipe create --file recipe.json
 vamscli edh admin ami-recipe create --file recipe.json --json-output
 ```
 
-Returns the new recipe with `latestBuild` `null` (HTTP 201). A field the API does not accept is refused with HTTP 400, as is a `buildInstanceType`, or an `ami-` or `ssm:` `parentImage`, that Amazon EC2 reports as running another architecture family than `architecture` (`buildInstanceType does not match the recipe's architecture`, `parentImage does not match the recipe's architecture`; `x86_64` and `i386` are one family), while a lookup that fails refuses nothing; a `recipeId` that is already in use (`recipeId is already in use`), a `stackName` another recipe uses (`stackName is already used by recipe '<id>'`), or a recipe that declares `assets` (`assets are only supported on shipped recipes`) is refused with HTTP 409.
+Returns the new recipe with `latestBuild` `null` (HTTP 201). A field the API does not accept is refused with HTTP 400, as is a `buildInstanceType`, or an `ami-` or `ssm:` `parentImage`, that Amazon EC2 reports as running another architecture family than `architecture` (`buildInstanceType does not match the recipe's architecture`, `parentImage does not match the recipe's architecture`; `x86_64` and `i386` are one family), while a lookup that fails refuses nothing; a `recipeId` that is already in use (`recipeId is already in use`), a `stackName` another recipe uses (`stackName is already used by another recipe`), or a recipe that declares `assets` (`assets are only supported on shipped recipes`) is refused with HTTP 409.
 
 ### edh admin ami-recipe update
 
@@ -695,7 +695,7 @@ vamscli edh admin ami-recipe update team-desktop --file recipe.json
 vamscli edh admin ami-recipe update team-desktop --file recipe.json --json-output
 ```
 
-A duplicated recipe keeps its bundled files and `duplicatedFrom`, so its file leaves `assets` out or repeats them exactly. A file that declares other `assets` is refused with HTTP 409 `the assets of a duplicated recipe cannot be changed`, or `assets are only supported on shipped recipes` for a recipe that holds none, a `stackName` another recipe uses with `stackName is already used by recipe '<id>'`, a recipe whose `source` is `config` with HTTP 409 `a config recipe is edited in the repository, not here`, a recipe deleted after the command read it with `the recipe no longer exists`, and an update that other writes to the recipe kept overtaking with `the recipe changed while it was saved; try again`. A definition whose build instance types or parent image run another architecture family than `architecture` is refused with HTTP 400, as on create.
+A duplicated recipe keeps its bundled files and `duplicatedFrom`, so its file leaves `assets` out or repeats them exactly. A file that declares other `assets` is refused with HTTP 409 `the assets of a duplicated recipe cannot be changed`, or `assets are only supported on shipped recipes` for a recipe that holds none, a `stackName` another recipe uses with `stackName is already used by another recipe`, a recipe whose `source` is `config` with HTTP 409 `a config recipe is edited in the repository, not here`, a recipe deleted after the command read it with `the recipe no longer exists`, and an update that other writes to the recipe kept overtaking with `the recipe changed while it was saved; try again`. A definition whose build instance types or parent image run another architecture family than `architecture` is refused with HTTP 400, as on create.
 
 ### edh admin ami-recipe duplicate
 
@@ -720,7 +720,7 @@ vamscli edh admin ami-recipe duplicate al2023-desktop --recipe-id team-desktop -
 vamscli edh admin ami-recipe duplicate al2023-desktop --recipe-id team-desktop --json-output
 ```
 
-Returns the new recipe with `source` `admin`, `duplicatedFrom` and `latestBuild` `null` (HTTP 201). A `--keep-versions` value outside 1-20 is refused at the command line (exit 2) before any request is made. A source that does not exist fails with `Recipe Not Found: AMI recipe '<SOURCE_ID>' not found`, and nothing is created. The create is refused with HTTP 409, printed as `AMI recipe creation refused (409): <message>`, when the new recipe id is in use (`recipeId is already in use`), when another recipe uses the stack name (`stackName is already used by recipe '<id>'`, which a second copy of one recipe meets under the default stack name), or when the source is deleted between the read and the create (`the recipe to duplicate does not exist`). A default name longer than its field allows is refused with HTTP 400; pass `--display-name` or `--stack-name`. A source whose build instance types or parent image run another architecture family than its `architecture` is refused with HTTP 400, as on create. A role without the `GET` and `POST` AMI recipe routes, or without `GET` on the source recipe or `POST` on the new one, is refused with HTTP 403.
+Returns the new recipe with `source` `admin`, `duplicatedFrom` and `latestBuild` `null` (HTTP 201). A `--keep-versions` value outside 1-20 is refused at the command line (exit 2) before any request is made. A source that does not exist fails with `Recipe Not Found: AMI recipe '<SOURCE_ID>' not found`, and nothing is created. The create is refused with HTTP 409, printed as `AMI recipe creation refused (409): <message>`, when the new recipe id is in use (`recipeId is already in use`), when another recipe uses the stack name (`stackName is already used by another recipe`, which a second copy of one recipe meets under the default stack name), or when the source is deleted between the read and the create (`the recipe to duplicate does not exist`). A default name longer than its field allows is refused with HTTP 400; pass `--display-name` or `--stack-name`. A source whose build instance types or parent image run another architecture family than its `architecture` is refused with HTTP 400, as on create. A role without the `GET` and `POST` AMI recipe routes, or without `GET` on the source recipe or `POST` on the new one, is refused with HTTP 403.
 
 ### edh admin ami-recipe delete
 
@@ -800,7 +800,7 @@ vamscli edh admin ami-recipe register al2023-desktop 4
 vamscli edh admin ami-recipe register al2023-desktop 4 --json-output
 ```
 
-The retry tags the AMI again and registers the stack, adopting an EDH stack that already carries the build's name. It returns the build row: `AVAILABLE` when registration completes, which also retires the recipe's other `AVAILABLE` builds (a newer one included) and prunes AMIs, or `REGISTER_FAILED` with the reason in `error`. Both answer HTTP 200 and the CLI prints `Build registered in EDH` for either, so read `status` in the returned row (for example `--json-output | jq -r '.status'`). It is refused with HTTP 409 `only a REGISTER_FAILED build can be re-registered`, `the build's AMI has been deregistered`, or `the build status changed` when another retry, a retire or pruning claimed the build first.
+The retry tags the AMI again and registers the stack, adopting an EDH stack that already carries the build's name. It returns the build row: `AVAILABLE` when registration completes, which also retires the recipe's other `AVAILABLE` builds (a newer one included) and prunes AMIs, or `REGISTER_FAILED` with the reason in `error`. Both answer HTTP 200. The CLI prints `Build registered in EDH` and exits 0 only for `AVAILABLE`; for `REGISTER_FAILED` it reports `Registration failed again: <reason>` and exits 1, and with `--json-output` the error object carries `status` and the reason as `registrationError`. It is refused with HTTP 409 `only a REGISTER_FAILED build can be re-registered`, `the build's AMI has been deregistered`, or `the build status changed` when another retry, a retire or pruning claimed the build first.
 
 ### edh admin ami-recipe retire
 
@@ -849,10 +849,10 @@ List the sessions whose state is `STOPPED` or `ORPHANED` and whose record last c
 vamscli edh admin instances stale [OPTIONS]
 ```
 
-| Option           | Type    | Required | Description                                 |
-| ---------------- | ------- | -------- | ------------------------------------------- |
-| `--idle-minutes` | INTEGER | No       | Idle threshold in minutes; 120 when omitted |
-| `--json-output`  | Flag    | No       | Output raw JSON response                    |
+| Option           | Type    | Required | Description                                                            |
+| ---------------- | ------- | -------- | ---------------------------------------------------------------------- |
+| `--idle-minutes` | INTEGER | No       | Idle threshold in minutes, from 1 to 525600 (a year); 120 when omitted |
+| `--json-output`  | Flag    | No       | Output raw JSON response                                               |
 
 ```bash
 vamscli edh admin instances stale
