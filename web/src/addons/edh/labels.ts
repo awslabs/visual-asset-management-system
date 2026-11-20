@@ -163,6 +163,19 @@ export const isStartStalled = (row: {
     lastError?: string | null;
 }): boolean => row.state === "CREATING" && row.lastError === "START_STALLED" && !row.activity;
 
+/**
+ * Whether a row is a new launch EDH has not placed: the session sweep found the desktop still
+ * `pending` or `placing` 3 hours after the launch and recorded `lastError` `LAUNCH_STALLED`; the row
+ * stays CREATING because EDH may still place it. Its way out is Delete, not Stop: the desktop never
+ * ran. Shared by the badge, the row actions and the poll cadence, and mirrored by
+ * `vamscli edh workstation` (workstationStatusCases.json).
+ */
+export const isLaunchStalled = (row: {
+    state: string | null;
+    activity?: WorkstationActivity | null;
+    lastError?: string | null;
+}): boolean => row.state === "CREATING" && row.lastError === "LAUNCH_STALLED" && !row.activity;
+
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;

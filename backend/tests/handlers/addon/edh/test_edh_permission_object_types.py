@@ -4,7 +4,7 @@
 """The EDH permission object types and constraint fields come from the add-on constants lane.
 
 ``common/addonConstants.py`` declares ``edhWorkstation``, ``edhImage``, ``edhCapacityReservation`` and
-``edhContainer`` and the five fields they are authorized on; ``common/constants.py`` merges them after the core
+``edhContainer`` and the seven fields they are authorized on; ``common/constants.py`` merges them after the core
 lists, so the constraint
 editor, the ``GET /auth/constraints/permissionObjects`` listing and the enforcer's field scrub see them
 like core types. A constraint needs a criterion and every criterion field must sit in its type's matrix,
@@ -28,11 +28,12 @@ from backend.backend.common.constants import (
 )
 
 EDH_TYPES = ["edhWorkstation", "edhImage", "edhCapacityReservation", "edhContainer"]
-EDH_FIELDS = ["edhImageId", "edhOsFamily", "edhInstanceType", "edhCapacityReservationId", "edhJobDefinition"]
+EDH_FIELDS = ["edhImageId", "edhStackName", "edhRecipeId", "edhOsFamily", "edhInstanceType", "edhCapacityReservationId",
+              "edhJobDefinition"]
 # Each EDH type: its editor label and the fields it is authorized on, in editor order.
 EDH_TYPE_MATRIX = {
     "edhWorkstation": ("EDH Workstation", ["edhImageId", "edhOsFamily", "edhInstanceType"]),
-    "edhImage": ("EDH Image", ["edhImageId", "edhOsFamily"]),
+    "edhImage": ("EDH Image", ["edhImageId", "edhStackName", "edhRecipeId", "edhOsFamily"]),
     "edhCapacityReservation": ("EDH Capacity Reservation", ["edhCapacityReservationId"]),
     "edhContainer": ("EDH Container Job", ["edhJobDefinition"]),
 }
@@ -40,7 +41,7 @@ EDH_TYPE_MATRIX = {
 
 @pytest.mark.unit
 class TestEdhObjectTypesComeFromTheAddOnLane:
-    def test_the_add_on_lane_declares_the_four_types_and_five_fields(self):
+    def test_the_add_on_lane_declares_the_four_types_and_seven_fields(self):
         assert list(ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS) == EDH_TYPES
         assert list(ADDON_PERMISSION_CONSTRAINT_FIELDS) == EDH_FIELDS
 

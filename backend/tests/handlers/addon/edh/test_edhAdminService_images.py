@@ -56,6 +56,12 @@ SIM_BODY = {"amiId": "ami-0123456789abcdef0", "stackName": "sim-2", "rootSize": 
             "targetNodeProfileId": 4, "userDataVariables": "A=1"}
 
 
+def _image_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict of an image route: the stack id and name, no recipe id."""
+    return {"object__type": "edhImage", "edhImageId": image_id, "edhStackName": stack_name,
+            "edhRecipeId": "", "edhOsFamily": os_family}
+
+
 def _catalog_client(**results):
     # The dcv listing already shows the stack a register test creates, so the post-create read-back
     # finds it; a client whose catalog is what the test says is built with list_software_stacks=...
@@ -144,10 +150,10 @@ class TestListImages:
         fakes.module.lambda_handler(make_event("GET", IMAGES_PATH), {})
 
         assert [call.args for call in fakes.enforcer.enforce.call_args_list] == [
-            ({"object__type": "edhImage", "edhImageId": "7", "edhOsFamily": "linux"}, "GET"),
-            ({"object__type": "edhImage", "edhImageId": "8", "edhOsFamily": "windows"}, "GET"),
-            ({"object__type": "edhImage", "edhImageId": "42", "edhOsFamily": "linux"}, "GET"),
-            ({"object__type": "edhImage", "edhImageId": "3", "edhOsFamily": "linux"}, "GET"),
+            (_image_object("7", "linux-cad", "linux"), "GET"),
+            (_image_object("8", "win-cad", "windows"), "GET"),
+            (_image_object("42", "new-stack", "linux"), "GET"),
+            (_image_object("3", "sim-base", "linux"), "GET"),
         ]
 
     def test_a_denied_item_is_dropped_and_an_allowed_one_kept(self, monkeypatch):
@@ -217,7 +223,7 @@ class TestImageArchitecture:
         assert [(i["imageId"], i["architecture"]) for i in response_body(response)["Items"]] == [("7", None)]
         # The architecture is display data: the enforcement dict stays the matrix fields.
         fakes.enforcer.enforce.assert_called_once_with(
-            {"object__type": "edhImage", "edhImageId": "7", "edhOsFamily": "linux"}, "GET")
+            _image_object("7", "linux-cad", "linux"), "GET")
 
     @pytest.mark.parametrize("architecture", ["x86_64", " arm64 ", "arm64_mac", "", "   ", 64, None],
                              ids=["x86_64", "padded", "other", "empty", "blank", "not-text", "absent"])
@@ -263,7 +269,7 @@ class TestRegisterImage:
         assert response_body(response)["imageId"] == "43"
         assert fakes.edh.projects.stack_ids("target_nodes") == ["43"]
 
-    def test_tier_2_from_the_body_uses_the_stack_name_and_os_family(self, monkeypatch):
+    def test_tier_2_from_the_body_uses_the_stack_name_and_os_family_with_no_stack_id(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_catalog_client(), enforce=lambda obj, act: False)
         body = {**VDI_BODY, "stackName": "win-x", "baseOs": "windows2022"}
 
@@ -272,7 +278,7 @@ class TestRegisterImage:
         assert response["statusCode"] == 403
         assert fakes.edh.calls_to("register_software_stack") == []
         assert fakes.enforcer.enforce.call_args.args == (
-            {"object__type": "edhImage", "edhImageId": "win-x", "edhOsFamily": "windows"}, "POST")
+            _image_object("", "win-x", "windows"), "POST")
 
     def test_an_invalid_body_is_400_before_any_edh_call(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_catalog_client())
@@ -479,7 +485,7 @@ class TestDeleteImage:
         assert fakes.edh.calls_to("list_software_stacks") == [("dcv",)]
         assert fakes.edh.calls_to("delete_software_stack") == [("dcv", "8", edh_uid_for(ADMIN))]
         assert fakes.enforcer.enforce.call_args.args == (
-            {"object__type": "edhImage", "edhImageId": "8", "edhOsFamily": "windows"}, "DELETE")
+            _image_object("8", "win-cad", "windows"), "DELETE")
 
     def test_simulation_delete_uses_the_target_nodes_kind(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_catalog_client())

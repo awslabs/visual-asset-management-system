@@ -13,6 +13,7 @@ phases:
                     - mkdir -p /opt/vams/vamscli-src
                     - /usr/bin/aws s3 cp --recursive --only-show-errors "${ASSET_vamscli}" /opt/vams/vamscli-src
                     - test -f /opt/vams/vamscli-src/pyproject.toml
+                    - test -f /opt/vams/vamscli-src/requirements.lock
           - name: BuildVirtualEnvironment
             action: ExecuteBash
             inputs:
@@ -23,8 +24,13 @@ phases:
                         # built from the python3.12 package the baseline component installs.
                         rm -rf /opt/vams/vamscli-venv
                         /usr/bin/python3.12 -m venv /opt/vams/vamscli-venv
-                        /opt/vams/vamscli-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel
-                        /opt/vams/vamscli-venv/bin/pip install --no-cache-dir /opt/vams/vamscli-src
+                        # The dependencies and the build backend come from the CLI's hash-locked
+                        # requirements.lock, as wheels; the CLI is then built against them with no index.
+                        /opt/vams/vamscli-venv/bin/pip install --no-cache-dir --require-hashes --only-binary :all: \
+                            -r /opt/vams/vamscli-src/requirements.lock
+                        /opt/vams/vamscli-venv/bin/pip install --no-cache-dir --no-index --no-deps --no-build-isolation \
+                            /opt/vams/vamscli-src
+                        /opt/vams/vamscli-venv/bin/pip check
                     - ln -sfn /opt/vams/vamscli-venv/bin/vamscli /usr/local/bin/vamscli
           - name: OpenPermissionsToEveryDesktopUser
             action: ExecuteBash

@@ -1,10 +1,13 @@
 # IsaacLab Training Container for VAMS
-# Base: NVIDIA Isaac Lab pre-built container (headless). The 3.0.0 image carries Isaac Sim 6.2,
-# Python 3.12 in /opt/isaaclab-venv, and the Newton physics packages (issue #1669).
+# Base: NVIDIA Isaac Lab pre-built container (headless), pinned by digest: the tag records which release
+# the digest resolves to, and a re-pointed tag cannot change what a rebuild of this commit pulls. Move the
+# version and the digest together. The 3.0.0 image carries Isaac Sim 6.2, Python 3.12 in
+# /opt/isaaclab-venv, and the Newton physics packages (issue #1669).
 ARG ISAAC_LAB_VERSION=3.0.0
-ARG BASE_IMAGE=nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}
+ARG ISAAC_LAB_DIGEST=sha256:f70acc9ed3bc3fc67099a0c5715379c432cc9965623cabbaf54f74599997e245
+ARG BASE_IMAGE=nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}@${ISAAC_LAB_DIGEST}
 
-# checkov:skip=CKV_DOCKER_7: BASE_IMAGE defaults to the versioned isaac-lab:${ISAAC_LAB_VERSION} tag; checkov does not resolve build args
+# checkov:skip=CKV_DOCKER_7: BASE_IMAGE defaults to the digest-pinned isaac-lab:${ISAAC_LAB_VERSION} image; checkov does not resolve build args
 FROM ${BASE_IMAGE}
 
 # The base image runs as its own user (ubuntu, uid 1000); the build steps below need root. The
@@ -33,11 +36,14 @@ ENV PATH=/opt/isaaclab-venv/bin:${PATH}
 ARG ISAAC_LAB_VERSION
 ENV ISAAC_LAB_VERSION=${ISAAC_LAB_VERSION}
 
-# Install additional dependencies into Isaac Lab's own environment: boto3 (not in the base image),
-# and MoviePy 1.x with imageio-ffmpeg, which Isaac Lab's --video recording needs (MoviePy 2.x fails
-# to import there).
-COPY requirements.txt /tmp/requirements.txt
-RUN /opt/isaaclab-venv/bin/python -m pip install --no-cache-dir -r /tmp/requirements.txt
+# Install additional dependencies into Isaac Lab's own environment: every package at the version and hash
+# in the lock (generated from requirements.txt for Python 3.12; its header holds the command). boto3 is
+# not in the base image; MoviePy 1.x with imageio-ffmpeg is what Isaac Lab's --video recording needs
+# (MoviePy 2.x fails to import there). MoviePy 1.0.3 publishes no wheel, so it is the one package built
+# from its source archive (--no-binary moviepy); its hash is still checked.
+COPY requirements.lock /tmp/requirements.lock
+RUN /opt/isaaclab-venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary :all: --no-binary moviepy \
+    -r /tmp/requirements.lock
 
 # Create directories (issue #327: /mnt/efs/checkpoints is mounted via EFS access point, owned by 10000:10000)
 RUN mkdir -p /app /tmp/assets

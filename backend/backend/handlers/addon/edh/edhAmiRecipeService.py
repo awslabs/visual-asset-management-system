@@ -48,9 +48,13 @@ def _enforcer():
 
 
 def _image_auth_object(recipe_id, os_family):
+    """The edhImage enforcement dict for an AMI recipe: exactly the matrix fields, as strings. A recipe is
+    named by ``edhRecipeId``; the image fields (stack id and name) are empty on every recipe route."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
-        "edhImageId": str(recipe_id if recipe_id is not None else ""),
+        "edhImageId": "",
+        "edhStackName": "",
+        "edhRecipeId": str(recipe_id if recipe_id is not None else ""),
         "edhOsFamily": str(os_family if os_family is not None else ""),
     }
 
