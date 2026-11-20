@@ -1221,6 +1221,27 @@ parity against a plain `casbin.Enforcer`, cross-user isolation and TTL/MFA fresh
 
 Because handlers compare against this exact string, a mismatched variant silently fails the comparison (or attributes records to a user ID that has no admin role). IAM permissions on direct Lambda invocation are the security boundary for who can inject a `lambdaCrossCall` event.
 
+#### **Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)**
+
+Mirrors `backend/CLAUDE.md` "Constraint Fields (`PERMISSION_CONSTRAINT_FIELDS`)". The core list is `CORE_PERMISSION_CONSTRAINT_FIELDS` in `common/constants.py`, merged with the add-on and custom constants lanes into `PERMISSION_CONSTRAINT_FIELDS`.
+
+Fields that can be referenced in ABAC policy rules: `databaseId`, `assetName`, `assetType`, `tags`, `tagName`, `tagTypeName`, `roleName`, `userId`, `pipelineId`, `pipelineExecutionType`, `workflowId`, `category`, `name`, `metadataSchemaName`, `metadataSchemaEntityType`, `complianceSchemaName`, `complianceState`, `cascadeId`, `auditLogGroup`, `object__type`, `route__path`, plus any field the add-on or fork constants lane registers.
+
+-   **Compliance objects.** The compliance handlers annotate `complianceSchema` objects with `complianceSchemaName`, `complianceEvaluation` objects with `databaseId` + `complianceState`, `complianceCascade` objects with `cascadeId`, and `complianceBinding` objects with `databaseId`.
+-   **`complianceState` is real on a few routes only.** It carries the asset's state only on the quarantine list, release and exception routes and on the single-asset state GET. Every other evaluation route passes `""`, and the docs say so, so a constraint on `complianceState` decides only those routes.
+-   **Binding checks.** A schema bind or unbind checks `complianceBinding` `PUT`/`DELETE` on the database (an asset binding uses the asset's database), the schema, and a `GET` of the target `database`/`asset` row. It never checks a write on the target, because a binding writes compliance records only.
+
+#### **Quarantine-Blocks-Download Guard Callers (`common/compliance/quarantineGuard.py`)**
+
+Mirrors the `compliance/quarantineGuard.py` entry in `backend/CLAUDE.md`'s file structure. This is the full caller list; the `compliance/` handler summary near the top of this document names only the first four.
+
+-   **Callers.** `check_quarantine_block` is shared by the five asset download Lambdas (`downloadAsset`, `streamAsset`, `assetExportService`, `streamAuxiliaryPreviewAsset` and `zipDownloadService`), by `assetFiles` for a copy to another asset or database, and by `executeWorkflow` for the input files of a run a caller starts or re-runs. A copy or move within the asset is not checked. A `SYSTEM_USER` cross-call to `executeWorkflow` (a file-upload trigger, a compliance pipeline rule, a system pipeline) is not checked either, so a pipeline rule still runs on a quarantined asset and can re-evaluate it.
+-   **Switch and grants.** The guard is a no-op unless `COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD=true`, which the CDK sets from `app.compliance.quarantineBlocksDownload` only on these Lambdas. The asset-state table is resolved only when the switch is on, and each caller's role gets a read-only grant on `complianceAssetStateStorageTable` only then (`assetFunctions.ts`; the `zipDownloadService`, `assetFiles` and `executeWorkflow` roles get `dynamodb:GetItem` alone, the last in `workflowFunctions.ts`). `infra/test/security/quarantineBlocksDownloadGrants.test.ts` holds the wiring with the switch on and off.
+-   **Order.** It runs after Tier-1 and Tier-2 authorization (for a copy, of both assets; for a run, of every input asset), so a caller who is refused never learns whether an asset is quarantined.
+-   **Refusal.** `QuarantineBlockedResponse` answers `400` with exactly its message and no "VAMS General Error: " prefix (D169): `QUARANTINE_BLOCK_MESSAGE` on the download routes, `QUARANTINE_COPY_BLOCK_MESSAGE` for a copy, `QUARANTINE_WORKFLOW_INPUT_BLOCK_MESSAGE` for a run. Each handler catches it ahead of `VAMSGeneralErrorResponse` and answers with `quarantine_refusal()`: one INFO line (database, asset, route), no traceback (D174).
+-   **Preview images.** The single-object routes pass the resolved key, and `is_preview_object()` still serves the asset preview image and a file's current `{file}.previewFile.{ext}` (#1495).
+-   Tests: `tests/handlers/assets/test_assetFiles_copy_quarantine_guard.py`, `tests/handlers/workflows/test_execute_quarantine_block.py`.
+
 #### **Authorization Decisions and Permission-Check Endpoints**
 
 Every allow-or-deny decision is made in the API, by the authorizer and `CasbinEnforcer`. The web app may only show or hide a control based on a decision the API returned, such as the route listing from `GET /auth/routes/api/allowed`. The API still enforces each call. Never derive a permission in the client: no capability flag computed from roles, no constraint matching in the browser, and no trust in a role, database or attribute the client sends.
