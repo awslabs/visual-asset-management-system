@@ -782,3 +782,92 @@ class TestRunDocumentOnAFailedBatchRun:
     def test_a_failed_lambda_run_writes_no_document(self):
         writer = self._run({"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"}, ValueError("The model could not be read."))
         writer.assert_not_called()
+
+
+def _after_download(mod, extension, declared=None, env=None, allow=True, worker=None, output=".glb"):
+    """Run convert_input_output to the worker, with an input of 1 MB whose zip declares ``declared``
+    uncompressed bytes; the worker raises ``worker`` (or a sentinel) and records the job it got."""
+    jobs = []
+    sentinel = RuntimeError("reached the worker")
+
+    def _worker(job, work_dir):
+        jobs.append(job)
+        raise worker or sentinel
+
+    extra = {"allow_escalation": True} if allow else {}
+    with patch.dict(os.environ, env or {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"}), \
+            patch.object(mod, "head_input", MagicMock(return_value=(1 * MB, ""))), \
+            patch.object(mod, "download", MagicMock(side_effect=lambda b, k, p, **kw: open(p, "wb").close() or p)), \
+            patch.object(mod, "check_input_text", MagicMock()), \
+            patch.object(mod.size_check, "declared_uncompressed_bytes", MagicMock(return_value=declared)), \
+            patch.object(mod, "run_worker", MagicMock(side_effect=_worker)), \
+            patch.object(mod, "uploadV2", MagicMock()):
+        try:
+            mod.convert_input_output(f"s3://abkt/xid/m{extension}", "s3://obkt/out/", output, "", "", None, **extra)
+        except RuntimeError as e:
+            if e is not sentinel:
+                raise
+    return jobs
+
+
+@pytest.mark.unit
+class TestMergedExpansionChecksOnBothTiers:
+    """The 3MF declared-size check and the scene-expansion bounds from development, on both tiers."""
+
+    def test_a_3mf_over_the_lambda_uncompressed_limit_escalates_with_its_declared_size(self):
+        mod = _load()
+        declared = 1 * GIB  # over about 343 MB at 10,240 MB, under the 30 GiB job's limit
+        with pytest.raises(conversion_service.EscalationRequired) as excinfo:
+            _after_download(mod, ".3mf", declared)
+        result = excinfo.value.result
+        assert result["reason"] == "size" and result["inputBytes"] == declared
+        limits = {int(k): v for k, v in result["limitBytesByTaskMemoryMiB"].items()}
+        assert limits == size_check.uncompressed_limits_by_task_memory(".3mf", ".glb")
+        assert limits[30 * 1024] >= declared
+        assert 10240 < result["requiredMemoryMiB"] <= 30 * 1024
+        assert "uncompressed" in result["message"]
+
+    def test_a_3mf_no_batch_size_admits_stays_a_refusal(self):
+        mod = _load()
+        with pytest.raises(size_check.InputTooLargeError, match="uncompressed"):
+            _after_download(mod, ".3mf", 50 * GIB)
+
+    def test_without_the_flag_a_3mf_over_the_limit_is_refused_as_before(self):
+        mod = _load()
+        with pytest.raises(size_check.InputTooLargeError, match="uncompressed"):
+            _after_download(mod, ".3mf", 1 * GIB, allow=False)
+
+    def test_on_batch_the_3mf_limit_follows_the_task_memory(self):
+        mod = _load()
+        env = {"VAMS_TASK_MEMORY_MIB": str(30 * 1024)}
+        jobs = _after_download(mod, ".3mf", 1 * GIB, env=env)
+        assert jobs, "a 1 GiB declared 3MF is admitted on a 30 GiB task"
+        with pytest.raises(size_check.InputTooLargeError, match="uncompressed"):
+            _after_download(mod, ".3mf", 2 * GIB, env=env)
+
+    def test_the_node_bound_scales_from_the_task_memory_on_batch(self):
+        import expansion_bounds
+        mod = _load()
+        # the first worker run of a COLLADA input reads its references; the conversion job is the last
+        lambda_job = _after_download(mod, ".dae")[-1]
+        assert lambda_job["max_scene_nodes"] == expansion_bounds.CONVERSION_MAX_SCENE_NODES
+        batch_job = _after_download(mod, ".dae", env={"VAMS_TASK_MEMORY_MIB": str(30 * 1024)})[-1]
+        assert batch_job["max_scene_nodes"] == expansion_bounds.max_scene_nodes(30 * GIB) == 3_000_000
+
+    def test_a_scene_expansion_refusal_is_not_escalated(self):
+        mod = _load()
+        refusal = ValueError("m.dae: the COLLADA scene expands to more than 1,000,000 nodes, more than this "
+                             "function converts.")
+        with pytest.raises(ValueError, match="expands to more than"):
+            _after_download(mod, ".dae", worker=refusal)
+
+    def test_the_collada_pre_count_and_usd_walk_take_the_tier_budgets(self):
+        import model_formats
+        seen = {}
+        with patch.object(model_formats, "_check_dae", MagicMock(return_value=(None, None))), \
+                patch.object(model_formats, "check_collada_scene",
+                             MagicMock(side_effect=lambda p, n, t=None, max_nodes=None: seen.update(t=t, n=max_nodes) or (_ for _ in ()).throw(ValueError("stop")))):
+            with pytest.raises(ValueError, match="stop"):
+                model_formats.load_model({"input_file": "/x/m.dae", "input_name": "m.dae", "input_dir": "/x",
+                                          "max_triangles": 106_000_000, "max_scene_nodes": 3_000_000}, MagicMock())
+        assert seen == {"t": 106_000_000, "n": 3_000_000}

@@ -810,6 +810,20 @@ def _escalation(reason, message, name, input_bytes, input_extension, output_file
         min_task_memory_mib=(memory // size_check.MB) if memory else 0, resource=resource)
 
 
+def _uncompressed_escalation(message, name, uncompressed_bytes, input_extension, output_filetype):
+    """The named result of a compressed package (3MF) whose declared uncompressed size is over the
+    function's memory: ``inputBytes`` is the declared uncompressed size and the limits are per
+    uncompressed byte, so the router compares like with like."""
+    required = -(-size_check.required_memory_bytes_uncompressed(
+        input_extension, uncompressed_bytes, output_filetype) // size_check.MB)
+    memory = size_check.memory_limit_bytes()
+    return conversion_service.escalation_result(
+        conversion_service.REASON_SIZE, message, input_name=name, input_bytes=uncompressed_bytes,
+        pair=f"{input_extension} to {output_filetype}", required_memory_mib=required,
+        limit_bytes_by_task_mib=size_check.uncompressed_limits_by_task_memory(input_extension, output_filetype),
+        min_task_memory_mib=(memory // size_check.MB) if memory else 0, resource=size_check.MEMORY_RESOURCE)
+
+
 def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version="", options=None,
                          allow_escalation=False):
     """Convert the input and upload the output; returns the completion message of a run that left
@@ -908,10 +922,21 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         # declared uncompressed size is read from the central directory and checked before any part
         # is parsed.
         if size_check.uncompressed_expansion_factor(input_s3_asset_extension) is not None:
-            size_check.check_uncompressed_size(
-                os.path.basename(input_key), input_s3_asset_extension,
-                size_check.declared_uncompressed_bytes(temp_file),
-                memory_bytes=size_check.memory_limit_bytes(), output_extension=output_filetype)
+            try:
+                size_check.check_uncompressed_size(
+                    input_name, input_s3_asset_extension, size_check.declared_uncompressed_bytes(temp_file),
+                    memory_bytes=size_check.memory_limit_bytes(), output_extension=output_filetype)
+            except size_check.InputTooLargeError as error:
+                # Memory-driven like the size check before the download, so it escalates the same way,
+                # but only when the largest AWS Batch job size would admit the declared size; otherwise
+                # it stays the refusal it is on every tier.
+                largest = max(size_check.uncompressed_limits_by_task_memory(
+                    input_s3_asset_extension, output_filetype).values(), default=None)
+                if not escalation_allowed or largest is None or error.total_bytes > largest:
+                    raise
+                raise conversion_service.EscalationRequired(_uncompressed_escalation(
+                    str(error), input_name, error.total_bytes, input_s3_asset_extension,
+                    output_filetype)) from error
         memory_bytes = size_check.memory_limit_bytes()
         handling = options.resolved_reference_handling(output_filetype)
         scene_input = input_s3_asset_extension in referenced_files.USD_EXTENSIONS or input_s3_asset_extension == ".dae"

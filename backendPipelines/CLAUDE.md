@@ -580,7 +580,16 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     referenced file the function's limits leave out (a large texture) also escalates when the flag is set, so the
     Batch run can include it; the job is sized from the input plus the declared (`HeadObject`) sizes of every
     referenced file found, fetched or not (`FetchReport.declared_bytes`), so the larger run does not skip it again.
-    Without the flag the run completes as an incomplete conversion, as before. Without the flag
+    Without the flag the run completes as an incomplete conversion, as before. A 3MF whose declared uncompressed size
+    (`size_check.check_uncompressed_size`, after the download and before any parse) is over the function's limit
+    escalates the same way, with `inputBytes` the declared uncompressed size and the per-uncompressed-byte limits
+    of each job size (`size_check.uncompressed_limits_by_task_memory`), but only when the largest job size admits
+    it; otherwise it stays the refusal. Scene-expansion refusals (the COLLADA placement pre-count, the USD arc
+    count before `Stage.Open`, the USD walk's node bound and deadline, `expansion_bounds.py`) never escalate:
+    they bound the scene's structure, not the memory a larger task adds. On a Batch task the node bound and the
+    3MF limit follow `VAMS_TASK_MEMORY_MIB` through `size_check.memory_limit_bytes()`, the COLLADA pre-count and
+    the USD walk take the task's triangle budget, and the USD walk's deadline is 75 percent of the attempt's
+    worker time. Without the flag
     (a deployment without the tier, a direct invocation, the Batch task itself) the same conditions raise the errors
     they always raised, with the same text. A format limit no memory lifts (`conversion_service.check_format_limit`: a PLY over
     4 GiB, whose loader keeps a 32-bit size) is refused before any download on both tiers and never escalated.

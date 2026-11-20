@@ -266,20 +266,43 @@ def declared_uncompressed_bytes(path):
         return None
 
 
+def uncompressed_limit_bytes(extension, memory_bytes, output_extension=None):
+    """The declared uncompressed bytes a compressed package may hold on ``memory_bytes`` of memory, or
+    None when the format's factor is per byte on disk or the memory is not known."""
+    factor = uncompressed_expansion_factor(extension, output_extension)
+    if factor is None or not memory_bytes:
+        return None
+    return max(int((memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES) / factor), 0)
+
+
+def uncompressed_limits_by_task_memory(extension, output_extension=None, sizes=BATCH_TASK_SIZES):
+    """``{task memory MiB: uncompressed limit in bytes}`` for each AWS Batch job size, the counterpart of
+    ``limits_by_task_memory`` for a package checked by its declared uncompressed size."""
+    return {mib: uncompressed_limit_bytes(extension, mib * MB, output_extension) for _, mib in sizes}
+
+
+def required_memory_bytes_uncompressed(extension, uncompressed_bytes, output_extension=None):
+    """The least memory (bytes) whose uncompressed limit admits ``uncompressed_bytes``, rounded up."""
+    usable = uncompressed_bytes * uncompressed_expansion_factor(extension, output_extension) + BASE_MEMORY_BYTES
+    return int(-(-usable // MEMORY_USABLE_FRACTION))
+
+
 def check_uncompressed_size(name, extension, uncompressed_bytes, memory_bytes=None, output_extension=None):
     """Raise ``InputTooLargeError`` when a compressed package's declared uncompressed size is over
-    what the function's memory can convert. The message has the shape of ``check_size``'s."""
-    factor = uncompressed_expansion_factor(extension, output_extension)
-    if factor is None or not memory_bytes or uncompressed_bytes is None:
+    what the function's memory can convert. The message has the shape of ``check_size``'s, and the
+    error carries the declared size and the limit, so the Lambda tier can escalate it like an input over
+    the size check."""
+    limit = uncompressed_limit_bytes(extension, memory_bytes, output_extension)
+    if limit is None or uncompressed_bytes is None:
         return None
-    limit = max(int((memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES) / factor), 0)
     if uncompressed_bytes > limit:
         target = (f"converting {extension.lower()} to {output_extension.lower()}" if output_extension
                   else f"{extension.lower()} inputs")
         raise InputTooLargeError(
             f"{name} is {_mb(uncompressed_bytes)} uncompressed, over the {_mb(limit)} uncompressed "
             f"limit for {target}. The limit is set by the {MEMORY_RESOURCE}. Reduce the model's size "
-            f"and run the conversion again.")
+            f"and run the conversion again.",
+            total_bytes=uncompressed_bytes, limit_bytes=limit, resource=MEMORY_RESOURCE)
     return limit
 
 
