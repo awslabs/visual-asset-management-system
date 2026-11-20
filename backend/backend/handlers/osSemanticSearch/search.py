@@ -69,8 +69,10 @@ OPENSEARCH_MAX_RESULT_WINDOW = 10000
 # window is at least twice the last and none exceeds OPENSEARCH_MAX_RESULT_WINDOW, so the loop ends
 # after a few fetches anyway. The next window is sized so its fetch and its new checks, predicted from
 # the time each has taken so far, end inside the bound; the checks stop at the bound, and the answer is
-# then the hits checked so far, in order. A search stopped by a bound reports its total as a minimum,
-# and one whose checks the time bound cut short also carries SEARCH_TIME_BOUND_WARNING_CODE.
+# then the hits checked so far, in order. The hits an earlier window checked count as checked in every
+# larger window, so a larger window whose fetch ends past the bound still answers them (#1773). A search
+# stopped by a bound reports its total as a minimum, and one whose checks the time bound cut short also
+# carries SEARCH_TIME_BOUND_WARNING_CODE.
 #
 # The checks stop at one of two deadlines (_check_deadlines). The fill deadline, SEARCH_FILL_MAX_SECONDS
 # after the search started, bounds every larger window's fetch and checks, and the first window's checks
@@ -2194,12 +2196,18 @@ class DualIndexResponseProcessor:
         # in a larger window is not decided twice
         self._decisions: Dict[Tuple[str, str], Tuple[bool, bool]] = {}
 
-    def _decide(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
-        """``_hit_decision`` for ``hit``, remembered for the rest of the request."""
+    def _decision_key(self, hit: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        """The key ``hit``'s decision is remembered under, or None for a hit without a document id."""
         doc_id = hit.get("_id")
         if not doc_id:
+            return None
+        return ("file" if self._is_file_hit(hit) else "asset", doc_id)
+
+    def _decide(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
+        """``_hit_decision`` for ``hit``, remembered for the rest of the request."""
+        key = self._decision_key(hit)
+        if key is None:
             return self._hit_decision(hit, claims_and_roles)
-        key = ("file" if self._is_file_hit(hit) else "asset", doc_id)
         if key not in self._decisions:
             self._decisions[key] = self._hit_decision(hit, claims_and_roles)
         return self._decisions[key]
@@ -2220,6 +2228,12 @@ class DualIndexResponseProcessor:
         Returns ``(decided, readable)``: how many leading hits were decided and how many of those
         passed. File hits' parent rows are read SEARCH_DECISION_CHUNK hits at a time, so the deadline
         is checked between reads as well as between decisions.
+
+        A hit already decided in this request (in a smaller window) is counted from its remembered
+        decision without a deadline check, because it costs neither a read nor a check: a larger window
+        whose fetch ended past the deadline still keeps, in order, the hits the earlier windows checked
+        (#1773). The first hit not yet decided is where a late window stops, so no hit is counted
+        without its decision.
         """
         decided = readable = 0
 
@@ -2228,13 +2242,19 @@ class DualIndexResponseProcessor:
             return time.monotonic() >= (page_deadline if page_open else deadline)
 
         for start in range(0, len(hits), SEARCH_DECISION_CHUNK):
-            if out_of_time():
-                break
             chunk = hits[start:start + SEARCH_DECISION_CHUNK]
-            self._load_parent_assets(chunk)
-            for hit in chunk:
-                if out_of_time():
-                    return decided, readable
+            parents_loaded = False
+            for position, hit in enumerate(chunk):
+                key = self._decision_key(hit)
+                if key is None or key not in self._decisions:
+                    if out_of_time():
+                        return decided, readable
+                    if not parents_loaded:
+                        # The rest of the chunk's parent rows, read once the first undecided hit needs them
+                        self._load_parent_assets(chunk[position:])
+                        parents_loaded = True
+                        if out_of_time():
+                            return decided, readable
                 if self._decide(hit, claims_and_roles)[0]:
                     readable += 1
                 decided += 1
