@@ -1,0 +1,24 @@
+[project]
+name = "coordinate-transform-pipeline"
+version = "0.1.0"
+description = "Coordinate transform pipeline container image"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "boto3",
+    "botocore",
+    "pyproj>=3.6,<4",
+    "numpy>=1.26,<3",
+    "pye57>=0.4,<0.5",
+    "laspy[lazrs]>=2.5,<3",
+    "open3d>=0.18,<0.20",
+    "pyyaml>=6.0,<7",
+    "structlog>=24.0,<27",
+    "pydantic>=2.0,<3",
+]
+
+# The image installs the committed requirements.txt with pip. It is exported from uv.lock; uv is a
+# development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
