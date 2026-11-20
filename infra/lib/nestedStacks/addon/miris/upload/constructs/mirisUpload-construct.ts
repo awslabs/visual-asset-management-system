@@ -234,6 +234,7 @@ export class MirisUploadConstruct extends Construct {
                     "..",
                     "..",
                     "backendPipelines",
+                    "addon",
                     "conversion",
                     "mirisUpload",
                     "container"
@@ -475,6 +476,7 @@ export class MirisUploadConstruct extends Construct {
                     "..",
                     "..",
                     "backendPipelines",
+                    "addon",
                     "conversion",
                     "mirisUpload",
                     "vamsSchema"

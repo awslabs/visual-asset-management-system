@@ -126,7 +126,7 @@ infra/
         addonWafExclusions.ts              # addonWafRuleExclusions(): scoped rule exclusions for both web ACLs, passed by buildWafStacks()
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
         miris/                             # Miris Spatial Streaming (mirisBuilder-nestedStack.ts: routes, perView key table + TTL cleanup, metadata schema seed)
-          upload/                          # Miris upload pipeline (mirisUploadBuilder-nestedStack.ts; source in backendPipelines/conversion/mirisUpload)
+          upload/                          # Miris upload pipeline (mirisUploadBuilder-nestedStack.ts; source in backendPipelines/addon/conversion/mirisUpload)
         physna/                            # Physna 3D/CAD geometric search sync (builds physnaFileSync, physnaAssetSync, physnaViewer lambdas for addon API)
         edhWorkstations/                   # EDH Workstations add-on stack (proxy Lambdas, session bootstrap, container and AMI recipe builds; see edhWorkstations/CLAUDE.md)
       custom/

@@ -314,7 +314,14 @@ const NON_ROOT_IMAGES: { label: string; file: string; scratchDir?: string }[] = 
     },
     {
         label: "Miris upload",
-        file: path.join(PIPELINES_DIR, "conversion", "mirisUpload", "container", "Dockerfile"),
+        file: path.join(
+            PIPELINES_DIR,
+            "addon",
+            "conversion",
+            "mirisUpload",
+            "container",
+            "Dockerfile"
+        ),
         scratchDir: "/workdir",
     },
 ];
@@ -463,7 +470,13 @@ describe.each(NON_ROOT_IMAGES)(
  * instead resolves whatever the index serves that day.
  */
 describe("the Miris upload image installs from its hash-locked requirements", () => {
-    const containerDir = path.join(PIPELINES_DIR, "conversion", "mirisUpload", "container");
+    const containerDir = path.join(
+        PIPELINES_DIR,
+        "addon",
+        "conversion",
+        "mirisUpload",
+        "container"
+    );
     const dockerfile = fs.readFileSync(path.join(containerDir, "Dockerfile"), "utf-8");
     const lock = fs.readFileSync(path.join(containerDir, "requirements.lock"), "utf-8");
 

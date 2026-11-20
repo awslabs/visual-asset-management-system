@@ -31,7 +31,7 @@ export interface AddonPipeline {
 
 export const ADDON_PIPELINES: readonly AddonPipeline[] = [
     {
-        backendPipelinesPath: "conversion/mirisUpload",
+        backendPipelinesPath: "addon/conversion/mirisUpload",
         dir: path.join(NESTED_STACKS_DIR, "addon", "miris", "upload"),
         nestedStackClass: "MirisUploadBuilderNestedStack",
     },

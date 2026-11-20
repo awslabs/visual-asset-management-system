@@ -38,7 +38,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 MANIFEST_HELPER_COPIES = (
     "backendPipelines/3dRecon/splatToolbox/lambda/manifestHelper.py",
     "backendPipelines/conversion/coordinateTransform/lambda/manifestHelper.py",
-    "backendPipelines/conversion/mirisUpload/lambda/manifestHelper.py",
+    "backendPipelines/addon/conversion/mirisUpload/lambda/manifestHelper.py",
     "backendPipelines/genAi/cadStepAgent/lambda/manifestHelper.py",
     "backendPipelines/genAi/imageTo3d/lambda/manifestHelper.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/manifestHelper.py",
@@ -86,7 +86,7 @@ REGION_CONSUMING_VAMS_EXECUTE = (
 # does not control, and the Miris upload, whose container reads the asset and writes its metadata with a
 # client for the deployment Region: same-Region only, rejected at vamsExecute.
 SAME_REGION_ONLY_VAMS_EXECUTE = (
-    "backendPipelines/conversion/mirisUpload/lambda/vamsExecuteMirisUpload.py",
+    "backendPipelines/addon/conversion/mirisUpload/lambda/vamsExecuteMirisUpload.py",
     "backendPipelines/multi/modelOps/lambda/vamsExecuteModelOps.py",
     "backendPipelines/multi/rapidPipeline/lambda/vamsExecuteRapidPipeline.py",
     "backendPipelines/multi/rapidPipelineEKS/lambda/vamsExecuteRapidPipelineEKS.py",

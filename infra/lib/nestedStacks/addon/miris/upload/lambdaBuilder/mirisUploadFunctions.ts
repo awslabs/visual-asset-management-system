@@ -32,18 +32,18 @@ const LAMBDA_PYTHON_RUNTIME = Config.LAMBDA_PYTHON_RUNTIME;
 
 const LAMBDA_SOURCE = path.join(
     __dirname,
-    "../../../../../../../backendPipelines/conversion/mirisUpload/lambda"
+    "../../../../../../../backendPipelines/addon/conversion/mirisUpload/lambda"
 );
 
 /**
  * Auxiliary-bucket prefix holding the dedup claim objects. Mirrors CLAIM_PREFIX in
- * backendPipelines/conversion/mirisUpload/lambda/mirisClaim.py.
+ * backendPipelines/addon/conversion/mirisUpload/lambda/mirisClaim.py.
  */
 export const MIRIS_CLAIM_PREFIX = "locks/miris-upload";
 
 /**
  * Auxiliary-bucket prefix of the dependency manifests the container writes. Mirrors MANIFEST_PREFIX in
- * backendPipelines/conversion/mirisUpload/container/dependency_manifest.py.
+ * backendPipelines/addon/conversion/mirisUpload/container/dependency_manifest.py.
  */
 export const MIRIS_DEPENDENCY_MANIFEST_PREFIX = "pipelines/miris-upload/manifests";
 
@@ -57,7 +57,7 @@ export const MIRIS_CLAIM_PREFIX_OBJECT_REGEX =
 
 /**
  * Object name of the container's ambiguous_root report under a run's results path. Mirrors
- * AMBIGUOUS_ROOT_REPORT_NAME in backendPipelines/conversion/mirisUpload/lambda/openPipeline.py.
+ * AMBIGUOUS_ROOT_REPORT_NAME in backendPipelines/addon/conversion/mirisUpload/lambda/openPipeline.py.
  */
 export const MIRIS_AMBIGUOUS_ROOT_REPORT_NAME = "ambiguous_root.json";
 

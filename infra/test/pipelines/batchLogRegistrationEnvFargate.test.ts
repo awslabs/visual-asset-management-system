@@ -510,7 +510,7 @@ describe("genAi/cadStepAgent (fargate runtime) executeBatchJob registration envi
     });
 });
 
-describe("conversion/mirisUpload openPipeline registration environment", () => {
+describe("addon/conversion/mirisUpload openPipeline registration environment", () => {
     let template: Template;
 
     beforeAll(() => {
@@ -536,7 +536,7 @@ describe("conversion/mirisUpload openPipeline registration environment", () => {
     test("the stage the producer declares is a state of the machine", () => {
         expectDeclaredStagesInAsl(
             template,
-            path.join(PRODUCERS, "conversion", "mirisUpload", "lambda", "openPipeline.py")
+            path.join(PRODUCERS, "addon", "conversion", "mirisUpload", "lambda", "openPipeline.py")
         );
     });
 });

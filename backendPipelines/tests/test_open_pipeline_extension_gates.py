@@ -38,7 +38,7 @@ PIPELINES = (
      "coordinateTransform-construct.ts"),
     # Configured per deployment (app.addons.useMirisStreaming.upload.triggerExtensions); the shipped
     # template carries the default the construct passes through.
-    ("mirisUpload", "backendPipelines/conversion/mirisUpload",
+    ("mirisUpload", "backendPipelines/addon/conversion/mirisUpload",
      "infra/config/config.template.commercial.json"),
     ("videoSopBom", "backendPipelines/genAi/videoSopBom",
      "infra/lib/nestedStacks/pipelines/genAi/videoSopBom/constructs/videoSopBom-construct.ts"),

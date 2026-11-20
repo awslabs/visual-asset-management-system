@@ -9,7 +9,7 @@ fileMatchPattern:
         "infra/config/addon/miris*",
         "infra/test/addon/miris*",
         "infra/test/config/mirisConfig*",
-        "backendPipelines/conversion/mirisUpload/**",
+        "backendPipelines/addon/conversion/mirisUpload/**",
         "web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/**",
         "web/src/services/addons/miris*",
         "web/customInstalls/miris/**",
@@ -95,9 +95,9 @@ Models: `backend/backend/models/addon/miris.py`. Routes: `common/addonApiRoutes.
 
 `backend/tests/handlers/addon/miris/`: `test_mirisGetAssetStatus.py`, `test_mirisAssetStatusStaleness.py`, `test_mirisMintViewerKey.py`, `test_mirisViewerKeyCleanup.py`, `test_mirisIntegration.py`. `addonRouteGrants.py` holds the permission template grants for both routes (read by `tests/handlers/auth/test_permission_templates_addon_routes.py`), and `test_miris_template_criteria.py` checks that each granting template spells them as `equals` criteria, as the read-only seed does.
 
-## Upload pipeline (`backendPipelines/conversion/mirisUpload/`)
+## Upload pipeline (`backendPipelines/addon/conversion/mirisUpload/`)
 
-Mirrors `backendPipelines/conversion/mirisUpload/CLAUDE.md`.
+Mirrors `backendPipelines/addon/conversion/mirisUpload/CLAUDE.md`.
 
 -   **Root file.** The selected file on a manual run; otherwise the `miris_root_file` asset metadata, or the one USD layer no other layer references. Several candidates fail and are named; the pipeline never guesses, and its message never advises adding references. The root must define geometry.
 -   **Pre-flight before any upload.** Text-USD bytes against the task's memory budget (`memory_budget.py`), unreadable or out-of-asset references, texture formats and stage metadata (`preflight.py`). Every download is pinned to one listing of the asset; a file that changes mid-run fails.

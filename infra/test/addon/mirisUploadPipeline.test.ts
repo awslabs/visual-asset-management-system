@@ -25,7 +25,10 @@ import {
     makeMirisUploadHarness,
 } from "./mirisUploadHarness";
 
-const PIPELINE_DIR = path.resolve(__dirname, "../../../backendPipelines/conversion/mirisUpload");
+const PIPELINE_DIR = path.resolve(
+    __dirname,
+    "../../../backendPipelines/addon/conversion/mirisUpload"
+);
 const HANDLER_STEMS = [
     "vamsExecuteMirisUpload",
     "mirisUploadGate",

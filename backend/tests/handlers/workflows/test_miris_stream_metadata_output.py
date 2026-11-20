@@ -44,7 +44,7 @@ from backend.backend.models.metadata import UpdateFileMetadataRequestModel  # no
 _REPO_ROOT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", ".."))
 _STREAM_METADATA_PATH = os.path.join(
-    _REPO_ROOT, "backendPipelines", "conversion", "mirisUpload", "container", "stream_metadata.py")
+    _REPO_ROOT, "backendPipelines", "addon", "conversion", "mirisUpload", "container", "stream_metadata.py")
 
 _spec = importlib.util.spec_from_file_location("miris_upload_stream_metadata", _STREAM_METADATA_PATH)
 stream_metadata = importlib.util.module_from_spec(_spec)

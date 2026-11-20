@@ -71,10 +71,10 @@ root/
 │   │   └── genAiMetadata/     # SYSTEM - GenAI metadata pipeline (lambda/, containers/{blender,media}, vamsSchema/; vamsSchema/assetSummary/ = the asset summary workflow)
 │   ├── utility/
 │   │   └── zipArchive/        # zipArchive system pipeline (utility-zip-archive): streaming ZIP64/tar writer for Download as Zip and zipArchive runs
-│   ├── conversion/
-│   │   ├── 3dBasic/, coordinateTransform/
-│   │   └── mirisUpload/       # Miris Spatial Streaming upload (USD to a streamable Miris asset; built by the Miris add-on)
-│   └── preview/, 3dRecon/, simulation/, multi/
+│   ├── addon/                 # Add-on pipelines, each built by its add-on's nested stack
+│   │   └── conversion/
+│   │       └── mirisUpload/   # Miris Spatial Streaming upload (USD to a streamable Miris asset; built by the Miris add-on)
+│   └── conversion/, preview/, 3dRecon/, simulation/, multi/
 ├── backendAddons/             # Add-on build sources shipped with the repo, one folder per add-on
 ├── documentation/             # User guides, API spec, permission templates
 │   └── CLAUDE.md              # Documentation development guide

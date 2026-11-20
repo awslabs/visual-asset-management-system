@@ -28,7 +28,7 @@ SCHEMA_PATH = (
     / "dynamodb-metadataschema-miris-stream.json"
 )
 STREAM_METADATA_PATH = (
-    REPO_ROOT / "backendPipelines" / "conversion" / "mirisUpload" / "container" / "stream_metadata.py"
+    REPO_ROOT / "backendPipelines" / "addon" / "conversion" / "mirisUpload" / "container" / "stream_metadata.py"
 )
 
 _TABLE = "test-metadata-schema-table"

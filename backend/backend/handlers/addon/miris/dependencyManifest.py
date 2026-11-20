@@ -11,7 +11,7 @@ bytes the stream was built from:
 
 The id is the hex SHA-256 of the manifest's canonical bytes, so a manifest whose bytes do not hash to
 the recorded id is not used. The format, the key layout and the ETag normalization mirror
-backendPipelines/conversion/mirisUpload/container/dependency_manifest.py.
+backendPipelines/addon/conversion/mirisUpload/container/dependency_manifest.py.
 """
 import hashlib
 import json
