@@ -500,6 +500,37 @@ describe("WorkstationsPage", () => {
         expect(stoppedItems[stoppedItems.length - 1]).toHaveTextContent("Delete");
     });
 
+    it.each([
+        ["STOPPED", "error"],
+        ["ACTIVE", "error"],
+        ["CREATING", "error"],
+    ] as const)(
+        "offers Stop and not Start to a %s workstation EDH reports in error (DESKTOP_ERROR)",
+        async (state, edhState) => {
+            const user = userEvent.setup();
+            const m = mutations();
+            (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
+            (queries.useWorkstations as jest.Mock).mockReturnValue(
+                list([
+                    {
+                        ...stoppedRow,
+                        state,
+                        edhState,
+                        activity: null,
+                        connectionAvailable: false,
+                        connectionUnavailableReason: "DESKTOP_ERROR",
+                    },
+                ])
+            );
+            renderPage();
+
+            await openActionsFor(user, "Render box");
+            const stop = screen.getByRole("menuitem", { name: "Stop" });
+            expect(stop).not.toHaveAttribute("aria-disabled", "true");
+            expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+        }
+    );
+
     it("keeps Start disabled on a stopped workstation EDH still lists stopping, naming EDH's state", async () => {
         const user = userEvent.setup();
         const m = mutations();

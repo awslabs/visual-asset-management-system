@@ -57,7 +57,8 @@ infra/
       batchJobLogGroup.ts       # /aws/batch/job name + colon-form ARN env for registering lambdas; job-definition name from a CfnJobDefinition Ref
       const.ts                  # SERVICE_LOOKUP: partition-aware endpoints (aws, aws-us-gov, aws-cn, aws-iso, aws-eusc)
       iamRoleCustomization.ts   # Bootstrap synthesizer + iam.Role.customizeRoles wiring
-      lambda.ts                 # Layer bundling commands
+      lambda.ts                 # Layer bundling command (pip install of each layer's committed requirements.txt; never resolves)
+                                # A new layer directory needs pyproject.toml + uv.lock + that export (backend/CLAUDE.md uv section)
       s3AssetBuckets.ts         # Global asset bucket registry (record.region set for a bucket outside the deployment Region;
                                 #   crossRegionTopicKey() keys the per-Region stacks' topic ARNs for storageBuilder)
       security.ts               # KMS, CDK Nag, CSP, TLS enforcement, audit logging setup

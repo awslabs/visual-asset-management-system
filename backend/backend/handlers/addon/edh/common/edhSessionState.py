@@ -12,8 +12,10 @@ says whether a running desktop's connection link signs a user in, why one that d
 connected to, and when the list route checks a running desktop's display session again; it also reads the
 reason EDH recorded for a failed launch out of the desktop's recent events, says which
 ``lastError`` that reason implies, and when a row is due a read for one; it says when a start EDH accepted has
-stalled, and it names the image a workstation runs: what a launch stores on its row, and the record's image fields
-resolved from the recipe builds. A pure module: no AWS client, no environment read.
+stalled, and what one EC2 returned to stopped records from the instance's state reason, which rows' desktops have
+run, so that EDH's ``error`` orphans only a new launch, and it names the image a workstation runs: what a launch
+stores on its row, and the record's image fields resolved from the recipe builds. A pure module: no AWS client, no
+environment read.
 """
 
 import json
@@ -45,7 +47,9 @@ EDH_SESSION_STATE_ERROR = "error"
 EDH_SCHEDULE_FIELD = "schedule"
 EDH_SCHEDULE_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
-# EDH session_state -> VAMS state. A value outside this map leaves the stored state alone.
+# EDH session_state -> VAMS state. A value outside this map leaves the stored state alone. EDH's ``error`` means
+# ORPHANED only for a new launch whose desktop never ran (``state_for_edh_desktop``): EDH also sets it on a running
+# desktop whose Amazon DCV health check failed, and such a desktop keeps its state, its disk and its credential.
 EDH_SESSION_STATE_TO_STATE = {
     EDH_SESSION_STATE_PENDING: STATE_CREATING,
     EDH_SESSION_STATE_PLACING: STATE_CREATING,
@@ -108,6 +112,14 @@ CAPACITY_RESERVATION_FALLBACK_REASONS = (CAPACITY_RESERVATION_FALLBACK_FULL, CAP
 # EDH's answer names, the Availability Zone of the desktop's instance, and when VAMS recorded it. Kept and cleared
 # with the code.
 START_FAILURE_FIELD = "startFailure"
+# Amazon EC2's state reason codes (``StateReason.Code`` of a DescribeInstances answer) that decide what a start EDH
+# accepted records when EC2 returns the instance to stopped: no capacity for the instance type in its Availability
+# Zone, and the shutdowns a user (a stop through EC2 or EDH) or the instance itself initiated, which are no failure.
+# Any other code records the start failed with that code.
+EC2_STATE_REASON_INSUFFICIENT_CAPACITY = "Server.InsufficientInstanceCapacity"
+EC2_STATE_REASONS_NOT_A_FAILURE = frozenset({
+    "Client.UserInitiatedShutdown", "Client.InstanceInitiatedShutdown", "Client.UserInitiatedHibernate",
+})
 
 # What a workstation is doing between two states, derived from the row whenever a record is read
 # (``workstation_activity``), so every client shows the same thing. The row itself stores ``activity`` only as
@@ -122,15 +134,28 @@ EDH_SESSION_STATE_STOPPING = "stopping"
 # `running` predates EDH's own update.
 STOP_REQUESTED_FIELD = "stopRequestedAt"
 STOP_SETTLE_SECONDS = 300
-# Why a workstation EDH reports running cannot be connected to (``connectionUnavailableReason``), kept on its row
-# while it stays ACTIVE and running: ``DISPLAY_SESSION_ENDED``, EDH listed the desktop with a link that signs no
-# user in, which it does when the DCV broker holds no session for the desktop. The desktop keeps running and the row
-# stays ACTIVE; a stop and a start, which register a DCV session with the broker again, recover it.
+# Why a workstation cannot be connected to (``connectionUnavailableReason``), kept on its row: ``DISPLAY_SESSION_ENDED``,
+# EDH listed the desktop running with a link that signs no user in, which it does when the DCV broker holds no session
+# for the desktop (the desktop keeps running and the row stays ACTIVE; a stop and a start, which register a DCV session
+# with the broker again, recover it); ``DESKTOP_ERROR``, EDH reports a desktop that has run in its ``error`` state,
+# which it sets when the desktop's Amazon DCV health check fails while it runs (the row keeps its state, its disk and
+# its credential; EDH moves the desktop on once the check passes again, and a stop and a start recover it).
 CONNECTION_UNAVAILABLE_REASON_FIELD = "connectionUnavailableReason"
 CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED = "DISPLAY_SESSION_ENDED"
-CONNECTION_UNAVAILABLE_REASONS = (CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED,)
+CONNECTION_UNAVAILABLE_DESKTOP_ERROR = "DESKTOP_ERROR"
+CONNECTION_UNAVAILABLE_REASONS = (CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED, CONNECTION_UNAVAILABLE_DESKTOP_ERROR)
 DISPLAY_SESSION_ENDED_MESSAGE = ("The workstation is running but its remote display session has ended. "
                                  "Stop it, then start it again, to reconnect.")
+DESKTOP_ERROR_MESSAGE = ("The workstation's remote display is not responding; its disk and data are kept. "
+                         "Wait a few minutes, or stop it, then start it again, to reconnect.")
+# The states a row EDH reports in ``error`` keeps once its desktop has run, the only ones it records
+# ``DESKTOP_ERROR`` in (``desktop_has_run``, ``state_for_edh_desktop``).
+DESKTOP_ERROR_STATES = frozenset({STATE_ACTIVE, STATE_STOPPED, STATE_CREATING})
+# Stamped on a row the session sweep records DELETED because EDH stopped listing its desktop, and only then: a row
+# deleted through VAMS never carries it. EDH's Save and Resume takes a desktop out of the listing while its image is
+# taken and brings it back under a new session uuid with the same name and owner, so only a row carrying this stamp
+# is re-adopted by a desktop listed under its name; such a desktop has run.
+EDH_UNLISTED_AT_FIELD = "edhUnlistedAt"
 # The query fields of an EDH connection link that sign a user in: the DCV connection token (the high-scale layout
 # and a standard virtual desktop) or the user name (the high-scale layout and a standard console desktop). EDH's
 # fallback link, and its link for a desktop the broker has not registered, carry neither.
@@ -206,9 +231,11 @@ START_IN_PROGRESS_SECONDS = 420
 # How old the stamp of an unresolved start (a STOPPED row still marked ``activity`` starting) is when the
 # session sweep records it START_FAILED, provided EDH still reports the desktop stopped.
 START_RESOLVE_SECONDS = 600
-# The stamp the launch worker writes (``start_stamp`` form) when it records a start of a stopped desktop EDH
-# accepted, and only then -- a new launch never carries it; every write that moves the row out of CREATING clears
-# it. An internal row attribute: the record does not return it.
+# The stamp (``start_stamp`` form) of a desktop that has run being back in CREATING: the launch worker writes it when
+# it records a start of a stopped desktop EDH accepted, and a read of EDH's state writes it when it moves a row whose
+# desktop has run (``desktop_has_run``) into CREATING -- a start made from EDH's own console, or EDH holding a running
+# desktop whose Amazon DCV check failed back as pending. A new launch never carries it; every write that moves the
+# row out of CREATING clears it. An internal row attribute: the record does not return it.
 START_ACCEPTED_FIELD = "startAcceptedAt"
 # How old that stamp is when the session sweep records the start START_STALLED, provided the row is still CREATING
 # and EDH still lists the desktop in one of ``START_STALL_EDH_STATES``. A resumed desktop normally reports running
@@ -250,10 +277,41 @@ def deleted_row_expiry(now=None):
 
 
 def state_for_edh_session_state(session_state, stored_state):
-    """The VAMS state EDH's ``session_state`` implies, or the stored state for an unknown value."""
+    """The VAMS state EDH's ``session_state`` implies, or the stored state for an unknown value. Row-blind: a row's
+    own state reads EDH's ``error`` through ``state_for_edh_desktop``."""
     if session_state is None:
         return stored_state
     return EDH_SESSION_STATE_TO_STATE.get(str(session_state).lower(), stored_state)
+
+
+def desktop_has_run(row) -> bool:
+    """True for a row whose desktop has run: one stored ACTIVE or STOPPED, a CREATING row whose start EDH accepted
+    (``startAcceptedAt``: a stopped desktop starting again), and a DELETED row the sweep recorded because EDH stopped
+    listing its desktop (``edhUnlistedAt``). False for a new launch that never ran -- a CREATING row without that
+    stamp, an ORPHANED row (a failed launch), a DELETED row without the unlisted stamp -- and for a record that stores
+    no state."""
+    state = row.get('state')
+    if state in (STATE_ACTIVE, STATE_STOPPED):
+        return True
+    if state == STATE_CREATING:
+        return row.get(START_ACCEPTED_FIELD) is not None
+    return state == STATE_DELETED and bool(row.get(EDH_UNLISTED_AT_FIELD))
+
+
+def edh_reports_error(session_state) -> bool:
+    """True when EDH's ``session_state`` is ``error``, in any case."""
+    return session_state is not None and str(session_state).lower() == EDH_SESSION_STATE_ERROR
+
+
+def state_for_edh_desktop(row, session_state):
+    """The VAMS state EDH's ``session_state`` implies for the row. EDH's ``error`` is ORPHANED only for a new launch
+    whose desktop never ran; a row whose desktop has run (``desktop_has_run``) keeps its stored state, and a DELETED
+    one EDH lists again is re-adopted ACTIVE, since EDH sets ``error`` on a desktop that runs when its Amazon DCV
+    health check fails. Any other value maps as ``state_for_edh_session_state`` maps it."""
+    stored = row.get('state')
+    if edh_reports_error(session_state) and desktop_has_run(row):
+        return STATE_ACTIVE if stored == STATE_DELETED else stored
+    return state_for_edh_session_state(session_state, stored)
 
 
 def start_stamp(instant):
@@ -388,7 +446,11 @@ def connection_verdict(row, desktop) -> Tuple[bool, Optional[str]]:
     (``DISPLAY_SESSION_ENDED``); running with an empty link is not connectable, without a reason. A record without
     the connection-string field (EDH's token-free session-state read, the cluster listing) says nothing of the
     display session: running connects, save on a row stored ACTIVE that records the session ended, which keeps it
-    until a link or a state other than running says otherwise. Not running is not connectable, without a reason."""
+    until a link or a state other than running says otherwise. EDH's ``error`` on a row whose desktop has run
+    (``desktop_has_run``) is not connectable, ``DESKTOP_ERROR``. Any other state is not connectable, without a
+    reason."""
+    if edh_reports_error(desktop.get(EDH_SESSION_STATE_FIELD)) and desktop_has_run(row):
+        return False, CONNECTION_UNAVAILABLE_DESKTOP_ERROR
     if str(desktop.get(EDH_SESSION_STATE_FIELD)).lower() != EDH_SESSION_STATE_RUNNING:
         return False, None
     if EDH_CONNECTION_STRING_FIELD not in desktop:
@@ -405,15 +467,17 @@ def connection_verdict(row, desktop) -> Tuple[bool, Optional[str]]:
 
 
 def connection_unavailable_reason(row) -> Optional[str]:
-    """Why the workstation cannot be connected to, as its record returns it: the reason its row records while the
-    row is stored ACTIVE, EDH reports it running and it is not connectable; None otherwise, a reason a stop or a
-    delete left on a row included."""
+    """Why the workstation cannot be connected to, as its record returns it: ``DISPLAY_SESSION_ENDED`` while the row
+    records it, is stored ACTIVE, EDH reports it running and it is not connectable; ``DESKTOP_ERROR`` while the row
+    records it, is stored ACTIVE, STOPPED or CREATING, EDH reports it ``error`` and it is not connectable; None
+    otherwise, a reason a stop, a delete or a later state left on a row included."""
     reason = row.get(CONNECTION_UNAVAILABLE_REASON_FIELD)
-    if (reason in CONNECTION_UNAVAILABLE_REASONS and row.get('state') == STATE_ACTIVE
-            and not row.get('connectionAvailable')
-            and str(row.get('edhState') or '').lower() == EDH_SESSION_STATE_RUNNING):
-        return reason
-    return None
+    if reason not in CONNECTION_UNAVAILABLE_REASONS or row.get('connectionAvailable'):
+        return None
+    edh_state = str(row.get('edhState') or '').lower()
+    if reason == CONNECTION_UNAVAILABLE_DESKTOP_ERROR:
+        return reason if row.get('state') in DESKTOP_ERROR_STATES and edh_state == EDH_SESSION_STATE_ERROR else None
+    return reason if row.get('state') == STATE_ACTIVE and edh_state == EDH_SESSION_STATE_RUNNING else None
 
 
 def connection_check_applies(row) -> bool:
@@ -461,10 +525,11 @@ def connection_checks_due(rows, now=None):
     return due[:CONNECTION_CHECKS_PER_LIST]
 
 
-def observed_row_attributes(row, desktop):
+def observed_row_attributes(row, desktop, now=None):
     """The row attributes EDH's desktop record implies, limited to those that differ from the row:
-    the session id a row lacks, the raw and mapped state, connectability and the reason a running desktop is not
-    connectable (``connection_verdict``), the EC2 instance the desktop is placed on (left as stored
+    the session id a row lacks, the raw and mapped state (``state_for_edh_desktop``: EDH's ``error`` orphans only a
+    new launch that never ran), connectability and the reason a desktop is not connectable (``connection_verdict``),
+    the EC2 instance the desktop is placed on (left as stored
     while EDH reports none), the launch-error code an ``error`` state carries when the row holds none (a
     code the launch recorded is kept, a stalled start's is not; as is, while the state stays stopped, a code of
     ``STOPPED_ROW_LAST_ERRORS`` with the ``startFailure`` beside it, and, while the state stays CREATING, a stalled
@@ -473,6 +538,7 @@ def observed_row_attributes(row, desktop):
     state is not lease-stopped and the stamp is what ages a stopped one toward deletion, the clearing of the
     start-in-progress stamp from a desktop seen past stopped, which has taken the start that stamp holds a second
     one off for, the clearing of an accepted start's stamp (``startAcceptedAt``) from a row moving out of CREATING,
+    its stamping at ``now`` (the current instant when not given) on a row whose desktop has run moving into CREATING,
     and the clearing of the start mark (``activity``) from a desktop seen running or failed, whose start is over."""
     edh_state = desktop.get(EDH_SESSION_STATE_FIELD)
     attributes = {}
@@ -482,7 +548,7 @@ def observed_row_attributes(row, desktop):
         attributes['instanceId'] = str(desktop[EDH_FIELD_INSTANCE_ID])
     if edh_state is not None:
         attributes['edhState'] = str(edh_state)
-        attributes['state'] = state_for_edh_session_state(edh_state, row.get('state'))
+        attributes['state'] = state_for_edh_desktop(row, edh_state)
         stalled = row.get('lastError') == LAST_ERROR_START_STALLED
         if attributes['state'] == STATE_ORPHANED:
             attributes['lastError'] = orphaned_last_error(row.get('lastError'))
@@ -497,11 +563,17 @@ def observed_row_attributes(row, desktop):
             attributes[START_FAILURE_FIELD] = None
         if attributes['state'] != STATE_CREATING and row.get(START_ACCEPTED_FIELD) is not None:
             attributes[START_ACCEPTED_FIELD] = None
+        elif (attributes['state'] == STATE_CREATING and row.get('state') != STATE_CREATING
+              and row.get(START_ACCEPTED_FIELD) is None and desktop_has_run(row)):
+            # The desktop has run: the row keeps that through CREATING, so EDH's ``error`` or an unlisted desktop
+            # never reads it as a new launch, and a start that does not finish is found stalled.
+            attributes[START_ACCEPTED_FIELD] = start_stamp(now or datetime.now(timezone.utc))
         if attributes['state'] in (STATE_ACTIVE, STATE_CREATING) and row.get('leaseStoppedAt'):
             attributes['leaseStoppedAt'] = None
         if state_for_edh_session_state(edh_state, None) not in (None, STATE_STOPPED):
             attributes['startRequestedAt'] = None
-        if attributes['state'] in (STATE_ACTIVE, STATE_ORPHANED) and row.get(ACTIVITY_FIELD) is not None:
+        if ((attributes['state'] in (STATE_ACTIVE, STATE_ORPHANED) or edh_reports_error(edh_state))
+                and row.get(ACTIVITY_FIELD) is not None):
             attributes[ACTIVITY_FIELD] = None
     available, reason = connection_verdict(row, desktop)
     attributes['connectionAvailable'] = available
@@ -529,9 +601,10 @@ def workstation_activity(row, now=None) -> Optional[str]:
     still reports it running; ``starting`` for a STOPPED row marked with a start the owner asked for whose stamp
     is still inside ``START_IN_PROGRESS_SECONDS``, for a CREATING row with a session id (a stopped desktop EDH
     has taken a start of, or a new one EDH has placed) unless it records the start stalled (``START_STALLED``: the
-    start is stuck, no longer under way), and for an ACTIVE row whose desktop is not connectable yet, unless it
-    records the desktop's display session ended (``connection_unavailable_reason``: the desktop is running, not
-    starting); None otherwise, and always for a DELETED or ORPHANED row. Pure: it reads only the row and ``now``."""
+    start is stuck, no longer under way) or the desktop in error (``DESKTOP_ERROR``), and for an ACTIVE row whose
+    desktop is not connectable yet, unless it records why (``connection_unavailable_reason``: the desktop is
+    running, not starting); None otherwise, and always for a DELETED or ORPHANED row. Pure: it reads only the row and
+    ``now``."""
     now = now or datetime.now(timezone.utc)
     state = row.get('state')
     if state in (STATE_DELETED, STATE_ORPHANED):
@@ -548,7 +621,9 @@ def workstation_activity(row, now=None) -> Optional[str]:
             return ACTIVITY_STARTING
         return None
     if state == STATE_CREATING and row.get('sessionId'):
-        return None if row.get('lastError') == LAST_ERROR_START_STALLED else ACTIVITY_STARTING
+        if row.get('lastError') == LAST_ERROR_START_STALLED or connection_unavailable_reason(row) is not None:
+            return None
+        return ACTIVITY_STARTING
     if (state == STATE_ACTIVE and not row.get('connectionAvailable')
             and connection_unavailable_reason(row) is None):
         return ACTIVITY_STARTING
@@ -676,6 +751,47 @@ def start_failure(error_text, availability_zone, now, error_code=None) -> Dict[s
     if isinstance(availability_zone, str) and availability_zone:
         failure["availabilityZone"] = availability_zone
     return failure
+
+
+def start_returned_to_stopped(row, attributes) -> bool:
+    """True when ``attributes``, what one read of EDH's record writes onto the row, move a row a start EDH accepted
+    (``startAcceptedAt``) from CREATING to STOPPED, and no stop through VAMS is recorded on it: EC2 took the start and
+    then returned the instance to stopped, or something outside VAMS stopped it."""
+    return (row.get('state') == STATE_CREATING and row.get(START_ACCEPTED_FIELD) is not None
+            and attributes.get('state') == STATE_STOPPED and not row.get(STOP_REQUESTED_FIELD))
+
+
+def instance_state_reason(described) -> Tuple[Optional[str], Optional[str]]:
+    """(the ``StateReason`` code, the Availability Zone) of the first instance an EC2 DescribeInstances answer names,
+    each None when the answer does not carry it; (None, None) for anything that is not such an answer."""
+    reservations = described.get('Reservations') if isinstance(described, dict) else None
+    instances = (reservations[0].get('Instances') if isinstance(reservations, list) and reservations
+                 and isinstance(reservations[0], dict) else None)
+    instance = instances[0] if isinstance(instances, list) and instances and isinstance(instances[0], dict) else {}
+    reason, placement = instance.get('StateReason'), instance.get('Placement')
+    code = reason.get('Code') if isinstance(reason, dict) else None
+    zone = placement.get('AvailabilityZone') if isinstance(placement, dict) else None
+    return (code if isinstance(code, str) and code else None), (zone if isinstance(zone, str) and zone else None)
+
+
+def start_return_attributes(row, state_reason_code, availability_zone, now) -> Dict[str, object]:
+    """What a start EDH accepted and EC2 returned to stopped records on its STOPPED row at ``now``, from the
+    instance's state reason: ``CAPACITY_UNAVAILABLE`` for ``Server.InsufficientInstanceCapacity``
+    (``RESERVATION_FULL`` on a row launched into a capacity reservation, ``capacityReservationId``, as a failed
+    launch of one is classified), ``START_FAILED`` for any other code and when the reason could not be read, each
+    with a ``startFailure`` naming the code and the Availability Zone when known; nothing for a shutdown a user or the
+    instance initiated (``EC2_STATE_REASONS_NOT_A_FAILURE``). The desktop keeps its disk and may be started again."""
+    code = (state_reason_code if isinstance(state_reason_code, str)
+            and AWS_ERROR_CODE_PATTERN.fullmatch(state_reason_code) else None)
+    if code in EC2_STATE_REASONS_NOT_A_FAILURE:
+        return {}
+    if code == EC2_STATE_REASON_INSUFFICIENT_CAPACITY:
+        last_error = (LAST_ERROR_RESERVATION_FULL if row.get('capacityReservationId')
+                      else LAST_ERROR_CAPACITY_UNAVAILABLE)
+    else:
+        last_error = LAST_ERROR_START_FAILED
+    return {'lastError': last_error,
+            START_FAILURE_FIELD: start_failure(None, availability_zone, now, error_code=code)}
 
 
 def _event_instant(event):
