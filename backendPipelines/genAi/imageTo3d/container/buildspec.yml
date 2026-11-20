@@ -32,17 +32,25 @@ phases:
             - echo "Resolving the CodeArtifact PyPI cache..."
             - |
                 set -e
-                CA_TOKEN=$(aws codeartifact get-authorization-token \
-                    --domain "${CODEARTIFACT_DOMAIN}" --domain-owner "${CODEARTIFACT_DOMAIN_OWNER}" \
-                    --region "${AWS_DEFAULT_REGION}" --query authorizationToken --output text)
-                CA_ENDPOINT=$(aws codeartifact get-repository-endpoint \
-                    --domain "${CODEARTIFACT_DOMAIN}" --domain-owner "${CODEARTIFACT_DOMAIN_OWNER}" \
-                    --repository "${CODEARTIFACT_REPOSITORY}" --format pypi \
-                    --region "${AWS_DEFAULT_REGION}" --query repositoryEndpoint --output text)
-                # get-repository-endpoint returns a trailing slash; simple/ is the PyPI index path.
-                printf '[global]\nindex-url = https://aws:%s@%ssimple/\n' \
-                    "${CA_TOKEN}" "${CA_ENDPOINT#https://}" > pip.conf
-                echo "pip will install through ${CA_ENDPOINT}simple/"
+                if [ -z "${CODEARTIFACT_DOMAIN}" ]; then
+                    # The deployment's Region has no CodeArtifact, so no cache was created. The
+                    # Dockerfiles still mount the pipconf secret; an empty [global] section leaves pip
+                    # on the public index.
+                    printf '[global]\n' > pip.conf
+                    echo "No CodeArtifact cache in this Region; pip will install from the public index"
+                else
+                    CA_TOKEN=$(aws codeartifact get-authorization-token \
+                        --domain "${CODEARTIFACT_DOMAIN}" --domain-owner "${CODEARTIFACT_DOMAIN_OWNER}" \
+                        --region "${AWS_DEFAULT_REGION}" --query authorizationToken --output text)
+                    CA_ENDPOINT=$(aws codeartifact get-repository-endpoint \
+                        --domain "${CODEARTIFACT_DOMAIN}" --domain-owner "${CODEARTIFACT_DOMAIN_OWNER}" \
+                        --repository "${CODEARTIFACT_REPOSITORY}" --format pypi \
+                        --region "${AWS_DEFAULT_REGION}" --query repositoryEndpoint --output text)
+                    # get-repository-endpoint returns a trailing slash; simple/ is the PyPI index path.
+                    printf '[global]\nindex-url = https://aws:%s@%ssimple/\n' \
+                        "${CA_TOKEN}" "${CA_ENDPOINT#https://}" > pip.conf
+                    echo "pip will install through ${CA_ENDPOINT}simple/"
+                fi
     build:
         commands:
             # One buildspec serves all models: DOCKERFILE_NAME selects the per-model image.

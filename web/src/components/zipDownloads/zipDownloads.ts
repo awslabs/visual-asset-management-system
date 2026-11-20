@@ -125,12 +125,30 @@ export function zipRefetchInterval(
 }
 
 /**
- * Merge a freshly fetched first page into the rows on screen: rows on the page replace their old
- * copies, new rows go on top, and rows from later pages stay where they are (newest first).
+ * Merge a freshly fetched page into the rows on screen: rows on the page replace their old copies,
+ * new rows go on top, and rows from other pages stay where they are (newest first).
+ *
+ * With `firstPage` the fresh rows are a new read of the list's first page (a poll): a row on
+ * screen that sorts within that page's range but is missing from it has gone from the list (deleted
+ * from another tab, expired, or on an asset the caller can no longer read) and is dropped. When the
+ * list has no more pages, the first page is the whole list. Request IDs sort by creation time.
  */
-export function mergeZipJobs(current: ZipDownloadJob[], fresh: ZipDownloadJob[]): ZipDownloadJob[] {
+export function mergeZipJobs(
+    current: ZipDownloadJob[],
+    fresh: ZipDownloadJob[],
+    firstPage?: { hasMore: boolean }
+): ZipDownloadJob[] {
     const freshIds = new Set(fresh.map((job) => job.requestId));
-    const rest = current.filter((job) => !freshIds.has(job.requestId));
+    const oldestFresh = fresh.reduce<string | null>(
+        (oldest, job) => (oldest === null || job.requestId < oldest ? job.requestId : oldest),
+        null
+    );
+    const rest = current.filter((job) => {
+        if (freshIds.has(job.requestId)) return false;
+        if (!firstPage) return true;
+        if (!firstPage.hasMore) return false;
+        return oldestFresh === null || job.requestId < oldestFresh;
+    });
     return [...fresh, ...rest].sort((a, b) =>
         a.requestId < b.requestId ? 1 : a.requestId > b.requestId ? -1 : 0
     );

@@ -160,6 +160,20 @@ def stage_setting(name, key, config, default):
     return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
+def largest_max_tokens(config):
+    """(maxTokens, stage name) of the largest output request this run's Bedrock calls send, or (0, "")
+    when the run sends none. A full-mode run calls window extraction and finalize, and vision
+    verification unless the run turns visual verification off; the other modes stop at the transcript."""
+    config = config or {}
+    if config.get("mode") != "full":
+        return 0, ""
+    stages = [("window_extraction", WINDOW_MAX_TOKENS), ("finalize", FINALIZE_MAX_TOKENS)]
+    if config.get("runVisualVerification", True) is not False:
+        stages.append(("vision_verification", VISION_MAX_TOKENS))
+    return max(((stage_setting(name, "maxTokens", config, default), name) for name, default in stages),
+               key=lambda item: item[0])
+
+
 def _kilo(tokens):
     return f"{tokens // 1000}K"
 

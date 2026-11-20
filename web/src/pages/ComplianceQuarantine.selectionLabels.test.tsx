@@ -4,24 +4,20 @@
  */
 
 /**
- * The Quarantine table's row selection has accessible names (#1520).
+ * The Quarantine table leaves no selection control unnamed (#1520).
  *
- * The table selects one row with a radio button. It set no `ariaLabels`, so Cloudscape left each
- * radio button unnamed (axe: a critical `label` violation) and the selection column's header
- * empty. Each radio button is now named "Select <asset name, else its id>" and the selection
- * column after the group, the way the asset and search tables name theirs
- * (`tableSelectionLabels`; Cloudscape puts the group label on the column header, not on each
- * row's control).
+ * No action reads a row selection, so the table renders no radio button or checkbox, and every
+ * control it renders has an accessible name: the condition axe's `label` rule checks for form
+ * controls (and its `button-name` and `link-name` rules for the row actions).
  *
  * The other compliance tables are checked at the source: any of them that selects rows must name
- * its selection controls too.
+ * its selection controls.
  */
 
 import fs from "fs";
 import path from "path";
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import Synonyms from "../synonyms";
 import ComplianceQuarantine from "./ComplianceQuarantine";
 
 jest.mock("../services/ComplianceService", () => ({
@@ -48,9 +44,7 @@ const quarantined = (assetId: string, assetName?: string) => ({
     updatedAt: "2026-01-01T00:00:00Z",
 });
 
-const GROUP_LABEL = `Quarantined ${Synonyms.assets} selection`;
-
-describe("Quarantine table selection names (#1520)", () => {
+describe("Quarantine table selection controls (#1520)", () => {
     beforeEach(() => {
         jest.clearAllMocks();
         service().fetchQuarantinedAssets.mockResolvedValue([
@@ -58,7 +52,7 @@ describe("Quarantine table selection names (#1520)", () => {
             {
                 quarantinedAssets: [
                     quarantined("asset-1", "Turbine housing"),
-                    // An asset with no name is named by its id.
+                    // An asset with no name is listed by its id.
                     quarantined("asset-2"),
                 ],
                 nextToken: undefined,
@@ -66,23 +60,30 @@ describe("Quarantine table selection names (#1520)", () => {
         ]);
     });
 
-    it("names each row's radio button after the asset it selects", async () => {
+    it("renders no row selection control", async () => {
         render(<ComplianceQuarantine />);
         await screen.findByText("Turbine housing");
 
-        const radios = screen.getAllByRole("radio");
-        expect(radios).toHaveLength(2);
-        expect(radios[0]).toHaveAccessibleName("Select Turbine housing");
-        expect(radios[1]).toHaveAccessibleName("Select asset-2");
+        expect(screen.queryAllByRole("radio")).toHaveLength(0);
+        expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     });
 
-    it("names the selection column after the group", async () => {
-        render(<ComplianceQuarantine />);
+    it("gives every control in the table an accessible name", async () => {
+        const { container } = render(<ComplianceQuarantine />);
         await screen.findByText("Turbine housing");
 
-        expect(screen.getAllByRole("columnheader", { name: GROUP_LABEL }).length).toBeGreaterThan(
-            0
+        const tables = container.querySelectorAll("table");
+        expect(tables.length).toBeGreaterThan(0);
+        const controls = Array.from(tables).flatMap((table) =>
+            Array.from(
+                table.querySelectorAll<HTMLElement>(
+                    'input:not([type="hidden"]), select, textarea, button, a[href], [role="radio"], [role="checkbox"]'
+                )
+            )
         );
+        // The row actions (Release, Exception) are controls too, so the check has something to read.
+        expect(controls.length).toBeGreaterThan(0);
+        controls.forEach((control) => expect(control).toHaveAccessibleName());
     });
 });
 

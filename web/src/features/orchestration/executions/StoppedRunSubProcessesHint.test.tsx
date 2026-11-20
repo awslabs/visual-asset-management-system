@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -14,6 +14,8 @@ import { stillRunningSubProcessCount } from "./StoppedRunSubProcessesHint";
 jest.mock("@monaco-editor/react", () => ({ __esModule: true, default: () => null }));
 
 const mockAbort = jest.fn();
+// Whether the abort request is in flight, as the mutation reports it.
+let mockAbortPending = false;
 jest.mock("../api/queries", () => ({
     useExecutionDetails: jest.fn(),
     useExecutionDetailMetadata: jest.fn(() => ({
@@ -42,7 +44,7 @@ jest.mock("../api/queries", () => ({
         error: null,
     })),
     useExecutionActions: jest.fn(() => ({
-        abortExecution: { mutateAsync: mockAbort, isPending: false },
+        abortExecution: { mutateAsync: mockAbort, isPending: mockAbortPending },
     })),
 }));
 jest.mock("../api/executions", () => ({ getExecutionLogs: jest.fn() }));
@@ -75,6 +77,17 @@ const execution = (executionStatus: string, subStatus: string, pipelineStatus = 
     ],
 });
 
+function page() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return (
+        <QueryClientProvider client={queryClient}>
+            <MemoryRouter>
+                <ExecutionDetailPage executionId="e-ext" />
+            </MemoryRouter>
+        </QueryClientProvider>
+    );
+}
+
 function renderPage(data: any, canAbort = true) {
     const { useExecutionDetails } = require("../api/queries");
     const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
@@ -85,18 +98,14 @@ function renderPage(data: any, canAbort = true) {
             method === "DELETE" && path === "/workflows/executions/{executionId}" ? canAbort : true
         ),
     });
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    return render(
-        <QueryClientProvider client={queryClient}>
-            <MemoryRouter>
-                <ExecutionDetailPage executionId="e-ext" />
-            </MemoryRouter>
-        </QueryClientProvider>
-    );
+    return render(page());
 }
 
 describe("stopped run with sub-processes still running (#1020)", () => {
-    beforeEach(() => jest.clearAllMocks());
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockAbortPending = false;
+    });
 
     it("counts RUNNING sub-processes only under a stopped execution", () => {
         expect(stillRunningSubProcessCount(execution("ABORTED", "RUNNING") as any)).toBe(1);
@@ -133,14 +142,57 @@ describe("stopped run with sub-processes still running (#1020)", () => {
         expect(screen.queryByTestId("stopped-run-subprocesses-hint")).not.toBeInTheDocument();
     });
 
-    it("shows the hint with an Abort that aborts this execution", async () => {
+    it("shows the hint with an Abort that asks first, then aborts this execution", async () => {
         mockAbort.mockResolvedValue({ message: "ok" });
         renderPage(execution("ABORTED", "RUNNING"));
         const hint = await screen.findByTestId("stopped-run-subprocesses-hint");
         expect(hint).toHaveTextContent(/has stopped, but 1 sub-process .* is still running/);
         expect(hint).toHaveTextContent(/Abort stops them/);
-        await userEvent.click(screen.getByRole("button", { name: "Abort" }));
+        await userEvent.click(within(hint).getByRole("button", { name: "Abort" }));
+
+        const dialog = await screen.findByRole("dialog");
+        expect(dialog).toHaveTextContent(
+            "Stop the sub-processes still running? Their compute is released and their work is lost."
+        );
+        expect(mockAbort).not.toHaveBeenCalled();
+        await userEvent.click(within(dialog).getByRole("button", { name: "Abort" }));
         await waitFor(() => expect(mockAbort).toHaveBeenCalledWith({ executionId: "e-ext" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("aborts nothing when the confirmation is cancelled", async () => {
+        renderPage(execution("ABORTED", "RUNNING"));
+        const hint = await screen.findByTestId("stopped-run-subprocesses-hint");
+        await userEvent.click(within(hint).getByRole("button", { name: "Abort" }));
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(mockAbort).not.toHaveBeenCalled();
+    });
+
+    it("keeps focus on the confirm while the abort runs", async () => {
+        mockAbort.mockReturnValue(new Promise(() => undefined));
+        const { rerender } = renderPage(execution("ABORTED", "RUNNING"));
+        const hint = await screen.findByTestId("stopped-run-subprocesses-hint");
+        await userEvent.click(within(hint).getByRole("button", { name: "Abort" }));
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.click(within(dialog).getByRole("button", { name: "Abort" }));
+        mockAbortPending = true;
+        rerender(page());
+
+        const confirm = within(screen.getByRole("dialog")).getByRole("button", {
+            name: "Aborting...",
+        });
+        expect(confirm).toHaveAttribute("aria-disabled", "true");
+        expect(confirm).not.toBeDisabled();
+        expect(confirm).toHaveFocus();
+        // The hint's own button (behind the open dialog) reads the same busy text as the dialog.
+        expect(
+            within(screen.getByTestId("stopped-run-subprocesses-hint")).getByRole("button", {
+                name: "Aborting...",
+                hidden: true,
+            })
+        ).toBeInTheDocument();
     });
 
     it("keeps the hint but hides the button for a caller who cannot abort", async () => {

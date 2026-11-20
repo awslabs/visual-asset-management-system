@@ -1772,3 +1772,47 @@ describe("ExecutionDetailPage workflow version", () => {
         expect(screen.queryByText("Workflow Version:")).not.toBeInTheDocument();
     });
 });
+
+describe("ExecutionDetailPage when a later poll fails", () => {
+    it("keeps the loaded execution and says the page could not be refreshed", () => {
+        const queries = require("../api/queries");
+        const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+        queries.useExecutionDetailMetadata.mockReturnValue(IDLE_PAGED_METADATA);
+        queries.useExecutionDetailFiles.mockReturnValue(IDLE_PAGED_METADATA);
+        queries.useExecutionResults.mockReturnValue({
+            data: undefined,
+            pageContents: [],
+            isLoading: false,
+            isError: false,
+            error: null,
+        });
+        queries.useExecutionDetails.mockReturnValue({
+            data: {
+                workflowExecutionId: "e-poll",
+                workflowId: "wf-1",
+                workflowDatabaseId: "db-1",
+                executionStatus: "RUNNING",
+                pipelines: [],
+            },
+            isLoading: false,
+            error: new Error("Service unavailable"),
+        });
+        useAllowedRoutes.mockReturnValue({ loading: false, can: jest.fn(() => true) });
+
+        render(
+            <QueryClientProvider client={new QueryClient()}>
+                <MemoryRouter>
+                    <ExecutionDetailPage executionId="e-poll" />
+                </MemoryRouter>
+            </QueryClientProvider>
+        );
+
+        expect(screen.getByRole("heading", { name: "Execution Detail" })).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The page shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText("Error Loading Execution")).not.toBeInTheDocument();
+    });
+});

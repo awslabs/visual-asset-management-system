@@ -47,6 +47,13 @@ class TestVamsRulesV1SchemaMessagesDoNotEchoInput:
                              "rules": {CALLER_RULE_NAME: {"enforcement": "warn"}}})
         assert CALLER_RULE_NAME not in validation_error_message(error)
 
+    def test_a_rule_name_under_the_reserved_prefix_is_refused_without_the_name(self):
+        error = _errors_for({"schemaFormat": "vams-rules-v1", "rules": {
+            "$" + CALLER_RULE_NAME: {"ruleType": "relationship", "enforcement": "warn", "checks": []}}})
+        message = validation_error_message(error)
+        assert "Rule names may not start with $" in message
+        assert CALLER_RULE_NAME not in message
+
     def test_the_model_class_name_stays_out_of_the_caller_safe_message(self):
         error = _errors_for({"schemaFormat": "vams-rules-v1", "rules": {}})
         message = validation_error_message(error)

@@ -26,6 +26,7 @@ import {
     stopWorkstation,
 } from "./workstations";
 import { EdhRequestError } from "./outcome";
+import { NETWORK_FAILURE_MESSAGE } from "../../../services/networkFailure";
 
 const LAUNCH_BODY = {
     bootstrapId: "11111111-1111-4111-8111-111111111111",
@@ -61,6 +62,11 @@ describe("workstations service", () => {
             (apiClient.get as jest.Mock).mockRejectedValue(new Error("Forbidden"));
             expect(await listWorkstations()).toEqual([false, "Forbidden"]);
         });
+
+        it("words a read that got no response as the network message", async () => {
+            (apiClient.get as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+            expect(await listWorkstations()).toEqual([false, NETWORK_FAILURE_MESSAGE]);
+        });
     });
 
     describe("createWorkstation", () => {
@@ -88,6 +94,14 @@ describe("workstations service", () => {
                 ]);
             }
         );
+
+        it("reports an unknown outcome for a launch that got no response", async () => {
+            (apiClient.post as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+            expect(await createWorkstation(LAUNCH_BODY)).toEqual([
+                false,
+                LAUNCH_OUTCOME_UNKNOWN_MESSAGE,
+            ]);
+        });
 
         it("returns the backend's message for any other rejection", async () => {
             (apiClient.post as jest.Mock).mockRejectedValue(
@@ -161,6 +175,21 @@ describe("workstations service", () => {
                 expect(ok).toBe(false);
                 expect(err).toBeInstanceOf(EdhRequestError);
                 expect(err).toMatchObject({ message: body.message, status: 502, body });
+            }
+        );
+
+        it.each([
+            ["stopWorkstation", stopWorkstation, "post"],
+            ["startWorkstation", startWorkstation, "post"],
+            ["deleteWorkstation", deleteWorkstation, "del"],
+        ] as const)(
+            "%s words a request that got no response as the network message",
+            async (_name, call, verb) => {
+                (apiClient[verb] as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+                const [ok, err] = await call("s-1");
+                expect(ok).toBe(false);
+                expect(err).toBeInstanceOf(EdhRequestError);
+                expect(err).toMatchObject({ message: NETWORK_FAILURE_MESSAGE, status: undefined });
             }
         );
     });

@@ -1,0 +1,35 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "EPSG:3031",
+  "dataType": "uint8",
+  "file": "polar_3031_offpole.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    1000000.0,
+    -1256000.0,
+    1256000.0,
+    -1000000.0
+  ],
+  "nodata": null,
+  "overviewCount": 1,
+  "pixelIsPoint": false,
+  "pixelSizeX": 1000.0,
+  "pixelSizeY": 1000.0,
+  "rotated": false,
+  "wgs84Bounds": [
+    128.526044,
+    -77.0374006,
+    141.473956,
+    -73.7572457
+  ],
+  "width": 256
+}

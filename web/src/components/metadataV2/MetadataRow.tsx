@@ -55,6 +55,8 @@ interface MetadataRowProps {
     onValidationError?: (error: string | undefined) => void;
     readOnly?: boolean;
     isFileAttribute?: boolean;
+    /** Whether the role may delete a stored field; a field added in this edit can always be removed. */
+    canDelete?: boolean;
 }
 
 export const MetadataRow: React.FC<MetadataRowProps> = ({
@@ -70,6 +72,7 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
     onValidationError,
     readOnly = false,
     isFileAttribute = false,
+    canDelete = true,
     rows,
 }) => {
     const [showRawEditor, setShowRawEditor] = useState(false);
@@ -501,27 +504,30 @@ export const MetadataRow: React.FC<MetadataRowProps> = ({
                             </div>
                         )}
 
-                        {/* Delete/Clear button */}
-                        <div style={{ display: "inline-block" }} tabIndex={-1}>
-                            <Button
-                                variant="icon"
-                                iconName={isSchema ? "undo" : "remove"}
-                                onClick={() => {
-                                    // For schema fields, always skip modal (just clear)
-                                    if (isSchema) {
-                                        onDelete();
-                                    }
-                                    // For non-schema: skip modal for new rows or rows with pending changes
-                                    else if (row.isNew || row.hasChanges) {
-                                        onDelete();
-                                    } else {
-                                        setShowDeleteConfirm(true);
-                                    }
-                                }}
-                                disabled={readOnly || (isSchema && row.metadataSchemaRequired)}
-                                ariaLabel={isSchema ? "Clear metadata" : "Delete metadata"}
-                            />
-                        </div>
+                        {/* Delete/Clear button. Clearing a schema field and removing a field added
+                            in this edit call no delete, so only a stored field needs the grant. */}
+                        {(canDelete || isSchema || row.isNew) && (
+                            <div style={{ display: "inline-block" }} tabIndex={-1}>
+                                <Button
+                                    variant="icon"
+                                    iconName={isSchema ? "undo" : "remove"}
+                                    onClick={() => {
+                                        // For schema fields, always skip modal (just clear)
+                                        if (isSchema) {
+                                            onDelete();
+                                        }
+                                        // For non-schema: skip modal for new rows or rows with pending changes
+                                        else if (row.isNew || row.hasChanges) {
+                                            onDelete();
+                                        } else {
+                                            setShowDeleteConfirm(true);
+                                        }
+                                    }}
+                                    disabled={readOnly || (isSchema && row.metadataSchemaRequired)}
+                                    ariaLabel={isSchema ? "Clear metadata" : "Delete metadata"}
+                                />
+                            </div>
+                        )}
                     </SpaceBetween>
                 </td>
             </tr>

@@ -11,7 +11,7 @@
  */
 
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { Navigation } from "./Navigation";
 import { checkWebRoutesAllowed, WebRouteCheck } from "../services/webRoutesCheck";
@@ -20,6 +20,7 @@ import {
     ALLOWED_API_ROUTES_CACHE_KEY,
     ALLOWED_API_ROUTES_CACHE_TTL_MILLIS,
 } from "../common/constants/authRoutes";
+import { cacheAllowedApiRoutes } from "../FedAuth/allowedApiRoutesCache";
 
 jest.mock("../services/webRoutesCheck", () => ({ checkWebRoutesAllowed: jest.fn() }));
 
@@ -96,5 +97,19 @@ describe("requiresApiRoute in the side navigation", () => {
         rerender(<Navigation activeHref="#/auth/constraints/" user={undefined} />);
 
         expect(nav()?.findLinkByHref(ADMIN_LINK)).toBeTruthy();
+    });
+
+    it("shows it as soon as the listing is cached, without another render from outside", async () => {
+        const { nav } = await renderSideNavigation();
+        expect(nav()?.findLinkByHref(ADMIN_LINK)).toBeFalsy();
+
+        act(() => {
+            cacheAllowedApiRoutes({
+                userId: "u1",
+                routes: [{ path: "/auth/api-keys", methods: ["GET"] }],
+            });
+        });
+
+        await waitFor(() => expect(nav()?.findLinkByHref(ADMIN_LINK)).toBeTruthy());
     });
 });

@@ -349,6 +349,37 @@ class TestSynchronousEvaluation:
         assert "exceptionApplied" not in record
         assert tables.audit_events() == ["compliance_check"]
 
+    # A rule definition the relationship model refuses (a relationship rule needs checks).
+    UNREADABLE_RULE = {"ruleType": "relationship", "enforcement": "warn", "checks": []}
+
+    def test_a_rule_that_cannot_be_read_is_recorded_as_an_error_result(self):
+        body = dict(SYNC_RULES_SCHEMA_BODY,
+                    rules=dict(SYNC_RULES_SCHEMA_BODY["rules"], unreadable=self.UNREADABLE_RULE))
+        tables = Tables(schema_body=body)
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        results = {r["ruleName"]: r for r in result["ruleResults"]}
+        assert results["unreadable"]["status"] == "error"
+        assert results["unreadable"]["message"] == store.engine.UNREADABLE_RULE_MESSAGE
+        assert {"has-parent", "owner-present"} <= set(results)
+
+    def test_an_evaluation_whose_every_rule_cannot_be_read_reaches_no_verdict(self):
+        body = {"schemaFormat": "vams-rules-v1", "rules": {"unreadable": self.UNREADABLE_RULE}}
+        tables = Tables(schema_body=body, previous_row={"complianceState": "quarantined"})
+        result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        assert result["verdict"] == "error"
+        # The quarantine stands: an evaluation with no verdict leaves the state as it is.
+        assert result["complianceState"] == "quarantined"
+        assert "complianceState" not in tables.outcome_state()
+        assert tables.outcome_state()["lastEvaluationStatus"] == "error"
+
+    def test_the_rules_of_a_parent_that_is_not_found_are_recorded_as_left_out(self):
+        tables = Tables(schema_body=dict(SYNC_RULES_SCHEMA_BODY, extends="parent-schema"))
+        with patch(f"{STORE}.load_schema_body", return_value=None):
+            result = tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
+        results = {r["ruleName"]: r for r in result["ruleResults"]}
+        assert results[store.engine.UNRESOLVED_PARENT_RULE_NAME]["status"] == "error"
+        assert "parent-schema" not in json.dumps(result["ruleResults"])
+
     def test_the_evaluation_never_rewrites_the_binding(self):
         """An ad-hoc evaluation against another schema records that schema on the evaluation row
         only; the asset-state row keeps the schema it is bound to."""

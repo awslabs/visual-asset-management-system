@@ -308,3 +308,53 @@ def test_the_issuer_flag_is_the_fallback_when_the_published_discovery_path_does_
     code, output = _run(external, tmp_path, "--issuer", external.issuer)
     assert code == 0, capsys.readouterr().err
     assert RemoteAuthSettings.load(str(output)).jwks_uri == external.jwks_uri
+
+
+# --- The deployment's settings are read over https, or http to loopback only -------------------------
+
+
+def test_a_plain_http_vams_url_is_refused_before_any_request(tmp_path, capsys, monkeypatch):
+    def no_request(*args, **kwargs):
+        raise AssertionError("nothing may be read over plain http from another host")
+
+    monkeypatch.setattr(setup_remote.requests, "get", no_request)
+    code = setup_remote.main(["--vams-url", "http://vams.example.com", "--resource-url", RESOURCE,
+                              "--client-id", REMOTE_CLIENT_ID, "--output", str(tmp_path / "a.json")])
+    assert code == 1 and not (tmp_path / "a.json").exists()
+    assert "https" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("url", [
+    "http://idp.example.com/.well-known/openid-configuration", "http://10.0.0.5/api/amplify-config",
+])
+def test_no_setting_is_read_over_plain_http_from_another_host(monkeypatch, url):
+    monkeypatch.setattr(setup_remote.requests, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError(url)))
+    with pytest.raises(setup_remote.SetupError, match="https"):
+        setup_remote._get_json(url)
+
+
+def test_a_published_plain_http_discovery_url_is_refused(external, tmp_path, capsys, monkeypatch):
+    """The deployment's published absolute discovery URL is read only over https (or loopback http)."""
+    published = "http://idp.example.com/.well-known/openid-configuration"
+    original = external.amplify_config
+
+    def amplify_config():
+        return {**original(), "externalOAuthIdpDiscoveryEndpoint": published}
+
+    monkeypatch.setattr(external, "amplify_config", amplify_config)
+    code, output = _run(external, tmp_path, "--audience", "api://vams")
+    assert code == 1 and not output.exists()
+    assert published in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("host", [
+    "localhost", "LOCALHOST", "127.0.0.1", "127.8.9.10", "::1", "[::1]", " localhost ",
+    "", "0.0.0.0", "10.0.0.1", "192.168.1.1", "localhost.example.com", "example.com", "::ffff:127.0.0.1",
+])
+def test_the_server_and_the_cli_agree_on_which_hosts_are_loopback(host):
+    """`setup-remote` checks URLs with the CLI's rule and the server checks its own bind and resource
+    URL with its own copy: the two must answer alike."""
+    from vamscli.commands.setup import is_loopback_host as cli_rule
+    from vams_mcp.config import is_loopback_host as server_rule
+
+    assert cli_rule(host) == server_rule(host)

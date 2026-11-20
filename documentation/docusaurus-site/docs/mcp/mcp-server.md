@@ -150,7 +150,7 @@ Keep these tools off the list:
 -   Every write and destructive tool, and above all the tools that start, stop or extend billed compute (`execute_workflow`, `rerun_execution`, `abort_execution`, `create_zip_download`, `cancel_zip_download`). `create_api_key` and `create_user_api_key` return a usable API key.
 
 :::warning[Approval by hint]
-Every tool carries MCP annotations (see [Tool tiers and annotations](#tool-tiers-and-annotations)). The presigned-URL tools change nothing, so they are marked read-only. A client set to approve every read-only tool automatically would approve them too. Use an explicit approval list instead.
+Every tool carries MCP annotations (see [Tool tiers and annotations](#tool-tiers-and-annotations)). The file download URL tools (`generate_download_url`, `generate_download_urls_bulk`) change nothing, so they are marked read-only, and a client set to approve every read-only tool automatically would approve them too. `get_zip_download_url` is a write-tier tool. Use an explicit approval list instead.
 :::
 
 ## Tools
@@ -200,7 +200,7 @@ The `VAMS_MCP_TRANSPORT`, `VAMS_MCP_AUTH_CONFIG`, `VAMS_MCP_HOST`, `VAMS_MCP_POR
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `consumer`   | Read-only: databases, assets, files, metadata, versions, links, search, download links, workflows and runs, tags, comments, zip download jobs |
 | `operator`   | `consumer` plus the writes and deletes of asset content, comments, subscriptions, zip downloads, and running workflows                        |
-| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, subscriptions and API keys                                      |
+| `admin`      | Databases, tags, metadata schemas, pipelines, templates, workflows, triggers, executions, the subscription list and API keys                  |
 | `compliance` | Compliance: schemas, bindings, evaluations and sweeps, quarantine and exceptions, cascades and the compliance audit trail                     |
 | `audit`      | Audit log search: `vams_audit_groups`, `vams_audit_search`, `vams_audit_results`, `vams_audit_stop` (opt-in, see below)                       |
 | `edh`        | EDH Workstations add-on: workstations, the catalog and container jobs                                                                         |
@@ -265,10 +265,10 @@ The server starts even when the profile is not set up or nobody is signed in. Ev
 ### What changes
 
 -   **Usage instructions.** The server sends the client a short guide when it connects: how VAMS identifies assets and files, where to start, and what a bounded result means.
--   **Tool descriptions** are rewritten for agents and are shorter. Tool names, parameters and returned JSON are unchanged.
+-   **Tool descriptions** are rewritten for agents and are shorter. No tool is renamed or removed and returned JSON is unchanged. Nine tools gain optional parameters: `include_archived` on `get_asset_links`, `get_asset_metadata`, `get_asset_version`, `list_asset_comments`, `list_asset_files`, `list_asset_version_comments` and `list_asset_versions`, and `exclude_status` and `include_system` on `list_executions` and `list_workflow_executions`.
 -   **Titles and annotations** on every tool, and **structured output** for the most-used reads.
 -   **Signed-out start.** In 2.6.x the server exited at start when nobody was signed in, so the client showed no tools. It now starts, and `vams_status` reports the state.
--   **New tools.** `vams_status`; `list_features`, `get_file_info`, `get_file_metadata`, `get_asset_link_metadata` and `export_asset` (read); `move_file`, `copy_file`, `create_asset_link`, `set_file_metadata`, `set_primary_file`, `revert_file_version` and the tag and tag-type create and update tools (write); `archive_file`, `unarchive_file`, `delete_file`, `delete_asset_link`, `delete_asset_metadata`, `delete_tag` and `delete_tag_type` (destructive). See [Tools](#tools).
+-   **New tools.** `vams_status`; `list_features`, `get_file_info`, `get_file_metadata`, `get_asset_link_metadata` and `export_asset` (read); `move_file`, `copy_file`, `create_asset_link`, `set_file_metadata`, `set_primary_file`, `revert_file_version` and the tag and tag-type create and update tools (write); `archive_file`, `unarchive_file`, `delete_file`, `delete_asset_link`, `delete_asset_metadata`, `delete_tag` and `delete_tag_type` (destructive); the compliance tools for schemas, bindings, evaluations, quarantine and exceptions, cascades and the audit trail; the Download as Zip tools (`create_zip_download`, `list_zip_downloads`, `get_zip_download`, `get_zip_download_url`, `cancel_zip_download` and `delete_zip_download`); and `get_execution_results` and `page_execution_detail_files`, which page an execution's results and files. See [Tools](#tools).
 -   **Tool sets.** `VAMS_MCP_TOOLSETS` selects fewer tools. The default, `all`, keeps every tool. See [Tool sets](#tool-sets).
 -   **Remote hosting.** The server can run as a remote server for clients that connect over HTTP. See [Remote MCP Server](remote-mcp-server.md).
 -   **Minimum versions.** The server requires `mcp` 1.10.0 or later and `pydantic` 2.11 or later.

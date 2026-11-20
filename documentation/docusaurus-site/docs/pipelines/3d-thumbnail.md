@@ -91,6 +91,8 @@ The same container also writes previews for images and video, through a second r
 
 Not accepted: SVG, HEIC/HEIF, AVIF, EXR, HDR, PSD, DDS and MDL (MDL thumbnails are tracked in #1547).
 
+The media pipeline skips `*.cog.tif`, the Cloud Optimized GeoTIFF that the [COG Conversion](cog-conversion.md) pipeline writes beside its source: the source `.tif` already has a preview, and a COG can exceed the pixel limit.
+
 ### What a run writes
 
 An image whose extension is one the web shows as its own preview (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`) and whose size is strictly under 5,242,880 bytes (5 MiB) is shown as its own preview, so the run writes nothing.
@@ -295,7 +297,7 @@ Each run executes on one of two AWS Fargate sizes, both submitted from one AWS B
 
 -   **Choosing the tier.** A run's `computeTier` parameter forces a tier; `auto` (the default) leaves the choice to the input size. When the input size cannot be read, the run uses the standard tier and logs a warning.
 -   **Sizing.** vCPU and memory are configured per tier (see [Configuration Options](#configuration-options)). Deployment validates each pair against the AWS Fargate Linux task sizes (4 vCPU: 8–30 GiB in 1 GiB steps; 8 vCPU: 16–60 GiB in 4 GiB steps; 16 vCPU: 32–120 GiB in 8 GiB steps), because AWS Batch checks an override only when a job is submitted.
--   **Time bounds.** The attempt durations are fixed. The pipeline's state machine times out after 4 hours and the registered pipeline's task timeout is 14,400 seconds, so neither gives up on a large-tier job that AWS Batch still allows to run.
+-   **Time bounds.** The attempt durations are fixed and start when the job leaves the job queue. Each tier's AWS Batch state also has its own 3 hour 30 minute bound, which counts the time the job waited in the queue as well as its run; a job still waiting or running at that bound fails the run with a timeout cause and is ended, so a job that waited past the bound never runs; run the pipeline again later. The pipeline's state machine times out after 3 hours 45 minutes, inside the registered pipeline's task timeout of 14,400 seconds, so the run always reports its own outcome.
 -   **Ephemeral storage.** Both tiers have 200 GiB, the AWS Fargate maximum; ephemeral storage is a property of the job definition and cannot be overridden per job.
 -   **Concurrency.** The Fargate compute environment allows 256 vCPU at a time, so up to 64 standard-tier jobs or 16 large-tier jobs run at once; further jobs wait in the job queue. The account's AWS Fargate vCPU quota in the Region also applies.
 

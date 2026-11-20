@@ -257,6 +257,25 @@ class TestStaleInstances:
         assert response["statusCode"] == 400
         assert fakes.edh.calls == []
 
+    @pytest.mark.parametrize("value", ["525601", str(10 ** 10)])
+    def test_an_idle_minutes_value_above_a_year_is_400(self, monkeypatch, value):
+        fakes = install_admin_fakes(monkeypatch, edh=_client())
+
+        response = fakes.module.lambda_handler(make_event("GET", STALE_PATH, query={"idleMinutes": value}), {})
+
+        assert response["statusCode"] == 400
+        assert response_body(response)["message"] == "idleMinutes must be at most 525600"
+        assert fakes.edh.calls == []
+
+    def test_the_largest_idle_minutes_value_is_accepted(self, monkeypatch):
+        fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
+
+        response = fakes.module.lambda_handler(
+            make_event("GET", STALE_PATH, query={"idleMinutes": "525600"}), {})
+
+        assert response["statusCode"] == 200
+        assert response_body(response)["idleMinutes"] == 525600
+
     def test_null_query_parameters_on_a_rest_event_use_the_default(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows())
 
@@ -454,6 +473,22 @@ class TestStopAndDeactivate:
 
         assert response["statusCode"] == 404
         assert fakes.edh.calls_to("stop_desktop") == []
+
+    @pytest.mark.parametrize("action", ["stop", "deactivate"])
+    def test_a_caller_limited_to_one_os_family_gets_one_answer_for_an_unknown_and_a_refused_session(
+            self, monkeypatch, action):
+        # The role may act on Windows workstations only; s-1 is a Linux one.
+        def windows_only(obj, act):
+            return obj.get("edhOsFamily") == "windows"
+        answers = []
+        for identifier in ("s-1", "nope"):
+            fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows(), enforce=windows_only)
+            response = fakes.module.lambda_handler(
+                make_event("POST", instance_path(identifier, action), path_params={"sessionId": identifier}), {})
+            answers.append((response["statusCode"], response_body(response)))
+            assert fakes.edh.calls_to("stop_desktop") == []
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 403
 
     def test_a_tier_2_denial_is_403_before_any_edh_action(self, monkeypatch):
         fakes = install_admin_fakes(monkeypatch, edh=_client(), rows=_rows(), enforce=lambda obj, act: False)

@@ -5,7 +5,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as containerService from "./containers";
-import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
+import { callService, mayHaveTakenEffect } from "./outcome";
 import type {
     EdhContainerBackend,
     EdhContainerCatalog,
@@ -28,18 +28,6 @@ export const containerQk = {
 
 /** Job states are owned by EDH and change without a VAMS action, so the list re-reads on a cadence. */
 export const CONTAINER_JOBS_POLL_MS = 15000;
-
-async function callService<T>(
-    serviceFn: () => Promise<[boolean, T | string | EdhRequestError]>
-): Promise<T> {
-    const [ok, data] = await serviceFn();
-    if (!ok) {
-        // An EdhRequestError is thrown as it is: its status and body say whether EDH confirmed it.
-        if (data instanceof Error) throw data;
-        throw new Error(typeof data === "string" ? data : "Service call failed");
-    }
-    return data as T;
-}
 
 export function useContainerCatalog(enabled = true) {
     return useQuery({
