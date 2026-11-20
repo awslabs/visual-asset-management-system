@@ -39,21 +39,39 @@ export const navigation = {
 };
 
 let inFlight: Promise<boolean> | null = null;
+// Whether the in-flight call refreshes the tokens rather than only checking them.
+let inFlightForced = false;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 let loggingOut = false;
 
 /**
  * Validate/refresh the session, coalescing concurrent callers onto one underlying
  * call so parallel API requests don't trigger N refreshes / N redirects.
+ *
+ * A refresh asked for while a plain check is in flight (a 401 during a focus check) runs once that
+ * check has found the session alive, so the caller gets new tokens instead of the check's answer
+ * for the tokens the API just rejected. Later callers join that refresh.
  */
 export function ensureValidSession(forceRefresh = false): Promise<boolean> {
-    if (inFlight) {
+    if (inFlight && (inFlightForced || !forceRefresh)) {
         return inFlight;
     }
-    inFlight = ensureSessionValid(forceRefresh).finally(() => {
-        inFlight = null;
+    const previous = inFlight;
+    const call: Promise<boolean> = (
+        previous
+            ? previous
+                  .catch(() => false)
+                  .then((alive) => (alive ? ensureSessionValid(true) : false))
+            : ensureSessionValid(forceRefresh)
+    ).finally(() => {
+        if (inFlight === call) {
+            inFlight = null;
+            inFlightForced = false;
+        }
     });
-    return inFlight;
+    inFlight = call;
+    inFlightForced = forceRefresh;
+    return call;
 }
 
 export function getAccessTokenExpiry(): Promise<number | null> {
@@ -76,6 +94,7 @@ export function clearExpiryTimer(): void {
 /** @internal Test-only: reset module state between tests. */
 export function __resetForTests(): void {
     inFlight = null;
+    inFlightForced = false;
     clearExpiryTimer();
     loggingOut = false;
 }

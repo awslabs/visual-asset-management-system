@@ -47,3 +47,42 @@ describe("ExecutionResultSurface Load more", () => {
         expect(fetchNextPage).toHaveBeenCalledTimes(1);
     });
 });
+
+describe("ExecutionResultSurface failures", () => {
+    it("keeps the loaded pages when Load more fails, and says why beside it", async () => {
+        const fetchNextPage = jest.fn();
+        useExecutionResults.mockReturnValue(
+            results({ isError: true, error: new Error("Service unavailable"), fetchNextPage })
+        );
+        render(<ExecutionResultSurface executionId="e1" open onOpenChange={jest.fn()} />);
+
+        expect(screen.getByTestId("result-surface-content")).toHaveTextContent("page one text");
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "Could not load more of the result: Service unavailable. Choose Load more to try again."
+        );
+        await userEvent.click(screen.getByTestId("result-surface-load-more"));
+        expect(fetchNextPage).toHaveBeenCalledTimes(1);
+    });
+
+    it("names why the first page failed and retries it", async () => {
+        const refetch = jest.fn();
+        useExecutionResults.mockReturnValue(
+            results({
+                data: undefined,
+                pageContents: [],
+                isError: true,
+                error: new Error("Not Authorized"),
+                hasNextPage: false,
+                refetch,
+            })
+        );
+        render(<ExecutionResultSurface executionId="e1" open onOpenChange={jest.fn()} />);
+
+        expect(screen.getByRole("alert")).toHaveTextContent(
+            "The result could not be loaded: Not Authorized"
+        );
+        expect(screen.queryByTestId("result-surface-content")).toBeNull();
+        await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(refetch).toHaveBeenCalledTimes(1);
+    });
+});

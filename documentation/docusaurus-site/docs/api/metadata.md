@@ -215,6 +215,8 @@ Updates existing metadata items for an asset. Supports two update modes.
 
 :::warning[REPLACE_ALL Mode]
 The `replace_all` update type deletes all existing metadata and replaces it with the provided items. This mode requires the user to have `PUT`, `POST`, and `DELETE` permissions on the entity. It is limited to 500 items per operation and includes automatic rollback on failure.
+
+A `replace_all` that removes stored keys (keys the entity holds that the request leaves out) also requires the `DELETE` method on the same API route, the permission the route's delete operation needs. Without it the request returns `403` and nothing is written. A `replace_all` that only adds or updates keys needs only `PUT` on the route. The same rule applies to the file, database and asset link metadata update endpoints.
 :::
 
 **Response:**
@@ -420,7 +422,7 @@ Updates metadata items for a specific file.
 }
 ```
 
-`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`; `updateType` is `"update"` (default) or `"replace_all"`.
+`filePath` and `type` are required. `type` is `"metadata"` or `"attribute"`; `updateType` is `"update"` (default) or `"replace_all"`. A `replace_all` that removes stored keys also requires `DELETE` on this route and returns `403` without it (see [Update Asset Metadata](#update-asset-metadata)).
 
 **Response:**
 
@@ -584,6 +586,8 @@ Updates metadata items for a database.
     "updateType": "update"
 }
 ```
+
+`updateType` is `"update"` (default) or `"replace_all"`. A `replace_all` that removes stored keys also requires `DELETE` on this route and returns `403` without it (see [Update Asset Metadata](#update-asset-metadata)).
 
 **Response:**
 
@@ -752,6 +756,8 @@ Updates metadata items for an asset link.
 | `updateType` | string | No       | `"update"` (default) or `"replace_all"`. |
 
 When the database of either linked asset sets `restrictMetadataOutsideSchemas` and an `assetLinkMetadata` schema applies, both update types refuse a key that is new to the link and not defined by the schema, as create does. A key already stored on the link passes, including when its value changes. Pipeline write-backs are not restricted.
+
+A `replace_all` that removes stored keys also requires `DELETE` on this route and returns `403` without it (see [Update Asset Metadata](#update-asset-metadata)).
 
 **Response:**
 

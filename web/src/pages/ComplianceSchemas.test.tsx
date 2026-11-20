@@ -7,7 +7,12 @@ import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Synonyms from "../synonyms";
-import ComplianceSchemas, { LEGACY_SCHEMA_LABEL, sweepMessage } from "./ComplianceSchemas";
+import ComplianceSchemas, {
+    LEGACY_SCHEMA_ACTION_REASON,
+    LEGACY_SCHEMA_LABEL,
+    SYSTEM_SCHEMA_NOTE,
+    sweepMessage,
+} from "./ComplianceSchemas";
 
 jest.mock("@monaco-editor/react", () => ({
     __esModule: true,
@@ -118,14 +123,20 @@ describe("ComplianceSchemas row actions", () => {
         await screen.findByText("old-json-schema");
 
         const legacyRow = rowOf("old-json-schema");
-        expect(within(legacyRow).getByRole("button", { name: "Edit" })).toBeDisabled();
-        expect(within(legacyRow).getByRole("button", { name: "Sweep" })).toBeDisabled();
+        expect(
+            within(legacyRow).getByRole("button", { name: "Edit old-json-schema" })
+        ).toBeDisabled();
+        expect(
+            within(legacyRow).getByRole("button", { name: "Sweep old-json-schema" })
+        ).toBeDisabled();
 
         const rulesRow = rowOf("cad-quality");
-        expect(within(rulesRow).getByRole("button", { name: "Edit" })).toBeEnabled();
-        expect(within(rulesRow).getByRole("button", { name: "Sweep" })).toBeEnabled();
+        expect(within(rulesRow).getByRole("button", { name: "Edit cad-quality" })).toBeEnabled();
+        expect(within(rulesRow).getByRole("button", { name: "Sweep cad-quality" })).toBeEnabled();
 
-        await userEvent.click(within(legacyRow).getByRole("button", { name: "Sweep" }));
+        await userEvent.click(
+            within(legacyRow).getByRole("button", { name: "Sweep old-json-schema" })
+        );
         expect(service().sweepSchema).not.toHaveBeenCalled();
     });
 
@@ -140,7 +151,9 @@ describe("ComplianceSchemas row actions", () => {
 
         // Two flashes raised back to back: one success, one error.
         const sweep = () =>
-            userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
+            userEvent.click(
+                within(rowOf("cad-quality")).getByRole("button", { name: "Sweep cad-quality" })
+            );
         await sweep();
         const successText = `Sweep of schema "cad-quality": 0 ${Synonyms.assets} evaluated.`;
         expect(await screen.findByText(successText)).toBeInTheDocument();
@@ -158,6 +171,29 @@ describe("ComplianceSchemas row actions", () => {
         expect(screen.getByText("Sweep failed for that schema")).toBeInTheDocument();
     });
 
+    it("sends one sweep at a time and shows the running one as busy", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema]]);
+        let answer: (value: unknown) => void = () => undefined;
+        service().sweepSchema.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+        render(<ComplianceSchemas />);
+        await screen.findByText("cad-quality");
+        const sweepButton = () =>
+            within(rowOf("cad-quality")).getByRole("button", { name: /Sweep/ });
+        fireEvent.click(sweepButton());
+        fireEvent.click(sweepButton());
+        await waitFor(() => expect(sweepButton()).toHaveAttribute("aria-disabled", "true"));
+        expect(screen.getByText(/Sweeping schema "cad-quality"/)).toBeInTheDocument();
+        fireEvent.click(sweepButton());
+        expect(service().sweepSchema).toHaveBeenCalledTimes(1);
+
+        answer([true, { assetsTriggered: [], assetsRemaining: 0 }]);
+        await waitFor(() => expect(sweepButton()).not.toHaveAttribute("aria-disabled"));
+        await waitFor(() =>
+            expect(screen.queryByText(/Sweeping schema "cad-quality"/)).not.toBeInTheDocument()
+        );
+    });
+
     it("continues a sweep that left assets with the token it returned", async () => {
         service().fetchComplianceSchemas.mockResolvedValue([true, [rulesSchema]]);
         service()
@@ -171,9 +207,11 @@ describe("ComplianceSchemas row actions", () => {
         render(<ComplianceSchemas />);
         await screen.findByText("cad-quality");
         const sweep = () =>
-            userEvent.click(within(rowOf("cad-quality")).getByRole("button", { name: "Sweep" }));
+            userEvent.click(
+                within(rowOf("cad-quality")).getByRole("button", { name: "Sweep cad-quality" })
+            );
         await sweep();
-        expect(await screen.findByText(/313 not reached yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/at least 313 not reached yet/)).toBeInTheDocument();
         await sweep();
         await sweep();
         await waitFor(() => expect(service().sweepSchema).toHaveBeenCalledTimes(3));
@@ -233,7 +271,7 @@ describe("ComplianceSchemas sweep message", () => {
                 assetsRemaining: 40,
             })
         ).toBe(
-            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (you may not evaluate or read them); 40 not reached yet; run the sweep again.`
+            `Sweep of schema "std": 3 ${Synonyms.assets} evaluated; 2 skipped (you may not evaluate or read them); at least 40 not reached yet; run the sweep again.`
         );
         expect(sweepMessage("std", { assetsTriggered: [{}] })).toBe(
             `Sweep of schema "std": 1 ${Synonyms.asset} evaluated.`
@@ -273,6 +311,21 @@ describe("ComplianceSchemas sweep message", () => {
                 assetsRemaining: 0,
             })
         ).toBe(`Sweep of schema "std": 2 ${Synonyms.assets} evaluated.`);
+    });
+
+    it("says more remain while a token is returned, also with no count", () => {
+        // The sweep can end before it has read every asset: none counted, more remain.
+        expect(
+            sweepMessage("std", { assetsTriggered: [{}], assetsRemaining: 0, NextToken: "tok-2" })
+        ).toBe(
+            `Sweep of schema "std": 1 ${Synonyms.asset} evaluated; more ${Synonyms.assets} remain; run the sweep again.`
+        );
+        // A count, when there is one, is given instead.
+        expect(
+            sweepMessage("std", { assetsTriggered: [], assetsRemaining: 12, NextToken: "tok-2" })
+        ).toBe(
+            `Sweep of schema "std": 0 ${Synonyms.assets} evaluated; at least 12 not reached yet; run the sweep again.`
+        );
     });
 });
 
@@ -321,4 +374,73 @@ describe("ComplianceSchemas rule-name errors", () => {
             Object.keys(service().createComplianceSchema.mock.calls[0][0].schemaBody.rules)
         ).toContain("renamed-rule");
     }, 20_000);
+});
+
+describe("ComplianceSchemas editor on each open", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("opens the next schema on the JSON Editor tab with no rule-name problem left over", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, []]);
+        service().createComplianceSchema.mockResolvedValue([true, { schemaName: "s2" }]);
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        let dialog = await screen.findByRole("dialog");
+        await userEvent.click(within(dialog).getByRole("tab", { name: "Visual Builder" }));
+        fireEvent.change((await within(dialog).findAllByPlaceholderText("rule-name"))[0], {
+            target: { value: "" },
+        });
+        expect(await within(dialog).findByText("Rule name is required")).toBeInTheDocument();
+        await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+        await userEvent.click(screen.getByRole("button", { name: "Create Schema" }));
+        dialog = await screen.findByRole("dialog");
+        expect(within(dialog).getByRole("tab", { name: "JSON Editor" })).toHaveAttribute(
+            "aria-selected",
+            "true"
+        );
+        fireEvent.change(within(dialog).getByPlaceholderText(/engineering-asset-standard/), {
+            target: { value: "s2" },
+        });
+        await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+        await waitFor(() => expect(service().createComplianceSchema).toHaveBeenCalledTimes(1));
+    }, 20_000);
+});
+
+describe("ComplianceSchemas system and legacy schemas", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    it("says why a legacy schema's Edit and Sweep are unavailable", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([true, [legacySchema]]);
+        render(<ComplianceSchemas />);
+        await screen.findByText("old-json-schema");
+        const row = rowOf("old-json-schema");
+        expect(
+            within(row).getByRole("button", { name: "Edit old-json-schema" })
+        ).toHaveAccessibleDescription(LEGACY_SCHEMA_ACTION_REASON);
+        expect(
+            within(row).getByRole("button", { name: "Sweep old-json-schema" })
+        ).toHaveAccessibleDescription(LEGACY_SCHEMA_ACTION_REASON);
+    });
+
+    it("marks a system schema and says in its dialog that only the system updates it", async () => {
+        service().fetchComplianceSchemas.mockResolvedValue([
+            true,
+            [
+                {
+                    ...rulesSchema,
+                    schemaName: "vams-default",
+                    isSystem: true,
+                    permissions: { edit: false },
+                },
+            ],
+        ]);
+        render(<ComplianceSchemas />);
+        await screen.findByText("vams-default");
+        expect(within(rowOf("vams-default")).getByText("System")).toBeInTheDocument();
+
+        await userEvent.click(screen.getByRole("button", { name: "vams-default" }));
+        const dialog = await screen.findByRole("dialog");
+        expect(within(dialog).getByText("View Schema")).toBeInTheDocument();
+        expect(within(dialog).getByText(SYSTEM_SCHEMA_NOTE)).toBeInTheDocument();
+    });
 });

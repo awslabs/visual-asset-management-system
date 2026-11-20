@@ -5,6 +5,10 @@
 
 import React, { useRef, useState } from "react";
 import ExecutionResultSurface from "./ExecutionResultSurface";
+import { useAllowedRoutes } from "../permissions/useAllowedRoutes";
+
+/** The route the Result surface reads; the execution detail page checks the same one. */
+const DETAILS_RESULTS_ROUTE = "/workflows/executions/{executionId}/details/results";
 
 interface ExecutionOutputTypeBadgesProps {
     executionId: string;
@@ -35,6 +39,10 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
     const [resultOpen, setResultOpen] = useState(false);
     const resultBadgeRef = useRef<HTMLButtonElement>(null);
     const types = outputTypes ?? [];
+    // Result opens the surface only for a role that may read the results route; for any other
+    // role (or while the check runs) it is a plain badge, like File and Metadata.
+    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const canReadResult = !permissionsLoading && can("GET", DETAILS_RESULTS_ROUTE);
 
     if (types.length === 0) {
         return <span className="text-sm text-text-secondary">—</span>;
@@ -44,7 +52,7 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
         <div className="flex flex-wrap items-center gap-1">
             {types.map((type) => {
                 const style = BADGE_STYLE[type] ?? BADGE_NEUTRAL;
-                if (type === "Result") {
+                if (type === "Result" && canReadResult) {
                     // Interactive: opens the full result surface. Stop propagation so a click here
                     // does not also fire the row-click quick-view.
                     return (
@@ -74,7 +82,7 @@ const ExecutionOutputTypeBadges: React.FC<ExecutionOutputTypeBadgesProps> = ({
                     </span>
                 );
             })}
-            {types.includes("Result") && (
+            {types.includes("Result") && canReadResult && (
                 <div onClick={(e) => e.stopPropagation()}>
                     <ExecutionResultSurface
                         executionId={executionId}

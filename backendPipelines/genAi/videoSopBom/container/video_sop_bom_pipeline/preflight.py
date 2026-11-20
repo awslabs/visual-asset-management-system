@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import botocore.exceptions
 from botocore.exceptions import ClientError
 
+from .bedrock import largest_max_tokens
 from .errors import CONNECTIVITY_ERROR, LIMIT_EXCEEDED, PipelineRejection
 
 logger = logging.getLogger("video_sop_bom_pipeline.preflight")
@@ -45,7 +46,7 @@ def _code_and_message(exc):
 
 
 def check_connectivity(clients, definition):
-    """Transcribe sentinel GetTranscriptionJob, Bedrock converse(maxTokens=1), aux HeadBucket."""
+    """Transcribe sentinel GetTranscriptionJob, Bedrock converse at the run's largest maxTokens, aux HeadBucket."""
     try:
         clients.preflight_transcribe.get_transcription_job(TranscriptionJobName=PREFLIGHT_JOB_NAME)
     except botocore.exceptions.ConnectionError as exc:
@@ -60,16 +61,27 @@ def check_connectivity(clients, definition):
     logger.info("preflight transcribe reachable")
 
     model_id = definition["bedrockModelId"]
+    # The probe asks for as many output tokens as the run's largest call will, so a model with a lower
+    # output limit is refused here, before Amazon Transcribe runs, rather than at the first analysis call.
+    # A one-word reply keeps the probe short whatever the limit.
+    max_tokens, stage = largest_max_tokens(definition.get("config"))
     try:
         clients.preflight_bedrock.converse(
             modelId=model_id,
-            messages=[{"role": "user", "content": [{"text": "ping"}]}],
-            inferenceConfig={"maxTokens": 1},
+            messages=[{"role": "user", "content": [{"text": "Reply with the single word: ok"}]}],
+            inferenceConfig={"maxTokens": max(max_tokens, 1)},
         )
     except botocore.exceptions.ConnectionError as exc:
         raise PipelineRejection(CONNECTIVITY_ERROR, _connect_cause(exc, "bedrock-runtime", "Bedrock Runtime")) from exc
     except ClientError as exc:
         code, message = _code_and_message(exc)
+        if code == "ValidationException" and max_tokens:
+            raise PipelineRejection(
+                CONNECTIVITY_ERROR,
+                f"Amazon Bedrock model {model_id} refused the preflight request ({code}: {message}). The run asks "
+                f"for up to {max_tokens} output tokens per call ({stage}), so the model must accept that many; "
+                f"a workload profile can lower stages.{stage}.maxTokens.",
+            ) from exc
         if code in BEDROCK_MODEL_ACCESS_CODES:
             raise PipelineRejection(
                 CONNECTIVITY_ERROR,

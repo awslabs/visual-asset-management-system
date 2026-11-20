@@ -248,3 +248,37 @@ describe("file page opened by its path when a later asset lookup fails", () => {
         expect(retryButton()).toBeInTheDocument();
     });
 });
+
+describe("file link into an archived asset", () => {
+    it("says the asset is archived rather than that the file does not exist", async () => {
+        assetAnswers = [() => Promise.resolve({ ...ASSET, status: "archived" })];
+        fileAnswer = () =>
+            Promise.reject(new ApiError("Asset not found", 404, { message: "Asset not found" }));
+
+        openByPath();
+
+        expect(await screen.findByText(`${Synonyms.Asset} Archived`)).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                new RegExp(
+                    `This file's ${Synonyms.asset} is archived\\. Unarchive the ${Synonyms.asset} to view its files\\.`
+                )
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText("File Not Found")).toBeNull();
+        expect(screen.getByRole("link", { name: `Return to ${Synonyms.asset}` })).toHaveAttribute(
+            "href",
+            "#/databases/db1/assets/a1"
+        );
+    });
+
+    it("positive control: a missing file of a live asset still reads File Not Found", async () => {
+        assetAnswers = [assetRecord];
+        fileAnswer = () =>
+            Promise.reject(new ApiError("File not found", 404, { message: "File not found" }));
+
+        openByPath();
+
+        expect(await screen.findByText("File Not Found")).toBeInTheDocument();
+    });
+});

@@ -46,3 +46,5 @@ Try running github actions locally with [act](https://github.com/nektos/act/)
 ### Local Development
 
 See documentation for instructions on how to deploy local developments for external OAUTH authentication and a basic API. 
+
+CI runs `uv lock --check`, an export diff and pip-audit on every uv.lock (python-dependency-audit job). Run it locally from the repository root: `PIP_AUDIT_VERSION=<version in .github/workflows/ci.yml> python3 .github/scripts/python_dependency_audit.py`. See documentation/docusaurus-site/docs/developer/setup.md, "Managing Python Dependencies".

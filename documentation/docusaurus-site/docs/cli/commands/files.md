@@ -83,7 +83,7 @@ A database can restrict uploads to specific extensions (`restrictFileUploadsToEx
 :::
 
 :::note[Large-File Asynchronous Processing]
-A file over 1 GiB completes its upload and is then processed into the asset asynchronously. The result lists each such upload under `async_ingestion` with its status (`processing_async`) and the `vamscli file upload-status` command that checks it later. With `--wait-async` the command waits for the outcome, up to `--async-timeout` seconds, lists each file as `SUCCEEDED` or `FAILED` with a reason, counts a failed file as failed, and exits non-zero when a file failed or the wait timed out.
+A file over 1 GiB completes its upload and is then processed into the asset asynchronously. The result lists each such upload under `async_ingestion` with its status (`processing_async`) and the `vamscli file upload-status` command that checks it later. With `--wait-async` the command waits for the outcome, up to `--async-timeout` seconds, lists each file as `SUCCEEDED` or `FAILED` with a reason, counts a failed file as failed, and exits non-zero when a file failed or the wait timed out. When the status reads stop on an error that is not transient (throttling past the retries, a sign-in that stopped working, a denial, a blocked request), the wait ends: the upload result is still printed, each upload not yet settled is reported `unknown` with the error and its `vamscli file upload-status` command, and the command exits non-zero. The files were uploaded; check them with that command rather than uploading them again.
 
 ```bash
 vamscli file upload -d my-db -a my-asset scan.e57 --wait-async --async-timeout 7200

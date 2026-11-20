@@ -71,6 +71,7 @@ def _age_row(e, request_id, days):
     row["expiresAt"] = e.zd.expires_at_epoch(created)
     row["status"] = "SUCCEEDED"
     e.s3.add(row["archiveKey"], size=10, bucket=h.AUX)
+    h.write_resolved_manifest(e, row)
     return row
 
 

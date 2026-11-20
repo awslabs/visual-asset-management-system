@@ -246,7 +246,7 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 **Purpose:** Lambda layer with Kubernetes Python client  
 **Lines:** ~70  
-**Creates:** Kubernetes API client layer following global layer pattern with Poetry
+**Creates:** Kubernetes API client layer following the global layer pattern (pip install of the committed `requirements.txt`)
 
 #### 5. `infra/lib/nestedStacks/pipelines/pipelineBuilder-nestedStack.ts`
 
@@ -278,13 +278,13 @@ User uploads 3D file → VAMS UI → Lambda → Step Functions → EKS Cluster �
 
 #### 9. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/pyproject.toml`
 
-**Purpose:** Lambda layer Poetry configuration  
+**Purpose:** Lambda layer project file (direct dependencies)  
 **Lines:** ~20  
 **Dependencies:** kubernetes, PyYAML, requests, urllib3. No AWS SDK: the consolidated handler also attaches the common base layer, which provides boto3, botocore and s3transfer, and the packages both layers carry are locked at the base layer's versions.
 
 #### 10. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/requirements.txt`
 
-**Purpose:** Lambda layer Python dependencies (exported from `poetry.lock`)  
+**Purpose:** Lambda layer Python dependencies (the committed export of the layer's lock file; see Managing Python Dependencies in the developer guide)  
 **Lines:** ~25  
 **Dependencies:** kubernetes==36.0.3, PyYAML, requests, urllib3 and their dependencies
 

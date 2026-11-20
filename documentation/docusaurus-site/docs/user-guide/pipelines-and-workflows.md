@@ -43,7 +43,8 @@ execution settings and the admin settings that govern how it may be run are show
 configuration templates as a separate list; **Archive** withdraws it from use. Only the actions your
 permissions allow appear in the menu, so a read-only user sees **Templates** alone. A
 [system pipeline](../concepts/pipelines-and-workflows.md#system-pipelines), marked **System**, offers
-**View** in place of **Edit**, where only **Enabled** can change, and lists **Archive** disabled with the
+**View** in place of **Edit**, where only **Enabled** can change (when your role may update pipelines; otherwise
+**Enabled** and **Update** are disabled with the reason), and lists **Archive** disabled with the
 reason shown on hover or focus; its template list shows **Create Template** and **Delete** the same way.
 
 Deleting a template from that list is permanent and is never blocked. When an auto-triggered workflow's
@@ -201,7 +202,7 @@ for the tag schema fields and the quoting rule in detail.
 
 ![Workflows page showing two built-in workflows](/img/workflows_page_20261109_v2.7.png)
 
-Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow. A system workflow, marked **System**, offers **View** in place of **Edit** and lists **Archive** disabled with the reason shown on hover or focus; in its trigger list **Add** and **Delete** are disabled the same way, and **Edit** switches a trigger on or off.
+Each entry's **⋮** actions menu holds **Edit**, **Execute**, **View Executions**, and **Archive**, limited to the actions your permissions allow. A system workflow, marked **System**, offers **View** in place of **Edit**, where only **Enabled** can change when your role may update workflows (otherwise **Enabled** and **Save** are disabled with the reason), and lists **Archive** disabled with the reason shown on hover or focus; in its trigger list **Add** and **Delete** are disabled the same way, and **Edit** switches a trigger on or off.
 
 ## Creating a workflow
 
@@ -503,7 +504,7 @@ Execution progress can be monitored from the **Executions** page or from the ass
 
 The **Executions** page lists every execution you may see, across all workflows and databases. A run is listed when you can view its workflow, every asset it read — each selected file's asset plus each asset named as a metadata source — and the asset it wrote to. A run that wrote its output into an asset you cannot open is therefore not listed, even when you can open every asset it read; ask an administrator for read access to the destination asset if you expect to see such a run. A run that produced results only, writing no files, has no destination asset, so being able to view its workflow is enough. The status, trigger, workflow, workflow database, and time-window filters narrow the list, and the output columns identify the asset each run wrote to.
 
-Runs of system workflows, the workflows shipped with your deployment, are hidden so the list shows the runs people start. Select **Show system runs** on the **Executions** page or an asset's **Executions** tab to include them; each one then carries a **System** badge. The choice is kept in the page address, so a shared or reloaded link keeps it. A view opened for one system workflow shows its runs from the start, and clearing **Show system runs** hides them. The same holds for the **System reindex** trigger filter, offered when natural-language search is enabled: the vector-search reindexer's runs are runs of the SYSTEM GenAI metadata workflow, so choosing it shows them.
+Runs of system workflows, the workflows shipped with your deployment, are hidden so the list shows the runs people start. Select **Show system runs** on the **Executions** page or an asset's **Executions** tab to include them; each one then carries a **System** badge. A run a system feature started (for example a zip download) lists **Rerun** disabled with the reason: start it again from that feature. The choice is kept in the page address, so a shared or reloaded link keeps it. A view opened for one system workflow shows its runs from the start, and clearing **Show system runs** hides them. The same holds for the **System reindex** trigger filter, offered when natural-language search is enabled: the vector-search reindexer's runs are runs of the SYSTEM GenAI metadata workflow, so choosing it shows them.
 
 ![Executions page listing workflow executions with status, trigger, and output columns](/img/executions_page_20261109_v2.7.png)
 
@@ -512,6 +513,18 @@ steps submit work that VAMS stops separately from the workflow itself — a cont
 farm job. When one of those could not be stopped, the abort still succeeds and reports a warning naming the
 job, which stays on the page after the notification clears; that work may still be running and billing until
 it is stopped where it runs.
+
+#### Output types and results
+
+The **Output Types** column, on the **Executions** page and on an asset's **Executions** tab, shows what each run produced: **File** (files written into an asset), **Metadata** (metadata written to an asset or its files) and **Result** (result text recorded on the execution, such as a report or a summary). A run that produced none of them shows a dash.
+
+Select the **Result** badge to read the run's result text without leaving the list:
+
+1. The result opens in a scrollable window; select **Copy** to copy the text shown.
+2. A long result arrives in pages. Select **Load more** to append the next page.
+3. Select **Download** to save the whole result as a `.txt` file, for a result too large to read on the page.
+
+A banner marks a result one of whose rows was cut to fit. The execution's detail view lists the same results under **Outputs**.
 
 :::note
 Workflow execution is asynchronous. Results (output files, previews, metadata) appear on the asset after all pipeline steps complete. Changes may take a few minutes to propagate through the system, including search results.

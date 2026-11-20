@@ -104,8 +104,8 @@ describe("Compliance Schemas per schema", () => {
 
     it("shows Edit on the database's own schema and not on a GLOBAL one", async () => {
         await renderSchemas(["db1"]);
-        expect(within(rowOf("own-1")).getByRole("button", { name: "Edit" })).toBeInTheDocument();
-        expect(within(rowOf("global-1")).queryByRole("button", { name: "Edit" })).toBeNull();
+        expect(within(rowOf("own-1")).getByRole("button", { name: /^Edit / })).toBeInTheDocument();
+        expect(within(rowOf("global-1")).queryByRole("button", { name: /^Edit / })).toBeNull();
     });
 
     it("opens a GLOBAL schema read-only for a caller who may not edit it", async () => {
@@ -158,10 +158,14 @@ describe("Cascade Approvals per cascade", () => {
         render(<ComplianceCascades />);
         const allowed = (await screen.findByText("asset-1111")).closest("tr") as HTMLElement;
         const denied = screen.getByText("asset-2222").closest("tr") as HTMLElement;
-        expect(within(allowed).getByRole("button", { name: "Approve" })).toBeInTheDocument();
-        expect(within(allowed).getByRole("button", { name: "Reject" })).toBeInTheDocument();
-        expect(within(denied).queryByRole("button", { name: "Approve" })).toBeNull();
-        expect(within(denied).queryByRole("button", { name: "Reject" })).toBeNull();
+        expect(
+            within(allowed).getByRole("button", { name: /^Approve cascade / })
+        ).toBeInTheDocument();
+        expect(
+            within(allowed).getByRole("button", { name: /^Reject cascade / })
+        ).toBeInTheDocument();
+        expect(within(denied).queryByRole("button", { name: /^Approve cascade / })).toBeNull();
+        expect(within(denied).queryByRole("button", { name: /^Reject cascade / })).toBeNull();
     });
 });
 
@@ -191,9 +195,13 @@ describe("Quarantine per asset", () => {
         render(<ComplianceQuarantine />);
         const own = (await screen.findByText("own-asset")).closest("tr") as HTMLElement;
         const other = screen.getByText("other-asset").closest("tr") as HTMLElement;
-        expect(within(own).getByRole("button", { name: "Release" })).toBeInTheDocument();
-        expect(within(own).getByRole("button", { name: "Exception" })).toBeInTheDocument();
-        expect(within(other).queryByRole("button", { name: "Release" })).toBeNull();
-        expect(within(other).queryByRole("button", { name: "Exception" })).toBeNull();
+        expect(within(own).getByRole("button", { name: "Release own-asset" })).toBeInTheDocument();
+        expect(
+            within(own).getByRole("button", { name: "Exception for own-asset" })
+        ).toBeInTheDocument();
+        expect(within(other).queryByRole("button", { name: "Release other-asset" })).toBeNull();
+        expect(
+            within(other).queryByRole("button", { name: "Exception for other-asset" })
+        ).toBeNull();
     });
 });

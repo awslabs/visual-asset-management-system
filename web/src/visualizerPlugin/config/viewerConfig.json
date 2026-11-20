@@ -149,6 +149,25 @@
             "enabled": true
         },
         {
+            "id": "geotiff-map-viewer",
+            "name": "GeoTIFF Map Viewer",
+            "description": "Show georeferenced TIFF and COG rasters on the map. Cloud-optimized GeoTIFFs in Web Mercator (EPSG:3857) stream as exact map tiles; small files in other coordinate systems are placed approximately. Requires location services.",
+            "componentPath": "./viewers/CogMapViewerPlugin/CogMapViewerComponent",
+            "dependencyManager": "./viewers/CogMapViewerPlugin/dependencies",
+            "dependencyManagerClass": "CogMapDependencyManager",
+            "dependencyManagerMethod": "loadCogProtocol",
+            "dependencyCleanupMethod": "cleanup",
+            "supportedExtensions": [".tif", ".tiff"],
+            "supportsMultiFile": true,
+            "canFullscreen": true,
+            "priority": 2,
+            "dependencies": ["@geomatico/maplibre-cog-protocol", "geotiff", "proj4"],
+            "loadStrategy": "lazy",
+            "category": "data",
+            "featuresEnabledRestriction": ["LOCATIONSERVICES"],
+            "enabled": true
+        },
+        {
             "id": "pdf-viewer",
             "name": "PDF Viewer",
             "description": "View PDF documents with navigation, zoom controls, and page management",

@@ -36,13 +36,15 @@ release: the source had the fix, the served bundle did not.
 
 ## Two kinds of spec — know which you are writing
 
-|           | **Core specs (tracked)**                                                                                         | **Ad-hoc specs (untracked)**                                |
-| --------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Purpose   | Permanent smoke coverage of a page or shared component                                                           | Prove one specific change / fix works                       |
-| Lifetime  | Lives with the page; updated when the page changes                                                               | Deleted or left untracked after the change ships            |
-| Data      | **Must not require specific data**                                                                               | May target known seed data                                  |
-| Naming    | `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `search.spec.ts`, `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
-| Committed | Yes                                                                                                              | No — keep out of git                                        |
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change / fix works                       |
+| Lifetime  | Lives with the page; updated when the page changes                                                                                                                                                                                                                                                                                                                                      | Deleted or left untracked after the change ships            |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No — keep out of git                                        |
+
+A `seeded.` spec still hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`, written by `tools/VamsCLI/examples/seed_compare_smoke.py`). A spec's other opt-in variables are listed in its header comment.
 
 **Add a core spec only when a new page or shared component is added.** A fix to existing behavior gets
 an ad-hoc spec, or a new assertion inside the relevant core spec if the behavior is permanent.
@@ -119,7 +121,9 @@ await deleteButton.click();
 await expect.poll(() => confirmText).toMatch(/cannot be undone/i);
 ```
 
-An ad-hoc spec may create and clean up its own throwaway data. A core spec may not.
+An ad-hoc spec may create and clean up its own throwaway data. A core spec may not, with one exception:
+`zipdownloads.spec.ts` creates one zip job and deletes it again, only behind `E2E_ZIP_CREATE=1`, and
+skips that case with the reason without it (see "Running the suite").
 
 ---
 
@@ -132,7 +136,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | Helper                                                        | Use for                                                                                                              |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `gotoOrchestration(page, route, heading)`                     | Navigate + wait for first load (no data dependency)                                                                  |
-| `cachedFeaturesEnabled(page)`                                 | The deployment's feature flags, read from the app's own cache; `test.skip` on an absent flag                         |
+| `cachedFeaturesEnabled(page)`                                 | Same as `featureSwitches(page)` (older name); `test.skip` on an absent flag                                          |
 | `orchestrationRoot(page)`                                     | The `.orchestration-root` container that scopes selectors on orchestration pages                                     |
 | `searchBox(page)`                                             | The orchestration filter-bar search input                                                                            |
 | `facet(page, label)`                                          | A native `<select>` filter                                                                                           |
@@ -147,6 +151,9 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `rowValue(page, label)`                                       | The value cell of a label/value row in a detail panel                                                                |
 | `collectPageErrors(page)`                                     | Uncaught page errors, for crash-regression assertions                                                                |
 | `openAssetFile(page, databaseId, assetId, filename)`          | Open an asset's file in the File Visualizer through the File Manager, as a user does                                 |
+| `openFileManager(page, databaseId, assetId)`                  | Land on an asset's File Manager tab with its tree rendered (the first half of `openAssetFile`)                       |
+| `selectTreePath(page, filename, { modifiers })`               | Select a file in the File Manager tree by path, expanding each folder by its caret as needed                         |
+| `compareSeed()`                                               | The `E2E_COMPARE_SEED` seed fixture of `seeded.compare.spec.ts`, or `null` when unset                                |
 | `treeNode(page, name)`                                        | A File Manager tree row by name, in the visible tree, for files and folders alike                                    |
 | `chooseViewer(page, name)`                                    | Pick a File Visualizer viewer matching a RegExp, by keyboard, and confirm it applied                                 |
 | `chooseSelectOption(page, trigger, option, describeTrigger?)` | Choose a Cloudscape Select option matching a RegExp, by keyboard, from its trigger locator                           |
@@ -173,7 +180,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `pickViewerIfAsked(page, name, select?)`                      | Choose viewer `name` (config name) if asked, then ALWAYS assert it is the one selected                               |
 | `expectViewerSelected(page, name)`                            | Assert the picker shows viewer `name` and no viewer placeholder remains                                              |
 | `dataGrid(scope)`                                             | The Columnar viewer's react-data-grid root; scope header and row queries to it                                       |
-| `featuresEnabled(page)` / `missingFeatures(list, req)`        | The deployment's `featuresEnabled` list / the required features it lacks                                             |
+| `featuresEnabled(page)` / `missingFeatures(list, req)`        | Same as `featureSwitches(page)` (older name) / the required features it lacks                                        |
 | `watchConsoleErrors(page, ignore?)`                           | Collect `console.error` and page errors not matching `CONSOLE_ERROR_IGNORE` (or your list)                           |
 | `largestCanvas(scope)`                                        | The largest visible `<canvas>`, a viewer's rendering surface                                                         |
 | `canvasStats(page, canvas, timeouts?)`                        | Pixel stats via `captureCanvas`: element shot, then bounded page clip of the canvas box                              |
@@ -187,7 +194,7 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
 | `sideNavigation(page)`                                        | The side navigation `nav` landmark (the one holding hash-route links)                                                |
 | `expectSuperSplatRendered(page, iframe, what)`                | SuperSplat Editor drew the file: splat count > 0, canvas differs from the empty editor's                             |
 | `SUPERSPLAT_CSP_ALLOWED` / `CSP_CONSOLE_REPORT`               | The editor page's baseline CSP violations / the console copy of a CSP report                                         |
-| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, as the running app cached them (assert the right side)                           |
+| `featureSwitches(page)`                                       | The deployment's `featuresEnabled`, from the app's own cache: the harness's one feature reader                       |
 | `signInAs(page, username, password)`                          | Sign a fresh context in as another user, from credentials the environment supplies                                   |
 
 **Selector facts worth not rediscovering:**
@@ -332,7 +339,7 @@ to one distributable asset (`e2e-viewers-db` / `e2e-viewers-samples`) and writes
 through `npm exec --min-release-age=7` at the pinned version.
 
 **A case** names `sample`, `viewer` (the viewer's exact config `name`; the case asserts that viewer
-opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message), and optionally
+opened, and a web jest test checks the name), `kind` (`canvas`, `image` (the Image Viewer's `<img>` decoded and showing content), `raster-notice` (the TIFF/TGA viewer's fallback notice, `expect.notice` names its text), `pdf`, `grid`, `text`, `text-binary`, `text-encoding`, `not-offered`, `potree`, `refused` — the viewer's refusal message, `raster-map` — the GeoTIFF Map Viewer's layer row for the file in the sample's `expect.mode` (`tile` or `placed`, with `expect.approximate` for the approximate-placement label) and a map canvas with content, `raster-refused` — its notice matching `expect.notice`), and optionally
 `select` (viewer picker RegExp), `requiresFeature` / `withoutFeature`, `fetches` (a URL part a response
 must succeed for), `thresholds`, `cspAllowed`, `servedBundle` (a web path a disabled-by-default add-on
 serves only when enabled; the case skips when it is not served as JavaScript, as the VNTANA cases do), `consoleAllowed` (console lines that case alone may log,
@@ -380,6 +387,24 @@ distributable asset with a top-level file), skipping when the deployment has non
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `E2E_ZIP_CREATE=1`                            | Creates one zip job on that asset and deletes it again (cancel, then delete)                                                                                                                                                                                                                       |
 | `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` | A second user for the ownership check (signs in with `signInAs`; never hardcoded): get and delete of the admin's job answer 404, and its URL follows the API's own decision, the all-users list's `canDownload` for that job (200, or 400 when a member is no longer downloadable; 404 without it) |
+
+Map viewer spec. `viewers.cogmap.layout.spec.ts` lives in the `chromium` project, counts the frame's stripe pixels through
+`support/rasterViewerFixtures.ts`, and skips with a reason when location services are off. It opens a raster in the GeoTIFF Map Viewer on the View File page and in
+the File Viewer modal (the File Manager's Visualize File eye) and checks it fills its frame at 390,
+820 and 1280 px, and in fullscreen on the page: canvas equal to its column, map, list and the
+viewer's own map controls inside the frame, and none of the frame backdrop's stripe colours visible.
+A third case hides and shows a raster with its **Visible** switch (one name, `Show "<label>" on the map`, the checked state, Space, the status line,
+Zoom disabled while hidden). It waits on the picker's options and on the layout settling (two equal
+reads of the boxes, canvas equal to its column) rather than on fixed sleeps. It finds a `.tif` through
+the API and skips, with the reason, when the file is not a raster the viewer draws.
+
+| Helper (`support/rasterViewerFixtures.ts`) | Use for                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `stripePixels(page, png)`                  | Count of the visualizer frame backdrop's stripe colours in a screenshot |
+
+| Variable                              | Effect                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `E2E_COG_MAP_FILE=<db>/<asset>/<key>` | Names the georeferenced raster the layout spec opens, instead of the first `.tif` found |
 
 The SuperSplat Editor renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs
 the SuperSplat cases in a separate `chromium-webgpu` project launched with WebGPU on, and takes them out

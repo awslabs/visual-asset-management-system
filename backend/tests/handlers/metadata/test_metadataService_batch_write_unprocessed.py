@@ -195,7 +195,20 @@ class TestReplaceAllRollbackIsReachable:
     arm that restores the deleted keys was never entered -- the entity was left with fewer
     records than either the old or the new state while the response reported a clean
     replace. An exhausted retry bound now reaches it.
+
+    Removing keys also needs the route's DELETE grant; the caller here holds it (the check
+    itself is `test_metadataService_replace_all_key_removal_grant.py`).
     """
+
+    ROUTE_EVENT = {"requestContext": {"http": {
+        "method": "PUT", "path": "/database/db1/assets/asset1/metadata"}}}
+
+    @pytest.fixture(autouse=True)
+    def _route_delete_granted(self):
+        enforcer = MagicMock(name="CasbinEnforcer")
+        enforcer.enforceAPI.return_value = True
+        with patch.object(metadataService, "CasbinEnforcer", MagicMock(return_value=enforcer)):
+            yield
 
     @staticmethod
     def _existing(key):
@@ -240,6 +253,7 @@ class TestReplaceAllRollbackIsReachable:
                     "asset1",
                     [MetadataItemModel(metadataKey="newKey", metadataValue="v")],
                     {"tokens": ["user1"]},
+                    self.ROUTE_EVENT,
                 )
 
         assert "rolled back successfully" in str(raised.value)
@@ -306,6 +320,7 @@ class TestReplaceAllRollbackIsReachable:
                     "asset1",
                     [MetadataItemModel(metadataKey="newKey", metadataValue="v")],
                     {"tokens": ["user1"]},
+                    self.ROUTE_EVENT,
                 )
 
         put_items = [
@@ -357,6 +372,7 @@ class TestReplaceAllRollbackIsReachable:
                     "asset1",
                     [MetadataItemModel(metadataKey="newKey", metadataValue="v")],
                     {"tokens": ["user1"]},
+                    self.ROUTE_EVENT,
                 )
 
         assert "may be inconsistent" in str(raised.value)

@@ -20,7 +20,7 @@ All metadata operations share a consistent request format and bulk semantics acr
 Update operations support two modes via `--update-type`:
 
 -   `update` (default) -- Upsert mode. Creates or updates the provided metadata and keeps unlisted keys.
--   `replace_all` -- Replace mode. Deletes unlisted keys and upserts the provided metadata, with rollback on failure.
+-   `replace_all` -- Replace mode. Deletes unlisted keys and upserts the provided metadata, with rollback on failure. Removing stored keys also requires the `DELETE` method on the metadata route; without it the request is refused (`403`) and nothing is written. See [Update Asset Metadata](../../api/metadata.md#update-asset-metadata).
 
 :::info[Supported value types]
 Each metadata item declares a `metadataValueType`. Values are always supplied as strings in JSON input; `object` and `array` values are JSON encoded into a string.

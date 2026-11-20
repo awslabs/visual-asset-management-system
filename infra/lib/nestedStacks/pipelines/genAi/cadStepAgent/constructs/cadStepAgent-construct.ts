@@ -40,6 +40,11 @@ import {
 import { CadStepAgentCodeBuildConstruct } from "./cadStepAgentCodeBuild-construct";
 import { CadStepAgentAgentCoreConstruct } from "./cadStepAgentAgentCore-construct";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import path = require("path");
 
 export interface CadStepAgentConstructProps extends cdk.StackProps {
@@ -443,6 +448,10 @@ export class CadStepAgentConstruct extends Construct {
                         props.config.app.baseStackName,
                     // One STEP input, a handful of script attempts and their outputs; 40 GiB is ample.
                     ephemeralStorageGiB: 40,
+                    // The agent waits on model calls and runs one script at a time under an 8 GiB
+                    // address-space limit: 2 vCPU / 16 GiB.
+                    cpu: 2,
+                    memoryMiB: 16384,
                     logGroup: containerLogGroup,
                     environment: containerEnvironment,
                     // No ECS init process (`initProcessEnabled`): the image's own ENTRYPOINT is PID 1,
@@ -474,6 +483,10 @@ export class CadStepAgentConstruct extends Construct {
                 props.vpc,
                 props.pipelineSubnets,
                 props.kmsKey
+            );
+            configureLambdaBatchJobTagging(
+                runAgentFunction,
+                pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.cadStepAgent)
             );
             runtimeStateName = "CadStepAgentBatchJob";
 

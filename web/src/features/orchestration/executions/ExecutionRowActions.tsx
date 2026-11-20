@@ -7,6 +7,7 @@ import React from "react";
 import ContextMenu, { type ContextMenuItem } from "../components/ContextMenu";
 import RowActionsButton from "../components/RowActionsButton";
 import { rowActionsFor } from "../components/useReturnFocus";
+import { SYSTEM_RECORD_REASONS } from "../permissions/systemRecordReasons";
 import type { Execution } from "../types";
 
 interface ExecutionRowActionsProps {
@@ -36,6 +37,9 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
     const isSkipped = execution.executionStatus === "SKIPPED";
     const isNonTerminal = ["NEW", "RUNNING"].includes(execution.executionStatus);
     const hasGroup = !!execution.executionGroupId;
+    // A run a system feature started (triggerType `System-...`, as the server recorded it) is
+    // refused by the rerun route; Rerun stays listed with that reason, as for system records.
+    const startedBySystem = (execution.triggerType || "").startsWith("System-");
 
     const menuItems: ContextMenuItem[] = [
         {
@@ -57,6 +61,8 @@ const ExecutionRowActions: React.FC<ExecutionRowActionsProps> = ({
         {
             label: "Rerun",
             onSelect: onRerun,
+            disabled: startedBySystem,
+            disabledReason: startedBySystem ? SYSTEM_RECORD_REASONS.rerunSystemRun : undefined,
             hidden: !can("POST", "/workflows/executions/{executionId}/rerun"),
         },
         {
