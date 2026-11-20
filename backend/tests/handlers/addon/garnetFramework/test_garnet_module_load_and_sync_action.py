@@ -94,13 +94,22 @@ def _stream_record(event_name):
             "dynamodb": {"Keys": key, "NewImage": key}}
 
 
+
+def _no_location_index(m):
+    """The S3 path asks the location index first; these tests run before it is ready and hold no
+    index rows, so the stamp and the first folder decide."""
+    import sys
+    from tests.common.fileAttributionFakes import AttributionAssetTable
+    return [patch.object(m, "asset_storage_table", AttributionAssetTable([])),
+            patch.object(sys.modules["common.fileAttribution"], "index_ready", lambda name: False)]
+
 def _s3_patches(m):
     """Stubs for the lookups handle_s3_notification performs before recording."""
     s3_client = MagicMock()
     s3_client.head_object.return_value = {
         "Metadata": {"assetid": "a1", "databaseid": "db1"}
     }
-    return [
+    return _no_location_index(m) + [
         patch.object(m, "s3_client", s3_client),
         patch.object(m, "get_asset_details",
                      return_value={"assetId": "a1", "bucketId": "b1",
