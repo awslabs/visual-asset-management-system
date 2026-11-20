@@ -32,7 +32,8 @@ from common.s3MetadataKeys import (
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
 )
-from common.fileAttribution import attribute_object, binding_of
+from common.batchItemFailures import batch_item_identifier, with_batch_item_failures
+from common.fileAttribution import RegistrationUnavailableError, attribute_object, binding_of
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
 from common.workflows import executionLocks as el
@@ -288,6 +289,12 @@ def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id="", bi
     resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding)
     if not resolved:
         return 0
+    return _launch_matching_triggers(trigger_rows, resolved, version_id)
+
+
+def _launch_matching_triggers(trigger_rows, resolved, version_id=""):
+    """Launch every fileUpload trigger that fires for one resolved upload. Returns the number of
+    workflows launched."""
     database_id, asset_id, relative_key, change_source, change_workflow_id = resolved
     matches = tm.match_fileupload_triggers(
         trigger_rows, database_id, asset_id, relative_key, version_id,
@@ -310,6 +317,16 @@ def _object_version_id(object_info):
     an unversioned bucket (and for the literal "null" version id S3 reports there)."""
     version_id = object_info.get("versionId") or object_info.get("version-id") or ""
     return "" if version_id == "null" else version_id
+
+
+def _uploaded_objects_by_message(event):
+    """Yield (SQS record or None, [(bucket_name, s3_key, versionId, vamsBinding)]) per message: one per
+    SQS record for an SQS-buffered event, one with no record for a direct EventBridge invocation."""
+    if "Records" in event:
+        for record in event["Records"]:
+            yield record, list(_iter_uploaded_objects({"Records": [record]}))
+    else:
+        yield None, list(_iter_uploaded_objects(event))
 
 
 def _iter_uploaded_objects(event):
@@ -375,9 +392,11 @@ def _iter_uploaded_objects(event):
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Dispatch fileUpload workflow triggers for each uploaded object in the (SQS-buffered
     EventBridge) event. Best-effort per file: per-file/per-workflow failures are logged and do not
-    fail the batch. A failure that prevents dispatching the batch at all (trigger enumeration, or
-    an error outside the per-file loop) raises so the SQS event source retries the batch and it
-    eventually reaches the DLQ rather than being silently deleted."""
+    fail the batch. A message whose files depend on a bucket registration that could not be read is
+    reported as a batch item failure and retried, with none of its workflows launched. A failure that
+    prevents dispatching the batch at all (trigger enumeration, or an error outside the per-file loop)
+    raises so the SQS event source retries the batch and it eventually reaches the DLQ rather than
+    being silently deleted."""
     import urllib.parse
 
     # A warm container keeps module state between invocations, so the workflow-row memo is cleared per
@@ -398,24 +417,51 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     try:
         total_launched = 0
         files_seen = 0
-        for bucket_name, raw_key, version_id, binding in _iter_uploaded_objects(event):
-            files_seen += 1
-            s3_key = urllib.parse.unquote_plus(raw_key)
-            # Per-file isolation: an unexpected failure resolving/dispatching one file must not drop
-            # trigger dispatch for the rest of the batch (best-effort contract).
+        failures = []
+        for message_record, objects in _uploaded_objects_by_message(event):
+            # Every file of a message is resolved before any of its workflows launch, so a message
+            # retried because one registration could not be read launches nothing twice.
+            pending = []
             try:
-                total_launched += _dispatch_uploaded_file(
-                    bucket_name, s3_key, trigger_rows, version_id, binding)
-            except Exception as e:
-                logger.exception(f"Error dispatching triggers for {s3_key} (continuing): {e}")
+                for bucket_name, raw_key, version_id, binding in objects:
+                    files_seen += 1
+                    s3_key = urllib.parse.unquote_plus(raw_key)
+                    if _should_skip_key(s3_key):
+                        continue
+                    # Per-file isolation: an unexpected failure resolving one file must not drop
+                    # trigger dispatch for the rest of the batch (best-effort contract).
+                    try:
+                        resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding)
+                    except RegistrationUnavailableError:
+                        raise
+                    except Exception as e:
+                        logger.exception(f"Error resolving {s3_key} for fileUpload triggers (continuing): {e}")
+                        continue
+                    if resolved:
+                        pending.append((s3_key, version_id, resolved))
+            except RegistrationUnavailableError as e:
+                identifier = batch_item_identifier(message_record) if message_record else ""
+                if not identifier:
+                    raise
+                logger.warning(f"fileUpload dispatch could not read a bucket registration ({e}); "
+                               f"message {identifier} is retried")
+                failures.append({"itemIdentifier": identifier})
+                continue
+            for s3_key, version_id, resolved in pending:
+                try:
+                    total_launched += _launch_matching_triggers(trigger_rows, resolved, version_id)
+                except Exception as e:
+                    logger.exception(f"Error dispatching triggers for {s3_key} (continuing): {e}")
 
         if files_seen == 0:
             # An event carrying no recognizable object means the producer-side envelope no longer
             # matches what this dispatcher enumerates; triggers silently stop firing otherwise.
             logger.warning("fileUpload dispatch found no recognizable uploaded object in the event")
         logger.info(f"fileUpload dispatch: {files_seen} file(s), {total_launched} workflow(s) launched")
-        return success(body={"message": "File-upload triggers dispatched",
-                             "filesProcessed": files_seen, "workflowsLaunched": total_launched})
+        return with_batch_item_failures(
+            success(body={"message": "File-upload triggers dispatched",
+                          "filesProcessed": files_seen, "workflowsLaunched": total_launched}),
+            event, failures)
     except Exception as e:
         logger.exception(f"Internal error in workflow trigger dispatch; failing the batch: {e}")
         raise

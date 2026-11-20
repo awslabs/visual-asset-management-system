@@ -86,6 +86,11 @@ NOT_ATTRIBUTED_RESULT = FileAttribution(NOT_ATTRIBUTED)
 AMBIGUOUS_RESULT = FileAttribution(AMBIGUOUS)
 
 
+class RegistrationUnavailableError(RuntimeError):
+    """A bucket registration could not be read (throttling, a timeout, access denied). The record can
+    be attributed once the read succeeds, so callers retry it rather than treat it as unattributed."""
+
+
 def live_database_id(database_id: Optional[str]) -> str:
     """A database id without the archived-partition suffix."""
     database_id = database_id or ''
@@ -165,12 +170,27 @@ def registration_in_bucket(buckets_table, bucket_id: str, bucket_name: str,
     replaces the registration read (a caller's own cached lookup by `bucketId`)."""
     if not bucket_id:
         return None
-    registrations = [get_registration(bucket_id)] if get_registration else \
-        registrations_of_bucket_id(buckets_table, bucket_id)
-    for registration in registrations:
-        if registration and registration.get('bucketName') == bucket_name:
+    for registration in read_registrations(buckets_table, bucket_id, get_registration):
+        if registration.get('bucketName') == bucket_name:
             return registration
     return None
+
+
+def read_registrations(buckets_table, bucket_id: str,
+                       get_registration: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+                       ) -> List[Dict[str, Any]]:
+    """The registration rows of `bucket_id` ([] when none exists). A read that fails raises
+    RegistrationUnavailableError."""
+    if not bucket_id:
+        return []
+    try:
+        if get_registration:
+            registration = get_registration(bucket_id)
+            return [registration] if registration else []
+        return registrations_of_bucket_id(buckets_table, bucket_id)
+    except Exception as e:
+        raise RegistrationUnavailableError(f"Bucket registration {bucket_id} could not be read: "
+                                           f"{type(e).__name__}") from e
 
 
 #######################
@@ -241,7 +261,13 @@ def _from_named_asset(readers: '_Readers', bucket_name: str, object_key: str, da
         logger.warning(f"Asset {asset_id} in database {live_database_id(database_id)} is in registration "
                        f"{row_bucket_id}, not {expected_bucket_id}; {resolved_by} not used for {object_key}")
         return None
-    registration = readers.registration_in_bucket(row_bucket_id or expected_bucket_id or '', bucket_name)
+    registration_id = row_bucket_id or expected_bucket_id or ''
+    registrations = readers.registrations(registration_id)
+    if not registrations:
+        logger.error(f"Asset {asset_id} in database {live_database_id(database_id)} names bucket registration "
+                     f"{registration_id or '(none)'}, which does not exist; {resolved_by} not used for {object_key}")
+        return None
+    registration = next((r for r in registrations if r.get('bucketName') == bucket_name), None)
     if registration is None:
         logger.warning(f"Asset {asset_id} in database {live_database_id(database_id)} is not in bucket "
                        f"{bucket_name}; {resolved_by} not used for {object_key}")
@@ -259,7 +285,12 @@ def _from_first_folder(asset_table, buckets_table, bucket_name: str, object_key:
     """Today's attribution by the first folder under a registered prefix, with the bucket and
     containment checks: the asset id is looked up across databases (`assetIdGSI`) and kept only in a
     registration of this bucket whose prefix the key is under and whose stored location holds it."""
-    registrations = sorted(registrations_of_bucket(buckets_table, bucket_name),
+    try:
+        bucket_registrations = registrations_of_bucket(buckets_table, bucket_name)
+    except Exception as e:
+        raise RegistrationUnavailableError(f"The registrations of bucket {bucket_name} could not be read: "
+                                           f"{type(e).__name__}") from e
+    registrations = sorted(bucket_registrations,
                            key=lambda r: -len(normalize_base_prefix(r.get('baseAssetsPrefix'))))
     for registration in registrations:
         prefix = normalize_base_prefix(registration.get('baseAssetsPrefix'))
@@ -308,6 +339,9 @@ class _Readers:
             return self._get_row(live_database_id(database_id), asset_id, include_archived)
         return read_asset_row(self.asset_table, database_id, asset_id, include_archived)
 
+    def registrations(self, bucket_id: str) -> List[Dict[str, Any]]:
+        return read_registrations(self.buckets_table, bucket_id, self._get_registration)
+
     def registration_in_bucket(self, bucket_id: str, bucket_name: str) -> Optional[Dict[str, Any]]:
         return registration_in_bucket(self.buckets_table, bucket_id, bucket_name, self._get_registration)
 
@@ -335,6 +369,10 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
         get_row: `(live database id, asset id, include_archived) -> (row, archived)`, replacing the
             strongly consistent asset-row reads of a binding or a stamp.
         get_registration: `bucketId -> registration row or None`, replacing the registration read.
+
+    Raises:
+        RegistrationUnavailableError: a bucket registration the answer depends on could not be read;
+            the caller retries the record.
     """
     readers = _Readers(asset_table, buckets_table, get_row, get_registration)
     key = normalize_location(object_key)

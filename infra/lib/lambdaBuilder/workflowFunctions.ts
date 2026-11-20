@@ -1504,6 +1504,8 @@ export function buildWorkflowTriggerDispatchFunction(
                 target: fun,
                 batchSize: 10,
                 maxBatchingWindow: Duration.seconds(3),
+                // A message whose bucket registration could not be read is reported for redrive.
+                reportBatchItemFailures: true,
             }
         );
         const cfnEsmDispatch = esmDispatch.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -1513,6 +1515,8 @@ export function buildWorkflowTriggerDispatchFunction(
             new eventsources.SqsEventSource(dispatchQueue, {
                 batchSize: 10,
                 maxBatchingWindow: Duration.seconds(3),
+                // A message whose bucket registration could not be read is reported for redrive.
+                reportBatchItemFailures: true,
             })
         );
     }

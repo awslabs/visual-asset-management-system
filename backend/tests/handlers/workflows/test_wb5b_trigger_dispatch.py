@@ -197,7 +197,9 @@ class TestDispatcher:
             {"s3": {"bucket": {"name": "b"}, "object": {"key": "a/1.glb"}}},
             {"s3": {"bucket": {"name": "b"}, "object": {"key": "a/2.glb"}}}]}})}]}
         with patch(f"{DMOD}._list_fileupload_triggers", return_value=[{"triggerType": "fileUpload"}]), \
-             patch(f"{DMOD}._dispatch_uploaded_file", side_effect=[RuntimeError("boom"), 1]):
+             patch(f"{DMOD}._resolve_asset_relative_key",
+                   side_effect=[RuntimeError("boom"), ("db", "a", "/2.glb", "", "")]), \
+             patch(f"{DMOD}._launch_matching_triggers", return_value=1):
             resp = wd.lambda_handler(event, MagicMock())
         assert resp["statusCode"] == 200
         assert json.loads(resp["body"])["workflowsLaunched"] == 1  # second file still processed
@@ -479,12 +481,21 @@ class TestResolveAssetRelativeKey:
         with patch.object(wd.s3_client, "head_object", return_value=self._head("db9", "a1")):
             assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb") is None
 
-    def test_an_unreadable_registration_binds_nothing(self, tables):
+    def test_an_unreadable_registration_is_raised_for_a_retry(self, tables):
         tables([ASSET_A1])
         with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
              patch.object(wd.s3_asset_buckets_table, "query", side_effect=RuntimeError("throttled")):
-            with pytest.raises(RuntimeError):
-                wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb")
+            with pytest.raises(_fa.RegistrationUnavailableError):
+                wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb", "v1", _binding())
+
+    def test_a_registration_that_does_not_exist_binds_nothing_and_logs_an_error(self, tables):
+        orphan = asset_row("db1", "a1", "bk-gone", "prefix/a1/", "b1", indexed=False)
+        tables([orphan])
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
+             patch.object(_fa.logger, "error") as m_error:
+            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb", "v1",
+                                                  _binding(bucket_id="bk-gone")) is None
+        assert any("does not exist" in str(c.args[0]) for c in m_error.call_args_list)
 
     def test_key_outside_asset_location_rejected(self, tables):
         # The metadata naming the asset is client-settable on a direct asset-bucket write, so an
@@ -588,3 +599,72 @@ class TestBindingFromTheEvent:
         _wfdb, _wfid, body = m_invoke.call_args.args
         assert body["inputFiles"] == [{"databaseId": "db1", "assetId": "a1",
                                        "relativeFileKey": "/scan.e57", "versionId": "ver-1"}]
+
+
+def _sqs_event(*keys):
+    """An SQS batch of asset.file.uploaded events, one message per key, each with a binding to a1."""
+    return {"Records": [
+        {"messageId": f"m{i}", "body": json.dumps({"detail": {"Records": [
+            {"s3": {"bucket": {"name": "b1"}, "object": {"key": key, "versionId": f"v{i}"}},
+             "vamsBinding": _binding()}]}})}
+        for i, key in enumerate(keys)]}
+
+
+@pytest.mark.unit
+class TestRegistrationReadErrorsRetry:
+    """A bucket registration that cannot be read is not a missing one: the message is retried (a batch
+    item failure) and logged at WARNING, and none of its workflows launch. A registration that does
+    not exist binds nothing (ERROR), and the message is not retried."""
+
+    TRIGGER = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
+               "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".e57"]},
+                                                  "defaultTemplateIds": {}}}
+
+    def _run(self, event, query_side_effect=None):
+        with patch.object(wd.s3_client, "head_object", return_value={"Metadata": {}}), \
+             patch(f"{DMOD}._list_fileupload_triggers", return_value=[self.TRIGGER]), \
+             patch.object(wd.workflow_storage_table_v2, "get_item",
+                          return_value={"Item": {"systemConfig": {"inputFileArity": "one"}}}), \
+             patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke, \
+             patch.object(wd.logger, "warning") as m_warning:
+            if query_side_effect is not None:
+                with patch.object(wd.s3_asset_buckets_table, "query", side_effect=query_side_effect):
+                    response = wd.lambda_handler(event, MagicMock())
+            else:
+                response = wd.lambda_handler(event, MagicMock())
+        return response, m_invoke, m_warning
+
+    def test_a_throttled_registration_read_retries_its_message_and_launches_nothing(self, tables):
+        tables([ASSET_A1])
+        response, m_invoke, m_warning = self._run(_sqs_event("prefix/a1/scan.e57"),
+                                                  query_side_effect=RuntimeError("ThrottlingException"))
+        assert response["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+        assert not m_invoke.called
+        assert any("is retried" in str(c.args[0]) for c in m_warning.call_args_list)
+
+    def test_a_readable_registration_launches_and_reports_no_failure(self, tables):
+        tables([ASSET_A1])
+        response, m_invoke, _ = self._run(_sqs_event("prefix/a1/scan.e57", "prefix/a1/other.e57"))
+        assert response["batchItemFailures"] == []
+        assert m_invoke.called
+        launched_keys = {c.args[2]["inputFiles"][0]["relativeFileKey"] for c in m_invoke.call_args_list}
+        assert launched_keys == {"/scan.e57", "/other.e57"}
+
+    def test_a_missing_registration_is_not_retried(self, tables):
+        orphan = asset_row("db1", "a1", "bk-gone", "prefix/a1/", "b1", indexed=False)
+        tables([orphan])
+        event = _sqs_event("prefix/a1/scan.e57")
+        body = json.loads(event["Records"][0]["body"])
+        body["detail"]["Records"][0]["vamsBinding"]["bucketId"] = "bk-gone"
+        event["Records"][0]["body"] = json.dumps(body)
+        response, m_invoke, _ = self._run(event)
+        assert response["batchItemFailures"] == []
+        assert not m_invoke.called
+
+    def test_a_direct_invocation_raises_for_the_caller_to_retry(self, tables):
+        tables([ASSET_A1])
+        event = {"detail": {"Records": [{"s3": {"bucket": {"name": "b1"},
+                                                "object": {"key": "prefix/a1/scan.e57"}},
+                                         "vamsBinding": _binding()}]}}
+        with pytest.raises(_fa.RegistrationUnavailableError):
+            self._run(event, query_side_effect=RuntimeError("timeout"))
