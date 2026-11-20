@@ -37,6 +37,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -373,6 +378,7 @@ export class Preview3dThumbnailConstruct extends NestedStack {
         ) =>
             new StateTimeoutBatchSubmitJob(this, id, {
                 stateTimeout: PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.preview3dThumbnail),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
                 jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
@@ -468,6 +474,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 tracingEnabled: true,
             }
         );
+
+        // The job-tagging grant's wildcard resources (pipelineJobTags.ts).
+        suppressBatchJobTaggingNag(pipelineStateMachine);
 
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource

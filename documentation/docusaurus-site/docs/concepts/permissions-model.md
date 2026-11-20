@@ -560,7 +560,7 @@ Routes of other add-ons are listed on each add-on's page.
 | `/compliance/sweep/{schemaName}`                          | POST             | `complianceSchema` (`GET`) + `complianceEvaluation` (`POST`, per bound database)     | `complianceSchemaName`, `databaseId` |
 | `/compliance/bind/{databaseId}`                           | GET, PUT, DELETE | `complianceSchema` + `database` (`GET`); `PUT` and `DELETE` also `complianceBinding` | `complianceSchemaName`, `databaseId` |
 | `/compliance/bind/{databaseId}/{assetId}`                 | PUT, DELETE      | `complianceBinding` + `complianceSchema` and `asset` (both `GET`)                    | `complianceSchemaName`, `databaseId` |
-| `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
+| `/compliance/evaluate/{databaseId}/{assetId}`             | POST             | `complianceEvaluation` + `complianceSchema` (`GET`, when the body names a schema)    | `databaseId`, `complianceSchemaName` |
 | `/compliance/evaluate/{databaseId}`                       | POST             | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/evaluations/{databaseId}/{assetId}`          | GET              | `complianceEvaluation`                                                               | `databaseId`                         |
 | `/compliance/state/{databaseId}/{assetId}`                | GET              | `complianceEvaluation`                                                               | `databaseId`, `complianceState`      |

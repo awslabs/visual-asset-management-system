@@ -1295,7 +1295,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Deployment master switch for the agent's web search and page fetch tools.",
+        help: "Deployment master switch for the agent's web search and page fetch tools. Off by default. When on, the agent sends search queries written from the run's design prompt to third-party web search engines (the ddgs metasearch library, not an AWS service) and fetches public web pages. Always off in GovCloud and EU Sovereign: synth refuses true there.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {

@@ -265,7 +265,8 @@ class TestTheTriggerAppliesItPageByPage:
         assert record["applyStatus"] == "applying" and record["cursor"]
         assert binding_apply.counts_of(record)["assetsProcessed"] == 2
         runs = 1 + world.drain()
-        assert runs == 4
+        # The live asset rows, then one run for the archived assets' partition (empty here).
+        assert runs == 5
         record = world.apply_record()
         assert (record["applyStatus"], record.get("cursor")) == ("applied", None)
         assert binding_apply.counts_of(record) == {
@@ -883,3 +884,60 @@ class TestTheEvaluationsKeepWithinTheirShareOfTheTriggerQueue:
         assert binding_apply.reserve_evaluations(record, record, 1)
         assert not binding_apply.reserve_evaluations(record, record, 1)
         assert world.apply_record()["evaluationsSent"] == 1
+
+
+ARCHIVED = "a06"
+ARCHIVED_UNRECORDED = "z-archived"
+
+
+def _archive(world, asset_id):
+    """Archive an asset as the asset service does: its row moves to `<databaseId>#deleted`, and its
+    compliance record stays under the live id."""
+    table = world.t["assetStorage"]
+    row = table.get_item(Key={"databaseId": DB, "assetId": asset_id})["Item"]
+    table.put_item(Item=dict(row, databaseId=f"{DB}#deleted"))
+    table.delete_item(Key={"databaseId": DB, "assetId": asset_id})
+
+
+@pytest.mark.unit
+class TestABindingChangeReachesArchivedAssetsRecords:
+    """A bind or change used to page the live asset rows only, so an archived asset kept the
+    previous schema and was evaluated against it once unarchived."""
+
+    def test_an_archived_assets_record_takes_the_new_binding(self, world):
+        _archive(world, ARCHIVED)
+        status, _ = world.bind(NEW)
+        assert status == 202
+        # One-row pages and a deadline after each page: the walk hands over between the live and
+        # the archived rows.
+        world.drain(page_size=1)
+        record = world.state(ARCHIVED)
+        assert (record["schemaName"], record["schemaSource"], record["complianceState"]) == (
+            NEW, "database", "pending_evaluation")
+        apply = world.apply_record()
+        assert (apply["applyStatus"], apply.get("cursor")) == ("applied", None)
+        assert binding_apply.counts_of(apply)["assetsProcessed"] == len(ASSETS)
+
+    def test_after_unarchive_it_is_evaluated_against_the_binding_in_force(self, world):
+        _archive(world, ARCHIVED)
+        world.bind(NEW)
+        world.drain(page_size=1)
+        row = world.t["assetStorage"].get_item(
+            Key={"databaseId": f"{DB}#deleted", "assetId": ARCHIVED})["Item"]
+        world.t["assetStorage"].put_item(Item=dict(row, databaseId=DB))
+        world.t["databaseStorage"].update_item(
+            Key={"databaseId": DB}, UpdateExpression="SET complianceAutoEval = :on",
+            ExpressionAttributeValues={":on": True})
+        record, schema = trigger._evaluation_target(DB, ARCHIVED)
+        assert schema == NEW
+
+    def test_an_archived_asset_without_a_record_gets_none(self, world):
+        world.t["assetStorage"].put_item(Item={"databaseId": f"{DB}#deleted",
+                                               "assetId": ARCHIVED_UNRECORDED})
+        world.bind(NEW)
+        world.drain(page_size=1)
+        assert world.state(ARCHIVED_UNRECORDED) is None
+
+    def test_the_apply_counts_the_archived_rows(self, world):
+        _archive(world, ARCHIVED)
+        assert binding_apply.count_assets(DB, binding_apply.OPERATION_CHANGE) == len(ASSETS)

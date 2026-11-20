@@ -261,3 +261,24 @@ class TestPrefixSurvivesTheStateMachine:
         batch_builder = source.split("this.executeBatchJobFunction = new lambda.Function")[1]
         batch_builder = batch_builder.split("this.closePipelineFunction = new lambda.Function")[0]
         assert "...batchJobLogGroupEnvironment()" in batch_builder
+
+
+@pytest.mark.unit
+class TestPipelineJobTags:
+    """The job carries the pipeline's job tags (vams:stackname, vams:pipeline) the construct sets in
+    PIPELINE_JOB_TAGS, so a later release can scope job permissions to them."""
+
+    TAGS = {"vams:stackname": "vams-core-test", "vams:pipeline": "isaacLabTraining"}
+
+    def test_the_job_carries_the_pipeline_job_tags(self):
+        with patch.dict(os.environ, {"PIPELINE_JOB_TAGS": json.dumps(self.TAGS)}):
+            mod = _load_execute_batch_job()
+        mod.lambda_handler(_event(orchestrationEventPrefix=PREFIX), MagicMock())
+        assert mod.batch.submit_job.call_args.kwargs["tags"] == self.TAGS
+
+    def test_without_the_tags_variable_the_job_is_submitted_untagged(self):
+        with patch.dict(os.environ):
+            os.environ.pop("PIPELINE_JOB_TAGS", None)
+            mod = _load_execute_batch_job()
+        mod.lambda_handler(_event(orchestrationEventPrefix=PREFIX), MagicMock())
+        assert "tags" not in mod.batch.submit_job.call_args.kwargs

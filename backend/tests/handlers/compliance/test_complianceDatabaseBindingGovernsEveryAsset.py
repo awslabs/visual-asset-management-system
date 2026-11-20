@@ -134,7 +134,7 @@ def _sweep(bound_databases, casbin=None, state_rows=()):
             patch(f"{SVC}.asset_state_table", state_table), \
             patch(f"{STORE}.load_schema_item", return_value={"schemaName": SCHEMA}), \
             patch(f"{STORE}.databases_bound_to_schema", return_value=list(bound_databases)), \
-            patch(f"{STORE}.register_unrecorded_assets", return_value=2) as register, \
+            patch(f"{STORE}.register_unrecorded_assets_page", return_value=(2, None)) as register, \
             patch(f"{STORE}.run_evaluation", return_value=EVALUATION), \
             patch(f"{SVC}.check_and_trigger_cascade"):
         response = svc.lambda_handler(event, MagicMock())
@@ -147,14 +147,15 @@ class TestASweepRegistersTheUnrecordedAssetsOfItsBoundDatabases:
     def test_each_bound_database_is_registered_before_the_bound_rows_are_read(self):
         response, register = _sweep(["db-a", "db-b"])
         assert response["statusCode"] == 200
-        assert [c.args for c in register.call_args_list] == [("db-a", SCHEMA), ("db-b", SCHEMA)]
+        assert [c.args for c in register.call_args_list] == [
+            ("db-a", SCHEMA, None), ("db-b", SCHEMA, None)]
 
     def test_a_database_the_caller_may_not_evaluate_is_not_registered(self):
         casbin = enforcer()
         casbin.enforce.side_effect = lambda obj, action: not (
             obj.get("object__type") == "complianceEvaluation" and obj.get("databaseId") == "db-b")
         _, register = _sweep(["db-a", "db-b"], casbin=casbin)
-        assert [c.args for c in register.call_args_list] == [("db-a", SCHEMA)]
+        assert [c.args for c in register.call_args_list] == [("db-a", SCHEMA, None)]
 
 
 # --- the store helpers against real conditional writes (moto) ---------------------------------
