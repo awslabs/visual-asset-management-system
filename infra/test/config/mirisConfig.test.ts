@@ -42,7 +42,7 @@ type Mutate = (c: any) => void;
 const UPLOAD_DEFAULTS = {
     enabled: false,
     autoRegisterWithVAMS: true,
-    autoRegisterAutoTriggerOnFileUpload: true,
+    autoRegisterAutoTriggerOnFileUpload: false,
     triggerExtensions: ".usd,.usda,.usdc,.usdz",
     taskTimeoutSeconds: 1800,
     maxAssetSizeBytes: 5000000000,
@@ -341,6 +341,16 @@ const REJECTED: [string, Mutate, string, string, TemplateName?][] = [
         "miris-unsafe-eval",
     ],
     [
+        "the add-on with every Lambda function in the VPC",
+        both(enableStatic, (c) => {
+            c.app.useGlobalVpc.enabled = true;
+            c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.openSearch.useServerless.allowPublic = false;
+        }),
+        "cannot be combined with app.useGlobalVpc.useForAllLambdas",
+        "miris-use-for-all-lambdas",
+    ],
+    [
         "static mode with no viewer key",
         set(setField("viewerKey", ""), "viewerKeyMode", "static"),
         '"static" requires viewerKey',
@@ -391,7 +401,11 @@ test.each([
     ],
     [
         "an armed upload trigger without registration",
-        setField("upload.autoRegisterWithVAMS", false),
+        set(
+            setField("upload.autoRegisterAutoTriggerOnFileUpload", true),
+            "upload.autoRegisterWithVAMS",
+            false
+        ),
         "autoRegisterAutoTriggerOnFileUpload is true but autoRegisterWithVAMS is not",
         "miris-upload-armed-trigger-unregistered",
     ],

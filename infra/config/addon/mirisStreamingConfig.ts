@@ -46,7 +46,7 @@ const MIRIS_STREAMING_DEFAULTS: Omit<ConfigMirisStreaming, "upload"> = {
 const MIRIS_UPLOAD_DEFAULTS: ConfigMirisStreaming["upload"] = {
     enabled: false,
     autoRegisterWithVAMS: true,
-    autoRegisterAutoTriggerOnFileUpload: true,
+    autoRegisterAutoTriggerOnFileUpload: false,
     triggerExtensions: MIRIS_STREAM_SCHEMA_EXTENSIONS.join(","),
     taskTimeoutSeconds: 1800,
     maxAssetSizeBytes: 5_000_000_000,
@@ -211,6 +211,18 @@ export function validateMirisStreamingConfig(config: Config): void {
                     "app.webUi.allowUnsafeEvalFeatures = true. The Miris web SDK compiles code at " +
                     "runtime, the same trust boundary the Cesium and Needle USD viewer plugins " +
                     "require. Consult your security team before enabling."
+            );
+        }
+
+        // With useForAllLambdas the add-on's functions are placed in the isolated subnets, which
+        // have no route to Miris.
+        if (config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas) {
+            throw new Error(
+                "Configuration Error: addons.useMirisStreaming cannot be combined with " +
+                    "app.useGlobalVpc.useForAllLambdas. That setting places the add-on's Lambda " +
+                    "functions in the VPC's isolated subnets, which have no route to the Miris API " +
+                    "at *.miris.com. Set app.useGlobalVpc.useForAllLambdas to false, or " +
+                    "app.addons.useMirisStreaming.enabled to false."
             );
         }
 

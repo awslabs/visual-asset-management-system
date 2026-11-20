@@ -118,4 +118,5 @@ export function mirisStaticWithUpload(c: any) {
     c.app.pipelines.useRapidPipeline.useEks.enabled = false;
     c.app.addons.useMirisStreaming.upload.enabled = true;
     c.app.addons.useMirisStreaming.upload.autoRegisterWithVAMS = false;
+    c.app.compliance.quarantineBlocksDownload = true;
 }

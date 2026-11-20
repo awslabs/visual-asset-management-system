@@ -9919,7 +9919,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /addon/miris/viewer-key:
         post:
             summary: "Get a Miris viewer key that can stream an asset file's Miris asset."
-            description: "Returns a viewer key for the Miris asset recorded in the file's `miris_asset_uuid` metadata, after the binding tag check the status route makes. In `static` mode it is the deployment-wide viewer key and `expiresAt` is null. In `perView` mode VAMS creates a key for the one Miris asset that expires after `viewerKeyTtlMinutes` and records its key ID in the add-on's viewer key table. The key material is never stored, logged, or audited; each delivery writes an `AUTHOTHER` audit record (`mirisStaticViewerKeyIssue` or `mirisViewerKeyMint`). Responses carry `Cache-Control: no-cache, no-store`. Enforces Tier 1 `POST` on the route and Tier 2 `GET` on the asset. Deployed only when `app.addons.useMirisStreaming.enabled` is true."
+            description: "Returns a viewer key for the Miris asset recorded in the file's `miris_asset_uuid` metadata, after the asset distribution rule of the core download routes (distributable, and not quarantined while `app.compliance.quarantineBlocksDownload` is on) and the binding tag check the status route makes. In `static` mode it is the deployment-wide viewer key and `expiresAt` is null. In `perView` mode VAMS creates a key for the one Miris asset that expires after `viewerKeyTtlMinutes` and records its key ID in the add-on's viewer key table. The key material is never stored, logged, or audited; each delivery writes an `AUTHOTHER` audit record (`mirisStaticViewerKeyIssue` or `mirisViewerKeyMint`). Responses carry `Cache-Control: no-cache, no-store`. Enforces Tier 1 `POST` on the route and Tier 2 `GET` on the asset. Deployed only when `app.addons.useMirisStreaming.enabled` is true."
             requestBody:
                 required: true
                 content:
@@ -9934,7 +9934,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/mirisViewerKeyResponse'
                 "400":
-                    description: "Invalid request body, the asset does not exist, or `miris_asset_uuid` is not a UUID (`state: invalidUuid`)."
+                    description: "Invalid request body, the asset does not exist, the asset is not distributable (`Asset not distributable`) or is quarantined (`Asset is quarantined and cannot be downloaded`), or `miris_asset_uuid` is not a UUID (`state: invalidUuid`)."
                     content:
                         application/json:
                             schema:

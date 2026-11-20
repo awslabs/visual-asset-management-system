@@ -21,6 +21,8 @@ const VIEWER_KEY_ROUTE = "/addon/miris/viewer-key";
 const STATUS_HANDLER = "handlers.addon.miris.getAssetStatus.lambda_handler";
 const MINT_HANDLER = "handlers.addon.miris.mintViewerKey.lambda_handler";
 const CLEANUP_HANDLER = "handlers.addon.miris.viewerKeyCleanup.lambda_handler";
+const UPLOAD_EXECUTE_HANDLER = "vamsExecuteMirisUpload.lambda_handler";
+const COMPLIANCE_TABLE = /ComplianceAssetStateStorageTable/;
 const PARAM_SUFFIX = "/resourceNames/addon/miris/viewerKeyStorage";
 const SCHEMA_ID = "miris-stream-file-schema";
 const WRITE_ACTION = /^dynamodb:(PutItem|UpdateItem|DeleteItem|BatchWriteItem|\*)$/;
@@ -87,15 +89,25 @@ const actionsOf = (statement: any): string[] => [statement.Action].flat();
 const writes = (statements: any[]) =>
     statements.flatMap(actionsOf).filter((a) => WRITE_ACTION.test(a));
 
-function expectExactSecretGrant(statements: any[]) {
+/** The Secrets Manager grants are GetSecretValue on exactly `resources`. */
+function expectExactSecretGrant(statements: any[], resources: unknown[] = [SECRET_ARN]) {
     const secrets = statements.filter((s) =>
         actionsOf(s).some((a) => a.toLowerCase().startsWith("secretsmanager:"))
     );
-    expect(secrets).toHaveLength(1);
-    expect(secrets[0].Effect).toBe("Allow");
-    expect(actionsOf(secrets[0])).toEqual(["secretsmanager:GetSecretValue"]);
-    expect(secrets[0].Resource).toBe(SECRET_ARN);
+    for (const statement of secrets) {
+        expect(statement.Effect).toBe("Allow");
+        expect(actionsOf(statement)).toEqual(["secretsmanager:GetSecretValue"]);
+    }
+    const granted = secrets.flatMap((s) => [s.Resource].flat());
+    expect(granted).toHaveLength(resources.length);
+    expect(granted).toEqual(expect.arrayContaining(resources));
 }
+
+/** The secret VAMS creates for the static viewer key. */
+const viewerKeySecrets = (synth: SynthResult): Resource[] =>
+    synth.where("AWS::SecretsManager::Secret", (r) =>
+        r.logicalId.startsWith("MirisViewerKeySecret")
+    );
 
 const viewerKeyTables = (synth: SynthResult): Resource[] =>
     synth.where("AWS::DynamoDB::Table", (r) =>
@@ -199,9 +211,10 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
     });
 
     test("the status and viewer key Lambdas carry the viewer key settings", () => {
+        const [secret] = viewerKeySecrets(synth);
         const shared = {
             MIRIS_VIEWER_KEY_MODE: "static",
-            MIRIS_VIEWER_KEY: PLACEHOLDER_VIEWER_KEY,
+            MIRIS_VIEWER_KEY_SECRET_ARN: { Ref: secret.logicalId },
             MIRIS_API_KEY_SECRET_ARN: SECRET_ARN,
             MIRIS_API_BASE_URL: "https://app.miris.com",
             MIRIS_METRICS_NAMESPACE: METRICS_NAMESPACE,
@@ -218,16 +231,31 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         expect(Object.keys(variables).filter((k) => k.endsWith("_TABLE_NAME"))).toEqual([]);
     });
 
+    test.each([MINT_HANDLER, UPLOAD_EXECUTE_HANDLER])(
+        "with the quarantine block on, %s carries it and reads the compliance asset state",
+        (handler) => {
+            const variables = onlyFunction(synth, handler).properties.Environment.Variables;
+            expect(variables.COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD).toBe("true");
+            const reads = JSON.stringify(
+                functionStatements(synth, handler).filter((s) =>
+                    actionsOf(s).includes("dynamodb:GetItem")
+                )
+            );
+            expect(reads).toMatch(COMPLIANCE_TABLE);
+        }
+    );
+
     test("an alarm watches Miris auth failures; static mode has no cleanup queue to alarm on", () => {
         expectAuthFailureAlarm(synth);
         expect(mirisAlarms(synth)).toHaveLength(1);
     });
 
     test.each([STATUS_HANDLER, MINT_HANDLER])(
-        "%s reads exactly the secret and writes no DynamoDB data",
+        "%s reads exactly the two secrets and writes no DynamoDB data",
         (handler) => {
             const statements = functionStatements(synth, handler);
-            expectExactSecretGrant(statements);
+            const [secret] = viewerKeySecrets(synth);
+            expectExactSecretGrant(statements, [SECRET_ARN, { Ref: secret.logicalId }]);
             expect(writes(statements)).toEqual([]);
             const reads = JSON.stringify(
                 statements.filter((s) => actionsOf(s).includes("dynamodb:GetItem"))
@@ -272,6 +300,22 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
             .flatMap(actionsOf)
             .filter((a) => a.startsWith("s3:"));
         expect(actions).toEqual([]);
+    });
+
+    test("the viewer key is in a secret filled at deploy time, and in no template or environment", () => {
+        const secrets = viewerKeySecrets(synth);
+        expect(secrets).toHaveLength(1);
+        expect(secrets[0].properties.SecretString).toBeUndefined();
+        const populate = synth.where(
+            "AWS::CloudFormation::CustomResource",
+            (r) =>
+                JSON.stringify(r.properties.SecretArn ?? "") ===
+                JSON.stringify({ Ref: secrets[0].logicalId })
+        );
+        expect(populate).toHaveLength(1);
+        // Control: the placeholder is a value the synth would carry if it leaked.
+        expect(PLACEHOLDER_VIEWER_KEY.length).toBeGreaterThan(8);
+        expect(synth.grep(PLACEHOLDER_VIEWER_KEY)).toEqual([]);
     });
 
     test("no viewer key table or cleanup resource is deployed, and no output holds the key", () => {
@@ -332,6 +376,10 @@ describe("Miris add-on in perView mode with the deployment CMK", () => {
         });
     });
 
+    test("perView mode creates no viewer key secret", () => {
+        expect(viewerKeySecrets(synth)).toEqual([]);
+    });
+
     test("with upload off, no upload pipeline is built and MIRIS_UPLOAD is not recorded", () => {
         expect(recordsFeature(synth, "MIRIS_ADDON")).toBe(true);
         expect(recordsFeature(synth, "MIRIS_UPLOAD")).toBe(false);
@@ -357,6 +405,16 @@ describe("Miris add-on in perView mode with the deployment CMK", () => {
         for (const handler of [STATUS_HANDLER, MINT_HANDLER, CLEANUP_HANDLER]) {
             expectExactSecretGrant(functionStatements(synth, handler));
         }
+    });
+
+    test("with the quarantine block off, the viewer key Lambda neither carries it nor reads compliance state", () => {
+        const fn = onlyFunction(synth, MINT_HANDLER);
+        expect(
+            fn.properties.Environment.Variables.COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD
+        ).toBeUndefined();
+        expect(JSON.stringify(functionStatements(synth, MINT_HANDLER))).not.toMatch(
+            COMPLIANCE_TABLE
+        );
     });
 
     test("alarms watch Miris auth failures and the viewer key cleanup dead-letter queue", () => {

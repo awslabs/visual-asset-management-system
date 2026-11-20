@@ -9,6 +9,10 @@ import MirisStreamViewerComponent from "./MirisStreamViewerComponent";
 import { MirisStreamDependencyManager } from "./dependencies";
 import viewerConfig from "../../config/viewerConfig.json";
 import addonViewerConfig from "../../config/addonViewerConfig.json";
+import {
+    QUARANTINE_REFUSAL_MESSAGE,
+    QUARANTINE_REFUSAL_STATUS,
+} from "../../core/quarantineRefusal.testdata";
 
 const VALID_UUID = "063393b4-4b0d-4196-a6d4-ebcde70c56c2";
 
@@ -861,6 +865,20 @@ describe("MirisStreamViewerComponent", () => {
             ["key", "a WAF-blocked request", BLOCKED, BLOCKED_MESSAGE, PERMISSION_TEXT],
             ["key", "a 503", [false, "", 503, undefined], NOT_CONFIGURED, null],
             ["key", "no stream", [false, "", 404, "notStreamed"], NOT_STREAMED_TEXT, null],
+            [
+                "key",
+                "a quarantined asset",
+                [false, QUARANTINE_REFUSAL_MESSAGE, QUARANTINE_REFUSAL_STATUS, undefined],
+                QUARANTINE_REFUSAL_MESSAGE,
+                KEY_ERROR_TEXT,
+            ],
+            [
+                "key",
+                "an asset that is not distributable",
+                [false, "Asset not distributable", 400, undefined],
+                "Asset not distributable",
+                KEY_ERROR_TEXT,
+            ],
         ])(
             "shows the %s route's answer for %s without loading the SDK",
             async (route, _label, result, shown, hidden) => {

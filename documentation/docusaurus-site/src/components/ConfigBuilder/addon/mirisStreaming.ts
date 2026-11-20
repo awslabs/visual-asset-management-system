@@ -121,7 +121,7 @@ export const MIRIS_DEFAULTS: ConfigShape = {
         upload: {
             enabled: false,
             autoRegisterWithVAMS: true,
-            autoRegisterAutoTriggerOnFileUpload: true,
+            autoRegisterAutoTriggerOnFileUpload: false,
             triggerExtensions: ".usd,.usda,.usdc,.usdz",
             taskTimeoutSeconds: 1800,
             maxAssetSizeBytes: 5000000000,
@@ -148,7 +148,7 @@ export const MIRIS_FIELDS: FieldMeta[] = [
             { value: "perView", label: "Per view (a short-lived key minted per viewer open)" },
             { value: "static", label: "Static (one deployment-wide viewer key)" },
         ],
-        help: "perView (the default) mints a short-lived viewer key scoped to the one Miris asset each time an authorized user opens the viewer, and stores no viewer key. static returns the configured viewer key to an authorized viewer; that key is stored in config.json, the CloudFormation template and the Lambda environment.",
+        help: "perView (the default) mints a short-lived viewer key scoped to the one Miris asset each time an authorized user opens the viewer, and stores no viewer key. static returns the configured viewer key to an authorized viewer; VAMS stores that key in a Secrets Manager secret it fills at deploy time.",
         visibleWhen: miris,
     },
     {
@@ -214,7 +214,7 @@ export const MIRIS_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "addons",
         advanced: true,
-        help: "Runs the pipeline when a file with a trigger extension is uploaded. Off: run it from the file manager only.",
+        help: "Runs the pipeline whenever a file with a trigger extension is uploaded to any database, sending it to Miris. Off (default): run it from the file manager only.",
         visibleWhen: mirisUpload,
     },
     {
@@ -361,6 +361,17 @@ export const MIRIS_RULES: Rule[] = [
             !g(c, "app.webUi.allowUnsafeEvalFeatures"),
         message:
             "Miris Spatial Streaming requires app.webUi.allowUnsafeEvalFeatures = true. The Miris web SDK compiles code at runtime.",
+    },
+    {
+        id: "miris-use-for-all-lambdas",
+        severity: "error",
+        fieldPaths: ["app.addons.useMirisStreaming.enabled", "app.useGlobalVpc.useForAllLambdas"],
+        appliesWhen: (c) =>
+            !!g(c, "app.addons.useMirisStreaming.enabled") &&
+            !!g(c, "app.useGlobalVpc.enabled") &&
+            !!g(c, "app.useGlobalVpc.useForAllLambdas"),
+        message:
+            "Miris Spatial Streaming cannot be combined with app.useGlobalVpc.useForAllLambdas: that setting places the add-on's Lambda functions in the VPC's isolated subnets, which have no route to the Miris API.",
     },
     {
         id: "miris-viewerkeymode",

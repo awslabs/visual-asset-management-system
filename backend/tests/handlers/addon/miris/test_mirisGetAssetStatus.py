@@ -26,6 +26,8 @@ from .conftest import (
     enforcer as _enforcer,
     metadata_table as _metadata_table,
     rest_event,
+    static_viewer_key,
+    VIEWER_KEY_SECRET_ARN,
 )
 
 pytestmark = pytest.mark.unit
@@ -80,7 +82,7 @@ def _invoke(event, metadata_table=None, asset_table=None, enforcer=None, viewer_
          patch.object(getAssetStatus, "asset_table", asset_table or _asset_table()), \
          patch.object(getAssetStatus, "CasbinEnforcer", return_value=enforcer or _enforcer()), \
          patch.object(getAssetStatus, "request_to_claims", side_effect=_AS_USER), \
-         patch.object(getAssetStatus, "miris_viewer_key", viewer_key), \
+         static_viewer_key(viewer_key), \
          patch.object(getAssetStatus, "miris_viewer_key_mode", mode):
         response = getAssetStatus.lambda_handler(event, context or FakeLambdaContext())
     return response["statusCode"], json.loads(response["body"]), metadata_table
@@ -217,6 +219,18 @@ class TestIndeterminateOutcomes:
         _, body, _ = _invoke(_event(), mode="perView")
         assert body["state"] == "unknown"
         assert miris_api.calls == []
+
+    def test_an_unreadable_static_viewer_key_is_unknown_after_the_binding_read(self, miris_api):
+        def read(SecretId):
+            if SecretId == VIEWER_KEY_SECRET_ARN:
+                raise RuntimeError("denied")
+            return {"SecretString": miris_api.integration_key}
+
+        miris_api.secretsmanager.get_secret_value.side_effect = read
+        miris_api.responses.append(_bound())
+        _, body, _ = _invoke(_event())
+        assert body["state"] == "unknown"
+        assert len(miris_api.calls) == 1
 
     @pytest.mark.parametrize("mode, viewer_key, base_url", [
         ("static", "", "https://app.miris.com"),

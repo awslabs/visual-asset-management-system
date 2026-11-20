@@ -1274,7 +1274,7 @@ Errors: `400` for invalid query parameters or an asset that does not exist, `403
 
 ### POST `/addon/miris/viewer-key`
 
-Returns a viewer key that can stream the file's Miris asset once both authorization tiers and the binding check pass. What is returned follows the deployment's `viewerKeyMode`:
+Returns a viewer key that can stream the file's Miris asset once both authorization tiers, the asset distribution rule of the core download routes, and the binding check pass. What is returned follows the deployment's `viewerKeyMode`:
 
 -   **`static`**: the deployment-wide viewer key, with `expiresAt` `null`. Nothing is created or stored. Each delivery writes a `mirisStaticViewerKeyIssue` audit record. A caller who passes the checks for one bound asset receives a key that streams every Miris asset it allows, so scope it in Miris with tags and an expiry, or use `perView` mode (see [Static mode](../developer/miris-spatial-streaming.md#static-mode)).
 -   **`perView`**: a new key for the one Miris asset that expires `viewerKeyTtlMinutes` minutes after it is minted. Its key ID is recorded in the add-on's viewer key table, and a cleanup function deletes the key from Miris after it expires. Each mint writes a `mirisViewerKeyMint` audit record.
@@ -1296,6 +1296,7 @@ The key material is never stored, logged, or audited. Responses carry `Cache-Con
 | ----- | ------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `400` | `invalidUuid` | `miris_asset_uuid` is not a UUID.                                                                                    |
 | `400` | --            | Invalid request body, or the asset does not exist.                                                                   |
+| `400` | --            | `Asset not distributable`, or `Asset is quarantined and cannot be downloaded` while the quarantine block is on.      |
 | `403` | `notBound`    | The Miris asset is missing or lacks a binding tag. The message names both tags.                                      |
 | `403` | --            | Tier 1 or Tier 2 authorization denied.                                                                               |
 | `404` | `notStreamed` | The file records no Miris stream.                                                                                    |

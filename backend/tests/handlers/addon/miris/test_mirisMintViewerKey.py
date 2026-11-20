@@ -5,6 +5,7 @@
 binding check pass, for the Miris asset recorded on the file. perView mints and records a key;
 static returns the deployment key. No key material reaches a log, audit entry, row or error."""
 
+import importlib
 import json
 import logging
 import sys
@@ -17,6 +18,7 @@ import requests
 from botocore.exceptions import ClientError
 
 from backend.backend.handlers.addon.miris import mintViewerKey, mirisIntegration
+from backend.tests.quarantineRefusalBody import assert_is_the_quarantine_refusal
 
 from .conftest import (
     ASSET_ID,
@@ -29,6 +31,8 @@ from .conftest import (
     enforcer as _enforcer,
     metadata_table as _metadata_table,
     rest_event,
+    static_viewer_key,
+    VIEWER_KEY_SECRET_ARN,
 )
 
 pytestmark = pytest.mark.unit
@@ -87,7 +91,7 @@ def _invoke(event, miris_api, metadata_table=None, asset_table=None, key_table=_
          patch.object(mintViewerKey, "asset_table", asset_table or _asset_table()), \
          patch.object(mintViewerKey, "miris_viewer_key_table", MagicMock() if key_table is _UNSET else key_table), \
          patch.object(mintViewerKey, "miris_viewer_key_mode", mode), \
-         patch.object(mintViewerKey, "miris_static_viewer_key", static_key), \
+         static_viewer_key(static_key), \
          patch.object(mintViewerKey, "CasbinEnforcer", return_value=enforcer or _enforcer()), \
          patch.object(mintViewerKey, "request_to_claims", side_effect=claims), \
          patch.object(mintViewerKey, "log_auth_other", audit or MagicMock()), \
@@ -191,6 +195,28 @@ class TestStaticMode:
         assert audit.call_args.args == (event, "mirisStaticViewerKeyIssue", {
             "userId": USER_ID, "databaseId": DATABASE_ID, "assetId": ASSET_ID,
             "filePath": "/scene.usd", "mirisAssetUuid": STORED_UUID})
+
+
+    def test_the_key_is_read_from_its_secret_after_the_binding_check(self, miris_api):
+        miris_api.responses.append(BOUND)
+        _, body = _invoke(_event(), miris_api, mode="static")
+        assert body["viewerKey"] == STATIC_VIEWER_KEY
+        assert [c.kwargs["SecretId"] for c in miris_api.secretsmanager.get_secret_value.call_args_list] == [
+            miris_api.secret_arn, VIEWER_KEY_SECRET_ARN]
+
+    def test_an_unreadable_key_secret_is_502_without_a_key(self, miris_api):
+        def read(SecretId):
+            if SecretId == VIEWER_KEY_SECRET_ARN:
+                raise RuntimeError(STATIC_VIEWER_KEY)
+            return {"SecretString": miris_api.integration_key}
+
+        miris_api.secretsmanager.get_secret_value.side_effect = read
+        miris_api.responses.append(BOUND)
+        audit = MagicMock()
+        response, body = _invoke(_event(), miris_api, mode="static", audit=audit)
+        assert response["statusCode"] == 502
+        assert "viewerKey" not in body and STATIC_VIEWER_KEY not in response["body"]
+        audit.assert_not_called()
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -332,6 +358,78 @@ class TestAuthorizationAndValidation:
         response, _ = _invoke(event, miris_api)
         assert response["statusCode"] == 504
         assert miris_api.calls == []
+
+
+def _compliance_table(state="quarantined", exception_granted=False):
+    table = MagicMock()
+    table.get_item.return_value = {"Item": {
+        "databaseId": DATABASE_ID, "assetId": ASSET_ID, "complianceState": state,
+        "exceptionGranted": exception_granted}}
+    return table
+
+
+@pytest.fixture
+def quarantine_block():
+    """The deployment's quarantine block switched on, with the compliance asset state table the
+    handler's own guard reads (the module `check_quarantine_block` was bound from)."""
+    guard = importlib.import_module(mintViewerKey.check_quarantine_block.__module__)
+    table = _compliance_table()
+    with patch.object(guard, "quarantine_blocks_download", True), \
+         patch.object(guard, "compliance_asset_state_table", table):
+        yield table
+
+
+@pytest.mark.parametrize("mode", MODES)
+class TestAssetDistributionRule:
+    """The rule the core file routes apply before serving content: the asset is distributable and,
+    while the quarantine block is on, not quarantined. Checked after both authorization tiers and
+    before the file's stream metadata or Miris is read."""
+
+    def test_an_asset_that_is_not_distributable_returns_no_key(self, miris_api, mode):
+        metadata_table, key_table, audit = _streamed(), MagicMock(), MagicMock()
+        response, body = _invoke(_event(), miris_api, asset_table=_asset_table(distributable=False),
+                                 metadata_table=metadata_table, key_table=key_table, audit=audit,
+                                 mode=mode)
+        assert (response["statusCode"], body) == (400, {"message": "Asset not distributable"})
+        metadata_table.get_item.assert_not_called()
+        assert miris_api.calls == []
+        key_table.put_item.assert_not_called()
+        audit.assert_not_called()
+
+    def test_a_quarantined_asset_returns_the_quarantine_refusal(self, miris_api, mode, quarantine_block):
+        metadata_table, key_table = _streamed(), MagicMock()
+        response, _ = _invoke(_event(), miris_api, metadata_table=metadata_table, key_table=key_table,
+                              mode=mode)
+        assert_is_the_quarantine_refusal(response)
+        quarantine_block.get_item.assert_called_once_with(
+            Key={"databaseId": DATABASE_ID, "assetId": ASSET_ID})
+        metadata_table.get_item.assert_not_called()
+        assert miris_api.calls == []
+        key_table.put_item.assert_not_called()
+
+    def test_a_granted_exception_returns_a_key(self, miris_api, mode, quarantine_block):
+        quarantine_block.get_item.return_value = _compliance_table(exception_granted=True).get_item.return_value
+        miris_api.responses.extend([BOUND, CREATED])
+        response, body = _invoke(_event(), miris_api, mode=mode)
+        assert response["statusCode"] == 200
+        assert body["viewerKey"]
+
+    def test_a_denied_caller_gets_the_denial_before_the_quarantine_is_read(self, miris_api, mode,
+                                                                         quarantine_block):
+        response, _ = _invoke(_event(), miris_api, enforcer=_enforcer(entity=False), mode=mode)
+        assert response["statusCode"] == 403
+        quarantine_block.get_item.assert_not_called()
+        assert miris_api.calls == []
+
+    def test_with_the_block_off_no_compliance_state_is_read(self, miris_api, mode):
+        guard = importlib.import_module(mintViewerKey.check_quarantine_block.__module__)
+        table = _compliance_table()
+        miris_api.responses.extend([BOUND, CREATED])
+        with patch.object(guard, "quarantine_blocks_download", False), \
+             patch.object(guard, "compliance_asset_state_table", table):
+            response, _ = _invoke(_event(), miris_api, mode=mode)
+        assert response["statusCode"] == 200
+        table.get_item.assert_not_called()
 
 
 class TestNotConfigured:

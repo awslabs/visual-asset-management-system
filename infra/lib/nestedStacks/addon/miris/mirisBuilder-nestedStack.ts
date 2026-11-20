@@ -19,6 +19,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as kms from "aws-cdk-lib/aws-kms";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { SqsDlq } from "aws-cdk-lib/aws-lambda-event-sources";
 import * as sqs from "aws-cdk-lib/aws-sqs";
@@ -33,6 +34,7 @@ import {
 import { RouteRegistry, attachFunctionToApi } from "../../apiLambda/apiRouteRegistry";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { publishAddonResourceName } from "../addonStackHelpers";
+import { populateHuggingFaceTokenSecret } from "../../pipelines/genAi/nvidia/customResources/populateHuggingFaceTokenSecret";
 import { DynamoDbMetadataSchemaMirisConstruct } from "./constructs/dynamodb-metadataschema-miris-construct";
 import {
     buildGetMirisAssetStatusFunction,
@@ -68,6 +70,30 @@ export class MirisBuilderNestedStack extends NestedStack {
         const kmsKey = sharedKmsKey
             ? kms.Key.fromKeyArn(this, "MirisKmsKeyRef", sharedKmsKey.keyArn)
             : undefined;
+
+        // Static mode: the deployment viewer key, in a secret created empty and filled at deploy
+        // time by a custom resource that carries the key in its code asset, so the key is in
+        // neither the template nor a Lambda environment. The populate helper stores one plain
+        // string and is not specific to its pipeline.
+        let viewerKeySecret: secretsmanager.Secret | undefined;
+        if (!perView) {
+            viewerKeySecret = new secretsmanager.Secret(this, "MirisViewerKeySecret", {
+                description: "Miris viewer key returned by the VAMS Miris add-on in static mode.",
+                encryptionKey: kmsKey,
+            });
+            populateHuggingFaceTokenSecret(
+                this,
+                "MirisViewerKeySecretPopulate",
+                viewerKeySecret,
+                props.config.app.addons.useMirisStreaming.viewerKey
+            );
+            NagSuppressions.addResourceSuppressions(viewerKeySecret, [
+                {
+                    id: "AwsSolutions-SMG4",
+                    reason: "The Miris viewer key is issued and rotated in Miris, not by AWS; the operator rotates it with miris viewerkey rotate and redeploys with the new value.",
+                },
+            ]);
+        }
 
         // Per-view viewer key IDs. TTL deletions stream to the cleanup Lambda, which deletes the
         // key from the Miris workspace.
@@ -132,7 +158,8 @@ export class MirisBuilderNestedStack extends NestedStack {
             props.storageResources,
             props.config,
             props.vpc,
-            props.isolatedSubnets
+            props.isolatedSubnets,
+            viewerKeySecret
         );
         attachFunctionToApi(this, getAssetStatusFunction, {
             routePath: "/addon/miris/asset-status",
@@ -148,7 +175,8 @@ export class MirisBuilderNestedStack extends NestedStack {
             props.config,
             props.vpc,
             props.isolatedSubnets,
-            viewerKeyTable
+            viewerKeyTable,
+            viewerKeySecret
         );
         attachFunctionToApi(this, mintViewerKeyFunction, {
             routePath: "/addon/miris/viewer-key",

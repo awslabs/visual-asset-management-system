@@ -15,7 +15,7 @@ import requests
 from backend.backend.handlers.addon.miris import mirisIntegration
 from backend.backend.handlers.addon.miris.mirisIntegration import MirisIntegrationError
 
-from .conftest import FakeLambdaContext, rest_event
+from .conftest import VIEWER_KEY_SECRET_ARN, FakeLambdaContext, rest_event
 
 pytestmark = pytest.mark.unit
 
@@ -168,16 +168,56 @@ class TestIntegrationKey:
         assert miris_api.calls == []
 
     def test_an_empty_secret_raises(self, miris_api):
-        miris_api.secretsmanager.get_secret_value.return_value = {"SecretString": "  "}
+        miris_api.secrets[miris_api.secret_arn] = "  "
         with pytest.raises(MirisIntegrationError, match="empty"):
             mirisIntegration.delete_viewer_key(KEY_ID)
         assert miris_api.calls == []
 
     def test_a_secret_with_surrounding_whitespace_is_trimmed(self, miris_api):
-        miris_api.secretsmanager.get_secret_value.return_value = {"SecretString": f"  {miris_api.integration_key}\n"}
+        miris_api.secrets[miris_api.secret_arn] = f"  {miris_api.integration_key}\n"
         miris_api.responses.append(204)
         mirisIntegration.delete_viewer_key(KEY_ID)
         assert miris_api.calls[0]["headers"]["Miris-API-Key"] == miris_api.integration_key
+
+
+class TestStaticViewerKey:
+    """The deployment-wide viewer key of static mode is read from its own secret, which VAMS fills
+    at deploy time, and cached apart from the Integration Key."""
+
+    @pytest.fixture
+    def secrets(self, miris_api, monkeypatch):
+        monkeypatch.setattr(mirisIntegration, "MIRIS_VIEWER_KEY_SECRET_ARN", VIEWER_KEY_SECRET_ARN)
+        miris_api.secrets[VIEWER_KEY_SECRET_ARN] = f" {VIEWER_KEY}\n"
+        return miris_api.secrets
+
+    def test_the_key_is_read_from_its_secret_trimmed_and_cached(self, miris_api, secrets):
+        assert mirisIntegration.load_static_viewer_key() == VIEWER_KEY
+        assert mirisIntegration.load_static_viewer_key() == VIEWER_KEY
+        miris_api.secretsmanager.get_secret_value.assert_called_once_with(SecretId=VIEWER_KEY_SECRET_ARN)
+
+    def test_it_is_cached_apart_from_the_integration_key(self, miris_api, secrets):
+        miris_api.responses.append(204)
+        mirisIntegration.load_static_viewer_key()
+        mirisIntegration.delete_viewer_key(KEY_ID)
+        assert miris_api.calls[0]["headers"]["Miris-API-Key"] == miris_api.integration_key
+        assert [c.kwargs["SecretId"] for c in miris_api.secretsmanager.get_secret_value.call_args_list] == [
+            VIEWER_KEY_SECRET_ARN, miris_api.secret_arn]
+
+    def test_an_unset_secret_arn_raises_without_a_read(self, miris_api, monkeypatch):
+        monkeypatch.setattr(mirisIntegration, "MIRIS_VIEWER_KEY_SECRET_ARN", "")
+        with pytest.raises(MirisIntegrationError, match="MIRIS_VIEWER_KEY_SECRET_ARN"):
+            mirisIntegration.load_static_viewer_key()
+        miris_api.secretsmanager.get_secret_value.assert_not_called()
+
+    @pytest.mark.parametrize("value, error", [("  ", "empty"), (RuntimeError(VIEWER_KEY), "RuntimeError")])
+    def test_an_empty_or_unreadable_secret_raises_without_the_key(self, miris_api, secrets, value, error):
+        if isinstance(value, Exception):
+            miris_api.secretsmanager.get_secret_value.side_effect = value
+        else:
+            secrets[VIEWER_KEY_SECRET_ARN] = value
+        with pytest.raises(MirisIntegrationError, match=error) as raised:
+            mirisIntegration.load_static_viewer_key()
+        assert VIEWER_KEY not in str(raised.value)
 
 
 class TestConfiguration:

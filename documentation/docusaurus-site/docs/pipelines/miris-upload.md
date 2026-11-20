@@ -20,11 +20,11 @@ The Miris Upload pipeline uploads a VAMS asset's root USD file to [Miris](https:
 
 The pipeline auto-registers as a GLOBAL pipeline and workflow, both with the ID `miris-upload`, with a `fileUpload` trigger and the **Stream with Miris** template. A run starts in one of three ways:
 
--   **Automatically**, when `autoRegisterAutoTriggerOnFileUpload` is `true`, for every uploaded `.usd`, `.usda`, `.usdc`, or `.usdz` file in any database. To limit uploads to specific databases, disable the global trigger and register a database-scoped copy of the workflow for each database.
+-   **Automatically**, when `autoRegisterAutoTriggerOnFileUpload` is `true` (it is `false` by default), for every uploaded `.usd`, `.usda`, `.usdc`, or `.usdz` file in any database. Turning it on sends every such file uploaded to any database to Miris. To limit uploads to specific databases, leave the global trigger off and register a database-scoped copy of the workflow for each database.
 -   **On demand.** Select one of the asset's USD files in the file manager, choose **Automation**, then **Execute Workflow**, and pick the **Miris Spatial Streaming Upload** workflow with its **Stream with Miris** template.
 -   **From the Miris viewer**, with its **Stream with Miris** button (see [Viewer plugin](../developer/miris-spatial-streaming.md#viewer-plugin)).
 
-The workflow takes exactly one file; a whole-asset (`/`) or folder selection is rejected. A manual run uploads that file; an automatic run uploads the asset's [root USD file](#how-the-root-is-chosen). The pipeline records the stream metadata on the file it uploads.
+The workflow takes exactly one file; a whole-asset (`/`) or folder selection is rejected. A run on an asset that is not distributable, or is quarantined while `app.compliance.quarantineBlocksDownload` is `true`, fails before anything is claimed or sent to Miris (see [Which assets can be streamed and uploaded](../developer/miris-spatial-streaming.md#which-assets-can-be-streamed-and-uploaded)). A manual run uploads that file; an automatic run uploads the asset's [root USD file](#how-the-root-is-chosen). The pipeline records the stream metadata on the file it uploads.
 
 ### Duplicate uploads and re-runs
 
@@ -191,7 +191,7 @@ The Lambda functions run in the VPC only when `app.useGlobalVpc.useForAllLambdas
 | ------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `app.addons.useMirisStreaming.upload.enabled`                             | `false`                  | Deploys the pipeline.                                                                                                                |
 | `app.addons.useMirisStreaming.upload.autoRegisterWithVAMS`                | `true`                   | Registers the pipeline, the workflow, and the **Stream with Miris** template during deployment.                                      |
-| `app.addons.useMirisStreaming.upload.autoRegisterAutoTriggerOnFileUpload` | `true`                   | Enables the workflow's `fileUpload` trigger. Requires `autoRegisterWithVAMS`.                                                        |
+| `app.addons.useMirisStreaming.upload.autoRegisterAutoTriggerOnFileUpload` | `false`                  | Enables the workflow's `fileUpload` trigger. Requires `autoRegisterWithVAMS`.                                                        |
 | `app.addons.useMirisStreaming.upload.triggerExtensions`                   | `.usd,.usda,.usdc,.usdz` | The extensions the pipeline accepts, fingerprints, and considers as a root. A run on a USD file whose extension is not listed fails. |
 | `app.addons.useMirisStreaming.upload.taskTimeoutSeconds`                  | `1800`                   | Seconds the container waits for Miris to report `preview` or `streamable`.                                                           |
 | `app.addons.useMirisStreaming.upload.maxAssetSizeBytes`                   | `5000000000`             | Largest upload, in bytes: the root and the files it references.                                                                      |

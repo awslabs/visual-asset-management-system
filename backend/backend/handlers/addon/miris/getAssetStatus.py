@@ -46,9 +46,9 @@ Miris Integration Key (`GET /v1/asset/{uuid}`, see `mirisIntegration`), which es
 binding. The Integration Key resolves to its owning Miris user's workspace, which must be the
 workspace holding the assets. The processing state then comes from:
 
-  - static: the viewer API, read with the deployment-wide viewer key
-    (`MIRIS_VIEWER_KEY`), the same credential the frontend streams with. It sees exactly the
-    assets the viewer can stream.
+  - static: the viewer API, read with the deployment-wide viewer key (from the secret named by
+    `MIRIS_VIEWER_KEY_SECRET_ARN`), the same credential the frontend streams with. It sees exactly
+    the assets the viewer can stream.
   - perView (the default): the Integration API read above, since no deployment-wide viewer key exists.
 
 The probe is advisory and must never block streaming. Everything short of a definitive Miris
@@ -152,8 +152,6 @@ try:
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
     # The dependency manifests the upload pipeline writes.
     auxiliary_bucket_name = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
-    # Deployment-wide Miris viewer key, the same credential the frontend streams with (static mode).
-    miris_viewer_key = os.environ.get("MIRIS_VIEWER_KEY", "").strip()
     miris_viewer_key_mode = os.environ.get("MIRIS_VIEWER_KEY_MODE", VIEWER_KEY_MODE_STATIC).strip()
 except Exception:
     logger.exception("Failed loading resource names")
@@ -280,7 +278,7 @@ def _stream_state(miris_asset_uuid: str, database_id: str, asset_id: str, deadli
         miris_asset, state = _read_bound_asset(miris_asset_uuid, database_id, asset_id, deadline)
         return state if miris_asset is None else _usable_state(miris_asset.state)
 
-    if miris_viewer_key_mode != VIEWER_KEY_MODE_STATIC or not miris_viewer_key:
+    if miris_viewer_key_mode != VIEWER_KEY_MODE_STATIC or not mirisIntegration.MIRIS_VIEWER_KEY_SECRET_ARN:
         logger.warning("The Miris viewer key mode or the static viewer key is not configured")
         return STATE_UNKNOWN
     miris_asset, state = _read_bound_asset(miris_asset_uuid, database_id, asset_id, deadline)
@@ -326,7 +324,8 @@ def _read_bound_asset(miris_asset_uuid: str, database_id: str, asset_id: str,
 def _viewer_processing_state(miris_asset_uuid: str, deadline: float) -> str:
     """Ask the Miris viewer API, with the deployment-wide viewer key, for the processing state."""
     try:
-        state = mirisIntegration.get_viewer_asset_state(miris_asset_uuid, miris_viewer_key, deadline=deadline)
+        viewer_key = mirisIntegration.load_static_viewer_key(deadline)
+        state = mirisIntegration.get_viewer_asset_state(miris_asset_uuid, viewer_key, deadline=deadline)
     except mirisIntegration.MirisIntegrationError as e:
         if e.status_code == 400:
             # A viewer API 400 is reported as processing.

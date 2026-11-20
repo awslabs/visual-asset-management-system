@@ -6,7 +6,9 @@ Integration API calls authenticate with the Miris Integration Key, a plain-strin
 secret named by `MIRIS_API_KEY_SECRET_ARN`, and go to the Miris API at `MIRIS_API_BASE_URL`. The
 key is cached per container for `_SECRET_CACHE_TTL_SECONDS`, so a rotated key is picked up within
 that window; a 401 or 403 drops the cached key and retries the call once with a freshly read one.
-`get_viewer_asset_state` instead reads the viewer API with a viewer key the caller passes.
+`get_viewer_asset_state` instead reads the viewer API with a viewer key the caller passes. In static
+mode that is the deployment-wide viewer key, which `load_static_viewer_key` reads from the secret
+named by `MIRIS_VIEWER_KEY_SECRET_ARN` (filled at deploy time) and caches the same way.
 
 Every call accepts an optional `deadline` (see `request_deadline`), which is a best-effort bound:
 a call is not started once less than `_MIN_CALL_SECONDS` remain before it, its connect and read
@@ -29,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.cookiejar import DefaultCookiePolicy
-from typing import Any, NamedTuple, Optional, Tuple
+from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 import boto3
 import requests
@@ -91,13 +93,15 @@ _UUID_PATTERN = re.compile(
 # Lazy module-level singletons, kept across warm invocations.
 _secretsmanager = None
 _session: Optional[requests.Session] = None
-_cached_api_key: Optional[str] = None
-_cached_api_key_fetched_at: float = 0.0
+# Secret values by ARN, each with the time it was read.
+_secret_cache: Dict[str, Tuple[str, float]] = {}
 
 # Module-level config, read once at cold start. A call made while either is unset raises
 # `MirisIntegrationError`, so a Lambda that imports this module without calling it needs neither.
 MIRIS_API_KEY_SECRET_ARN = os.environ.get("MIRIS_API_KEY_SECRET_ARN", "").strip()
 MIRIS_API_BASE_URL = os.environ.get("MIRIS_API_BASE_URL", "").strip().rstrip("/")
+# The deployment-wide viewer key's secret, set in static mode only.
+MIRIS_VIEWER_KEY_SECRET_ARN = os.environ.get("MIRIS_VIEWER_KEY_SECRET_ARN", "").strip()
 
 
 def integration_configured() -> bool:
@@ -295,39 +299,49 @@ def _get_secretsmanager_client():
     return _secretsmanager
 
 
-def _load_api_key(deadline: Optional[float] = None) -> str:
-    """Return the Miris Integration Key, read from Secrets Manager or the module cache.
+def _load_secret(secret_arn: str, name: str, deadline: Optional[float]) -> str:
+    """Return a plain-string secret, read from Secrets Manager or the module cache.
 
     With a deadline, Secrets Manager is read only while the bounded read and one call still fit.
     """
-    global _cached_api_key, _cached_api_key_fetched_at
-    if (
-        _cached_api_key is not None
-        and (time.time() - _cached_api_key_fetched_at) < _SECRET_CACHE_TTL_SECONDS
-    ):
-        return _cached_api_key
-    if not MIRIS_API_KEY_SECRET_ARN:
-        raise MirisIntegrationError("MIRIS_API_KEY_SECRET_ARN is not configured")
+    cached = _secret_cache.get(secret_arn)
+    if cached is not None and (time.time() - cached[1]) < _SECRET_CACHE_TTL_SECONDS:
+        return cached[0]
     if deadline is not None:
         _time_left(deadline, _SECRET_READ_BOUND_SECONDS + _MIN_CALL_SECONDS)
     try:
-        response = _get_secretsmanager_client().get_secret_value(SecretId=MIRIS_API_KEY_SECRET_ARN)
+        response = _get_secretsmanager_client().get_secret_value(SecretId=secret_arn)
     except Exception as e:
-        raise MirisIntegrationError(
-            f"Could not read the Miris Integration Key secret ({type(e).__name__})"
-        ) from None
-    api_key = (response.get("SecretString") or "").strip()
-    if not api_key:
-        raise MirisIntegrationError("The Miris Integration Key secret is empty")
-    _cached_api_key = api_key
-    _cached_api_key_fetched_at = time.time()
-    return _cached_api_key
+        raise MirisIntegrationError(f"Could not read the {name} secret ({type(e).__name__})") from None
+    value = (response.get("SecretString") or "").strip()
+    if not value:
+        raise MirisIntegrationError(f"The {name} secret is empty")
+    _secret_cache[secret_arn] = (value, time.time())
+    return value
+
+
+def _load_api_key(deadline: Optional[float] = None) -> str:
+    """Return the Miris Integration Key."""
+    if not MIRIS_API_KEY_SECRET_ARN:
+        raise MirisIntegrationError("MIRIS_API_KEY_SECRET_ARN is not configured")
+    return _load_secret(MIRIS_API_KEY_SECRET_ARN, "Miris Integration Key", deadline)
+
+
+def load_static_viewer_key(deadline: Optional[float] = None) -> str:
+    """Return the deployment-wide viewer key of static mode."""
+    if not MIRIS_VIEWER_KEY_SECRET_ARN:
+        raise MirisIntegrationError("MIRIS_VIEWER_KEY_SECRET_ARN is not configured")
+    return _load_secret(MIRIS_VIEWER_KEY_SECRET_ARN, "Miris viewer key", deadline)
 
 
 def _invalidate_api_key_cache() -> None:
     """Drop the cached Integration Key so the next call re-reads Secrets Manager."""
-    global _cached_api_key
-    _cached_api_key = None
+    _secret_cache.pop(MIRIS_API_KEY_SECRET_ARN, None)
+
+
+def _clear_secret_cache() -> None:
+    """Drop every cached secret."""
+    _secret_cache.clear()
 
 
 def _request(method: str, path: str, json_body: Optional[dict] = None,

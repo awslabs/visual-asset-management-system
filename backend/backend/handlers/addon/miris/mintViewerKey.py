@@ -13,8 +13,8 @@ A Miris asset without both tags, or one Miris reports as missing (404), is `notB
 
 What is returned follows `MIRIS_VIEWER_KEY_MODE`:
 
-  - static: the deployment-wide viewer key (`MIRIS_VIEWER_KEY`). No key is created and nothing is
-    recorded; `expiresAt` is null.
+  - static: the deployment-wide viewer key, read from the secret named by
+    `MIRIS_VIEWER_KEY_SECRET_ARN`. No key is created and nothing is recorded; `expiresAt` is null.
   - perView: a key created with the Miris Integration Key, with no tags and the one asset ID,
     that expires `MIRIS_VIEWER_KEY_TTL_MINUTES` minutes after it is minted. Each key is recorded
     in the add-on's viewer key table under its Miris key ID, with a `ttl` one hour after its
@@ -57,6 +57,12 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from botocore.config import Config
 
 from common.addonApiRoutes import API_ADDON_MIRIS_VIEWER_KEY
+from common.compliance.quarantineGuard import (
+    QuarantineBlockedResponse,
+    check_quarantine_block,
+    quarantine_refusal,
+)
+from common.downloadEligibility import require_distributable_asset
 from common.addonResourceNames import AddonResourceKeys
 from common.resourceNames import ResourceKeys, get_resource_name, get_table_name
 from customLogging.auditLogging import audited_handler, log_auth_other
@@ -107,8 +113,6 @@ try:
     asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
     miris_viewer_key_mode = os.environ.get("MIRIS_VIEWER_KEY_MODE", VIEWER_KEY_MODE_STATIC).strip()
-    # Deployment-wide Miris viewer key, returned in static mode.
-    miris_static_viewer_key = os.environ.get("MIRIS_VIEWER_KEY", "").strip()
     # The key table records per-view keys only, so it is resolved in perView mode only.
     miris_viewer_key_table_name = (
         get_resource_name(AddonResourceKeys.MIRIS_VIEWER_KEY_STORAGE_TABLE)
@@ -194,7 +198,7 @@ def _configured() -> bool:
     if not mirisIntegration.integration_configured():
         return False
     if miris_viewer_key_mode == VIEWER_KEY_MODE_STATIC:
-        return bool(miris_static_viewer_key)
+        return bool(mirisIntegration.MIRIS_VIEWER_KEY_SECRET_ARN)
     return miris_viewer_key_mode == VIEWER_KEY_MODE_PER_VIEW and miris_viewer_key_table is not None
 
 
@@ -236,6 +240,9 @@ def _handle_post(event, context):
     )
     if denied:
         return denied
+    refused = _distribution_refusal(asset, database_id, asset_id, event)
+    if refused:
+        return refused
 
     file_path = file_path_for_asset(asset, asset_id, request_model.filePath)
     stream_metadata = read_stream_metadata(
@@ -271,9 +278,23 @@ def _handle_post(event, context):
         return unbound
 
     if miris_viewer_key_mode == VIEWER_KEY_MODE_STATIC:
-        return _static_key(event, database_id, asset_id, file_path, miris_asset_uuid)
+        return _static_key(event, deadline, database_id, asset_id, file_path, miris_asset_uuid)
     return _mint_key(event, context, deadline, ttl_minutes, database_id, asset_id, file_path,
                      miris_asset_uuid)
+
+
+def _distribution_refusal(asset, database_id, asset_id, event):
+    """The rule the core file routes apply before serving an asset's content: distributable, with a
+    location, and not quarantined while the deployment's quarantine block is on. Returns None when a
+    key may be returned, else the refusal, answered as the download route answers it."""
+    try:
+        require_distributable_asset(asset, check_quarantine_block, database_id, asset_id)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
+    except VAMSGeneralErrorResponse as refusal:
+        return general_error(status_code=refusal.status_code, body={"message": refusal.user_message},
+                             event=event)
+    return None
 
 
 def _binding_failure(miris_asset_uuid, database_id, asset_id, deadline, event):
@@ -312,8 +333,21 @@ def _binding_failure(miris_asset_uuid, database_id, asset_id, deadline, event):
     )
 
 
-def _static_key(event, database_id, asset_id, file_path, miris_asset_uuid):
+def _static_key(event, deadline, database_id, asset_id, file_path, miris_asset_uuid):
     """Return the deployment-wide viewer key for a bound asset (static mode)."""
+    try:
+        viewer_key = mirisIntegration.load_static_viewer_key(deadline)
+    except mirisIntegration.MirisDeadlineExceeded:
+        logger.error("Request deadline passed before the viewer key secret was read")
+        return _deadline_response(event)
+    except mirisIntegration.MirisIntegrationError as e:
+        logger.error(f"Could not read the static viewer key: {e}")
+        return general_error(
+            status_code=502,
+            body={"message": "The deployment viewer key could not be read"},
+            event=event,
+        )
+
     log_auth_other(
         event,
         "mirisStaticViewerKeyIssue",
@@ -328,7 +362,7 @@ def _static_key(event, database_id, asset_id, file_path, miris_asset_uuid):
     response = MirisViewerKeyResponseModel(
         filePath=file_path,
         mirisAssetUuid=miris_asset_uuid,
-        viewerKey=miris_static_viewer_key,
+        viewerKey=viewer_key,
         expiresAt=None,
     )
     return success(body=response.dict())

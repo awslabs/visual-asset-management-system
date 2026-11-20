@@ -26,6 +26,7 @@ from .conftest import (
     enforcer as _enforcer,
     metadata_table as _metadata_table,
     rest_event,
+    static_viewer_key,
 )
 
 pytestmark = pytest.mark.unit
@@ -135,7 +136,7 @@ def _invoke(miris_api, s3, metadata_table=None, mode="perView", root_key=ROOT_KE
          patch.object(getAssetStatus, "s3", s3), \
          patch.object(getAssetStatus, "CasbinEnforcer", return_value=_enforcer()), \
          patch.object(getAssetStatus, "request_to_claims", side_effect=_AS_USER), \
-         patch.object(getAssetStatus, "miris_viewer_key", "viewer-key" if mode == "static" else ""), \
+         static_viewer_key("viewer-key" if mode == "static" else ""), \
          patch.object(getAssetStatus, "miris_viewer_key_mode", mode):
         response = getAssetStatus.lambda_handler(event, context or FakeLambdaContext())
     assert response["statusCode"] == 200

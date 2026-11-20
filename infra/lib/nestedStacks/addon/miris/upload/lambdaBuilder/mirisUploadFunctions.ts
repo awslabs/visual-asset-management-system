@@ -214,8 +214,13 @@ export function buildVamsExecuteMirisUploadFunction(
         environment: {
             OPEN_PIPELINE_FUNCTION_NAME: openPipelineFunction.functionName,
             MIRIS_UPLOAD_GATE_FUNCTION_NAME: gateFunction.functionName,
-            // The asset name the Miris asset is created with, read from the asset record.
+            // The asset record: whether it may be served, and the name the Miris asset is created with.
             ASSET_STORAGE_TABLE_NAME: storageResources.dynamo.assetStorageTable.tableName,
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+                COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME:
+                    storageResources.dynamo.complianceAssetStateStorageTable.tableName,
+            }),
         },
     });
 
@@ -229,6 +234,9 @@ export function buildVamsExecuteMirisUploadFunction(
     // Reads the per-pipeline manifest envelope and the input configuration from the asset bucket.
     grantReadPermissionsToAllAssetBuckets(fun);
     storageResources.dynamo.assetStorageTable.grantReadData(fun);
+    if (config.app.compliance.quarantineBlocksDownload) {
+        storageResources.dynamo.complianceAssetStateStorageTable.grantReadData(fun);
+    }
     // Releases the claim the gate wrote when the run cannot be handed off to the pipeline.
     grantClaimRelease(fun, storageResources);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);

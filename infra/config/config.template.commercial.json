@@ -501,7 +501,7 @@
                 "upload": {
                     "enabled": false,
                     "autoRegisterWithVAMS": true,
-                    "autoRegisterAutoTriggerOnFileUpload": true,
+                    "autoRegisterAutoTriggerOnFileUpload": false,
                     "triggerExtensions": ".usd,.usda,.usdc,.usdz",
                     "taskTimeoutSeconds": 1800,
                     "maxAssetSizeBytes": 5000000000

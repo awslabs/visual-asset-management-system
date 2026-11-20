@@ -141,8 +141,10 @@ export const getMirisStreamStatus = async ({
  * do not cache or persist it.
  *
  * Returns [true, MirisViewerKey] on success, or [false, errorMessage, status, state] on failure,
- * where `status` is the HTTP status when the request reached the API (403 for a permission denial
- * or an unbound Miris asset, 404 when the file records no stream, 502 when Miris could not be
+ * where `status` is the HTTP status when the request reached the API (400 for an asset that is not
+ * distributable, or is quarantined while the deployment's quarantine block is on, with the API's
+ * reason as the message; 403 for a permission denial or an unbound Miris asset, 404 when the file
+ * records no stream, 502 when Miris could not be
  * read or did not issue a key, 503 when the add-on is not configured, 504 when Miris did not
  * answer in time) and undefined otherwise, and `state` is the error body's `state` (`notBound`
  * when the Miris asset lacks the `vams-asset-{assetId}` or `vams-database-{databaseId}` tag), when

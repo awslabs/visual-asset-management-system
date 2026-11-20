@@ -24,6 +24,11 @@ dynamodb = boto3.resource("dynamodb", config=retry_config)
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 MIRIS_UPLOAD_GATE_FUNCTION_NAME = os.environ.get("MIRIS_UPLOAD_GATE_FUNCTION_NAME", "")
 ASSET_STORAGE_TABLE_NAME = os.environ.get("ASSET_STORAGE_TABLE_NAME", "")
+# The deployment's quarantine block (app.compliance.quarantineBlocksDownload) and the table it reads.
+COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD = os.environ.get(
+    "COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD", "false").lower() == "true"
+COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME = os.environ.get(
+    "COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME", "")
 
 # The stored trigger type of a user-launched run, rendered into the configuration as {{triggerType}}.
 MANUAL_TRIGGER_TYPE = "Manual"
@@ -38,22 +43,29 @@ def _asset_table():
     return dynamodb.Table(ASSET_STORAGE_TABLE_NAME)
 
 
-def resolve_asset_name(database_id, asset_id):
-    """The asset's display name, or '' when it cannot be read.
+def _compliance_asset_state_table():
+    """The compliance asset state table resource. Wrapped so tests can patch it."""
+    return dynamodb.Table(COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME)
 
-    The workflow manifest carries asset IDs but no asset NAME, so the Miris asset name is read
-    here rather than rendered from a template tag.
+
+def read_distributable_asset(database_id, asset_id):
+    """The asset record, once it passes the rule the VAMS file routes apply before serving an
+    asset's content (`common/downloadEligibility.py` and `common/compliance/quarantineGuard.py` in
+    the backend): the asset exists and is distributable and, while the deployment's quarantine block
+    is on, is not quarantined without a granted exception. Raises otherwise, so a refused run fails
+    before anything is claimed or sent to Miris. A record that cannot be read fails the run too.
     """
-    if not (ASSET_STORAGE_TABLE_NAME and database_id and asset_id):
-        return ""
-    try:
-        item = _asset_table().get_item(
-            Key={"databaseId": database_id, "assetId": asset_id}
-        ).get("Item") or {}
-    except Exception as e:
-        logger.warning(f"Could not read asset record {database_id}/{asset_id}: {e}")
-        return ""
-    return item.get("assetName", "") or ""
+    key = {"databaseId": database_id, "assetId": asset_id}
+    asset = _asset_table().get_item(Key=key).get("Item")
+    if not asset:
+        raise Exception("The asset was not found, so its files are not sent to Miris.")
+    if not asset.get("isDistributable", False):
+        raise Exception("The asset is not distributable, so its files are not sent to Miris.")
+    if COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD:
+        state = _compliance_asset_state_table().get_item(Key=key).get("Item")
+        if state and state.get("complianceState") == "quarantined" and not state.get("exceptionGranted"):
+            raise Exception("The asset is quarantined, so its files are not sent to Miris.")
+    return asset
 
 
 def resolve_asset_root(resolved):
@@ -266,10 +278,13 @@ def lambda_handler(event, context):
         # Both identities become the Miris asset's binding tags, so neither may be missing.
         if not resolved.get("assetId") or not resolved.get("databaseId"):
             raise Exception("The workflow manifest does not name the input file's asset and database.")
+        # The workflow manifest carries asset IDs but no asset NAME, so the Miris asset name is
+        # read from the same record.
+        asset_name = read_distributable_asset(
+            resolved["databaseId"], resolved["assetId"]).get("assetName", "") or ""
         asset_location = resolve_asset_root(resolved)
         manual = is_manual_run(data, resolved)
         root_file = "" if manual else resolve_root_file(resolved)
-        asset_name = resolve_asset_name(resolved["databaseId"], resolved["assetId"])
 
         proceed, claim_fingerprint = invoke_gate(
             resolved, asset_location, manual, asset_name, external_task_token)

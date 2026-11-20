@@ -50,9 +50,9 @@ def _resolved(**overrides):
     return resolved
 
 
-def _asset_table_mock(asset_name="Pump Housing"):
+def _asset_table_mock(asset_name="Pump Housing", distributable=True):
     table = MagicMock()
-    table.get_item.return_value = {"Item": {"assetName": asset_name}}
+    table.get_item.return_value = {"Item": {"assetName": asset_name, "isDistributable": distributable}}
     return table
 
 
@@ -302,3 +302,75 @@ def test_the_results_path_reaches_the_pipeline(handler):
     _, _, open_payload, _ = _run(handler, resolved=_resolved(outputS3AssetResultsPath=results))
 
     assert open_payload["outputS3AssetResultsPath"] == results
+
+
+def _compliance_table(state="quarantined", exception_granted=False):
+    table = MagicMock()
+    table.get_item.return_value = {"Item": {
+        "databaseId": "db1", "assetId": "a1", "complianceState": state,
+        "exceptionGranted": exception_granted}}
+    return table
+
+
+def _run_against(handler, asset_table, compliance_table=None):
+    """Run the handler with the given asset and compliance state tables; returns
+    (response, lambda invoke mock, Step Functions client mock)."""
+    with patch.object(handler.manifestHelper, "resolve_pipeline_inputs", return_value=_resolved()), \
+         patch.object(handler, "_asset_table", return_value=asset_table), \
+         patch.object(handler, "_compliance_asset_state_table",
+                      return_value=compliance_table or _compliance_table()), \
+         patch.object(handler, "s3_client", _configuration(None)), \
+         patch.object(handler, "sfn_client") as sfn, \
+         patch.object(handler, "lambda_client") as lc:
+        lc.invoke.side_effect = [_gate_says(), {"StatusCode": 200}]
+        resp = handler.lambda_handler({"body": json.dumps(
+            {"TaskToken": "tok-1", "executingUserName": "SYSTEM_USER"})}, None)
+    return resp, lc.invoke, sfn
+
+
+def _failure_cause(sfn):
+    sfn.send_task_failure.assert_called_once()
+    return sfn.send_task_failure.call_args.kwargs["cause"]
+
+
+@pytest.mark.parametrize("asset_table, reason", [
+    (_asset_table_mock(distributable=False), "not distributable"),
+    (MagicMock(get_item=MagicMock(return_value={})), "not found"),
+    (MagicMock(get_item=MagicMock(side_effect=Exception("throttled"))), "throttled"),
+], ids=["not-distributable", "missing-record", "unreadable-record"])
+def test_an_asset_that_may_not_be_served_fails_before_anything_is_claimed(handler, asset_table, reason):
+    resp, invoke, sfn = _run_against(handler, asset_table)
+    assert resp["statusCode"] == 500
+    invoke.assert_not_called()
+    assert reason in _failure_cause(sfn)
+
+
+def test_a_quarantined_asset_fails_before_anything_is_claimed_while_the_block_is_on(handler, monkeypatch):
+    monkeypatch.setattr(handler, "COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD", True)
+    compliance = _compliance_table()
+    resp, invoke, sfn = _run_against(handler, _asset_table_mock(), compliance)
+    assert resp["statusCode"] == 500
+    invoke.assert_not_called()
+    assert "quarantined" in _failure_cause(sfn)
+    compliance.get_item.assert_called_once_with(Key={"databaseId": "db1", "assetId": "a1"})
+
+
+@pytest.mark.parametrize("compliance", [
+    _compliance_table(exception_granted=True),
+    _compliance_table(state="compliant"),
+    MagicMock(get_item=MagicMock(return_value={})),
+], ids=["exception-granted", "other-state", "no-row"])
+def test_an_asset_the_block_allows_reaches_the_gate(handler, monkeypatch, compliance):
+    monkeypatch.setattr(handler, "COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD", True)
+    resp, invoke, sfn = _run_against(handler, _asset_table_mock(), compliance)
+    assert resp["statusCode"] == 200
+    assert invoke.call_count == 2
+    sfn.send_task_failure.assert_not_called()
+
+
+def test_with_the_block_off_no_compliance_state_is_read(handler):
+    assert handler.COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is False
+    compliance = _compliance_table()
+    resp, _, _ = _run_against(handler, _asset_table_mock(), compliance)
+    assert resp["statusCode"] == 200
+    compliance.get_item.assert_not_called()

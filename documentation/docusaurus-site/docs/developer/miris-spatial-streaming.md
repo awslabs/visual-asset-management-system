@@ -18,7 +18,7 @@ The add-on is off by default. It deploys only to the commercial `aws` partition 
 The viewer asks VAMS at render time whether a USD file has a stream. Both API routes read the `miris_*` keys of the requested file server side, so the browser never supplies a Miris asset UUID and a caller can reach only a stream that the file itself references.
 
 1. **Stream status.** The viewer calls `GET /addon/miris/asset-status` with the file's path. VAMS authorizes the caller, reads the file's stream metadata, reads the Miris asset with the Integration Key to check its [binding tags](#binding-tags), and reports the stream's state and whether the stream is stale (see [Stale streams](#stale-streams)).
-2. **Viewer key.** When the state allows streaming, the viewer calls `POST /addon/miris/viewer-key`. VAMS repeats the authorization and the binding check and returns a viewer key (see [Viewer key modes](#viewer-key-modes)), which the viewer holds in memory for that open only.
+2. **Viewer key.** When the state allows streaming, the viewer calls `POST /addon/miris/viewer-key`. VAMS repeats the authorization, applies the [asset distribution rule](#which-assets-can-be-streamed-and-uploaded) and the binding check, and returns a viewer key (see [Viewer key modes](#viewer-key-modes)), which the viewer holds in memory for that open only.
 3. **Streaming.** The viewer loads the Miris web SDK and streams the asset directly from Miris. VAMS never proxies or stores the streamed geometry.
 
 Both routes enforce Tier 1 on the route and Tier 2 `GET` on the asset before any metadata is read; the viewer key route checks a read even though it is a `POST`. See the [Add-on API reference](../api/addon.md#miris-spatial-streaming-add-on) for the request and response shapes.
@@ -28,6 +28,15 @@ Both routes enforce Tier 1 on the route and Tier 2 `GET` on the asset before any
 A Miris asset is bound to a VAMS asset by two tags on the Miris asset: `vams-asset-{assetId}` and `vams-database-{databaseId}`. Both are required, because an asset ID is unique only within its database. In both viewer key modes the routes accept a Miris asset only when it carries both tags of the VAMS asset being viewed.
 
 A Miris asset that lacks either tag, that the Integration Key cannot find, or that Miris reports `deleted` is `notBound`: the viewer key route returns `403` with `state: notBound` and no key, and the viewer shows an error that names both tags. The upload pipeline always adds both tags. For a Miris asset linked by hand, add `vams-asset-<assetId>` and `vams-database-<databaseId>` in the Miris Portal or with `miris asset update --add-tags`.
+
+### Which assets can be streamed and uploaded
+
+The add-on applies the rule the core download and stream routes apply before they serve an asset's files (`common/downloadEligibility.py` and `common/compliance/quarantineGuard.py`). An asset can be streamed and uploaded to Miris when it is distributable and, while `app.compliance.quarantineBlocksDownload` is `true`, it is not quarantined without a granted exception. The rule is checked after both authorization tiers, so a caller who may not read the asset receives the authorization error and learns nothing about the asset's state.
+
+-   **Viewer key route.** Returns `400` with the reason, "Asset not distributable" or "Asset is quarantined and cannot be downloaded", and no key. The viewer shows the reason.
+-   **Upload pipeline.** The run fails at `vamsExecute`, before anything is claimed or sent to Miris, with the reason as the workflow's failure cause. The viewer and the execution details show it.
+
+The status route still reports the stream recorded on the file, and returns no key.
 
 ---
 
@@ -48,9 +57,9 @@ The entry in `web/src/visualizerPlugin/config/addonViewerConfig.json` ships with
 | `invalidUuid`                     | An error stating that `miris_asset_uuid` is not a valid UUID.                                                                                                                                                                                                                                     |
 | `error` or `failed`               | An error stating that Miris processing failed.                                                                                                                                                                                                                                                    |
 
-Each error offers a **Retry** button. A failed viewer key request shows `403` as a permission error, `503` as "Miris streaming is not configured for this deployment", `404` as the "Not yet streamed with Miris" note, a request the AWS WAF web ACL blocked with the blocking message, and anything else as an access error.
+Each error offers a **Retry** button. A failed viewer key request shows a `400` refusal with the API's reason (see [Which assets can be streamed and uploaded](#which-assets-can-be-streamed-and-uploaded)), `403` as a permission error, `503` as "Miris streaming is not configured for this deployment", `404` as the "Not yet streamed with Miris" note, a request the AWS WAF web ACL blocked with the blocking message, and anything else as an access error.
 
-When the status reports `stale: true`, the viewer streams the recorded asset under a banner that says the asset has changed since it was streamed: the file, or a sublayer or texture it uses, differs from the one in the stream (see [Stale streams](#stale-streams)). When `stale` is null, the viewer compares the recorded root version (`miris_source_version_id`) with the version being viewed instead. The routes read the file's current metadata, so a historical asset version streams the Miris asset recorded now. The viewer never downloads the file, so streaming works for assets marked non-distributable.
+When the status reports `stale: true`, the viewer streams the recorded asset under a banner that says the asset has changed since it was streamed: the file, or a sublayer or texture it uses, differs from the one in the stream (see [Stale streams](#stale-streams)). When `stale` is null, the viewer compares the recorded root version (`miris_source_version_id`) with the version being viewed instead. The routes read the file's current metadata, so a historical asset version streams the Miris asset recorded now.
 
 ### Starting an upload from the viewer
 
@@ -77,7 +86,7 @@ With the add-on enabled, the Content Security Policy gains `https://*.miris.com`
 
 ### Static mode
 
-The deployment's viewer key is stored in `config.json`, the CloudFormation template and the environment of the status and viewer key Lambda functions; it is not part of `/api/secure-config`. A user receives it only from the viewer key route, after both authorization tiers and the binding check pass. Create the key with an expiry (`miris viewerkey create -e`) and rotate it before it expires (`miris viewerkey rotate`): a key without an expiry stays valid until it is revoked.
+The deployment's viewer key is set in `config.json` (`viewerKey`). VAMS stores it in an AWS Secrets Manager secret that it creates empty and fills at deployment time, and the status and viewer key Lambda functions read it from there, so it is in neither the CloudFormation template nor a Lambda environment (see [Third-Party Credentials Supplied in Configuration](../architecture/security.md#third-party-credentials-supplied-in-configuration)). It is not part of `/api/secure-config`. To change the key, set the new value and deploy. A user receives it only from the viewer key route, after both authorization tiers and the binding check pass. Create the key with an expiry (`miris viewerkey create -e`) and rotate it before it expires (`miris viewerkey rotate`): a key without an expiry stays valid until it is revoked.
 
 :::warning[The static key is deployment-wide]
 Anyone who can read one bound asset receives the deployment's viewer key, and that key streams every Miris asset it allows. Scope the static key in Miris with tags and an expiry, or use `perView` mode where stream access must follow VAMS permissions asset by asset.
@@ -189,8 +198,8 @@ The add-on deploys `MirisBuilderNestedStack` (`infra/lib/nestedStacks/addon/miri
 ## Requirements and limitations
 
 -   **Commercial partition only.** Configuration validation rejects the add-on in any partition other than `aws`. Every browser that streams, and the add-on's Lambda functions, must reach `*.miris.com`.
--   **`app.webUi.allowUnsafeEvalFeatures` must be `true`.** The Miris web SDK compiles code at runtime. Review this with your security team.
--   **Lambda functions in the VPC have no route to Miris.** With `app.useGlobalVpc.useForAllLambdas` set to `true`, the add-on's Lambda functions run in the isolated subnets and every Miris API call fails. See [Network Architecture](../architecture/networking.md).
+-   **`app.webUi.allowUnsafeEvalFeatures` must be `true`.** The Miris web SDK runs in the VAMS web application's own origin and compiles code at runtime. The setting adds `'unsafe-eval'` to `script-src` for the whole web application, not only the viewer. Review this with your security team (see [Security](../architecture/security.md)).
+-   **Not with `app.useGlobalVpc.useForAllLambdas`.** Configuration validation rejects the add-on with that setting, which would place the add-on's Lambda functions in the VPC's isolated subnets, where they have no route to the Miris API. See [Network Architecture](../architecture/networking.md).
 -   **Browser support.** A browser with WebGPU, for example Chrome or Edge 113 or later, or Safari 26 or later, over HTTPS, with WebSocket support.
 -   **Processing time.** After upload, an asset can take a few hours to become streamable.
 

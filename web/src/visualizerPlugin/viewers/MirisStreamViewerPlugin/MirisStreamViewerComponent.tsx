@@ -9,6 +9,7 @@ import Button from "@cloudscape-design/components/button";
 import Link from "@cloudscape-design/components/link";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { ViewerPluginProps } from "../../core/types";
+import { apiRefusalMessage } from "../../core/streamFailure";
 import Synonyms from "../../../synonyms";
 import { fetchFileInfo } from "../../../services/APIService";
 import {
@@ -54,6 +55,7 @@ type ViewerError =
     | { kind: "STATUS_FETCH" }
     | { kind: "FORBIDDEN" }
     | { kind: "MINT_FAILED" }
+    | { kind: "REFUSED"; message: string }
     | { kind: "REQUEST_BLOCKED"; message: string }
     | { kind: "INVALID_UUID" }
     | { kind: "NOT_BOUND"; databaseId: string; assetId: string }
@@ -132,6 +134,7 @@ function errorMessage(err: ViewerError): string {
         case "MINT_FAILED":
             return "Could not get access to stream this asset from Miris. Try again.";
         case "REQUEST_BLOCKED":
+        case "REFUSED":
             return err.message;
         case "INVALID_UUID":
             return "This file's miris_asset_uuid metadata is not a valid UUID. Correct it in the file's metadata, or run the Miris Spatial Streaming Upload workflow on it again.";
@@ -337,6 +340,9 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                 if (cancelled) return;
                 if (keyResult[0] !== true) {
                     const [, message, keyStatus, keyState] = keyResult;
+                    // The asset's distribution rule (not distributable, or quarantined), in the
+                    // API's own words.
+                    const refusal = apiRefusalMessage(keyStatus, message);
                     if (keyState === MIRIS_REQUEST_BLOCKED) {
                         setError({ kind: "REQUEST_BLOCKED", message });
                     } else if (keyStatus === 404) {
@@ -351,6 +357,8 @@ const MirisStreamViewerComponent: React.FC<ViewerPluginProps> = ({
                         );
                     } else if (keyStatus === 503) {
                         setError({ kind: "NOT_CONFIGURED" });
+                    } else if (refusal) {
+                        setError({ kind: "REFUSED", message: refusal });
                     } else {
                         setError({ kind: "MINT_FAILED" });
                     }

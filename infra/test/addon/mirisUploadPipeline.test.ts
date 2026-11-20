@@ -527,6 +527,9 @@ describe("Miris upload Lambda environment", () => {
         expect(env.ASSET_STORAGE_TABLE_NAME).toEqual({ Ref: tableId });
         // The pipeline runs same-Region only; the handler refuses a remote input itself.
         expect(env.CROSS_REGION_S3_ENDPOINT_REGIONS).toBeUndefined();
+        // The quarantine block is off in this harness, so the compliance state is not read.
+        expect(env.COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD).toBeUndefined();
+        expect(env.COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME).toBeUndefined();
     });
 
     test.each(HANDLER_STEMS)(

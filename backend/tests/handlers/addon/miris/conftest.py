@@ -5,12 +5,30 @@
 tables, the enforcer, the Lambda context and the loggers."""
 
 import json
+import os
+import sys
+import types
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.backend.handlers.addon.miris import (
+# The root harness replaces `common` with a mock package, so the real `common.compliance` package
+# is registered as a package object whose `__path__` points at the source tree, as
+# `tests/handlers/assets/conftest.py` does. The viewer key handler imports
+# `common.compliance.quarantineGuard` at module load, and its tests patch that module instance.
+_BACKEND_SOURCE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "backend"))
+
+if "common.compliance" not in sys.modules:
+    _compliance_pkg = types.ModuleType("common.compliance")
+    _compliance_pkg.__path__ = [os.path.join(_BACKEND_SOURCE, "common", "compliance")]
+    _compliance_pkg.__package__ = "common.compliance"
+    sys.modules["common.compliance"] = _compliance_pkg
+if "common" in sys.modules:
+    setattr(sys.modules["common"], "compliance", sys.modules["common.compliance"])
+
+from backend.backend.handlers.addon.miris import (  # noqa: E402
     getAssetStatus,
     mintViewerKey,
     mirisIntegration,
@@ -19,6 +37,7 @@ from backend.backend.handlers.addon.miris import (
 
 INTEGRATION_KEY = "test-integration-key-do-not-log-7f3a9c"
 SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-api-key-AbCdEf"
+VIEWER_KEY_SECRET_ARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:test-miris-viewer-key-GhIjKl"
 BASE_URL = "https://miris.example.test"
 DATABASE_ID = "db-1"
 ASSET_ID = "asset-1"
@@ -42,9 +61,11 @@ def metadata_table(rows_by_file=None):
     return table
 
 
-def asset_table(found=True, root_key=None):
+def asset_table(found=True, root_key=f"{ASSET_ID}/", distributable=True):
+    """An asset table holding one asset; `root_key=None` leaves out its assetLocation."""
     table = MagicMock()
-    item = {"databaseId": DATABASE_ID, "assetId": ASSET_ID, "bucketId": "bucket-1"}
+    item = {"databaseId": DATABASE_ID, "assetId": ASSET_ID, "bucketId": "bucket-1",
+            "isDistributable": distributable}
     if root_key is not None:
         item["assetLocation"] = {"Key": root_key}
     table.get_item.return_value = {"Item": item} if found else {}
@@ -112,12 +133,15 @@ def miris_api(monkeypatch):
     Append to `responses` an int status, a `(status, body)` tuple (a dict body is JSON), or an
     exception to raise; each request consumes one. `calls` records every request as a dict of its method, URL and kwargs.
     """
-    mirisIntegration._invalidate_api_key_cache()
+    mirisIntegration._clear_secret_cache()
     monkeypatch.setattr(mirisIntegration, "MIRIS_API_BASE_URL", BASE_URL)
     monkeypatch.setattr(mirisIntegration, "MIRIS_API_KEY_SECRET_ARN", SECRET_ARN)
 
+    # Secret values by ARN; a test sets `secrets[arn]` to change one.
+    secrets = {SECRET_ARN: INTEGRATION_KEY}
     secretsmanager = MagicMock()
-    secretsmanager.get_secret_value.return_value = {"SecretString": INTEGRATION_KEY}
+    secretsmanager.secrets = secrets
+    secretsmanager.get_secret_value.side_effect = lambda SecretId: {"SecretString": secrets[SecretId]}
     monkeypatch.setattr(mirisIntegration, "_get_secretsmanager_client", lambda: secretsmanager)
 
     calls = []
@@ -138,10 +162,19 @@ def miris_api(monkeypatch):
         secret_arn=SECRET_ARN,
         base_url=BASE_URL,
         secretsmanager=secretsmanager,
+        secrets=secrets,
         calls=calls,
         responses=responses,
     )
-    mirisIntegration._invalidate_api_key_cache()
+    mirisIntegration._clear_secret_cache()
+
+
+def static_viewer_key(value):
+    """Point the client at the static viewer key's secret and store `value` in it; an empty
+    `value` leaves the secret unset. Use with the `miris_api` fixture active."""
+    mirisIntegration._get_secretsmanager_client().secrets[VIEWER_KEY_SECRET_ARN] = value
+    return patch.object(mirisIntegration, "MIRIS_VIEWER_KEY_SECRET_ARN",
+                        VIEWER_KEY_SECRET_ARN if value else "")
 
 
 class FakeLambdaContext:
