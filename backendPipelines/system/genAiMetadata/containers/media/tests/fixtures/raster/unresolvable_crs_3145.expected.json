@@ -1,0 +1,30 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "EPSG:3145",
+  "dataType": "uint8",
+  "file": "unresolvable_crs_3145.tif",
+  "footprint": null,
+  "footprintNote": "unknown-crs",
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    100000.0,
+    174400.0,
+    125600.0,
+    200000.0
+  ],
+  "nodata": null,
+  "overviewCount": 1,
+  "pixelIsPoint": false,
+  "pixelSizeX": 100.0,
+  "pixelSizeY": 100.0,
+  "rotated": false,
+  "wgs84Bounds": null,
+  "width": 256
+}

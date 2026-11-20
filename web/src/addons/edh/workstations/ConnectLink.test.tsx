@@ -286,6 +286,41 @@ describe("ConnectLink", () => {
         ).toBe(sentence);
     });
 
+    it("keeps Connect clickable on a workstation EDH reports in error and says its disk is kept", async () => {
+        const user = userEvent.setup();
+        const sentence =
+            "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.";
+        render(
+            <ConnectLink
+                row={row({
+                    edhState: "error",
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                })}
+            />
+        );
+
+        const control = screen.getByRole("button", { name: "Connect to Dev box" });
+        expect(control).not.toHaveAttribute("aria-disabled");
+        expect(control).toHaveAccessibleDescription(sentence);
+        const tab = fakeTab();
+        openSpy.mockReturnValue(tab as unknown as Window);
+        connect.mutateAsync.mockRejectedValue(new Error(sentence));
+        await user.click(control);
+        expect(connect.mutateAsync).toHaveBeenCalledWith("s-1");
+        await waitFor(() => expect(tab.close).toHaveBeenCalled());
+        // A stopped workstation EDH reports in error gives the same reason under an inert Connect.
+        expect(
+            connectUnavailableReason(
+                row({
+                    state: "STOPPED",
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                })
+            )
+        ).toBe(sentence);
+    });
+
     it("gives every non-connectable state a reason", () => {
         expect(
             connectUnavailableReason(row({ state: "DELETED", connectionAvailable: false }))

@@ -1,0 +1,30 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "EPSG:3832",
+  "dataType": "uint8",
+  "file": "antimeridian_3832.tif",
+  "footprint": "MultiPolygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    3200000.0,
+    744000.0,
+    3456000.0,
+    1000000.0
+  ],
+  "nodata": null,
+  "overviewCount": 1,
+  "pixelIsPoint": false,
+  "pixelSizeX": 1000.0,
+  "pixelSizeY": 1000.0,
+  "rotated": false,
+  "wgs84Bounds": null,
+  "width": 256
+}
