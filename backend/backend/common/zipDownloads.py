@@ -144,12 +144,23 @@ MSG_JOB_TIMED_OUT = "The archive job timed out"
 # (#1125 D26): the same words the container records as its stop reason (runner.STOPPED).
 MSG_JOB_STOPPED = "The archive job was stopped"
 # The zipArchive container stopped sending heartbeats (killed without a SIGTERM: out of memory, host
-# loss), so its run ended with States.HeartbeatTimeout (#1125 D26).
+# loss) before its run's 11-hour bound; the zipArchive pipelineEnd reports it as HEARTBEAT_LOST_ERROR
+# (#1125 D26).
 MSG_JOB_LOST = "The archive job stopped responding"
-# Error names in a run's executionError that identify those two ends. The zipArchive pipelineEnd
+# The heartbeat clock starts when the Batch job is submitted. When it ran out before the container
+# started, the zipArchive pipelineEnd reports where the job was instead: still waiting in the AWS
+# Batch queue (it cancels the job), or failed before its container ran.
+MSG_JOB_QUEUED = "The archive job waited too long to start; create it again later"
+MSG_JOB_NOT_STARTED = "The archive job failed before it started"
+# Error names in a run's executionError that identify those ends. The zipArchive pipelineEnd
 # reports the state's error as "Pipeline Failure: <Error>", which the workflow error handler records.
+# Step Functions records a heartbeat expiry as States.Timeout, the same error as the state's bound,
+# so pipelineEnd names the end from the run's Batch job.
 CONTAINER_STOPPED_ERROR = "ZipArchiveContainerStopped"
-HEARTBEAT_TIMEOUT_ERROR = "States.HeartbeatTimeout"
+STATE_TIMEOUT_ERROR = "States.Timeout"
+JOB_QUEUED_ERROR = "ZipArchiveJobQueued"
+JOB_NOT_STARTED_ERROR = "ZipArchiveJobNotStarted"
+HEARTBEAT_LOST_ERROR = "ZipArchiveHeartbeatLost"
 MSG_CANCELLED_FROM_EXECUTIONS = "Cancelled from workflow executions"
 MSG_NOT_READY = "The archive is not ready for download"
 MSG_EXPIRED = "This zip download has expired"
@@ -360,11 +371,14 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
     - SUCCEEDED without the archive: FAILED (not produced).
     - ABORTED: FAILED "Cancelled from workflow executions", cancelledBy execution.
     - FAILED / TIMED_OUT: FAILED with the container's own reason when it gave one (on the row or as
-      a prefixed execution error), else for TIMED_OUT the timeout message, else the stop the
-      container recorded on SIGTERM (``stopReason``, a Batch terminate outside an abort), else, by
-      the error name in the execution error, MSG_JOB_STOPPED for the container's own stop answer
-      (CONTAINER_STOPPED_ERROR) or MSG_JOB_LOST for a heartbeat timeout (HEARTBEAT_TIMEOUT_ERROR, a
-      container killed without a SIGTERM; #1125 D26), else a fixed message. Raw execution errors are
+      a prefixed execution error), else, when the zipArchive pipelineEnd named where the run's job got
+      to after its token wait timed out, MSG_JOB_QUEUED (JOB_QUEUED_ERROR, still waiting to start),
+      MSG_JOB_NOT_STARTED (JOB_NOT_STARTED_ERROR, failed before its container ran) or MSG_JOB_LOST
+      (HEARTBEAT_LOST_ERROR, a container killed without a SIGTERM; #1125 D26), else for TIMED_OUT or a
+      States.Timeout in the execution error (STATE_TIMEOUT_ERROR, the job state's 11-hour bound) the
+      timeout message, else the stop the container recorded on SIGTERM (``stopReason``, a Batch
+      terminate outside an abort), else MSG_JOB_STOPPED for the container's own stop answer
+      (CONTAINER_STOPPED_ERROR), else a fixed message. Raw execution errors are
       never shown: they can carry internal resource names; only these fixed names are matched.
 
     The container never finalizes a job on SIGTERM; it only records ``stopReason`` and leaves the
@@ -386,17 +400,28 @@ def decide_finalization(execution_status: str, row: dict, execution_error: str =
         return STATUS_FAILED, {"error_message": MSG_CANCELLED_FROM_EXECUTIONS,
                                "cancelled_by": CANCELLED_BY_EXECUTION}
     if execution_status in ("FAILED", "TIMED_OUT"):
+        error = execution_error if isinstance(execution_error, str) else ""
         reason = (row.get("errorMessage") or "").strip() or container_reason(execution_error)
-        if not reason and execution_status == "TIMED_OUT":
+        # The ZipArchiveBatchJob token wait ends with States.Timeout both at its heartbeat timeout and
+        # at its 11-hour bound. The zipArchive pipelineEnd looks the run's job up and reports where it
+        # got to instead of the timeout when the job did not reach the bound, so those names are read
+        # first; they also win over the stop the container recorded when pipelineEnd ended its job.
+        if not reason:
+            if JOB_QUEUED_ERROR in error:
+                reason = MSG_JOB_QUEUED
+            elif JOB_NOT_STARTED_ERROR in error:
+                reason = MSG_JOB_NOT_STARTED
+            elif HEARTBEAT_LOST_ERROR in error:
+                reason = MSG_JOB_LOST
+        # A run that reached the bound keeps States.Timeout (reported by pipelineEnd as a failure),
+        # which wins over the stop the container recorded when pipelineEnd ended its job.
+        if not reason and (execution_status == "TIMED_OUT" or STATE_TIMEOUT_ERROR in error):
             reason = MSG_JOB_TIMED_OUT
         if not reason:
             reason = (row.get("stopReason") or "").strip()[:1024]
         if not reason:
-            error = execution_error if isinstance(execution_error, str) else ""
             if CONTAINER_STOPPED_ERROR in error:
                 reason = MSG_JOB_STOPPED
-            elif HEARTBEAT_TIMEOUT_ERROR in error:
-                reason = MSG_JOB_LOST
             else:
                 reason = MSG_JOB_FAILED
         return STATUS_FAILED, {"error_message": reason}

@@ -23,6 +23,7 @@ import {
 } from "../api/adminQueries";
 import { BusyButton, BusyInput } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
+import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     useRemovedRowRef,
     useReturnFocus,
@@ -476,11 +477,13 @@ const ReservationsTab: React.FC<ReservationsTabProps> = ({ can }) => {
             </div>
             <p className="text-sm text-text-secondary max-w-3xl">{RESERVATIONS_DESCRIPTION}</p>
 
+            {!isLoading && error && data && <RefreshFailedNotice error={error} />}
+
             {isLoading ? (
                 <div className="p-8 text-center text-text-secondary">
                     Loading capacity reservations...
                 </div>
-            ) : error ? (
+            ) : error && !data ? (
                 <div role="alert" className="p-4 text-vams-error">
                     Error loading capacity reservations: {toastErrorMessage(error)}
                 </div>

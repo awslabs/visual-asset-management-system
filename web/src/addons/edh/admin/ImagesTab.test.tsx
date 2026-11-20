@@ -321,3 +321,21 @@ describe("focus when a register dialog closes", () => {
         );
     });
 });
+
+describe("a failed poll of a listed image table", () => {
+    it("keeps the listed images and says the list could not be refreshed", () => {
+        (adminQueries.useEdhAdminImages as jest.Mock).mockReturnValue({
+            ...query(IMAGES),
+            error: new Error("Service unavailable"),
+        });
+        render(<ImagesTab can={() => true} />);
+
+        expect(trigger("linux-cad")).toBeInTheDocument();
+        expect(
+            screen.getByText(
+                "Could not refresh: Service unavailable. The list shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Error loading images/)).not.toBeInTheDocument();
+    });
+});

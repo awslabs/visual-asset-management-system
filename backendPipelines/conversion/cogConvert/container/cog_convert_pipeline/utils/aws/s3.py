@@ -19,8 +19,8 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = log.get_logger()
 
-client = boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
-s3 = boto3.resource("s3", region_name=os.getenv("AWS_REGION", "us-east-1"), config=retry_config)
+client = boto3.client("s3", region_name=os.environ["AWS_REGION"], config=retry_config)
+s3 = boto3.resource("s3", region_name=os.environ["AWS_REGION"], config=retry_config)
 
 
 # An asset bucket may be in another Region than this container. The pipeline definition carries a

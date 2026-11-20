@@ -1477,10 +1477,21 @@ record the API holds read-only except for `enabled` and template content (`backe
 
 -   **Two modes, decided from the run manifest.** `vamsExecuteZipArchivePipeline.py` reads the manifest's server-only `systemExecutionContext` (written only for a run VAMS launched as a system run, under the zip's `System-ZipDownload` trigger). With it, the run is a **zip download**: the context names the job and its request manifest under `vams.preparedDownloads/` in the auxiliary bucket, which is the authority for what is archived; the archive goes to the job's key and the container writes the job row's status and progress (conditional on the row being non-terminal and on this run's execution id, parsed from the orchestration event prefix). Without it, the run is an **zipArchive run**: the inputs are archived into the run's outputs files prefix and the output step ingests the archive as a new file version (outputs over 1 GiB go through the large object copy engine, so there is no size cap). Its configBody keys are `format`, `compression`, `outputFileName`, `includePatterns`, `excludePatterns`, `assetVersionId`; any other key is refused in `constructPipeline.py`.
 -   **The job command carries locations, not lists.** AWS Batch bounds the size of a job's command override, so `constructPipeline.py` passes the request manifest's or the run manifest's location and the container reads the selection itself. The cross-pipeline input-version guard lists this pipeline under `CONTAINER_MANIFEST_PIPELINES` and checks the container source for the per-entry version read.
--   **Refuse the whole archive.** Before writing a byte the container head-checks every member on its pinned version (`zip_archive_pipeline/resolve.py`, `rules.py`): a delete marker, a missing version, `GLACIER` / `DEEP_ARCHIVE`, `vams-status` archived or deleted, or a blocked extension or media type refuses the archive with a user-safe reason (`ZIPDOWNLOAD:`-prefixed in the task failure cause). A zip download carries the deployment's merged blocklists in its request manifest; a zipArchive run uses the core lists in `rules.py`, which `container/tests/test_runner.py` pins to backend `CORE_UNALLOWED_*`.
+-   **Refuse the whole archive.** Before writing a byte the container checks every entry name (`resolve.check_names` with `engine/zipstream.check_member_name`: a name the archive writers refuse, such as one with a `.` or `..` segment, or two entries with the same name, refuses the archive) and head-checks every member on its pinned version (`zip_archive_pipeline/resolve.py`, `rules.py`): a delete marker, a missing version, `GLACIER` / `DEEP_ARCHIVE`, `vams-status` archived or deleted, or a blocked extension or media type refuses the archive with a user-safe reason (`ZIPDOWNLOAD:`-prefixed in the task failure cause). A zip download carries the deployment's merged blocklists in its request manifest; a zipArchive run uses the core lists in `rules.py`, which `container/tests/test_runner.py` pins to backend `CORE_UNALLOWED_*`.
 -   **Preview companions (#1622).** `resolve.expand_selection` leaves `{file}.previewFile.{ext}` keys out of the members (explicit, pinned, folder and whole-asset) unless `includePreviewFiles` is true: a zipArchive run reads it from its configBody (`constructPipeline.archive_config` accepts only a JSON boolean; the shipped `zip-archive-store` template sets `false`), a zip download from its request manifest. A missing key is false and a non-boolean refuses the archive (`rules.include_preview_files`). `rules.PREVIEW_FILE_PATTERN` mirrors backend `common/s3PathPatterns.PREVIEW_FILE_PATTERN`; `tests/test_preview_companions.py` pins the mirror and the manifest key.
 -   **Streaming engine, never on disk.** `zip_archive_pipeline/engine/`: `reader.py` (ordered, byte-bounded ranged GETs of pinned versions across members, retried, length-checked), `zipstream.py` (ZIP64 local headers and 8-byte data descriptors for members that can reach 4 GiB, ZIP64 central records for any overflowing size or offset, ZIP64 end records past 65,535 entries or 4 GiB of directory, UTF-8 names, directory entries for empty folders, STORE or DEFLATE), `tarstream.py` (pax tar and tar.gz in plain write mode over a forward-only sink; the `w|` stream mode is quadratic per write and is not used), `sink.py` (multipart upload, part size `max(16 MiB, ceil(estimate / 9500))` rounded to 1 MiB and capped at 5 GiB, at most four parts in flight, aborted on any error and on SIGTERM). `container/tests/test_zip64_streaming.py` streams a member over 4 GiB and 70,000 entries and validates both with Python `zipfile` and `unzip -t` (set `ARCHIVE_TEST_TMPDIR` to put the file on disk).
 -   **Container environment:** `ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE_NAME`, `ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME` (zipArchive-run asset-version pins), `TASK_TOKEN`; the VAMS task token is heartbeated every `HEARTBEAT_SECONDS` (120 s). `taskTimeout` is 12 hours.
+
+#### **Zip Download Mode: Stops, Landed Archives and Recorded Uploads**
+
+Mirrors the rest of the "Two modes" rule in `backendPipelines/CLAUDE.md` (the zip download mode, mode 1, unless a bullet says otherwise).
+
+-   **A landed archive wins with one outcome (`runner.Job`).** Once the upload completed no path writes FAILED: a transient error or SIGTERM after it leaves the job to the API's read-time reconcile, which finds the archive. A SIGTERM never finalizes the job: `Job.stop()` aborts the upload and records only `stopReason` (`StatusWriter.stopped`), and every later failure of that run does the same, so the reconcile decides from the run's own status (#1125 D24). A failure that cannot tell whether the upload completed HEADs the archive and counts it only when the current object is this upload's own (its version id from CompleteMultipartUpload, else the `archiveUploadToken` it recorded on the row and stamped as `x-amz-meta-vams-copyuploadtoken`; `runner.ARCHIVE_UPLOAD_TOKEN_METADATA` mirrors `backend/backend/common/s3MetadataKeys.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY`, pinned by `tests/test_terminal_races.py`), never by presence or size. An archive that lands after another writer finalized the job without it is deleted (this upload's version only; the job role's only `s3:Delete*`, on `vams.preparedDownloads/*`).
+-   **A stop outside VAMS (#1125 D26).** When no VAMS stopper recorded the stop (`Job.stop_recorded_by_vams`, i.e. `StatusWriter.must_stop` is false; always in mode 2), the SIGTERM handler answers the zipArchive state machine's own token with `STOPPED_ERROR` `ZipArchiveContainerStopped` (`runner.answer_stop`), so a Batch terminate outside VAMS ends the run instead of waiting 11 hours. `Heartbeat` beats both the VAMS workflow token and that own token every `HEARTBEAT_SECONDS` (120), and `ZipArchiveBatchJob` has `ZIP_ARCHIVE_BATCH_HEARTBEAT` (30 minutes), so a kill without a SIGTERM ends the wait within 30 minutes. Step Functions records the expiry as `States.Timeout`, the same error as the 11-hour bound; `lambda/pipelineEnd.py` looks the run's job up and reports `ZipArchiveHeartbeatLost`, `ZipArchiveJobQueued` or `ZipArchiveJobNotStarted`, or keeps `States.Timeout` at the bound, and ends a job still queued or running (`tests/test_stop_outside_vams.py`).
+-   **A SIGTERM during the Complete.** While the archive's CompleteMultipartUpload is in flight (`MultipartSink.completing`) a SIGTERM neither aborts nor writes FAILED: S3 answers 204 to an abort sent then and lets the Complete land (#1123 D1), so `Job.stop()` returns False and `sigterm_handler` lets the Complete return and its own path decide (`tests/test_abort_204.py`).
+-   **No part is left behind after a stop (#1125 D16).** S3 keeps a part whose UploadPart was in flight during an abort, so each part reads the job first (`MultipartSink(should_stop=...)`; mode 1 `StatusWriter.must_stop`: the row ended, belongs to another run, or carries the stopper's `stopRequestedAt`, which backend `common/zipDownloads.request_stop` writes before its abort) and uploads nothing further. A stop the job did not make itself (`StopRequested`) aborts and returns `stopped` without a status write, since the stopper decides. `MultipartSink.abort()` cancels the queued parts, aborts, waits at most `IN_FLIGHT_WAIT_SECONDS` for the parts in flight and aborts until ListParts answers NoSuchUpload (`ABORT_SWEEP_ATTEMPTS`); a part that ends after an abort aborts again itself (`tests/test_late_parts.py`, S3 double `LateS3`).
+-   **Recorded uploads.** The archive's upload id is recorded on the job row right after CreateMultipartUpload and before any part (`MultipartSink(on_created=StatusWriter.record_upload)`, `ADD archiveUploadIds`, written whatever the status, this run's row only; an upload that cannot be recorded is aborted at once), so the backend's delayed sweep (`common/zipDownloads.sweep_recorded_uploads`, about 5 and 15 minutes after a stop) aborts exactly that upload (#1125 D16 round 2; `tests/test_recorded_upload.py`).
+-   **One openPipeline invoke (both modes).** `vamsExecuteZipArchivePipeline.invoke_open_pipeline` sends the synchronous openPipeline invoke once (no botocore retry, 310 s read timeout above openPipeline's 300 s timeout; only a `TooManyRequestsException` is retried), because each call starts a new archive run on the same task token (the #1205 rule; `lambda/tests/test_zip_archive_lambdas.py`).
 
 ### **Registering Sub-Processes and Logs (Abort, Stage Status, Log Sources)**
 
@@ -1916,17 +1927,18 @@ Install a container's dependencies so that two builds of one commit ship the sam
 One job definition, one Batch state per tier. The 3D thumbnail pipeline is the worked example
 (`infra/lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct.ts`).
 One `BatchFargatePipelineConstruct` job definition is registered at the standard tier's size with
-`attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
+`attemptDuration` = the longest tier's bound; each tier is its own `StateTimeoutBatchSubmitJob` with fixed
 `containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
 `MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
 `Vcpus`/`Memory`), `VAMS_COMPUTE_TIER` and `VAMS_TASK_MEMORY_MIB` (the memory override in MiB, since a
-Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout`,
+Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout` (the attempt override),
 behind a `sfn.Choice` on the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
 overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
 the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
 with `isFargateCpuMemory` (`infra/config/config.ts`, mirrored in the ConfigBuilder
-`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). The state machine
-timeout covers the longest tier and the `vamsSchema` `taskTimeout` covers the state machine. Each
+`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). Both tier states share
+one state bound (queue wait plus attempt) above the longest tier, the state machine timeout covers
+that bound, and the `vamsSchema` `taskTimeout` covers the state machine. Each
 tier's Batch construct id is a module-level `*_STATE_NAME` literal in the registering lambda, which
 registers the container log source of the state its tier routes to. Tests:
 `infra/test/pipelines/preview3dThumbnailComputeTiers.test.ts`,
@@ -1935,6 +1947,31 @@ registers the container log source of the state its tier routes to. Tests:
 #### **Multi-Job State Machines Submit by the Revision-less Job Definition ARN**
 
 Mirrors `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Multi-Job State Machines Submit by the Revision-less Job Definition ARN". A deploy that changes a container image replaces its job definition: Batch registers a new revision and the old one is deregistered. `batchJobDefinition.jobDefinitionArn` is the `Ref`, the REVISIONED ARN, so a state machine that submits a second Batch job after a first one finishes (the Potree viewer's PDAL then Potree) fails that submit for every run spanning such a deploy. Such a state machine passes `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${pipeline.batchJobDefinitionPhysicalName}` instead (`BatchFargatePipelineConstruct.batchJobDefinitionPhysicalName` is the literal base-plus-hash name); Batch runs the latest ACTIVE revision, and `BatchSubmitJob`'s own `batch:SubmitJob` grant on `job-definition/*` already covers it. A single-job state machine has submitted before any deploy can replace its definition and keeps the `Ref`. Test: `infra/test/pipelines/pcPotreeViewerJobDefinitionRevision.test.ts`.
+
+#### **A Batch State Bounds Its Own Queue Wait (`StateTimeoutBatchSubmitJob`)**
+
+An attempt's clock starts when the job leaves the queue, and `tasks.BatchSubmitJob` renders
+`taskTimeout` as the SubmitJob attempt-duration override while forcing the state's `TimeoutSeconds` to
+undefined. A Batch state built with it is bounded only by the state machine timeout, and an
+execution-level `States.Timeout` skips every Catch, so `pipelineEnd` never reports and the run waits out
+the parent's `taskTimeout`. A `.sync` Batch state therefore uses `StateTimeoutBatchSubmitJob`
+(`infra/lib/nestedStacks/pipelines/constructs/stateTimeoutBatchSubmitJob.ts`), whose `stateTimeout`
+renders as the state's `TimeoutSeconds` and is caught like any other error (`taskTimeout` there is still
+the attempt override). Nest the chain: attempt duration ≤ the state bound; the state bound plus 15
+minutes (the two 5-minute Lambda states around it) ≤ the state machine timeout; the state machine
+timeout < the `vamsSchema` `taskTimeout`, which starts before the execution does. A
+`WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform, COG conversion)
+bounds the wait with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Step Functions ends a `.sync` job
+when the state's own bound fires (on a deployed stack, a job still queued at the bound gets `TerminateJob` from
+the state machine role in the same second), so for a `.sync` state the pipelineEnd terminate is a backup; a
+job a Lambda submitted under a token wait has no owner after the wait times out, so there the pipelineEnd is
+what ends it. Either way the state's pipelineEnd ends the run's job itself:
+`grantBatchStateTimeoutCleanup` gives it `BATCH_JOB_QUEUES` (every queue the state submits to),
+`batch:ListJobs` and `batch:TerminateJob` on `job/*`, and its handler's `end_batch_job_after_state_timeout`
+terminates the unfinished job with the run's job name on `States.Timeout`. Image to 3D, Video SOP/BOM, the
+3D thumbnail tiers and Potree use it; the NVIDIA, splat toolbox and metadata labeling constructs predate
+it. Tests: `infra/test/pipelines/batchStateTimeoutChain.test.ts`,
+`backendPipelines/tests/test_pipeline_end_ends_timed_out_batch_job.py`.
 
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 

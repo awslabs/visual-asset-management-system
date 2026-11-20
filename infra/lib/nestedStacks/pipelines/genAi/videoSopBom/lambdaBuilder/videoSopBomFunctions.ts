@@ -36,11 +36,14 @@ const LAMBDA_CODE_PATH = path.join(
 );
 
 /**
- * Root of this pipeline's scratch prefixes on the auxiliary bucket: `pipelines/<pipelineId>/`, under
- * which `executionRecords.aux_pipeline_prefix` places one `<executionId>/` folder per run. The same
- * string bounds the storage stack's lifecycle expiry and pipelineEnd's own refusal of a foreign locator.
+ * Root of the pipelines' scratch prefixes on the auxiliary bucket. `executionRecords.aux_pipeline_prefix`
+ * places a run at `pipelines/<name>/<executionId>/`, where <name> is the workflow step's jobName or,
+ * without one, the pipeline id, so a run of this pipeline can sit under any name below this root.
+ * pipelineEnd's cleanup grant and the container job role's object grants are bounded to it, and the
+ * handler itself refuses a locator that is not exactly one such execution folder. The storage stack's
+ * lifecycle expiry names the registered id's folder (`pipelines/genai-video-sop-bom/`) only.
  */
-export const VIDEO_SOP_BOM_AUX_PREFIX_ROOT = "pipelines/genai-video-sop-bom/";
+export const VIDEO_SOP_BOM_AUX_PREFIX_ROOT = "pipelines/";
 
 /**
  * The Bedrock model id the pipeline invokes, read from `app.pipelines.useGenAiVideoSopBom.bedrockModelId`.
@@ -232,8 +235,8 @@ export function buildPipelineEndFunction(
     });
 
     // pipelineEnd reads the state machine's event; its AWS calls are the token release and, on a
-    // failed outcome, the deletion of the run's scratch objects under this pipeline's auxiliary
-    // prefix (the container deletes them itself on success).
+    // failed outcome, the deletion of the run's scratch objects under the auxiliary bucket's pipelines
+    // root (the container deletes them itself on success).
     globalLambdaEnvironmentsAndPermissions(fun, config);
     suppressCdkNagErrorsByGrantReadWrite(scope);
     suppressCdkNagLambda(fun);
@@ -246,8 +249,8 @@ export function buildPipelineEndFunction(
         })
     );
 
-    // Scratch cleanup: list only this pipeline's prefix root, delete only objects under it. The
-    // handler additionally refuses a locator outside that root, so the two bounds agree.
+    // Scratch cleanup: list only the pipelines root, delete only objects under it. The handler
+    // additionally refuses a locator that is not exactly one execution folder under that root.
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             actions: ["s3:ListBucket"],
@@ -269,12 +272,13 @@ export function buildPipelineEndFunction(
             {
                 id: "AwsSolutions-IAM5",
                 reason:
-                    "Object ARNs under one named bucket and this pipeline's own key prefix: Amazon S3 " +
+                    "Object ARNs under one named bucket and its pipelines scratch key prefix: Amazon S3 " +
                     "expresses object access only as the bucket ARN plus a key wildcard, and the " +
-                    "execution folder a run deletes is created per run.",
+                    "execution folder a run deletes is created per run under a name the workflow step " +
+                    "chooses.",
                 appliesTo: [
                     {
-                        regex: "/^Resource::<.*Bucket.*\\.Arn>/pipelines/genai-video-sop-bom/\\*$/g",
+                        regex: "/^Resource::<.*Bucket.*\\.Arn>/pipelines/\\*$/g",
                     },
                 ],
             },

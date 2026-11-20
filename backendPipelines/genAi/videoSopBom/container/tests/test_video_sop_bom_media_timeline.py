@@ -207,6 +207,82 @@ class TestFrames:
         assert not issubclass(media.FrameExtractionFailed, PipelineRejection)
 
 
+class TestInputAllowlists:
+    """Every ffmpeg and ffprobe command opens its input as a local file through a demuxer allowlist:
+    the uploaded videos through the video demuxers, the extracted tracks as FLAC only, and the combined
+    track through the concat list of those FLACs."""
+
+    # The demuxer FFmpeg uses for each uploaded extension the pipeline accepts.
+    DEMUXER_BY_EXTENSION = {"mp4": "mov", "mov": "mov", "m4v": "mov", "mkv": "matroska", "webm": "matroska"}
+
+    def _every_argv(self, monkeypatch, tmp_path):
+        """(seam call, argv) for every command the media module builds, through its four entry points."""
+        from video_sop_bom_pipeline import media
+
+        fake = fake_run_factory({"part1.mp4": 75.0, "0.flac": 75.0, "1.flac": 80.0, "combined.flac": 155.0})
+        monkeypatch.setattr(media, "_run", fake)
+        seen = []
+
+        def record(label, call):
+            start = len(fake.calls)
+            call()
+            seen.extend((label, argv) for argv in fake.calls[start:])
+
+        video = str(tmp_path / "part1.mp4")
+        parts = [str(tmp_path / "0.flac"), str(tmp_path / "1.flac")]
+        record("probe", lambda: media.probe(video))
+        record("audio", lambda: media.extract_audio_flac(video, parts[0]))
+        record("audio", lambda: media.extract_audio_flac(video, parts[1]))
+        record("concat", lambda: media.concat_flac(parts, str(tmp_path / "combined.flac")))
+        record("frame", lambda: media.extract_frame(video, 1.0, str(tmp_path / "keyframe.jpg")))
+        return media, seen
+
+    @staticmethod
+    def _input_at(argv):
+        """Index of the input path: after -i for ffmpeg, the last argument for ffprobe."""
+        return argv.index("-i") + 1 if argv[0] == "ffmpeg" else len(argv) - 1
+
+    def test_every_command_limits_its_input_to_the_file_protocol_and_a_demuxer_allowlist(self, monkeypatch, tmp_path):
+        _, seen = self._every_argv(monkeypatch, tmp_path)
+        assert {label for label, _ in seen} == {"probe", "audio", "concat", "frame"}
+        assert {argv[0] for _, argv in seen} == {"ffmpeg", "ffprobe"}
+        for label, argv in seen:
+            input_at = self._input_at(argv)
+            assert argv.count("-i") <= 1, argv
+            for option in ("-protocol_whitelist", "-format_whitelist"):
+                assert argv.count(option) == 1, (label, argv)
+                assert argv.index(option) < input_at, f"{option} must precede the input it limits: {argv}"
+            assert argv[argv.index("-protocol_whitelist") + 1] == "file", argv
+
+    def test_each_input_gets_the_allowlist_for_what_it_is(self, monkeypatch, tmp_path):
+        media, seen = self._every_argv(monkeypatch, tmp_path)
+        for label, argv in seen:
+            formats = argv[argv.index("-format_whitelist") + 1]
+            target = argv[self._input_at(argv)]
+            if target.endswith(".flac"):
+                assert formats == media.FLAC_FORMATS == "flac", (label, argv)
+            elif target.endswith(".txt"):
+                assert label == "concat" and formats == media.CONCAT_FORMATS == "concat,flac", argv
+            else:
+                assert target.endswith(".mp4") and formats == media.VIDEO_FORMATS, (label, argv)
+
+    def test_the_video_allowlist_covers_every_accepted_extension_and_nothing_else(self):
+        import json
+
+        from video_sop_bom_pipeline import media
+
+        # FFmpeg names its QuickTime/MP4 demuxer "mov,mp4,m4a,3gp,3g2,mj2" and its Matroska demuxer
+        # "matroska,webm"; the allowlist is those two demuxers under all their names.
+        assert media.VIDEO_FORMATS == "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm"
+        listed = set(media.VIDEO_FORMATS.split(","))
+        schema_dir = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "vamsSchema")
+        with open(os.path.join(schema_dir, "pipeline.json"), encoding="utf-8") as handle:
+            allowed = json.load(handle)["systemConfig"]["inputFileFilters"]["allow"]
+        extensions = sorted(pattern.rsplit(".", 1)[-1].lower() for pattern in allowed)
+        assert extensions == sorted(self.DEMUXER_BY_EXTENSION), "a new input extension needs its demuxer here"
+        assert {self.DEMUXER_BY_EXTENSION[ext] for ext in extensions} <= listed
+
+
 class TestTimeline:
     def _timeline(self):
         from video_sop_bom_pipeline.timeline import build_timeline
