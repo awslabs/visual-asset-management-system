@@ -201,6 +201,9 @@ def resolution(media, _attributes=None) -> Optional[str]:
 
 
 def crs_label(crs, _attributes=None) -> Optional[str]:
+    if isinstance(crs, str):
+        # A raster records its CRS as the label itself (`EPSG:4326`, `user-defined` or `none`).
+        return crs.strip() or None
     if not isinstance(crs, dict):
         return None
     epsg = _as_number(crs.get("epsg"))
@@ -249,15 +252,21 @@ PROMOTED_FIELDS: List[PromotedField] = [
     _field("ext_assembly_count", TYPE_NUMBER, "sys_cad.assemblyCount", {fc.CLASS_CAD}),
     _field("ext_point_count", TYPE_NUMBER, "sys_pointcloud.pointCount", POINT_CLASSES),
     _field("ext_has_color", TYPE_BOOLEAN, "sys_pointcloud.hasColor", POINT_CLASSES),
-    _field("ext_crs", TYPE_STRING, "sys_pointcloud.crs", POINT_CLASSES, crs_label),
+    _field("ext_crs", TYPE_STRING, ("sys_pointcloud.crs", "sys_raster.crs"), POINT_CLASSES | {fc.CLASS_RASTER},
+           crs_label),
     _field("ext_ifc_schema", TYPE_STRING, "sys_ifc.schema", {fc.CLASS_IFC}),
     _field("ext_project_name", TYPE_STRING, "sys_ifc.projectName", {fc.CLASS_IFC}),
     _field("ext_storey_count", TYPE_NUMBER, "sys_ifc.storeyCount", {fc.CLASS_IFC}),
     _field("ext_element_count", TYPE_NUMBER, "sys_ifc.elementCount", {fc.CLASS_IFC}),
     _field("ext_geometric_error", TYPE_NUMBER, "sys_tiles3d.geometricError", {fc.CLASS_TILES3D}),
     _field("ext_tile_count", TYPE_NUMBER, "sys_tiles3d.tileCount", {fc.CLASS_TILES3D}),
-    _field("ext_width", TYPE_NUMBER, ("sys_image.width", "sys_media.width"), {fc.CLASS_IMAGE, fc.CLASS_VIDEO}),
-    _field("ext_height", TYPE_NUMBER, ("sys_image.height", "sys_media.height"), {fc.CLASS_IMAGE, fc.CLASS_VIDEO}),
+    _field("ext_width", TYPE_NUMBER, ("sys_image.width", "sys_media.width", "sys_raster.width"),
+           {fc.CLASS_IMAGE, fc.CLASS_VIDEO, fc.CLASS_RASTER}),
+    _field("ext_height", TYPE_NUMBER, ("sys_image.height", "sys_media.height", "sys_raster.height"),
+           {fc.CLASS_IMAGE, fc.CLASS_VIDEO, fc.CLASS_RASTER}),
+    _field("ext_is_cog", TYPE_BOOLEAN, "sys_raster.isCog", {fc.CLASS_RASTER}),
+    _field("ext_band_count", TYPE_NUMBER, "sys_raster.bandCount", {fc.CLASS_RASTER}),
+    _field("ext_georeferenced", TYPE_BOOLEAN, "sys_raster.georeferenced", {fc.CLASS_RASTER}),
     _field("ext_color_mode", TYPE_STRING, "sys_image.mode", {fc.CLASS_IMAGE}),
     _field("ext_camera", TYPE_STRING, "sys_image.exif", {fc.CLASS_IMAGE}, camera_name),
     _field("ext_captured_at", TYPE_DATE,
@@ -575,6 +584,19 @@ def _geometry_positions(geometry) -> List[list]:
     return _positions(geometry.get("coordinates"))
 
 
+def _location_from_raster_footprint(attributes: dict) -> Optional[dict]:
+    """A raster's footprint, except a derived COG's: the COG the TIFF-to-COG pipeline writes beside its source
+    keeps its footprint in `sys_geo`, but the source file alone is the Search map's hit for the area."""
+    if lookup(attributes, "sys_raster.derivedCog") is True:
+        return None
+    footprint = lookup(attributes, "sys_geo.footprint")
+    if isinstance(footprint, dict) and footprint.get("type") == "MultiPolygon":
+        # The outline of a raster that crosses the antimeridian: kept as the two polygons, because a box around
+        # their positions would span the globe.
+        return footprint
+    return _location_from_footprint(attributes)
+
+
 def _location_from_footprint(attributes: dict) -> Optional[dict]:
     footprint = lookup(attributes, "sys_geo.footprint")
     if not isinstance(footprint, dict):
@@ -597,6 +619,7 @@ LOCATION_SOURCES: Tuple[Tuple[FrozenSet[str], Callable[[dict], Optional[dict]]],
     (POINT_CLASSES, _location_from_pointcloud),
     (frozenset({fc.CLASS_TILES3D}), _location_from_region),
     (frozenset({fc.CLASS_DATA}), _location_from_footprint),
+    (frozenset({fc.CLASS_RASTER}), _location_from_raster_footprint),
 )
 
 

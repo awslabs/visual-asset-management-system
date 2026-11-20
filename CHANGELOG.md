@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Pipelines** The SYSTEM GenAI metadata pipeline reads GeoTIFF and Cloud Optimized GeoTIFF (`.tif`, `.tiff`) headers by ranged reads, with no download and no pixel decoded: size, bands, sample type, compression, layout, overviews, whether the file is a COG, its CRS and its WGS84 footprint, written as `sys_raster` and `sys_geo` and promoted to `ext_width`, `ext_height`, `ext_is_cog`, `ext_crs`, `ext_band_count`, `ext_georeferenced` and the file's `location` (a `MultiPolygon` where it crosses the antimeridian). A new `raster` file class carries georeferenced files (a TIFF with no georeference keeps its image analysis as before); `raster` is accepted by the natural-language search file-class filter. ([#1600](https://github.com/awslabs/visual-asset-management-system/issues/1600))
+    -   **Pipelines** A GeoPackage layer in an EPSG reference other than WGS84 now contributes its reprojected extent to the file's footprint. ([#1600](https://github.com/awslabs/visual-asset-management-system/issues/1600))
 -   **Pipelines** A deployment can register an existing pipeline bundle with a different execution config (callback mode, timeouts or Lambda name) through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without shipping a second bundle. A registration without the property is unchanged. Changing a value that the generated state machines encode redeploys every workflow that uses the pipeline, including custom workflows, and running executions finish on the definition they started with. (issue #1732)
 
 ### Bug Fixes
