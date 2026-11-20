@@ -69,6 +69,7 @@ done
 
 if [[ "${GOLDEN_TARGET:-}" == "batch" ]]; then
     export GOLDEN_BATCH_IMAGE="$IMAGE"
+    export GOLDEN_BATCH_STDERR_LOG="$LOG_DIR/batch-stderr.log"
     GOLDEN_RIE_URL=""
 else
 docker run -d --name "$NAME" --platform linux/amd64 -p "127.0.0.1:${RIE_PORT}:8080" \
@@ -93,6 +94,11 @@ GOLDEN_S3_ENDPOINT="http://${GATEWAY}:${S3_PORT}" \
 
 if [[ $status -ne 0 ]]; then
     echo "--- image log (last 60 lines) ---"
-    docker logs "$NAME" 2>&1 | tail -n 60
+    if [[ "${GOLDEN_TARGET:-}" == "batch" ]]; then
+        echo "--- container stderr of failed runs (last 60 lines) ---"
+        if [[ -f "$LOG_DIR/batch-stderr.log" ]]; then tail -n 60 "$LOG_DIR/batch-stderr.log"; fi
+    else
+        docker logs "$NAME" 2>&1 | tail -n 60
+    fi
 fi
 exit $status

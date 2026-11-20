@@ -184,6 +184,10 @@ def _invoke_batch(body):
     if done.returncode == 0:
         results = [line for line in done.stdout.splitlines() if line.startswith("VAMS_CONVERSION_RESULT: ")]
         return {"statusCode": 200, "body": results[-1][len("VAMS_CONVERSION_RESULT: "):] if results else done.stdout[-500:]}
+    log_path = os.environ.get("GOLDEN_BATCH_STDERR_LOG")
+    if log_path:
+        with open(log_path, "a", encoding="utf-8") as log:
+            log.write(f"--- exit {done.returncode} ---\n{done.stderr[-2000:]}\n")
     found = _BATCH_ERROR.search(done.stderr)
     return {"errorMessage": found.group(2) if found else f"exit {done.returncode}: {done.stderr[-500:]}",
             "errorType": found.group(1) if found else ""}
