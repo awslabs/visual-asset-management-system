@@ -58,6 +58,12 @@ JOB_NAME = "vams-container-definition-log-job"
 # is exactly the one the image imports, minus the package name.
 CONTAINERS = (
     (
+        "cogConvert",
+        "conversion/cogConvert/container",
+        "cog_convert_pipeline.core",
+        (),
+    ),
+    (
         "coordinateTransform",
         "conversion/coordinateTransform/container",
         "coord_transform_pipeline.core",

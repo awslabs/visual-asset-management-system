@@ -1,0 +1,30 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "none",
+  "crs": "EPSG:32633",
+  "dataType": "uint8",
+  "file": "rotated_utm33.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": null,
+  "nodata": null,
+  "overviewCount": 0,
+  "pixelIsPoint": false,
+  "pixelSizeX": 25.0,
+  "pixelSizeY": 25.0,
+  "rotated": true,
+  "wgs84Bounds": [
+    15.0,
+    45.0958594,
+    15.1204386,
+    45.1811012
+  ],
+  "width": 256
+}
