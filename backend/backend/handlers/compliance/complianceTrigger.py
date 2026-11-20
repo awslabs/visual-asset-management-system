@@ -1052,6 +1052,10 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
         logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
                     "skipping compliance evaluation")
         return
+    if removal_superseded_by_workflow_write(s3_record, s3_info, message):
+        logger.info(f"Object removal under asset {asset_id} was superseded by a workflow execution's "
+                    "write of the same key; skipping compliance evaluation")
+        return
 
     decided.add(asset_id)
     # The object is not a workflow execution's (those were skipped above), so it belongs to a
@@ -1105,6 +1109,41 @@ def upload_object_awaits_its_settling_completion(change_source, stamp_attribute,
             and completion_time is not None
             and (change_time is None or change_time <= completion_time)
             and upload_completion_wait_seconds(completion_time) > 0)
+
+
+def removal_superseded_by_workflow_write(s3_record, s3_info, message):
+    """Whether an S3 removal record names a key that a workflow execution has written again since:
+    the key's current version carries `vams-changesource: workflowExecution` and was written no
+    earlier than the removal's second (`LastModified` has second precision; `eventTime` has
+    milliseconds).
+
+    A removal leaves a delete marker, which carries no object metadata (a HEAD of it answers 405),
+    so `object_change_source` reports it as unknown. A key a workflow execution has written again by
+    the time the removal is read is the execution's output, and a workflow execution's write starts
+    no evaluation. A removal the key's current state does not supersede (a user archiving a file,
+    whose delete marker is the current version) is evaluated as before. Unreadable reads as not
+    superseded.
+
+    Only the decoded key is read. S3 event notifications form-encode the object key (a space as
+    '+', a literal '+' as '%2B'), so the decoded key is the removed object's own; the raw key, when
+    it differs, names another object, whose write must not stand in for this removal."""
+    if not str(s3_record.get("eventName") or "").startswith("ObjectRemoved"):
+        return False
+    bucket = (s3_info.get("bucket") or {}).get("name") or message.get("ASSET_BUCKET_NAME", "")
+    raw_key = (s3_info.get("object") or {}).get("key", "")
+    removed_at = parse_event_time(s3_record.get("eventTime"))
+    if not bucket or not raw_key or removed_at is None:
+        return False
+    try:
+        head = s3_client.head_object(Bucket=bucket, Key=urllib.parse.unquote_plus(raw_key))
+    except Exception as e:
+        logger.info(f"Could not read the current version of a removed object under {bucket}: {e}")
+        return False
+    written_at = head.get("LastModified")
+    change_source = (head.get("Metadata") or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY, "")
+    return (change_source == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+            and isinstance(written_at, datetime)
+            and written_at >= removed_at.replace(microsecond=0))
 
 
 def file_event_completion_time(asset_row):
