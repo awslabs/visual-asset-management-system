@@ -493,8 +493,35 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
     });
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
-        expect(script).not.toMatch(/list_objects|list_object_versions|\.client\(\s*['"]s3['"]/);
+        // Only assetLocationFolderKeys reads Amazon S3: one HeadObject and one single-key listing per key.
+        const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
+        const end = script.indexOf("# STEP: orphanedTriggers\n");
+        expect(start).toBeGreaterThan(-1);
+        expect(end).toBeGreaterThan(start);
+        const locationStep = script.slice(start, end);
+        const rest = script.slice(0, start) + script.slice(end);
+        expect(rest).not.toMatch(
+            /list_objects|list_object_versions|head_object|\.client\(\s*['"]s3['"]/
+        );
+        expect(script).not.toMatch(/list_object_versions|get_paginator\(\s*['"]list_objects/);
+        const listings = locationStep.match(/list_objects_v2\([^)]*\)/g) ?? [];
+        expect(listings).toHaveLength(1);
+        expect(listings[0]).toContain("MaxKeys=1");
         expect(script).not.toMatch(/auxiliary/i);
+    });
+
+    it("runs assetLocationFolderKeys first, gated, with a report and a checkpoint", () => {
+        expect(tuple(script, "STEP_CHOICES")[0]).toBe("assetLocationFolderKeys");
+        const body = script.slice(script.indexOf("def main("));
+        expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeGreaterThan(-1);
+        expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeLessThan(
+            body.indexOf("run_orphaned_triggers_step(")
+        );
+        expect(body).toMatch(/gated=run_location_keys or /);
+        expect(script).toContain("ConditionExpression='#loc.#key = :old'");
+        expect(script).toMatch(/parser\.add_argument\('--resume'/);
+        expect(readme).toContain("assetLocationFolderKeys-dry-run-report.jsonl");
+        expect(readme).toContain("--resume");
     });
 
     it("documents what the deploy creates for Download as Zip and the copy engine", () => {

@@ -3,10 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Data Migration Script for VAMS v2.6 to v2.7 - orphaned workflow-trigger cleanup, vector index
-backfill, and the system-pipeline retirement report.
+Data Migration Script for VAMS v2.6 to v2.7 - asset location folder keys, orphaned workflow-trigger
+cleanup, vector index backfill, and the system-pipeline retirement report.
 
 The v2.7 release introduces:
+  0. One meaning for an asset location key: a key ending in '/' is a folder, any other key names one
+     Amazon S3 object (a single-file asset). Before v2.7 a folder key written without the '/' still
+     listed its files. The ``assetLocationFolderKeys`` step finds asset rows whose key has no trailing
+     '/', no object at the key and objects under ``{key}/``, reports them, and on a real run appends the
+     '/'. It runs first, before the backfills that walk every asset's location; it saves its scan
+     position after every page (``--resume``) and writes one report line per finding.
   1. A consolidated SYSTEM GenAI metadata pipeline (``system-genai-metadata``) that replaces the
      GenAI 3D Metadata Labeling and CAD/Mesh Metadata Extraction built-ins. The v2.7 deploy removes
      the two retired nested stacks, and the schema importer archives their pipeline and workflow
@@ -43,7 +49,7 @@ Parameter Store. Explicit ``*_table_name`` / ``vector_reindexer_function_name`` 
 supported as optional overrides.
 
 Safety: every run is a DRY RUN unless ``--execute`` is given and the config's ``dry_run`` is false (the
-shipped config sets it true). A real run that deletes trigger rows, deletes vectors, or launches
+shipped config sets it true). A real run that changes asset location keys, deletes trigger rows, deletes vectors, or launches
 Bedrock-billed executions is confirmed against the resolved AWS account id - typed at a prompt or
 passed as ``--confirm-account`` - and refused when the identity cannot be resolved or confirmed.
 
@@ -130,6 +136,7 @@ _PLACEHOLDER_PREFIXES = ('<', 'YOUR-')
 
 _STS_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 _DYNAMODB_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+_S3_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 # One attempt: a synchronous invoke that outlives the read timeout is reported as "continues in the
 # background" and never re-issued (a retry would start a second clear or a second enqueue pass).
 _LAMBDA_CLIENT_CONFIG = Config(connect_timeout=10, read_timeout=900,
@@ -348,6 +355,244 @@ def _paginate(read: Callable[..., Dict], **kwargs) -> Iterator[Dict]:
         if 'LastEvaluatedKey' not in response:
             return
         kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+#######################
+# STEP: assetLocationFolderKeys
+#######################
+
+# An asset location key ending in '/' is a folder; any other key names one Amazon S3 object (a
+# single-file asset). Before v2.7 a folder key written without the trailing '/' still listed its files,
+# and v2.7 reads such a key as a single object. This step finds the asset rows whose key has no
+# trailing '/', no object at the key and objects under '{key}/', reports them and, on a real run,
+# appends the '/'. It reads one object (HeadObject) and at most one listed key (ListObjectsV2,
+# MaxKeys=1) per such row; it never walks a bucket and never lists object versions.
+LOCATION_STEP = 'assetLocationFolderKeys'
+LOCATION_CLASSES = ('folder', 'single-file', 'folder-without-slash', 'no-objects', 'unreadable')
+LOCATION_PAGE_SIZE = 100
+LOCATION_PACE_SECONDS = 0.05
+_NOT_FOUND_CODES = ('404', 'NoSuchKey', 'NotFound')
+
+
+class LocationFinding(NamedTuple):
+    database_id: str
+    asset_id: str
+    bucket: str
+    key: str
+    location_class: str
+    detail: str
+
+
+def _location_key(row: Dict) -> str:
+    """The wire-format row's assetLocation.Key, or ''."""
+    return ((row.get('assetLocation') or {}).get('M') or {}).get('Key', {}).get('S', '') or ''
+
+
+def classify_asset_location(s3_client, bucket: str, key: str) -> Tuple[str, str]:
+    """Return (class, detail) for one asset location key. Reads nothing for a key ending in '/'."""
+    if not key or key.endswith('/'):
+        return 'folder', ''
+    if not bucket:
+        return 'unreadable', 'the asset bucket is not registered in the S3 asset buckets table'
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+        return 'single-file', ''
+    except ClientError as e:
+        code = str(e.response.get('Error', {}).get('Code', ''))
+        if code not in _NOT_FOUND_CODES:
+            return 'unreadable', f"HeadObject: {code or e}"
+    try:
+        listed = s3_client.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+    except ClientError as e:
+        return 'unreadable', f"ListObjectsV2: {e.response.get('Error', {}).get('Code', '') or e}"
+    if listed.get('KeyCount', 0) > 0 or listed.get('Contents'):
+        return 'folder-without-slash', ''
+    return 'no-objects', ''
+
+
+def append_location_slash(dynamodb_client, asset_table: str, row: Dict, key: str) -> str:
+    """Append '/' to the row's assetLocation.Key. The write is conditional on the key still being
+    ``key``, so a repeat or a concurrent edit changes nothing. Returns 'appended' or 'changed'."""
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': row['databaseId'], 'assetId': row['assetId']},
+            UpdateExpression='SET #loc.#key = :new',
+            ConditionExpression='#loc.#key = :old',
+            ExpressionAttributeNames={'#loc': 'assetLocation', '#key': 'Key'},
+            ExpressionAttributeValues={':new': {'S': f"{key}/"}, ':old': {'S': key}},
+        )
+        return 'appended'
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            return 'changed'
+        raise
+
+
+def _location_files(output_dir: str, dry_run: bool) -> Tuple[str, str]:
+    """The report (JSON Lines) and checkpoint paths. A dry run and a real run keep separate files."""
+    mode = 'dry-run' if dry_run else 'execute'
+    return (os.path.join(output_dir, f"{LOCATION_STEP}-{mode}-report.jsonl"),
+            os.path.join(output_dir, f"{LOCATION_STEP}-{mode}-checkpoint.json"))
+
+
+def _read_checkpoint(path: str, asset_table: str) -> Optional[Dict]:
+    """The saved scan position, or None. A checkpoint of another table is refused."""
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as f:
+        checkpoint = json.load(f)
+    if checkpoint.get('assetTable') != asset_table:
+        raise ValueError(f"The checkpoint {path} belongs to table '{checkpoint.get('assetTable')}', not "
+                         f"'{asset_table}'. Remove it or point the step at its table.")
+    return checkpoint
+
+
+def _write_checkpoint(path: str, asset_table: str, start_key: Optional[Dict], counts: Dict[str, int]) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'assetTable': asset_table, 'exclusiveStartKey': start_key, 'counts': counts}, f)
+    os.replace(tmp, path)
+
+
+def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_run: bool,
+                                   limit: Optional[int] = None, resume: bool = False,
+                                   pace_seconds: float = LOCATION_PACE_SECONDS,
+                                   page_size: int = LOCATION_PAGE_SIZE) -> Dict[str, int]:
+    """Scan every asset row (archived rows included), classify each key without a trailing '/', and
+    append the '/' to each 'folder-without-slash' key on a real run. Each finding is appended to the
+    report; after every page the scan position is saved, so ``resume`` continues where a stopped run
+    ended. A finished run removes its checkpoint. A dry run counts what a real run would change."""
+    asset_table = cfg['asset_storage_table_name']
+    report_path, checkpoint_path = _location_files(cfg['output_dir'], dry_run)
+    os.makedirs(cfg['output_dir'], exist_ok=True)
+    counts = {'scanned': 0, 'appended': 0, 'changed': 0, 'errors': 0}
+    counts.update({c: 0 for c in LOCATION_CLASSES})
+
+    start_key = None
+    checkpoint = _read_checkpoint(checkpoint_path, asset_table) if resume else None
+    if checkpoint:
+        start_key = checkpoint.get('exclusiveStartKey')
+        counts.update(checkpoint.get('counts') or {})
+        logger.info(f"Resuming from {checkpoint_path} after {counts['scanned']} row(s).")
+    elif resume:
+        logger.info(f"No checkpoint at {checkpoint_path}; starting from the first row.")
+    report_mode = 'a' if checkpoint else 'w'
+
+    buckets = {}
+    for item in _paginate(dynamodb_client.scan, TableName=cfg['s3_asset_buckets_storage_table_name'],
+                          ProjectionExpression='bucketId, bucketName'):
+        if _attr_s(item, 'bucketId') and _attr_s(item, 'bucketName'):
+            buckets[_attr_s(item, 'bucketId')] = _attr_s(item, 'bucketName')
+
+    with open(report_path, report_mode, encoding='utf-8') as report:
+        while True:
+            scan_kwargs = {'TableName': asset_table, 'Limit': page_size,
+                           'ProjectionExpression': 'databaseId, assetId, bucketId, assetLocation'}
+            if start_key:
+                scan_kwargs['ExclusiveStartKey'] = start_key
+            response = dynamodb_client.scan(**scan_kwargs)
+            for row in response.get('Items', []):
+                if limit is not None and counts['scanned'] >= limit:
+                    logger.info(f"Limit of {limit} asset row(s) reached; stopping the scan.")
+                    return counts
+                counts['scanned'] += 1
+                key = _location_key(row)
+                bucket = buckets.get(_attr_s(row, 'bucketId'), '')
+                location_class, detail = classify_asset_location(s3_client, bucket, key)
+                counts[location_class] += 1
+                if location_class == 'folder':
+                    continue
+                if pace_seconds:
+                    time.sleep(pace_seconds)
+                if location_class == 'single-file':
+                    continue
+                action = 'report only'
+                if location_class == 'folder-without-slash':
+                    if dry_run:
+                        action = 'would append /'
+                        counts['appended'] += 1
+                    else:
+                        try:
+                            outcome = append_location_slash(dynamodb_client, asset_table, row, key)
+                            counts[outcome] += 1
+                            action = 'appended /' if outcome == 'appended' else 'skipped: the key changed'
+                        except ClientError as e:
+                            counts['errors'] += 1
+                            action = 'failed'
+                            detail = str(e)
+                finding = LocationFinding(_attr_s(row, 'databaseId'), _attr_s(row, 'assetId'), bucket, key,
+                                          location_class, detail)
+                record = dict(finding._asdict(), action=action)
+                report.write(json.dumps(record) + '\n')
+                report.flush()
+                logger.info(f"  {'[DRY RUN] ' if dry_run else ''}{record['database_id']} / {record['asset_id']}: "
+                            f"'{key}' is {location_class} ({action}){f' - {detail}' if detail else ''}")
+            start_key = response.get('LastEvaluatedKey')
+            if not start_key:
+                break
+            _write_checkpoint(checkpoint_path, asset_table, start_key, counts)
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+    return counts
+
+
+def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, profile, region,
+                                        dry_run) -> int:
+    """Append the trailing '/' to asset location keys that name a folder. Returns 0 on success."""
+    try:
+        resolve = make_resolver(config, base_param_prefix, profile, region)
+        cfg = {
+            'asset_storage_table_name': resolve(
+                'asset_storage_table_name', ResourceParamKeys.ASSET_STORAGE_TABLE),
+            's3_asset_buckets_storage_table_name': resolve(
+                's3_asset_buckets_storage_table_name', ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE),
+            'output_dir': config.get('asset_location_output_dir') or os.getcwd(),
+        }
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the {LOCATION_STEP} step: {e}")
+        return 1
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+    pace = config.get('asset_location_pace_seconds')
+    pace = LOCATION_PACE_SECONDS if pace is None else float(pace)
+    session = _session(profile, region)
+    dynamodb_client = session.client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG)
+    s3_client = session.client('s3', config=_S3_CLIENT_CONFIG)
+    report_path, _ = _location_files(cfg['output_dir'], dry_run)
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 ASSET LOCATION FOLDER KEYS")
+    logger.info(f"Asset table:  {cfg['asset_storage_table_name']}")
+    logger.info(f"Report:       {report_path}")
+    logger.info(f"Dry Run: {dry_run}   Limit: {limit}   Resume: {args.resume}   Pace: {pace}s")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts = fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg, dry_run, limit,
+                                                resume=args.resume, pace_seconds=pace)
+    except Exception as e:
+        logger.error(f"{LOCATION_STEP} step failed: {e}. Re-run with --resume to continue from the last "
+                     "saved page.")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("ASSET LOCATION FOLDER KEYS SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Asset rows examined:                  {counts['scanned']}")
+    logger.info(f"  Folder keys (end in '/'):             {counts['folder']}")
+    logger.info(f"  Single-file keys (an object):         {counts['single-file']}")
+    logger.info(f"  Folder keys without the '/':          {counts['folder-without-slash']}")
+    logger.info(f"    '/' {'that would be ' if dry_run else ''}appended:            {counts['appended']}")
+    logger.info(f"    skipped, the key changed meanwhile: {counts['changed']}")
+    logger.info(f"  Keys with no objects (reported):      {counts['no-objects']}")
+    logger.info(f"  Keys that could not be read:          {counts['unreadable']}")
+    logger.info(f"  Errors:                               {counts['errors']}")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 and counts['unreadable'] == 0 else 1
 
 
 #######################
@@ -1147,13 +1392,16 @@ def run_system_pipeline_retirement_step(config: dict, args, base_param_prefix, p
 # CLI
 #######################
 
-STEP_CHOICES = ('orphanedTriggers', 'vectorBackfill', 'metadataBackfill', 'systemPipelineRetirement', 'all')
+STEP_CHOICES = ('assetLocationFolderKeys', 'orphanedTriggers', 'vectorBackfill', 'metadataBackfill',
+                'systemPipelineRetirement', 'all')
 
 
 def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
-                   backfills_metadata: bool = False) -> str:
-    """What a real run deletes or bills, phrased to follow "This run will"."""
+                   backfills_metadata: bool = False, fixes_locations: bool = False) -> str:
+    """What a real run changes, deletes or bills, phrased to follow "This run will"."""
     parts = []
+    if fixes_locations:
+        parts.append("append '/' to asset location keys that name a folder (assetLocationFolderKeys)")
     if deletes_triggers:
         parts.append('delete orphaned workflow-trigger rows (orphanedTriggers)')
     if clears_vectors:
@@ -1188,7 +1436,7 @@ def _account_id(value: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='VAMS v2.6 to v2.7 data migration (orphaned trigger cleanup, vector index '
+        description='VAMS v2.6 to v2.7 data migration (asset location folder keys, orphaned trigger cleanup, vector index '
                     'backfill, system-pipeline retirement report). Dry run by default.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
@@ -1201,6 +1449,9 @@ Examples:
 
   # Real run without a prompt (automation): the resolved account must equal the id given
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --confirm-account <account-id>
+
+  # Append the trailing '/' to asset location keys that name a folder (run before the backfills)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps assetLocationFolderKeys
 
   # Delete orphaned trigger rows only
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
@@ -1218,7 +1469,8 @@ Examples:
 Notes:
   - Every run is a DRY RUN unless --execute is given AND the config's dry_run is false. The shipped
     config sets "dry_run": true; set it to false once the dry run's counts look right.
-  - A real run that deletes rows (orphanedTriggers), deletes vectors (--clear-vectors), or launches
+  - A real run that changes asset rows (assetLocationFolderKeys), deletes rows (orphanedTriggers),
+    deletes vectors (--clear-vectors), or launches
     Bedrock-billed executions (vectorBackfill, with or without --clear-vectors) is confirmed against
     the resolved AWS account id: type it at the prompt, or pass --confirm-account <account-id>. No
     flag skips the check; an unresolved identity or a non-interactive run without --confirm-account
@@ -1236,7 +1488,10 @@ Notes:
     afterwards. The summary prints how to watch them.
   - --clear-vectors defaults to FALSE: the default re-embeds every latest file in place. Pass it only
     when the stored vectors must go first (a model change, or a rebuild from scratch).
-  - --limit caps trigger rows examined (orphanedTriggers), is forwarded as the reindexer's limit
+  - assetLocationFolderKeys reads one object and lists at most one key per asset row whose location key
+    has no trailing '/', writes each finding to assetLocationFolderKeys-<mode>-report.jsonl, and saves its
+    scan position after every page (--resume continues from it). It runs first under --steps all.
+  - --limit caps asset rows examined (assetLocationFolderKeys), trigger rows examined (orphanedTriggers), is forwarded as the reindexer's limit
     (vectorBackfill), and caps rows listed per section (systemPipelineRetirement).
         """
     )
@@ -1251,6 +1506,9 @@ Notes:
                              'must also be false (the shipped config sets it true).')
     parser.add_argument('--limit', type=int,
                         help='Cap on rows examined / files enqueued (testing)')
+    parser.add_argument('--resume', action='store_true',
+                        help='assetLocationFolderKeys: continue the asset scan from the checkpoint a '
+                             'stopped run of the same mode (dry run or real) saved. Default: start over.')
     parser.add_argument('--clear-vectors', dest='clear_vectors', action='store_true',
                         help='vectorBackfill: delete every stored vector before re-embedding '
                              '(reindexer operation "both" instead of "enqueue"). Default: false.')
@@ -1283,6 +1541,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config = load_config_from_file(args.config)
 
+    run_location_keys = args.steps in ('assetLocationFolderKeys', 'all')
     run_orphaned_triggers = args.steps in ('orphanedTriggers', 'all')
     run_vector_backfill = args.steps in ('vectorBackfill', 'all')
     run_metadata_backfill = args.steps in ('metadataBackfill', 'all')
@@ -1323,6 +1582,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     backfills_metadata = run_metadata_backfill and metadata_plan.action == 'run'
 
     step_plan = []
+    if run_location_keys:
+        step_plan.append('assetLocationFolderKeys')
     if run_orphaned_triggers:
         step_plan.append('orphanedTriggers')
     if run_vector_backfill:
@@ -1359,9 +1620,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
         args_dry_run=args.dry_run,
-        gated=run_orphaned_triggers or backfills_vectors or backfills_metadata,
+        gated=run_location_keys or run_orphaned_triggers or backfills_vectors or backfills_metadata,
         gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors,
-                                     backfills_metadata),
+                                     backfills_metadata, fixes_locations=run_location_keys),
         confirm_account=args.confirm_account,
         step_plan=step_plan,
     ):
@@ -1372,6 +1633,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def _record(step: str, rc: int) -> None:
         outcomes.append((step, "completed" if rc == 0 else f"failed (exit {rc})"))
+
+    # First: the backfills below walk every asset's location, so a folder key gets its '/' before them.
+    if run_location_keys:
+        logger.info("")
+        logger.info("##### STEP: Asset location folder keys #####")
+        rc = run_asset_location_folder_keys_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('assetLocationFolderKeys', rc)
+        if rc != 0:
+            exit_code = rc
 
     if run_orphaned_triggers:
         logger.info("")
