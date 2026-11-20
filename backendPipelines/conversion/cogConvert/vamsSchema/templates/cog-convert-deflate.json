@@ -1,0 +1,9 @@
+{
+    "templateId": "cog-convert-deflate",
+    "templateName": "COG in EPSG:3857 (DEFLATE)",
+    "description": "Write a tiled Cloud Optimized GeoTIFF in EPSG:3857 (Web Mercator) with overviews and DEFLATE compression beside the original file.",
+    "configFormat": "json",
+    "configBody": "{\"compression\":\"DEFLATE\"}",
+    "allowCustomEdit": true,
+    "inputInstructions": "Converts a georeferenced TIFF into a Cloud Optimized GeoTIFF (COG) that the Search map can draw. The original file is never changed.\n\nOutput: <file name>.cog.tif in the same folder of the same asset (a.tif becomes a.tif.cog.tif). Running the workflow again on a new version of the original writes a new version of the COG.\n\nThe COG is written in EPSG:3857 (Web Mercator), the only coordinate system the map viewer draws, so the pixels are resampled from the original's coordinate system. A COG that is already in EPSG:3857, and a TIFF with no georeference, are left alone and the run notes why in its results.\n\nSettings in the template body:\n  compression  DEFLATE (the only value today).\n\nThis pipeline reads no asset metadata."
+}

@@ -942,6 +942,12 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
     {
+        id: "vpc-required-cog-conversion",
+        label: "pipelines.useCogConversion",
+        fieldPaths: ["app.pipelines.useCogConversion.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
         id: "vpc-required-genai-video-sop-bom",
         label: "pipelines.useGenAiVideoSopBom",
         fieldPaths: ["app.pipelines.useGenAiVideoSopBom.enabled"],
@@ -1307,6 +1313,7 @@ const CORE_RULES: Rule[] = [
     ...(
         [
             "useConversionCoordinateTransform",
+            "useCogConversion",
             "useGenAiCadStepAgent",
             "usePreviewPcPotreeViewer",
             "usePreview3dThumbnail",
