@@ -34,6 +34,7 @@ _FILE_CLASS_INTENT = os.path.join(h.REPO_ROOT, "backend", "backend", "common", "
 EXPECTED_PHRASES = {
     "mesh": "3D model (mesh)", "usd": "3D model (USD scene)", "cad": "CAD model", "splat": "3D Gaussian splat",
     "pointcloud": "point cloud (LiDAR scan)", "ifc": "BIM building model (IFC)", "tiles3d": "3D Tiles tileset",
+    "raster": "georeferenced raster (GeoTIFF)",
     "image": "image (photo or picture)", "video": "video (footage)", "audio": "audio recording",
     "document": "document (PDF or office)", "text": "text file", "data": "data table (spreadsheet)", "other": "file",
 }
@@ -116,9 +117,10 @@ class TestAllowList:
         """The office formats join the allow list for their text, the ffmpeg-decodable video containers for
         their stream facts, the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and
         extents, and the GeoJSON extension for its features, although no viewer renders them. The tuple is the
-        registry literal, none of its members is a viewer extension, every member is allow-listed, and their
-        classes are document, data, document, video three times, then data three times (the `.geojson` one
-        sniffed from a GeoJSON root), all on the MEDIA branch."""
+        registry literal, none of its members is a viewer extension (the TIFF extensions are served by the
+        TIFF/TGA viewer and are not in it), every member is allow-listed, and their classes are document, data,
+        document, video three times, then data three times (the `.geojson` one sniffed from a GeoJSON root),
+        all on the MEDIA branch."""
         assert fc.ADDITIONAL_EXTENSIONS == (".docx", ".xlsx", ".pptx", ".avi", ".flv", ".wmv", ".gpkg", ".lyrx",
                                             ".geojson")
         assert not set(fc.ADDITIONAL_EXTENSIONS) & catalog_extensions()
@@ -132,6 +134,18 @@ class TestAllowList:
         # Every member but the sniffed one is decided by the table alone.
         assert [extension for extension in fc.ADDITIONAL_EXTENSIONS if extension not in fc.EXTENSION_CLASSES] == [
             ".geojson"]
+
+    def test_tiff_extensions_are_served_by_the_viewer_and_stay_image(self):
+        """`.tif`, `.tiff` and `.tga` are served by the TIFF/TGA viewer, so they are on the allow list through the
+        viewer catalog, not ADDITIONAL_EXTENSIONS, and classify `image` on the MEDIA branch (any case), with no sniff
+        of the bytes. The MEDIA branch promotes a georeferenced TIFF to `raster` after reading its header; the
+        class exists and has its phrase."""
+        for extension in (".tif", ".tiff", ".tga", ".TIF", ".Tiff"):
+            assert fc.classify(extension, lambda n: pytest.fail("a TIFF is not sniffed")) == (
+                fc.CLASS_IMAGE, fc.BRANCH_MEDIA)
+        assert {".tif", ".tiff", ".tga"} <= set(fc.ALLOW_LIST) and {".tif", ".tiff", ".tga"} <= catalog_extensions()
+        assert not {".tif", ".tiff"} & set(fc.ADDITIONAL_EXTENSIONS)
+        assert fc.CLASS_RASTER in fc.FILE_CLASSES and fc.FILE_CLASS_PHRASES[fc.CLASS_RASTER]
 
     def test_geojson_is_allow_listed_although_no_viewer_lists_it(self):
         # Control: no viewer catalog names .geojson, so only ADDITIONAL_EXTENSIONS can admit it.

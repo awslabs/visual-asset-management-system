@@ -91,9 +91,9 @@ REGISTRY_EXT_KEYS = {
                "ext_element_count", "ext_geometric_error", "ext_tile_count", "ext_width", "ext_height",
                "ext_duration_seconds", "ext_frame_rate", "ext_bitrate_kbps", "ext_channels", "ext_sample_rate",
                "ext_year", "ext_page_count", "ext_line_count", "ext_word_count", "ext_row_count", "ext_column_count",
-               "ext_feature_count", "ext_archive_entry_count"},
+               "ext_feature_count", "ext_archive_entry_count", "ext_band_count"},
     "boolean": {"ext_watertight", "ext_has_textures", "ext_has_uv", "ext_has_vertex_colors", "ext_has_animation",
-                "ext_has_armature", "ext_has_color", "ext_has_text"},
+                "ext_has_armature", "ext_has_color", "ext_has_text", "ext_is_cog", "ext_georeferenced"},
     "date": {"ext_captured_at", "ext_created_at"},
 }
 
@@ -131,7 +131,7 @@ class TestCatalogueShape:
         for field in mc.PROMOTED_FIELDS:
             by_type.setdefault(field.value_type, set()).add(field.key)
         assert by_type == REGISTRY_EXT_KEYS
-        assert len(mc.PROMOTED_FIELDS) == 66 == sum(len(keys) for keys in REGISTRY_EXT_KEYS.values())
+        assert len(mc.PROMOTED_FIELDS) == 69 == sum(len(keys) for keys in REGISTRY_EXT_KEYS.values())
 
     def test_every_key_is_prefixed_and_unique(self):
         keys = [field.key for field in mc.PROMOTED_FIELDS]
@@ -151,7 +151,7 @@ class TestCatalogueShape:
     def test_every_source_path_names_a_registry_group(self):
         groups = {"sys_geometry", "sys_statistics", "sys_visual", "sys_scene", "sys_cad", "sys_pointcloud", "sys_ifc",
                   "sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo",
-                  "sys_file", "sys_archive"}
+                  "sys_file", "sys_archive", "sys_raster"}
         for field in mc.PROMOTED_FIELDS:
             assert field.source and all(path.split(".")[0] in groups for path in field.source), field.key
             assert field.classes and field.classes <= set(fc.FILE_CLASSES), field.key
@@ -392,6 +392,72 @@ class TestTiles3d:
 
     def test_a_null_region_has_no_location(self):
         assert mc.location_geojson({"sys_tiles3d": {"geometricError": 1, "tileCount": 1, "region": None}}, "tiles3d") is None
+
+
+RASTER_POLYGON = {"type": "Polygon", "coordinates": [[[-122.5, 37.488], [-122.0, 37.488], [-122.0, 38.0],
+                                                      [-122.5, 38.0], [-122.5, 37.488]]]}
+RASTER = {
+    "sys_file": SYS_FILE,
+    "sys_raster": {"width": 1024, "height": 512, "bandCount": 3, "isCog": True, "crs": "EPSG:4326",
+                   "georeferenced": True, "layout": "tiled"},
+    "sys_geo": {"format": "GeoTIFF", "crs": "EPSG:4326", "footprint": RASTER_POLYGON},
+}
+RASTER_ANTIMERIDIAN = {"type": "MultiPolygon", "coordinates": [
+    [[[178.7, 6.7], [180.0, 6.7], [180.0, 9.0], [178.7, 9.0], [178.7, 6.7]]],
+    [[[-180.0, 6.8], [-178.9, 6.8], [-178.9, 9.0], [-180.0, 9.0], [-180.0, 6.8]]]]}
+
+
+@pytest.mark.unit
+class TestRaster:
+    def test_a_raster_promotes_its_facts_with_the_catalogue_types(self):
+        rows = _items(RASTER, "raster")
+        assert rows["ext_width"]["metadataValue"] == "1024" and rows["ext_height"]["metadataValue"] == "512"
+        assert rows["ext_band_count"] == {"metadataKey": "ext_band_count", "metadataValue": "3",
+                                          "metadataValueType": "number"}
+        assert rows["ext_is_cog"] == {"metadataKey": "ext_is_cog", "metadataValue": "true",
+                                      "metadataValueType": "boolean"}
+        assert rows["ext_georeferenced"]["metadataValue"] == "true"
+        assert rows["ext_crs"] == {"metadataKey": "ext_crs", "metadataValue": "EPSG:4326", "metadataValueType": "string"}
+        for item in rows.values():
+            backend.validate_metadata_value_common(item["metadataValue"], item["metadataValueType"])
+
+    def test_false_facts_are_written_not_dropped(self):
+        attributes = {"sys_file": SYS_FILE, "sys_raster": {"width": 8, "height": 8, "isCog": False,
+                                                           "georeferenced": False, "crs": "none"}}
+        rows = _items(attributes, "raster")
+        assert rows["ext_is_cog"]["metadataValue"] == "false" and rows["ext_georeferenced"]["metadataValue"] == "false"
+        assert rows["ext_crs"]["metadataValue"] == "none"
+
+    def test_the_raster_rows_belong_to_the_raster_class_only(self):
+        assert "ext_is_cog" not in _items(RASTER, "data") and "ext_band_count" not in _items(RASTER, "image")
+        # ext_width and ext_height are shared with the image and video classes; ext_crs with point clouds.
+        assert _items({"sys_pointcloud": {"crs": {"epsg": 32633}}}, "pointcloud")["ext_crs"]["metadataValue"] == "EPSG:32633"
+
+    def test_the_footprint_is_the_location_and_passes_the_backend_rules(self):
+        location = mc.location_geojson(RASTER, "raster")
+        assert location == RASTER_POLYGON
+        backend._validate_geojson_value(location)
+
+    def test_an_antimeridian_footprint_stays_two_polygons(self):
+        attributes = {"sys_geo": {"footprint": RASTER_ANTIMERIDIAN}}
+        location = mc.location_geojson(attributes, "raster")
+        assert location == RASTER_ANTIMERIDIAN
+        backend._validate_geojson_value(location)
+
+    def test_a_derived_cog_has_no_location_but_keeps_its_footprint_and_facts(self):
+        attributes = json.loads(json.dumps(RASTER))
+        attributes["sys_raster"]["derivedCog"] = True
+        assert mc.location_geojson(attributes, "raster") is None
+        assert attributes["sys_geo"]["footprint"] == RASTER_POLYGON
+        assert _items(attributes, "raster")["ext_is_cog"]["metadataValue"] == "true"
+
+    def test_a_raster_without_a_footprint_has_no_location(self):
+        attributes = {"sys_raster": {"width": 8, "height": 8}, "sys_geo": {"format": "GeoTIFF", "footprint": None}}
+        assert mc.location_geojson(attributes, "raster") is None
+
+    def test_an_invalid_raster_footprint_is_dropped(self):
+        bad = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [0, 0]]]}
+        assert mc.location_geojson({"sys_geo": {"footprint": bad}}, "raster") is None
 
 
 @pytest.mark.unit

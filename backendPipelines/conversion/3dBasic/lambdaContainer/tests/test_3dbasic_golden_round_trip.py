@@ -95,7 +95,11 @@ def _usd_bytes(geometry, extension):
             full = os.path.join(root, name)
             with open(full, "rb") as handle:
                 files[os.path.relpath(full, export_dir).replace(os.sep, "/")] = handle.read()
-    return files
+    # The layer first, because the first name is the file _convert stages as the input. os.walk lists a
+    # directory in whatever order its filesystem keeps, and on some runners that put the texture the
+    # writer saves beside the layer (material_0.png) ahead of it.
+    layer = "part" + extension
+    return {layer: files.pop(layer), **dict(sorted(files.items()))}
 
 
 def _fbx_box():
@@ -321,3 +325,23 @@ def test_the_cell_list_covers_every_accepted_input_and_every_written_output():
     outputs = set(re.findall(r"'(\.\w+)'", re.search(r"SUPPORTED_OUTPUT_FORMATS = \{([^}]*)\}", source).group(1)))
     assert inputs == set(INPUTS)
     assert outputs == set(OUTPUTS)
+
+
+@pytest.mark.parametrize("listing", ["as listed", "texture first", "texture last"])
+def test_every_fixture_stages_its_own_format_as_the_input(monkeypatch, listing):
+    # _convert stages each fixture's first name as the input file. The USD fixtures collect the writer's
+    # output with os.walk, whose order is the filesystem's: a listing with the texture first once made the
+    # image refuse every .usda cell as "Input format .png not supported". The order is forced here both
+    # ways, so the check does not depend on the filesystem this test happens to run on.
+    pytest.importorskip("pxr")
+    if listing != "as listed":
+        real_walk = os.walk
+
+        def ordered_walk(top, *args, **kwargs):
+            for root, dirs, files in real_walk(top, *args, **kwargs):
+                yield root, dirs, sorted(files, key=lambda n: n.lower().endswith(".png") == (listing == "texture last"))
+
+        monkeypatch.setattr(os, "walk", ordered_walk)
+    for extension, (names, _, _) in _fixture_files().items():
+        first = next(iter(names))
+        assert first.lower().endswith(extension), f"the {extension} fixture stages {first} as its input"

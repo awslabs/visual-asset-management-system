@@ -1,0 +1,35 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "none",
+  "crs": "EPSG:4326",
+  "dataType": "uint8",
+  "file": "pixel_is_point_4326.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": false,
+  "layout": "tiled",
+  "nativeBounds": [
+    30.0,
+    17.44,
+    32.56,
+    20.0
+  ],
+  "nodata": null,
+  "overviewCount": 0,
+  "pixelIsPoint": true,
+  "pixelSizeX": 0.01,
+  "pixelSizeY": 0.01,
+  "rotated": false,
+  "wgs84Bounds": [
+    30.0,
+    17.44,
+    32.56,
+    20.0
+  ],
+  "width": 256
+}

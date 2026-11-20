@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Parsing audit records into rows: contract v1 records written by the real formatter, frozen legacy
-records of the v2.6.x format, and the forgery corpus (test plan section 2).
+records of the format before the record contract, and the forgery corpus (test plan section 2).
 
 None of the hostile inputs may change the matched user, database, entity or outcome, and the parser
 never raises.
@@ -187,7 +187,7 @@ class TestContractRecords:
 
 
 # ---------------------------------------------------------------------------------------------------
-# Legacy: frozen v2.6.x records
+# Legacy: frozen records of the format before the record contract
 # ---------------------------------------------------------------------------------------------------
 
 @pytest.mark.unit

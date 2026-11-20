@@ -32,7 +32,8 @@ _VIEWER_EXTENSIONS_ADDED_WITH_1551 = {".webp", ".bmp", ".tga", ".tif", ".tiff", 
 # Formats no viewer renders, admitted by the pipeline's ADDITIONAL_EXTENSIONS for their extracted content: the
 # office formats for their text, the ffmpeg-decodable video containers no browser plays for their stream facts,
 # the GIS containers (GeoPackage, ArcGIS Pro layer file) for their layers and extents, and the GeoJSON extension
-# for its features (sniffed like a .json).
+# for its features (sniffed like a .json). The TIFF extensions are served by the TIFF/TGA viewer, so they are not here;
+# the MEDIA branch reads a GeoTIFF's header under the `raster` class all the same.
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
 _UNPLAYABLE_VIDEO_EXTENSIONS = {".avi", ".flv", ".wmv"}
 _GIS_EXTENSIONS = {".gpkg", ".lyrx"}
@@ -66,9 +67,10 @@ REGISTRY_PROMOTION_SOURCES = {
     "sys_data": ("columnCount", "rowCount", "columns"),
     "sys_tiles3d": ("geometricError", "tileCount", "region"),
     "sys_geo": ("featureCount", "geometryTypes", "footprint"),
+    "sys_raster": ("width", "height", "bandCount", "isCog", "crs", "georeferenced", "derivedCog"),
 }
 _MEDIA_ATTRIBUTE_GROUPS = {"sys_image", "sys_media", "sys_document", "sys_text", "sys_data", "sys_tiles3d", "sys_geo",
-                           "sys_archive"}
+                           "sys_archive", "sys_raster"}
 
 
 @pytest.mark.unit
