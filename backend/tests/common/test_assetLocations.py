@@ -296,3 +296,19 @@ class TestHeldObjects:
         # A folder location lists its folder once
         lister = self._lister("projects/building-a/x.txt", "projects/building-a-other/y.txt")
         assert [o["Key"] for o in al.held_objects(FOLDER_LOCATION, lister)] == ["projects/building-a/x.txt"]
+
+
+@pytest.mark.unit
+class TestAFileNamedLikeAPreview:
+    LOCATION = "projects/scan.previewFile.png"
+
+    @pytest.mark.parametrize("key,path", [
+        ("projects/scan.previewFile.png", "/scan.previewFile.png"),
+        ("projects/scan.previewFile.png/scan.previewFile.png", "/scan.previewFile.png/scan.previewFile.png"),
+        ("projects/scan.previewFile.png.previewFile.gif", "/scan.previewFile.png.previewFile.gif"),
+        ("projects/scan.previewFile.png/sub/x.obj", "/sub/x.obj"),
+    ])
+    def test_its_keys_keep_their_own_paths(self, key, path):
+        assert al.relative_path_in(self.LOCATION, key) == path
+        assert al.object_key_for(self.LOCATION, path) == key
+        assert al.names_own_object(self.LOCATION, path) is (key == self.LOCATION)

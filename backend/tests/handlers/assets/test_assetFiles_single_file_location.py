@@ -272,6 +272,26 @@ class TestFileOperations:
         assert _live(af.test_client, COMPANION)
         _neighbours_untouched(af.test_client)
 
+    @pytest.mark.parametrize("operation", ["delete", "archive"])
+    def test_the_folder_named_like_the_file_is_found_behind_many_keys_that_only_start_with_its_name(
+            self, af, operation):
+        """The folder /model.glb/ is listed under p1/model.glb/model.glb, where more than one page of
+        p1/model.glb/model.glb.bak* keys sorts before p1/model.glb/model.glb/part.obj."""
+        client = af.test_client
+        for version in client.list_object_versions(Bucket=BUCKET, Prefix=SHADOWED).get("Versions", []):
+            if version["Key"] == SHADOWED:
+                client.delete_object(Bucket=BUCKET, Key=SHADOWED, VersionId=version["VersionId"])
+        for i in range(1001):
+            client.put_object(Bucket=BUCKET, Key=f"p1/model.glb/model.glb.bak{i:04}", Body=b"x")
+        client.put_object(Bucket=BUCKET, Key="p1/model.glb/model.glb/part.obj", Body=b"x")
+        if operation == "delete":
+            response = af.delete_file("db1", "a1", "/model.glb/", True, True, CLAIMS)
+        else:
+            response = af.archive_file("db1", "a1", "/model.glb/", True, CLAIMS)
+        assert [path.lstrip("/") for path in response.affectedFiles] == ["model.glb/part.obj"]
+        assert not _live(client, "p1/model.glb/model.glb/part.obj")
+        assert _live(client, "p1/model.glb/model.glb.bak0000") and _live(client, OWN_KEY)
+
     def test_unarchive_file_restores_the_object_and_its_preview(self, af):
         af.test_client.delete_object(Bucket=BUCKET, Key=OWN_KEY)
         af.test_client.delete_object(Bucket=BUCKET, Key=OWN_PREVIEW)

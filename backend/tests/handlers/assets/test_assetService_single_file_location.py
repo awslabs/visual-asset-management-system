@@ -106,7 +106,8 @@ def svc(monkeypatch):
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
         client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
-        for key in (FILE_LOCATION, OWN_PREVIEW, COMPANION) + OUTSIDE_KEYS + ("proj/a/", "proj/a/x.txt") + SIBLING_FOLDER_KEYS:
+        keys = (FILE_LOCATION, OWN_PREVIEW, COMPANION) + OUTSIDE_KEYS + ("proj/a/", "proj/a/x.txt")
+        for key in keys + SIBLING_FOLDER_KEYS:
             client.put_object(Bucket=BUCKET, Key=key, Body=b"content")
         history = MagicMock()
         monkeypatch.setattr(m, "s3", client)

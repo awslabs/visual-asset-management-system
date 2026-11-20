@@ -107,10 +107,15 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
     loc = normalize_location(location)
     if loc.endswith("/"):
         return "/" + object_key[len(loc):]
+    name = _file_name(loc)
+    # The whole key first: a file named like a preview (``x.previewFile.png``) is a chain key itself
+    depth = _chain_depth(loc, object_key)
+    if depth is not None:
+        return "/" + "/".join([name] * (depth + 1))
     body, preview = _split_preview(object_key)
     depth = _chain_depth(loc, body)
     if depth is not None:
-        return "/" + "/".join([_file_name(loc)] * (depth + 1)) + preview
+        return "/" + "/".join([name] * (depth + 1)) + preview
     return object_key[len(loc):]
 
 
@@ -143,10 +148,11 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
     if relative == loc or relative.startswith(loc + "/") or _is_preview_of(loc, relative):
         return relative
     name = _file_name(loc)
-    body, preview = _split_preview(relative)
-    segments = body.split("/")
-    if all(segment == name for segment in segments):
-        return loc + "/".join([""] + [name] * (len(segments) - 1)) + preview
+    # The whole path first, as relative_path_in does, then the path without a preview suffix
+    for body, preview in ((relative, ""), _split_preview(relative)):
+        segments = body.split("/")
+        if all(segment == name for segment in segments):
+            return loc + "/".join([""] + [name] * (len(segments) - 1)) + preview
     return loc + "/" + relative
 
 

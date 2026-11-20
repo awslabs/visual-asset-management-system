@@ -41,11 +41,6 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
-
-# The prepared-downloads folder name is a valid asset id, so a key under it would otherwise auto-create
-# an asset over system data; it is skipped with the reserved folders (read at call time, so a test that
-# substitutes RESERVED_S3_PREFIX_FOLDERS still reaches the check).
-PREPARED_DOWNLOADS_FOLDERS = frozenset({AUXILIARY_PREPARED_DOWNLOADS_PREFIX.strip('/')})
 from common.s3 import is_object_version_archived, region_routing_s3_client, region_routing_s3_resource
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
@@ -53,6 +48,16 @@ from common.assetHistory import (
     write_asset_history_record,
 )
 from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
+
+# The prepared-downloads folder name is a valid asset id, so a key under it would otherwise auto-create
+# an asset over system data; it is skipped with the reserved folders (read at call time, so a test that
+# substitutes RESERVED_S3_PREFIX_FOLDERS still reaches the check).
+PREPARED_DOWNLOADS_FOLDERS = frozenset({AUXILIARY_PREPARED_DOWNLOADS_PREFIX.strip('/')})
+
+
+def _is_system_key(object_key: str, prefix: str) -> bool:
+    """Whether a key is VAMS system data: a reserved folder or the prepared-downloads folder as a segment."""
+    return key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS | PREPARED_DOWNLOADS_FOLDERS)
 
 # Initialize AWS clients
 retry_config = BotoConfig(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -1761,7 +1766,7 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
         # (extraction returns None above). Treating pipeline output as an asset file is not merely
         # wasted work: update_s3_metadata below re-stamps it by copying the object onto itself, and
         # that copy re-enters the same s3:ObjectCreated notification that triggered this handler.
-        if key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS | PREPARED_DOWNLOADS_FOLDERS):
+        if _is_system_key(object_key, prefix):
             logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
             return False, False, f"Key {object_key} contains a reserved VAMS folder segment"
 
@@ -2275,7 +2280,7 @@ def lambda_handler_deleted(event, context):
 
                     # Skip VAMS system data (never indexed). Segment-wise over the whole key for the
                     # same reasons as the created path above.
-                    if key_has_reserved_segment(object_key, prefix, RESERVED_S3_PREFIX_FOLDERS | PREPARED_DOWNLOADS_FOLDERS):
+                    if _is_system_key(object_key, prefix):
                         logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
                         continue
 
