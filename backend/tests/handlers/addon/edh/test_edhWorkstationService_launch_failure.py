@@ -3,8 +3,8 @@
 
 """The list and get routes capture the reason EDH recorded for a failed launch.
 
-A row the route records ORPHANED -- EDH reports the desktop in ``error``, or EDH no longer has the desktop
-of a launch still CREATING -- or finds ORPHANED with a session id is given the failure EDH's per-user
+A row the route records ORPHANED -- EDH reports the desktop of a new launch in ``error``, or EDH no longer has the
+desktop of a new launch still CREATING -- or finds ORPHANED with a session id is given the failure EDH's per-user
 listing records for that one session: ``edhFailure`` is stored, a generic ``lastError`` becomes the code
 the AWS error implies, and a code the launch recorded is kept. Each row is read at most once per five
 minutes (``edhFailureReadAt``) and never again once a reason is stored; a read that fails, or finds
@@ -68,6 +68,11 @@ def _failed_in_edh(**overrides):
     return own_row(**fields)
 
 
+def _launching(**overrides):
+    """The caller's new launch EDH has placed: CREATING with a session id and no start EDH accepted."""
+    return own_row(**{"state": "CREATING", "edhState": "placing", "connectionAvailable": False, **overrides})
+
+
 def _list(monkeypatch, rows, states, failure=None):
     fakes = install_service_fakes(
         monkeypatch, edh=FakeEdhClient(get_desktop_states=states, get_desktop_failure=failure))
@@ -94,8 +99,8 @@ def _ago(**delta):
 
 @pytest.mark.unit
 class TestTheListCapturesAFailedLaunch:
-    def test_a_desktop_edh_reports_in_error_is_given_its_reason_and_reclassified(self, monkeypatch):
-        response, fakes = _list(monkeypatch, [own_row()], [state_record(SESSION_OWN, "error")], CAPACITY_FAILURE)
+    def test_a_new_launch_edh_reports_in_error_is_given_its_reason_and_reclassified(self, monkeypatch):
+        response, fakes = _list(monkeypatch, [_launching()], [state_record(SESSION_OWN, "error")], CAPACITY_FAILURE)
 
         assert response["statusCode"] == 200
         item = _item(response)
@@ -110,7 +115,8 @@ class TestTheListCapturesAFailedLaunch:
         assert stored["edhFailureReadAt"]
 
     def test_the_read_is_audited_under_its_own_operation_and_the_per_user_route(self, monkeypatch):
-        _response, fakes = _list(monkeypatch, [own_row()], [state_record(SESSION_OWN, "error")], CAPACITY_FAILURE)
+        _response, fakes = _list(monkeypatch, [_launching()], [state_record(SESSION_OWN, "error")],
+                                 CAPACITY_FAILURE)
 
         reads = [record for record in edh_proxy_records(fakes) if record["operation"] == FAILURE_OPERATION]
         assert reads, "the failure read was not audited"
@@ -246,8 +252,8 @@ class TestTheListCapturesAFailedLaunch:
 
 @pytest.mark.unit
 class TestTheGetCapturesAFailedLaunch:
-    def test_a_desktop_edh_reports_in_error_is_given_its_reason(self, monkeypatch):
-        response, fakes = _get(monkeypatch, own_row(), [state_record(SESSION_OWN, "error")], CAPACITY_FAILURE)
+    def test_a_new_launch_edh_reports_in_error_is_given_its_reason(self, monkeypatch):
+        response, fakes = _get(monkeypatch, _launching(), [state_record(SESSION_OWN, "error")], CAPACITY_FAILURE)
 
         assert response["statusCode"] == 200
         body = response_body(response)
