@@ -11,7 +11,9 @@ Schema delivery: the static schema files (pipeline.json / workflow.json / templa
 uploaded to the artefacts bucket by CDK; the CR receives their S3 keys (avoids CFN property / lambda
 payload size limits) plus the small deploy-time values — resolved resource ids (Lambda name / SQS url /
 bus arn), optional id overrides, and the deploy-time trigger-enable flag. The CR fetches + merges +
-parses the bundle, then upserts. The CR is also invocable outside CloudFormation (a direct invoke with
+parses the bundle, then upserts. An optional ``executionConfigOverrides`` property (waitForCallback,
+taskTimeout, taskHeartbeatTimeout, lambdaName) lets a deployment register a bundle with a different
+execution config; the pipeline service then redeploys every workflow referencing the pipeline. The CR is also invocable outside CloudFormation (a direct invoke with
 an ``inlineBundle`` or ``bundleS3Keys`` payload) so external solutions can self-register.
 
 Idempotent re-register: on redeploy an existing built-in pipeline/workflow is UPDATED (and re-enabled —
@@ -223,6 +225,22 @@ def _parse_json_prop(value):
     return dict(value)
 
 
+def _parse_overrides_prop(value, name):
+    """Normalize the optional executionConfigOverrides property to a dict. Unlike the id and resource
+    overrides, a value that is present but unparsable fails the registration: silently dropping it
+    would register the pipeline with the execution config the deployment meant to replace."""
+    if value is None or value == "":
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            raise ImportError_(f"{name} is not valid JSON")
+    if not isinstance(value, dict):
+        raise ImportError_(f"{name} must be a JSON object")
+    return dict(value)
+
+
 def _parse_bool_prop(value):
     """Normalize an optional CloudFormation boolean-ish property to True/False/None. CloudFormation
     passes properties as strings, so "true"/"false" (case-insensitive) and actual bools are honored;
@@ -248,8 +266,14 @@ def register_bundle(resource_properties):
     # property arrives as a string; treat only "true" (case-insensitive) as True, absent as no override.
     trigger_enabled_override = _parse_bool_prop(resource_properties.get("triggerEnabled"))
 
+    # Optional deploy-time override of the pipeline's execution config (waitForCallback, timeouts,
+    # Lambda name). Absent builds exactly the request it always did.
+    execution_config_overrides = _parse_overrides_prop(
+        resource_properties.get("executionConfigOverrides"), "executionConfigOverrides")
+
     requests = vsi.build_import_requests(
-        bundle, resource_overrides, id_overrides, trigger_enabled_override=trigger_enabled_override)
+        bundle, resource_overrides, id_overrides, trigger_enabled_override=trigger_enabled_override,
+        execution_config_overrides=execution_config_overrides)
     ids = vsi.collect_ids(bundle, id_overrides)
 
     applied = []

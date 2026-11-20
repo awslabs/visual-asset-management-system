@@ -44,6 +44,8 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Added:**
 
+-   **Execution config overrides at pipeline registration** — A deployment can register an existing pipeline bundle with a different callback mode, timeouts or Lambda name through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without a second bundle. A registration without the property is unchanged. A change to a value the generated state machines encode redeploys every workflow that uses the pipeline, custom workflows included, and running executions finish on the definition they started with. (issue #1732)
+
 **Key fixes:**
 
 -   **Search file path column without OpenSearch** — Natural-language file results on a deployment without OpenSearch list the file path directly after Relevance, ahead of the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))
@@ -59,6 +61,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Other changes:**
 
 -   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
+-   **Python dependencies on uv** — The backend and the base, authorizer and EDH root key sync Lambda layers lock their Python dependencies with uv, and the layer build installs each layer's committed `requirements.txt` with pip without resolving anything; installed package versions are unchanged. After changing a layer's `pyproject.toml`, run `uv lock` and `uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt` in that layer's directory and commit both files; a layer directory without a `requirements.txt` now fails the build with a message. (issue #1742)
 
 **Known issues:**
 

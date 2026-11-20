@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Features
 
+-   **Pipelines** A deployment can register an existing pipeline bundle with a different execution config (callback mode, timeouts or Lambda name) through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without shipping a second bundle. A registration without the property is unchanged. Changing a value that the generated state machines encode redeploys every workflow that uses the pipeline, including custom workflows, and running executions finish on the definition they started with. (issue #1732)
+
 ### Bug Fixes
 
 -   **Web** Natural-language search results on a deployment without OpenSearch list a file's path in the first column after Relevance, before the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))
@@ -31,6 +33,8 @@ All notable changes to this project will be documented in this file. See [standa
 ### Chores
 
 -   **Backend tests** The Physna add-on tests' `handlers.auth` stub carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, so a backend test run that collects the Physna tests before another test imports `customLogging.auditLogging` (for example `tests/handlers` alone) no longer fails at collection. ([#1451](https://github.com/awslabs/visual-asset-management-system/issues/1451))
+-   **Python dependencies** The backend and the base, authorizer and EDH root key sync Lambda layers lock their Python dependencies with uv, and the layer build installs each layer's committed `requirements.txt` with pip without resolving anything. Installed package versions are unchanged. ([#1742](https://github.com/awslabs/visual-asset-management-system/issues/1742))
+    -   Note: after changing a layer's `pyproject.toml`, run `uv lock` and `uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt` in that layer's directory and commit both files. A layer directory without a `requirements.txt` now fails the build with a message instead of locking dependencies during the build. See the developer setup guide.
 
 ### Known Outstanding Issues
 
