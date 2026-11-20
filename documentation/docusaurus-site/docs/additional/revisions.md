@@ -45,6 +45,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Added:**
 
 -   **Isaac Lab 3.0 and the physics engine setting** — The Isaac Lab training and evaluation pipeline runs on Isaac Lab 3.0.0 and Isaac Sim 6.2 (Python 3.12) and takes a physics engine setting, `trainingConfig.physics`: `newton_mjwarp` (Newton, the default) or `isaacsim_physx` (PhysX on Isaac Sim). Both built-in templates show it as a "Physics engine" drop-down, and the uploaded run configuration records the engine, the Isaac Lab image version and the GPU driver version. A task that does not offer the chosen engine fails at the start with a message naming the options, and a task that lists no physics presets, such as the AutoMate tasks and most custom environments, runs on its registered physics. The AutoMate tasks, which offer `rl_games` only, are refused with any other library before a GPU instance starts. PhysX evaluation videos render, and `rsl_rl` checkpoints from Isaac Lab 2.x do not load on 3.0 (`rl_games` and `skrl` ones do). Saved Isaac Lab 2.x task ids `Isaac-Cartpole-v0`, `Isaac-Cartpole-Direct-v0`, `Isaac-Lift-Cube-Franka-v0` and `Isaac-Velocity-Rough-Anymal-D-v0` are mapped to their 3.0 ids. An evaluation whose checkpoint was trained on the other engine prints a note and still runs, and a play process that does not finish within a time limit is stopped. See [NVIDIA Isaac Lab](../pipelines/nvidia-isaac-lab.md#physics-engine). (issue #1669)
+-   **Execution config overrides at pipeline registration** — A deployment can register an existing pipeline bundle with a different callback mode, timeouts or Lambda name through the optional `executionConfigOverrides` property of `VamsSchemaRegistration`, without a second bundle. A registration without the property is unchanged. A change to a value the generated state machines encode redeploys every workflow that uses the pipeline, custom workflows included, and running executions finish on the definition they started with. (issue #1732)
 
 **Behaviour changes:**
 
@@ -53,6 +54,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 
 **Key fixes:**
 
+-   **Search file path column without OpenSearch** — Natural-language file results on a deployment without OpenSearch list the file path directly after Relevance, ahead of the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))
 -   **Search map popup pick by area** — When footprints overlap on the Search Map view, the popup opens the one with the smallest area as drawn on the flat map, not the smallest bounding box, so a rotated footprint is no longer passed over for a larger one and latitude no longer skews the comparison. (issue #1729)
 -   **Search map popup position** — A click on a file's footprint in the Search Map view opens its popup at the click, not at the centre of the footprint's box (away from the click for a large or L-shaped footprint, and at longitude 0 for a footprint split at longitude 180). Of overlapping footprints, the smallest under the click opens. (issue #1683)
 -   **Isaac Lab GPU instance pool** — The compute environment launches only GPU instance types that can run the job: one RT-core GPU, at least 8 vCPUs and more registered memory than the 32 GiB the job asks for. The default list is wider, with 11 single-GPU G5, G6, GR6 and G6E types. CPU-only instance classes are no longer added, and `keepWarmInstance` keeps one instance the job can run on. The new `app.pipelines.useIsaacLabTraining.instanceTypes` option sets the list, and deployment fails at synthesis for a type that cannot run the job. (issue #1308)
@@ -63,6 +65,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 **Other changes:**
 
 -   **Backend test subsets** — A test run that collects the Physna add-on tests before another test imports the audit logging module, such as `tests/handlers` alone, no longer fails at collection. (issue #1451)
+-   **Python dependencies on uv** — The backend and the base, authorizer and EDH root key sync Lambda layers lock their Python dependencies with uv, and the layer build installs each layer's committed `requirements.txt` with pip without resolving anything; installed package versions are unchanged. After changing a layer's `pyproject.toml`, run `uv lock` and `uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt` in that layer's directory and commit both files; a layer directory without a `requirements.txt` now fails the build with a message. (issue #1742)
 
 **Known issues:**
 
