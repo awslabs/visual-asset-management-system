@@ -26,3 +26,22 @@ def test_the_corpus_region_and_then_us_east_1_apply_when_none_is_exported():
     assert ro.bedrock_region({}, {}) == "us-east-1"
     # The resolved Region is exported, so the container package's clients use the same one.
     assert environ == {"AWS_REGION": "us-east-1"}
+
+
+def test_the_offline_model_is_built_without_a_temperature():
+    # Some models refuse the parameter ("`temperature` is deprecated for this model"), so the
+    # runner builds its model the way the deployed agent does: max tokens only.
+    import types
+    from unittest.mock import patch
+
+    captured = {}
+    fake_models = types.ModuleType("strands.models")
+
+    class BedrockModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+    fake_models.BedrockModel = BedrockModel
+    with patch.dict(sys.modules, {"strands": types.ModuleType("strands"), "strands.models": fake_models}):
+        ro.bedrock_model("global.anthropic.claude-sonnet-5-5", "us-east-1", 8192)
+    assert captured == {"model_id": "global.anthropic.claude-sonnet-5-5", "region_name": "us-east-1",
+                        "max_tokens": 8192}

@@ -347,7 +347,7 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterAutoTriggerOnFileUpload: false,
                 bedrockModelId: "global.anthropic.claude-sonnet-5-5",
                 openAi: { modelId: "", apiKeySecretArn: "" },
-                allowInternetResearch: true,
+                allowInternetResearch: false,
                 bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
                 agentCore: {
                     warmSessionSlots: 0,

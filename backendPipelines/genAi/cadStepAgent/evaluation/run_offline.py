@@ -245,6 +245,14 @@ def bedrock_region(globals_, environ=os.environ):
     return environ.setdefault("AWS_REGION", globals_.get("region") or "us-east-1")
 
 
+def bedrock_model(model_id, region, max_tokens):
+    """The Strands Bedrock model a run drives, without a guardrail. No temperature is sent, as in the
+    deployed agent: some models refuse the parameter."""
+    from strands.models import BedrockModel  # noqa: WPS433 - only a model-driven run needs it
+
+    return BedrockModel(model_id=model_id, region_name=region, max_tokens=max_tokens)
+
+
 def run_one(case_id, corpus_path, container_dir, out_root, model_id, fake_script=None):
     corpus = load_corpus(corpus_path)
     case = corpus["_by_id"][case_id]
@@ -292,10 +300,7 @@ def run_one(case_id, corpus_path, container_dir, out_root, model_id, fake_script
             with open(fake_script, encoding="utf-8") as fh:
                 holder["rec"] = AgentRecorder(ScriptedAgent(bound_tools, fh.read()))
             return holder["rec"]
-        from strands.models import BedrockModel  # noqa: WPS433 - only a model-driven run needs it
-
-        model = BedrockModel(model_id=model_id, region_name=region,
-                             temperature=agent_module.TEMPERATURE, max_tokens=agent_module.MAX_TOKENS)
+        model = bedrock_model(model_id, region, agent_module.MAX_TOKENS)
         holder["rec"] = AgentRecorder(agent_module.build_agent(model, bound_tools))
         return holder["rec"]
 

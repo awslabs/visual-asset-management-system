@@ -382,3 +382,163 @@ class TestApiKeyRemainsVisibleToTheUser:
         # The machine contract the external connectors parse must be unchanged.
         assert parsed["apiKey"] == "vams_SUPERSECRETVALUE1234"  # pragma: allowlist secret
         assert parsed["apiKeyId"] == "k1"  # pragma: allowlist secret
+
+
+# A presigned GET URL as the API Lambdas issue it: signed with role credentials, so it carries a
+# session token as well as the signature. Neither value is real.
+_SIG = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"  # pragma: allowlist secret
+_TOK = "IQoJb3JpZ2luX2VjEXAMPLESESSIONTOKEN%2Fpart%2Bmore%3D"  # pragma: allowlist secret
+_RAW_TOK = "IQoJb3JpZ2luX2VjEXAMPLESESSIONTOKEN/part+more="  # pragma: allowlist secret
+_PRESIGNED_URL = (
+    "https://bucket.s3.us-east-1.amazonaws.com/assets/model.glb"
+    "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+    "&X-Amz-Credential=ASIAEXAMPLE%2F20261118%2Fus-east-1%2Fs3%2Faws4_request"
+    "&X-Amz-Date=20261118T120000Z&X-Amz-Expires=900"
+    f"&X-Amz-Security-Token={_TOK}&X-Amz-SignedHeaders=host&X-Amz-Signature={_SIG}"
+)
+
+
+class TestVerboseEchoMasksPresignedUrlSecrets:
+    """The `--verbose` echo masks the values of `X-Amz-Signature` and `X-Amz-Security-Token`.
+
+    Every line `utils/logging.py` writes to the console goes through `_echo`, which replaces the two
+    values and keeps the parameter names; the rest of each URL stays readable. Command output and
+    `--json-output` are not touched. Credential fields and shapes: `test_verbose_echo_credentials.py`.
+    """
+
+    @staticmethod
+    def _verbose(monkeypatch):
+        from vamscli.utils import logging as vlog
+
+        file_records = []
+
+        class FakeLogger:
+            def _record(self, msg, *a, **k):
+                file_records.append(str(msg))
+
+            debug = info = warning = error = _record
+
+        monkeypatch.setattr(vlog, "get_logger", lambda: FakeLogger())
+        monkeypatch.setattr(vlog, "_verbose_mode", True)
+        return vlog, file_records
+
+    @staticmethod
+    def _assert_masked(err):
+        # Control first: an echo that printed nothing would satisfy every "not in" below.
+        assert "X-Amz-Signature=" + REDACTED in err
+        assert "X-Amz-Security-Token=" + REDACTED in err
+        assert _SIG not in err and _TOK not in err
+        # The rest of the URL stays readable: it is what the echo is for.
+        assert "bucket.s3.us-east-1.amazonaws.com/assets/model.glb" in err
+        assert "X-Amz-Credential=ASIAEXAMPLE" in err and "X-Amz-Expires=900" in err
+
+    def test_request_url_line(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        vlog.log_api_request("GET", _PRESIGNED_URL)
+        self._assert_masked(capsys.readouterr().err)
+
+    def test_json_response_body(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        vlog.log_api_response(200, {"url": _PRESIGNED_URL, "expiresIn": 900,
+                                    "archiveFileName": "Asset.zip"}, 0.2)
+        err = capsys.readouterr().err
+        self._assert_masked(err)
+        assert "Asset.zip" in err
+
+    def test_a_truncated_response(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        parts = [{"PartNumber": n, "UploadUrl": _PRESIGNED_URL} for n in range(1, 9)]
+        vlog.log_api_response(200, {"uploadId": "u1", "files": [{"partUploadUrls": parts}]}, 0.2)
+        err = capsys.readouterr().err
+        assert "truncated for display" in err
+        self._assert_masked(err)
+
+    def test_text_response_and_request_bodies(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        vlog.log_api_request("POST", "https://api.example.com/x", body=f"link={_PRESIGNED_URL}")
+        vlog.log_api_response(502, f"<Error><Url>{_PRESIGNED_URL}</Url></Error>", 0.2)
+        err = capsys.readouterr().err
+        self._assert_masked(err)
+        assert err.count("X-Amz-Signature=" + REDACTED) == 2
+
+    def test_header_and_mapping_forms(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        vlog.log_api_request("GET", "https://api.example.com/x",
+                             headers={"X-Amz-Security-Token": _RAW_TOK, "Accept": "application/json"})
+        vlog.log_api_response(200, {"X-Amz-Security-Token": _RAW_TOK, "X-Amz-Signature": _SIG}, 0.2)
+        vlog.log_debug(f"X-Amz-Security-Token: {_RAW_TOK}")
+        err = capsys.readouterr().err
+        assert err.count("X-Amz-Security-Token") == 3
+        assert _RAW_TOK not in err and _SIG not in err
+        assert "application/json" in err
+
+    def test_debug_info_and_warning_lines(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        vlog.log_debug(f"Fetching {_PRESIGNED_URL}")
+        vlog.log_info(f"Fetching {_PRESIGNED_URL}")
+        vlog.log_warning(f"Retrying {_PRESIGNED_URL}")
+        err = capsys.readouterr().err
+        self._assert_masked(err)
+        assert err.count("X-Amz-Signature=" + REDACTED) == 3
+
+    def test_a_shown_warning_is_masked_without_verbose(self, monkeypatch, capsys):
+        vlog, _ = self._verbose(monkeypatch)
+        monkeypatch.setattr(vlog, "_verbose_mode", False)
+        vlog.log_warning(f"Retrying {_PRESIGNED_URL}", show_console=True)
+        self._assert_masked(capsys.readouterr().err)
+
+    def test_a_percent_encoded_url(self):
+        from urllib.parse import quote
+
+        from vamscli.utils.logging import mask_presigned_url_secrets
+
+        out = mask_presigned_url_secrets("load=" + quote(_PRESIGNED_URL, safe=""))
+        assert "X-Amz-Signature%3D" + REDACTED in out
+        assert "X-Amz-Security-Token%3D" + REDACTED + "%26X-Amz-SignedHeaders%3Dhost" in out
+        assert _SIG not in out and quote(_TOK, safe="") not in out
+
+    def test_ordinary_text_is_untouched(self):
+        from vamscli.utils.logging import mask_presigned_url_secrets
+
+        text = "X-Amz-SignedHeaders=host&X-Amz-Algorithm=AWS4-HMAC-SHA256 assets/model.glb"
+        assert mask_presigned_url_secrets(text) == text
+
+    def test_the_log_file_is_still_fully_redacted(self, monkeypatch, capsys):
+        vlog, file_records = self._verbose(monkeypatch)
+        vlog.log_api_request("GET", "https://api.example.com/x", body={"link": _PRESIGNED_URL})
+        vlog.log_api_response(200, {"url": _PRESIGNED_URL}, 0.2)
+        capsys.readouterr()
+        joined = " ".join(file_records)
+        assert "Response body" in joined
+        assert _SIG not in joined and _TOK not in joined
+
+    def test_json_output_is_unchanged_under_verbose(self, monkeypatch, capsys):
+        import json as _json
+        import vamscli.utils.json_output as jo
+
+        self._verbose(monkeypatch)
+        result = {"apiKeyId": "k1", "apiKey": "vams_SUPERSECRETVALUE1234"}  # pragma: allowlist secret
+        jo.output_result(result, json_output=True)
+        captured = capsys.readouterr()
+        # stdout is the command's own output: pure JSON, the one-time key intact.
+        assert _json.loads(captured.out) == result
+        assert REDACTED not in captured.out
+
+    def test_every_console_write_goes_through_the_masking_writer(self):
+        """A new `click.echo` in `utils/logging.py` would print unmasked text; route it via `_echo`."""
+        import ast
+        import inspect
+
+        from vamscli.utils import logging as vlog
+
+        def console_writes(tree):
+            return [node for node in ast.walk(tree)
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == "click"
+                    and node.func.attr in ("echo", "secho")]
+
+        module = ast.parse(inspect.getsource(vlog))
+        writer = next(node for node in module.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_echo")
+        assert len(console_writes(writer)) == 1
+        assert len(console_writes(module)) == 1, "a console write in utils/logging.py bypasses _echo"
