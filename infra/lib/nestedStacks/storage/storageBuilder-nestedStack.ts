@@ -29,6 +29,7 @@ import * as s3AssetBuckets from "../../helper/s3AssetBuckets";
 import { createPopulateS3AssetBucketsTableCustomResource } from "./customResources/populateS3AssetBucketsTable";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as cr from "aws-cdk-lib/custom-resources";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import { SqsSubscription } from "aws-cdk-lib/aws-sns-subscriptions";
 import {
@@ -40,6 +41,7 @@ import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import { Service, Partition } from "../../helper/service-helper";
 import {
     buildSqsBucketSyncFunction,
+    buildAssetLocationIndexMarkerFunction,
     buildFileIndexerSnsQueuingFunction,
     buildAssetIndexerSnsQueuingFunction,
     buildDatabaseIndexerSnsQueuingFunction,
@@ -3334,6 +3336,43 @@ export function storageResourcesBuilder(
     const bucketSyncQueueMaxReceiveCount = 3;
     // Bucket-sync dead-letter queues, covered by the AwsSolutions-SQS3 suppression below.
     const bucketSyncDlqs: sqs.Queue[] = [];
+
+    // Rejected-record queue: a direct write that bucket sync cannot attribute by rule (today, two live
+    // assets that both hold its location) is logged at ERROR and sent here instead of being attributed
+    // to either. One queue per deployment, read by operators: they fix the cause and redrive the record
+    // to its bucket's created-events queue. Only the created-events functions may send to it.
+    const bucketSyncRejectedQueue = new sqs.Queue(scope, "bucketSyncRejectedQueue", {
+        retentionPeriod: cdk.Duration.days(14),
+        encryption: kmsEncryptionKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+        encryptionMasterKey: kmsEncryptionKey,
+        enforceSSL: true,
+    });
+    new cloudwatch.Alarm(scope, "bucketSyncRejectedQueueAlarm", {
+        alarmName: `${config.name}-${config.app.baseStackName}-bucketSyncRejected`,
+        alarmDescription:
+            "S3 object-created events that VAMS bucket sync could not attribute to one asset (two assets " +
+            "hold the same location) are in this queue. Resolve the overlapping assets, then redrive the " +
+            "messages to the bucket's created-events queue.",
+        metric: bucketSyncRejectedQueue.metricApproximateNumberOfMessagesVisible({
+            period: Duration.minutes(5),
+            statistic: cloudwatch.Stats.MAXIMUM,
+        }),
+        threshold: 0,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: 1,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    NagSuppressions.addResourceSuppressions(
+        bucketSyncRejectedQueue,
+        [
+            {
+                id: "AwsSolutions-SQS3",
+                reason: "This queue holds S3 notifications that bucket sync rejected by rule, for an operator to review and redrive. It is the end of that record's path; a dead-letter queue of its own would only move the same record to a further queue.",
+            },
+        ],
+        true
+    );
+
     const bucketRecords = s3AssetBuckets.getS3AssetBucketRecords();
     // A bucket instance can appear in multiple records (same bucket, different
     // prefixes). The sync-queue construct IDs are derived from the bucket instance,
@@ -3425,7 +3464,8 @@ export function storageResourcesBuilder(
             bucketSyncIndex,
             config,
             vpc,
-            subnets
+            subnets,
+            bucketSyncRejectedQueue
         );
 
         // Subscribe SQS queue to SNS topic
@@ -3578,6 +3618,37 @@ export function storageResourcesBuilder(
 
         bucketSyncIndex = bucketSyncIndex + 1;
     }
+
+    // Readiness marker of the asset location index for a new deployment: written once, on Create, and
+    // only when the asset table was created by this deployment and holds no row. An upgrade gets no
+    // marker from here; the operator runs the index backfill, which writes it.
+    const assetLocationIndexMarkerName =
+        config.resourceNamesSSMParamPrefix.replace(/\/$/, "") +
+        "/dataMigrations/assetLocationIndex";
+    const assetLocationIndexMarkerFunction = buildAssetLocationIndexMarkerFunction(
+        scope,
+        lambdaCommonBaseLayer,
+        storageResources,
+        config,
+        vpc,
+        subnets,
+        assetLocationIndexMarkerName
+    );
+    const assetLocationIndexMarkerProvider = new cr.Provider(
+        scope,
+        "AssetLocationIndexMarkerProvider",
+        { onEventHandler: assetLocationIndexMarkerFunction }
+    );
+    const assetLocationIndexMarker = new cdk.CustomResource(scope, "AssetLocationIndexMarker", {
+        serviceToken: assetLocationIndexMarkerProvider.serviceToken,
+        properties: {
+            assetTableName: storageResources.dynamo.assetStorageTable.tableName,
+            markerParameterName: assetLocationIndexMarkerName,
+            // A table created more than this long before the resource is not this deployment's.
+            newTableWindowSeconds: "3600",
+        },
+    });
+    assetLocationIndexMarker.node.addDependency(storageResources.dynamo.assetStorageTable);
 
     /// Register fixed resource names for SSM publication by the ResourceNames builder stack
 

@@ -14,6 +14,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Service from "../helper/service-helper";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     suppressCdkNagErrorsByGrantReadWrite,
     grantReadWritePermissionsToAllAssetBuckets,
@@ -81,7 +82,8 @@ export function buildSqsBucketSyncFunction(
     index: number,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    rejectedQueue?: sqs.IQueue
 ): lambda.Function {
     // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
     // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
@@ -129,6 +131,12 @@ export function buildSqsBucketSyncFunction(
 
     // Grant SNS publish permissions
     storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // A record that cannot be attributed by rule goes to the deployment's rejected-record queue.
+    if (rejectedQueue) {
+        fun.addEnvironment("BUCKET_SYNC_REJECTED_QUEUE_URL", rejectedQueue.queueUrl);
+        rejectedQueue.grantSendMessages(fun);
+    }
 
     // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery), scoped to the
     // one event the handler emits. A PutEvents request carries a set of entries, so its source and
@@ -357,5 +365,54 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
+    return fun;
+}
+
+/**
+ * The deploy-time custom resource handler that marks the asset location index ready on a new
+ * deployment (handlers/indexing/crAssetLocationIndexMarker.py). It reads the asset table's creation
+ * time and whether it holds a row, and writes one SSM String parameter without overwriting it.
+ */
+export function buildAssetLocationIndexMarkerFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    markerParameterName: string
+): lambda.Function {
+    const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+    const fun = new lambda.Function(scope, "crAssetLocationIndexMarker", {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.crAssetLocationIndexMarker.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: inVpc ? vpc : undefined,
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
+    });
+
+    const assetTable = storageResources.dynamo.assetStorageTable;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:DescribeTable", "dynamodb:Scan"],
+            resources: [assetTable.tableArn],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:PutParameter"],
+            resources: [Service.IAMArn(markerParameterName.replace(/^\//, "")).ssm],
+        })
+    );
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     return fun;
 }
