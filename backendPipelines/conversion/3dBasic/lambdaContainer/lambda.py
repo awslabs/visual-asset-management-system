@@ -765,7 +765,7 @@ def run_worker(job, work_dir, timeout_seconds=None):
         logger.error(f"Conversion worker failed with {str(result.get('type'))[:100]}: {message[:2000]}")
         _log_worker_stderr(stderr_path)
         raise RuntimeError(f"The conversion of {job['input_name']} failed unexpectedly. "
-                           f"The function's log has the detail.")
+                           f"The {_memory_owner()}'s log has the detail.")
     raise ValueError(message)
 
 
