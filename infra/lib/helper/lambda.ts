@@ -9,15 +9,14 @@ import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 
 export function layerBundlingCommand(): string {
-    //Command to install layer dependencies from poetry files and remove unneeded cache, tests, and boto libraries (automatically comes with lambda python container base)
+    //Command to install layer dependencies from the layer's committed requirements.txt and remove unneeded cache, tests, and boto libraries (automatically comes with lambda python container base)
     //Note: The removals drastically reduce layer sizes
-    //Note: The build tools are pinned so a layer build is reproducible; poetry is the version that wrote the layer lock files
+    //Note: requirements.txt is the pinned export of the layer's lock file (uv.lock; the RapidPipeline EKS Kubernetes layer still carries a Poetry lock and its committed Poetry export until it moves to uv). The command never resolves
+    //      dependencies: it installs the committed pins with pip, so a deploy cannot pick a version the lock does not name. Re-lock and re-export before changing a layer's pyproject.toml.
+    //Note: The build tool (pip) is pinned so a layer build is reproducible
     return [
         "pip install --root-user-action=ignore --upgrade pip==26.2.1",
-        "pip install --root-user-action=ignore poetry==2.1.4",
-        "pip install --root-user-action=ignore poetry-plugin-export==1.9.0",
-        "if [ ! -f poetry.lock ]; then poetry lock; fi",
-        "poetry export --without-hashes --format=requirements.txt > requirements.txt",
+        "if [ ! -f requirements.txt ]; then echo 'This layer directory has no requirements.txt: run uv lock and uv export to create it (see the developer guide, layer customization)'; exit 1; fi",
         "pip install --root-user-action=ignore -r requirements.txt -t /asset-output/python",
         "rsync -rLv ./ /asset-output/python",
         "cd /asset-output",

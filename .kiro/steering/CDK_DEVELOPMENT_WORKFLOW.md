@@ -1260,6 +1260,16 @@ not read). Two rules follow:
     placeholder for token values -- the resolved value still reaches CloudFormation via the
     `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
     `infra/test/pipelines/vamsSchemaRegistrationHash.test.ts`.
+-   **`executionConfigOverrides` is optional and additive.** A deployment registers an existing bundle
+    with a different `executionConfig` through `VamsSchemaRegistration`'s `executionConfigOverrides`
+    (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`). It reaches the import
+    lambda as one JSON property, and `vsi.apply_execution_config_overrides` applies it after the
+    resource injection (`lambdaName` here wins over `resourceOverrides.lambdaName`). Absent emits no
+    property and leaves `schemaHash` unchanged; set, it is mixed into the hash, so a change re-runs the
+    registration. The import's update goes through `pipelineService.update_pipeline`, so a change to a
+    state-machine-relevant value redeploys every referencing workflow (bundle and custom). Tests:
+    `infra/test/pipelines/vamsSchemaRegistrationExecutionConfigOverrides.test.ts`,
+    `backend/tests/handlers/workflows/test_importGlobalPipelineWorkflow_execution_config_overrides.py`.
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` -- otherwise refreshing an unrelated artefact deletes every bundle while the
@@ -1782,11 +1792,13 @@ export class NewPipelineNestedStack extends NestedStack {
 backendPipelines/newPipeline/
 ├── lambda/
 │   ├── lambda_function.py      # Pipeline orchestration Lambda
-│   └── requirements.txt        # Lambda dependencies
+│   └── requirements.txt        # Only if the Lambda ships its own packages; then also pyproject.toml + uv.lock
 ├── container/
 │   ├── Dockerfile              # Container definition
 │   ├── app.py                  # Container application
-│   ├── requirements.txt        # Container dependencies
+│   ├── pyproject.toml          # uv project: direct Python dependencies
+│   ├── uv.lock                 # uv lock; audited by the python-dependency-audit CI job
+│   ├── requirements.txt        # uv export of uv.lock; the Dockerfile pip-installs it
 │   └── scripts/                # Processing scripts
 └── README.md                   # Pipeline documentation
 ```
@@ -2103,6 +2115,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 16. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 17. **A Feature Tracks Its Own Workflow Runs; Core Never Names a Pipeline** (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" and `infra/CLAUDE.md`): A feature that runs a workflow tracks it by storing the `workflowExecutionId` on its own record and reading the run status from the existing execution tracking (execution rows, read-time reconcile, the status-change rule) when its own record is read; it does not register a callback with the workflow core. Core workflow code never names or calls a specific pipeline. Clean up a feature's leftover artefacts with S3 lifecycle rules (e.g. abort incomplete multipart uploads) rather than a terminal hook. A system run's trigger value is the feature's own `System-<Identifier>` string (format checked by `systemPipelines.is_system_trigger`), never a value added to a core list; `backend/tests/handlers/workflows/test_system_pipeline_hooks.py` fails when `lambdaBuilder/workflowFunctions.ts` or the backend workflow core names a feature-specific trigger.
+18. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`. (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" item 22)
 
 #### **Pipeline Configuration Rules**
 

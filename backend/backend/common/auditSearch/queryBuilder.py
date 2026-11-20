@@ -42,7 +42,7 @@ MAX_VALUES_PER_FILTER = 20
 # head is the action-record cap plus room for the prefix, which sits inside that cap anyway.
 HEAD_BYTES = 36 * 1024
 
-# The ceilings of the configurable limits. The configuration (a later change) may lower a limit.
+# The ceilings of the configurable limits. The configuration may lower a limit.
 DEFAULT_MAX_WINDOW_DAYS = 31
 CEILING_MAX_WINDOW_DAYS = 366
 DEFAULT_MAX_ROWS = 1000
