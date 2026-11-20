@@ -39,8 +39,8 @@ from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationR
 from common.indexing.geoLocation import build_geo_location
 from common.indexing.documentIds import MAX_OPENSEARCH_DOCUMENT_ID_BYTES, build_file_document_id
 from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, list_key_versions_to_newest_version, region_routing_s3_client, bucket_region_fields
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
-from common.assetLocations import contains, normalize_base_prefix
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.assetLocations import contains, normalize_base_prefix, object_key_for
 from common.fileAttribution import AMBIGUOUS, FileAttribution, attribute_object, binding_of, stored_location
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record, is_internal_metadata_field
 
@@ -2011,10 +2011,17 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                     operation="skip"
                 )
             
-            # Calculate S3 key
-            asset_location = asset_details.get('assetLocation', {})
-            asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = join_asset_location_key(asset_base_key, file_path)
+            # Calculate S3 key (the single-file rule: the object, an own preview or a companion entry)
+            s3_key = object_key_for(stored_location({**asset_details, 'assetId': asset_id}, bucket_details),
+                                    file_path)
+            if not s3_key:
+                logger.warning(f"File path {file_path} names no single file of asset {asset_id}; skipping")
+                return IndexOperationResponse(
+                    success=True,
+                    message="File path names no file of the asset, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
             
             # Ensure relative path starts with a slash
             if not file_path.startswith('/'):
@@ -2127,10 +2134,16 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
         
-        # Calculate S3 key
-        asset_location = asset_details.get('assetLocation', {})
-        asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = join_asset_location_key(asset_base_key, file_path)
+        # Calculate S3 key (the single-file rule: the object, an own preview or a companion entry)
+        s3_key = object_key_for(stored_location({**asset_details, 'assetId': asset_id}, bucket_details), file_path)
+        if not s3_key:
+            logger.warning(f"File path {file_path} names no single file of asset {asset_id}; skipping")
+            return IndexOperationResponse(
+                success=True,
+                message="File path names no file of the asset, skipping",
+                indexName=opensearch_file_index,
+                operation="skip"
+            )
         
         # Ensure relative path starts with a slash
         if not file_path.startswith('/'):
