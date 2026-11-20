@@ -309,6 +309,7 @@ Feature settings that configuration validation refuses outside the partitions or
 -   `app.useGlobalVpc.addCrossRegionS3Endpoints: true` with an external asset bucket in another Region, outside `aws` ([VPC](#vpc-appuseglobalvpc)).
 -   The Video SOP/BOM Extraction pipeline, outside `aws` and `aws-us-gov` ([Video SOP/BOM extraction](#video-sopbom-extraction-apppipelinesusegenaivideosopbom)).
 -   The GenAI CAD STEP agent's `agentcore` runtime, outside `aws` ([GenAI CAD STEP agent](#genai-cad-step-agent-apppipelinesusegenaicadstepagent)).
+-   The GenAI CAD STEP agent's internet research (`allowInternetResearch: true`), in `aws-us-gov`, `aws-eusc` and the ISO partitions ([GenAI CAD STEP agent](#genai-cad-step-agent-apppipelinesusegenaicadstepagent)).
 -   A `global.` or `us.` cross-Region inference-profile model id, outside `aws` ([Choosing an Amazon Bedrock model](#choosing-an-amazon-bedrock-model)).
 -   The Image to 3D Blender agent's Stability AI image editing (`useStabilityImageEditing`), outside the `aws` partition's `us-` Regions ([Image to 3D](#image-to-3d-apppipelinesuseimageto3d)).
 
