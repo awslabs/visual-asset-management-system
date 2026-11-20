@@ -618,7 +618,7 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
 -   **Run document.** `conversion-run.json` (`vams.conversion3dBasic.run/v1`: tier, task memory and vCPU, seconds per
     phase, and for a continued run its reason) is written under the run's results folder only when the request carries
     `allowEscalation` (a deployment with the tier) or the run is on Batch, so a deployment without the tier writes
-    nothing new. A failed Batch run also writes it, with `failed: true` and the error line, then fails as before; a
+    nothing new. It also carries `peakWorkerMemoryMiB`, the largest peak resident memory a conversion worker reported (measured; `requiredMemoryMiB` is the size check's estimate). A failed Batch run also writes it, with `failed: true` and the error line (`pipelineEnd` reads that line to tell the workflow why a job failed, dropping the exception type of user-facing errors, and summarises the job's status reason and exit code when there is none), then fails as before; a
     failed Lambda run writes none (its error is in the workflow).
 -   **Launcher.** `conversion/3dBasic/lambda/` holds the callback form's Lambdas, deployed only with
     `useConversion3dBasic.batchTier.enabled`: `vamsExecuteConversion3dBasicPipeline` (what the workflow calls, in
