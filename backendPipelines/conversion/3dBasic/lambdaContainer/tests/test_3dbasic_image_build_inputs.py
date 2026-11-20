@@ -3,14 +3,14 @@
 
 """What goes into the 3D Basic Conversion image (#506, #510).
 
-- ``requirements.txt`` is the hashed export of ``poetry.lock`` (backend ``CLAUDE.md``, "Updating Python
+- ``requirements.txt`` is the hashed export of ``uv.lock`` (backend ``CLAUDE.md``, "Updating Python
   Dependencies"; ``pip install --require-hashes``): the Dockerfile installs the requirements file, so a hand edit that disagrees with the
   lock ships one version and is silently reverted by the next export. Both files are compared package
   by package.
 - Pillow is installed. trimesh decodes and encodes texture images through it; without it textures are
   dropped from every conversion and an OBJ with texture coordinates fails to load (#506).
 - The base image is pinned by digest, so two builds of one commit start from the same image.
-- ``.dockerignore`` keeps the tests, the Poetry files and local caches out of ``COPY . .`` while every
+- ``.dockerignore`` keeps the tests, the uv project files and local caches out of ``COPY . .`` while every
   runtime module still enters the image.
 """
 
@@ -43,10 +43,20 @@ def _requirements():
 
 
 def _lock():
-    with open(os.path.join(_LAMBDA_DIR, "poetry.lock"), "rb") as handle:
-        lock = tomllib.load(handle)
-    return {package["name"].lower(): package["version"] for package in lock["package"]
-            if "main" in package.get("groups", ["main"])}
+    """Name -> version of the packages the default image installs: the project's runtime dependencies and
+    everything they pull in. The optional ``step`` group (cascadio) is exported to requirements-step.txt."""
+    with open(os.path.join(_LAMBDA_DIR, "uv.lock"), "rb") as handle:
+        packages = {p["name"]: p for p in tomllib.load(handle)["package"]}
+    with open(os.path.join(_LAMBDA_DIR, "pyproject.toml"), "rb") as handle:
+        project = tomllib.load(handle)["project"]["name"]
+    seen, todo = set(), [project]
+    while todo:
+        name = todo.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        todo.extend(dep["name"] for dep in packages[name].get("dependencies", []))
+    return {name: packages[name]["version"] for name in seen if name != project}
 
 
 def _dockerignore_patterns():
@@ -84,7 +94,7 @@ class TestRequirementsAreTheLockExport:
 
     def test_pillow_is_installed(self):
         assert "pillow" in _requirements()
-        assert re.search(r"(?m)^pillow\s*=", _read("pyproject.toml"))
+        assert re.search(r"(?m)^\s*\"pillow[>=<]", _read("pyproject.toml"))
 
     def test_trimesh_is_on_the_5x_line(self):
         assert int(_requirements()["trimesh"].split(".")[0]) >= 5
@@ -93,7 +103,7 @@ class TestRequirementsAreTheLockExport:
         # `pip install --require-hashes` refuses a package without a hash and any file whose hash is
         # not listed, so the image holds exactly the locked packages.
         blocks = re.split(r"(?m)^(?=[A-Za-z0-9])", _read("requirements.txt"))
-        entries = [block for block in blocks if block.strip()]
+        entries = [block for block in blocks if block.strip() and not block.lstrip().startswith("#")]
         assert entries
         for entry in entries:
             assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), entry.splitlines()[0]
@@ -104,10 +114,15 @@ class TestRequirementsAreTheLockExport:
     def test_the_pyproject_floor_matches_the_lock(self):
         # The direct dependencies' floors are the locked releases, so a re-lock cannot drift below.
         with open(os.path.join(_LAMBDA_DIR, "pyproject.toml"), "rb") as handle:
-            declared = tomllib.load(handle)["tool"]["poetry"]["dependencies"]
+            declared = tomllib.load(handle)["project"]["dependencies"]
+        floors = {}
+        for requirement in declared:
+            match = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)>=([0-9][^,\s]*)", requirement)
+            if match:
+                floors[match.group(1).lower()] = match.group(2)
         pins = _requirements()
         for name in ("trimesh", "aws-lambda-powertools", "pillow"):
-            assert declared[name].lstrip("^") == pins[name], name
+            assert floors[name] == pins[name], name
 
 
 @pytest.mark.unit
@@ -155,7 +170,7 @@ class TestBaseImage:
 class TestDockerIgnore:
     @pytest.mark.parametrize("path", [
         "tests/test_conversion_contract.py", "tests/conftest.py", "__pycache__/lambda.cpython-312.pyc",
-        "common/__pycache__/logger.cpython-312.pyc", ".pytest_cache/v/cache/nodeids", "poetry.lock",
+        "common/__pycache__/logger.cpython-312.pyc", ".pytest_cache/v/cache/nodeids", "uv.lock",
         "pyproject.toml", "Dockerfile", ".dockerignore",
     ])
     def test_it_keeps_build_only_files_out_of_the_image(self, path):
