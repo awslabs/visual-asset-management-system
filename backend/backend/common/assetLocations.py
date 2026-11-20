@@ -31,7 +31,7 @@ than with the prefix match alone.
 Pure functions, no AWS calls.
 """
 
-from typing import List, Optional, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
@@ -164,6 +164,29 @@ def listing_prefixes(location: Optional[str]) -> List[Tuple[str, Optional[int]]]
     if loc.endswith("/"):
         return [(loc, None)]
     return [(loc, 1), (loc + PREVIEW_FILE_PATTERN, None), (loc + "/", None)]
+
+
+def held_objects(location: Optional[str],
+                 list_objects: Callable[[str, Optional[int]], Iterable[Dict]]) -> Iterator[Dict]:
+    """Each S3 object a location holds, once, from listings of its ``listing_prefixes``.
+
+    ``list_objects(prefix, cap)`` returns the S3 object dicts (``Contents`` entries) under ``prefix``, at most
+    ``cap`` when ``cap`` is set. The one-key read of a single-file location's own key counts only when the key
+    it returns IS that key: when the object has no current version, the smallest key under the prefix is an
+    own preview or a companion entry, which a later prefix lists again. Only keys ``contains`` accepts are
+    yielded, each once.
+    """
+    loc = normalize_location(location)
+    seen = set()
+    for prefix, cap in listing_prefixes(loc):
+        for obj in list_objects(prefix, cap) or []:
+            key = obj.get("Key", "")
+            if cap == 1 and not loc.endswith("/") and key != loc:
+                continue
+            if key in seen or not contains(loc, key):
+                continue
+            seen.add(key)
+            yield obj
 
 
 def folder_listing_prefix(location: Optional[str], relative_folder: Optional[str]) -> str:

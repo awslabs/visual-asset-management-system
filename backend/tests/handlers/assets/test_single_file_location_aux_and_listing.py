@@ -162,6 +162,17 @@ def engine(monkeypatch):
 
 @pytest.mark.unit
 class TestAssetTypeSampleReadsOnlyTheLocationsKeys:
+    def test_an_archived_object_and_one_companion_file_count_that_file_once(self, engine):
+        """With the object archived and no neighbour key, the one-key read of the location returns the
+        companion file, which the companion folder listing returns again; counted twice, the asset read as
+        a folder (D4)."""
+        client = engine.test_client
+        for version in client.list_object_versions(Bucket=BUCKET, Prefix="p1/model.glb-old/").get("Versions", []):
+            client.delete_object(Bucket=BUCKET, Key=version["Key"], VersionId=version["VersionId"])
+        client.delete_object(Bucket=BUCKET, Key=OWN_KEY)
+        client.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/part.obj", Body=b"x")
+        assert engine._determine_asset_type(BUCKET, FILE_LOCATION) == ".obj"
+
     def test_neighbours_do_not_fill_the_sample(self, engine):
         engine.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/part.obj", Body=b"x")
         assert engine._determine_asset_type(BUCKET, FILE_LOCATION) == "folder"

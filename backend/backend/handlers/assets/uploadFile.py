@@ -45,7 +45,7 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import contains, is_folder_location, listing_prefixes, names_own_object, object_key_for
+from common.assetLocations import contains, held_objects, is_folder_location, names_own_object, object_key_for
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -616,11 +616,9 @@ def determine_asset_type(assetId, bucket, prefix):
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = []
-        for list_prefix, cap in listing_prefixes(prefix):
-            contents.extend(list_all_objects(bucket, list_prefix, client=s3,
-                                             max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE,
-                                                             ASSET_TYPE_DETECTION_SAMPLE_SIZE)))
+        contents = list(held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+            bucket, list_prefix, client=s3,
+            max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE))))
         
         # Filter out archived files
         non_archived_files = []

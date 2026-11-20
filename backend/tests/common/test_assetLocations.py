@@ -270,3 +270,29 @@ class TestListingPrefixes:
 
     def test_no_location_lists_nothing(self):
         assert al.listing_prefixes("") == [] and al.listing_prefixes(None) == []
+
+
+@pytest.mark.unit
+class TestHeldObjects:
+    @staticmethod
+    def _lister(*keys):
+        def list_objects(prefix, cap):
+            listed = [{"Key": key} for key in sorted(keys) if key.startswith(prefix)]
+            return listed[:cap] if cap else listed
+        return list_objects
+
+    def test_each_held_key_is_yielded_once_when_the_object_has_no_current_version(self):
+        lister = self._lister("projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == [
+            "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj"]
+        lister = self._lister("projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == ["projects/model.glb/sub/x.obj"]
+
+    def test_the_object_and_its_keys_are_yielded_and_neighbours_are_not(self):
+        lister = self._lister(FILE_LOCATION, "projects/model.glb-old/n.txt", "projects/model.glb.bak",
+                              "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == [
+            FILE_LOCATION, "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj"]
+        # A folder location lists its folder once
+        lister = self._lister("projects/building-a/x.txt", "projects/building-a-other/y.txt")
+        assert [o["Key"] for o in al.held_objects(FOLDER_LOCATION, lister)] == ["projects/building-a/x.txt"]
