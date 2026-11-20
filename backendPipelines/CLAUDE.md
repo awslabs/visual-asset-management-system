@@ -309,14 +309,15 @@ The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logge
 in the `customLogging/logger.py` byte-identity set and redacts only `authorization`. Its handler
 therefore checks `TaskToken` before it logs anything and never logs the event
 (`tests/test_3dbasic_task_token_logging.py`). The 3dBasic
-`.dockerignore` keeps `tests/`, the Poetry files and caches out of its `COPY . .`.
+`.dockerignore` keeps `tests/`, the lock and project files and caches out of its `COPY . .`.
 
 **3D Basic Conversion image: how a model is read and written.** `lambdaContainer/lambda.py` is the handler
 and does all Amazon S3 traffic; the parsing runs elsewhere:
 
--   `requirements.txt` is `poetry export -f requirements.txt` of `poetry.lock` **with hashes** (the export needs
-    `poetry-plugin-export`), and the Dockerfile installs it with `pip install --require-hashes`. Re-lock with
-    `poetry update`, re-export, and bump the base image digest as the Dockerfile comment says.
+-   `requirements.txt` is the export of the image's lock **with hashes**, and the Dockerfile installs it with
+    `pip install --require-hashes`. The image is one of the two projects not yet on uv: re-lock and re-export it
+    as the developer guide's "Projects not yet on uv" section says (Managing Python Dependencies in
+    `developer/setup.md`), and bump the base image digest as the Dockerfile comment says.
     `tests/test_3dbasic_image_build_inputs.py` holds the two files, the hashes and the install flag together.
 -   `size_check.py` refuses an input before it is downloaded. The handler reads the size with `HeadObject` at
     the launch version and compares it with a limit derived from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and the
@@ -409,9 +410,24 @@ and does all Amazon S3 traffic; the parsing runs elsewhere:
     `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
     environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
     the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.
+-   COLLADA and USD scenes are sized from the file before their loader expands them
+    (`lambdaContainer/expansion_bounds.py`, container-only). `model_formats.check_collada_scene` counts the
+    nodes, vertices and triangles `trimesh` places for `instance_node` and nested `node` elements (one node and
+    one mesh for each primitive element of each geometry placed), from the
+    hardened XML parse and a memoised count over the node graph, and refuses a scene over the bound or one
+    that places a node inside itself. `usd_io.read_usd` counts the prims `Usd.Stage.Open` composes from the
+    layers' prim specs and arcs (references, payloads, inherits, specializes, sublayers, variants; an
+    instanceable prim counts once, its shared content once per prototype) before it opens the stage, and
+    refuses a scene over the bound or one whose prim composes itself. Both use
+    `expansion_bounds.max_scene_nodes(memory)` (1,000,000 on the 10,240 MB function, in proportion above
+    that, from the same memory input as the input size limits), the value of `scene_limits.MAX_SCENE_NODES`;
+    the job carries it as `max_scene_nodes` and the conversion passes it as `SceneLimit(max_nodes=...)`.
+    `read_usd` also takes a `deadline` (a share, `model_formats.USD_READ_TIME_SHARE`, of the job's
+    `tool_timeout_seconds`) checked for every prim of the walk. A refusal names nodes or prims, not memory. `model_formats.apply_plan` transforms a scene through
+    `_apply_scene_transform` (trimesh's `Scene.apply_transform` rebuilds its graph cache per node).
 -   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
-    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the `step` Poetry
-    group, `poetry export --only step`). `lambda.py` refuses a STEP run before any S3 call when the variable is
+    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the export of the
+    lock's `step` group). `lambda.py` refuses a STEP run before any S3 call when the variable is
     not `true`. `step_limits.py` is the thumbnail CAD handler's placement count, vendored with a drift test in
     `tests/test_3dbasic_step_input.py`. cascadio writes metres and keeps Z up. `run_golden.sh` with
     `GOLDEN_STEP=1` builds and tests the STEP image and asserts the default image holds no Open CASCADE files.
@@ -741,6 +757,16 @@ The registration custom resource re-fires only when the bundle changes: `schemaH
     placeholder for token values — the resolved value still reaches CloudFormation via the
     `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
     `infra/test/pipelines/vamsSchemaRegistrationHash.test.ts`.
+-   **`executionConfigOverrides` is optional and additive.** A deployment registers an existing bundle
+    with a different `executionConfig` through `VamsSchemaRegistration`'s `executionConfigOverrides`
+    (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`). It reaches the import
+    lambda as one JSON property, and `vsi.apply_execution_config_overrides` applies it after the
+    resource injection (`lambdaName` here wins over `resourceOverrides.lambdaName`). Absent emits no
+    property and leaves `schemaHash` unchanged; set, it is mixed into the hash, so a change re-runs the
+    registration. The import's update goes through `pipelineService.update_pipeline`, so a change to a
+    state-machine-relevant value redeploys every referencing workflow (bundle and custom). Tests:
+    `infra/test/pipelines/vamsSchemaRegistrationExecutionConfigOverrides.test.ts`,
+    `backend/tests/handlers/workflows/test_importGlobalPipelineWorkflow_execution_config_overrides.py`.
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` — otherwise refreshing an unrelated artefact deletes every bundle while the
@@ -1927,3 +1953,5 @@ What an upstream tool writes is a second thing to read from its source rather th
     honest alternative is to scope the rule that flags it (see
     `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`, whose exemption is a
     DENY list precisely so a future upstream file turns the rule red instead of vanishing from it).
+
+22. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`.

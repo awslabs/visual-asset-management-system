@@ -120,6 +120,18 @@ DISPLAY_SESSION_ENDED_CODE = 'DISPLAY_SESSION_ENDED'
 DISPLAY_SESSION_ENDED_MESSAGE = (
     "The workstation is running but its remote display session has ended. Stop it, then start it again, "
     "to reconnect.")
+# A workstation that has run which EDH reports in its error state (its remote display stopped responding): the
+# record keeps its state and carries connectionUnavailableReason DESKTOP_ERROR, `get` prints the web's sentence, and
+# `connect`, the desktop sign-in and `start` are refused (409) with it.
+DESKTOP_ERROR_CODE = 'DESKTOP_ERROR'
+DESKTOP_ERROR_MESSAGE = (
+    "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or "
+    "stop it, then start it again, to reconnect.")
+# The sentence `get` prints as Connection for each reason a record carries.
+CONNECTION_UNAVAILABLE_MESSAGES = {
+    DISPLAY_SESSION_ENDED_CODE: DISPLAY_SESSION_ENDED_MESSAGE,
+    DESKTOP_ERROR_CODE: DESKTOP_ERROR_MESSAGE,
+}
 
 # The `get` record's label column: a continuation line of a value starts under the value.
 RECORD_VALUE_INDENT = ' ' * 19
@@ -134,12 +146,16 @@ def is_start_stalled(record: Dict[str, Any]) -> bool:
 
 def state_label(record: Dict[str, Any]) -> str:
     """What the State column prints for a workstation: STARTING or STOPPING while the record's
-    `activity` says so, STALLED for a start the sweep found stalled, otherwise its state."""
+    `activity` says so, STALLED for a start the sweep found stalled, STARTING for a workstation that
+    has run held in CREATING while EDH reports it in error (DESKTOP_ERROR: a restart, not a launch),
+    otherwise its state."""
     activity = record.get('activity')
     if activity in ACTIVITY_LABELS:
         return ACTIVITY_LABELS[activity]
     if is_start_stalled(record):
         return STALLED_LABEL
+    if record.get('state') == 'CREATING' and record.get('connectionUnavailableReason') == DESKTOP_ERROR_CODE:
+        return ACTIVITY_LABELS['starting']
     return str(record.get('state') or 'N/A')
 
 
@@ -513,8 +529,9 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Created At:      {result.get('createdAt', 'N/A')}")
     lines.append(f"  Updated At:      {result.get('updatedAt', 'N/A')}")
     lines.append(f"  Connectable:     {result.get('connectionAvailable', 'N/A')}")
-    if result.get('connectionUnavailableReason') == DISPLAY_SESSION_ENDED_CODE:
-        lines.append(f"  Connection:      {DISPLAY_SESSION_ENDED_MESSAGE}")
+    reason_message = CONNECTION_UNAVAILABLE_MESSAGES.get(result.get('connectionUnavailableReason'))
+    if reason_message:
+        lines.append(f"  Connection:      {reason_message}")
     lines.append(f"  Lease Expires:   {result.get('leaseExpiresAt') or 'none'}")
     lines.append(f"  Lease Stopped:   {result.get('leaseStoppedAt') or 'none'}")
     lines.append(f"  Lease Hours:     {result.get('leaseHoursAtLaunch') or 'N/A'}")
@@ -955,7 +972,9 @@ def connect(ctx: click.Context, session_id: str, show_sign_in: bool, json_output
     The response is sessionId, connectionUrl and osFamily. A workstation that is not connectable yet
     (still CREATING, STOPPED, or without an EDH session) is refused with HTTP 409. So is a running
     workstation whose remote display session has ended (code DISPLAY_SESSION_ENDED; `get` shows it as
-    Connection): stop it, then start it again, to reconnect.
+    Connection): stop it, then start it again, to reconnect. A workstation EDH reports in error (code
+    DESKTOP_ERROR, also shown by `get` as Connection) keeps its disk: wait a few minutes, or stop it,
+    then start it again.
 
     The connection URL carries a session credential, so in CLI mode only the DCV host is printed.
     Use --json-output to receive the full connectionUrl; it is written to stdout, so it lands in your

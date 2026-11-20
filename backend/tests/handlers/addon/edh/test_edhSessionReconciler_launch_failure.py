@@ -3,8 +3,8 @@
 
 """The session sweep captures the reason EDH recorded for a failed launch.
 
-A row the sweep records ORPHANED -- EDH lists its desktop in ``error``, or EDH no longer has the desktop of a
-launch still CREATING -- or finds ORPHANED with a session id is given the failure EDH's per-user listing
+A row the sweep records ORPHANED -- EDH lists the desktop of a new launch in ``error``, or EDH no longer has the
+desktop of a new launch still CREATING -- or finds ORPHANED with a session id is given the failure EDH's per-user listing
 records for that session, read as the row's own EDH uid since that listing is owner-scoped: ``edhFailure``
 is stored and a generic ``lastError`` reclassified, a code the launch recorded kept. The read is made at
 most once per row per five minutes and never once a reason is stored; one that fails writes only its
@@ -44,6 +44,12 @@ def _orphaned(bootstrap_id, **overrides):
                                  "keyExpiresAt": "", "edhUid": OWNER_UID, **overrides})
 
 
+def _launching(bootstrap_id, **overrides):
+    """A new launch EDH has placed: CREATING with a session id and no start EDH accepted."""
+    return _row(bootstrap_id, **{"state": rec.STATE_CREATING, "edhState": "placing", "connectionAvailable": False,
+                                 **overrides})
+
+
 def _capture_writes(persist, bootstrap_id):
     return [updates for updates in _updates_for(persist, bootstrap_id) if "edhFailureReadAt" in updates]
 
@@ -51,7 +57,7 @@ def _capture_writes(persist, bootstrap_id):
 @pytest.mark.unit
 class TestTheSweepCapturesAFailedLaunch:
     def test_a_desktop_edh_lists_in_error_is_given_its_reason_read_as_the_rows_owner(self):
-        row = _row("b", edhUid=OWNER_UID)
+        row = _launching("b", edhUid=OWNER_UID)
 
         summary, revoke_fn, persist, _pager, client_factory, _delete = _run(
             [row], [_desktop("sess-b", "error")], failure=CAPACITY_FAILURE)
@@ -67,7 +73,7 @@ class TestTheSweepCapturesAFailedLaunch:
 
     def test_the_read_never_names_the_service_actor(self):
         _summary_out, _revoke, _persist, _pager, client_factory, _delete = _run(
-            [_row("b", edhUid=OWNER_UID)], [_desktop("sess-b", "error")], failure=CAPACITY_FAILURE)
+            [_launching("b", edhUid=OWNER_UID)], [_desktop("sess-b", "error")], failure=CAPACITY_FAILURE)
 
         reads = _failure_reads(client_factory)
         assert reads, "the failure was never read"
@@ -112,7 +118,7 @@ class TestTheSweepCapturesAFailedLaunch:
 
     def test_after_a_revoking_write_the_capture_is_conditioned_on_that_write(self):
         _summary_out, _revoke, persist, *_rest = _run(
-            [_row("b")], [_desktop("sess-b", "error")], failure=CAPACITY_FAILURE)
+            [_launching("b")], [_desktop("sess-b", "error")], failure=CAPACITY_FAILURE)
 
         conditions = _conditions_for(persist, "b")
         assert conditions, "nothing was written"

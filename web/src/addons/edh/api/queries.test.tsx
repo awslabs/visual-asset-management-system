@@ -208,6 +208,21 @@ describe("isTransitionalWorkstation", () => {
         ).toBe(false);
     });
 
+    it("treats a workstation EDH reports in error as settled, active or creating", () => {
+        // Not starting: it stays as it is until EDH recovers it or the user stops it.
+        for (const state of ["ACTIVE", "CREATING"] as const) {
+            expect(
+                isTransitionalWorkstation({
+                    state,
+                    connectionAvailable: false,
+                    activity: null,
+                    lastError: null,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                })
+            ).toBe(false);
+        }
+    });
+
     it("treats a stalled start as settled, and a creating row with any other code as transitional", () => {
         const creating = { state: "CREATING", connectionAvailable: false, activity: null } as const;
         expect(isTransitionalWorkstation({ ...creating, lastError: "START_STALLED" })).toBe(false);
