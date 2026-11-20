@@ -8,7 +8,6 @@ import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { NeedleUSDDependencyManager } from "./dependencies";
 import { downloadAsset } from "../../../services/APIService";
-import { getDualAuthorizationHeader } from "../../../utils/authTokenUtils";
 import { MouseControls } from "./MouseControls";
 import NeedleUSDPanel from "./NeedleUSDPanel";
 import LoadingSpinner from "../../components/LoadingSpinner";
@@ -22,11 +21,8 @@ import {
     listZipEntryNames,
     normalizePackagedPath,
 } from "./usdDependencyPaths";
-import {
-    ApiRefusalError,
-    isApiRefusalError,
-    streamResponseFailure,
-} from "../../core/streamFailure";
+import { ApiRefusalError, isApiRefusalError } from "../../core/streamFailure";
+import { fetchPresignedFile } from "../../core/presignedFetch";
 
 const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
     assetId,
@@ -781,56 +777,40 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
         };
 
         /**
-         * Download a file from the streaming endpoint
+         * Download a file straight from S3 through a presigned URL that the authorized download
+         * route issues. The streaming route's 307 makes the browser send `Origin: null` to S3,
+         * which an external bucket's single-origin CORS rule rejects (#1630); nothing but the
+         * signed URL is sent to S3.
          */
         const downloadFile = async (
             fileKey: string,
-            authHeader: string,
             isMainFile = false,
             isSingleFile = false
         ): Promise<ArrayBuffer | null> => {
             try {
-                const pathSegments = fileKey.split("/");
-                const encodedSegments = pathSegments.map((segment) => encodeURIComponent(segment));
-                const encodedFileKey = encodedSegments.join("/");
-                let assetUrl = `${config.api}database/${databaseId}/assets/${encodeURIComponent(
-                    assetId
-                )}/download/stream/${encodedFileKey}`;
-
                 // Version resolution:
                 // - assetVersionId: used for ALL files (main + dependencies) to fetch from a specific asset version
                 // - versionId: S3 version ID, used only for the MAIN file (not dependencies)
-                if (assetVersionId) {
-                    assetUrl += `?assetVersionId=${encodeURIComponent(assetVersionId)}`;
-                } else if (versionId && isSingleFile) {
-                    assetUrl += `?versionId=${encodeURIComponent(versionId)}`;
-                }
-
                 // Created lazily on the first download of a load pass; cleanup aborts and clears it,
                 // so a remount gets a fresh controller.
                 if (!downloadAbortRef.current) {
                     downloadAbortRef.current = new AbortController();
                 }
-                const response = await fetch(assetUrl, {
-                    headers: { Authorization: authHeader },
-                    signal: downloadAbortRef.current.signal,
-                });
-
-                if (!response.ok) {
-                    if (isMainFile) {
-                        // A refusal with the API's own reason is an ApiRefusalError carrying it
-                        // (D166); any other status keeps this file's own message.
-                        throw await streamResponseFailure(
-                            response,
-                            `Failed to load: ${fileKey} (${response.status})`
-                        );
-                    } else {
-                        console.warn(
-                            `Dependency not found (skipping): ${fileKey} (${response.status})`
-                        );
-                        return null;
-                    }
-                }
+                const fileName = fileKey.split("/").pop() || fileKey;
+                // A refused presign is the API's own answer (an ApiRefusalError carrying its
+                // reason); an S3 error status is worded as an unavailable link.
+                const response = await fetchPresignedFile(
+                    {
+                        databaseId,
+                        assetId,
+                        key: fileKey,
+                        assetVersionId: assetVersionId || undefined,
+                        versionId:
+                            !assetVersionId && versionId && isSingleFile ? versionId : undefined,
+                        signal: downloadAbortRef.current.signal,
+                    },
+                    `Failed to load: ${fileName}`
+                );
 
                 return await response.arrayBuffer();
             } catch (error) {
@@ -1151,7 +1131,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
 
                 //     // Download using existing streams API logic
                 //     console.log(`[urlModifier] On-demand download: ${relativePath}`);
-                //     const content = await downloadFile(relativePath, authHeader, false, false);
+                //     const content = await downloadFile(relativePath, false, false);
                 //     if (content) {
                 //         onDemandDownloads.set(relativePath, content);
                 //         console.log(`[urlModifier] Downloaded: ${relativePath} (${content.byteLength} bytes)`);
@@ -1190,7 +1170,6 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                         : [];
                 if (filesToLoad.length === 0) throw new Error("No files specified");
 
-                const authHeader = await getDualAuthorizationHeader();
                 const loadedFiles = new Set<string>();
                 const failedDownloads = new Set<string>();
                 // `refusal`: the API refused the file with its own reason (an ApiRefusalError).
@@ -1227,12 +1206,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                     try {
                         // Download main file
                         const isSingleFile = filesToLoad.length === 1;
-                        const arrayBuffer = await downloadFile(
-                            fileKey,
-                            authHeader,
-                            true,
-                            isSingleFile
-                        );
+                        const arrayBuffer = await downloadFile(fileKey, true, isSingleFile);
                         if (!arrayBuffer) throw new Error("Failed to download file");
 
                         // Store main file in WASM filesystem
@@ -1275,12 +1249,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                                         )
                                             return;
 
-                                        const content = await downloadFile(
-                                            depPath,
-                                            authHeader,
-                                            false,
-                                            false
-                                        );
+                                        const content = await downloadFile(depPath, false, false);
                                         if (content) {
                                             storeInWASM(depPath, content, USD, directory);
                                             loadedFiles.add(depPath);
@@ -1480,7 +1449,7 @@ const NeedleUSDViewerComponent: React.FC<ViewerPluginProps> = ({
                             console.log(
                                 `[Verification] Downloading: ${assetPath} for file_${fileIndex}`
                             );
-                            const content = await downloadFile(assetPath, authHeader, false, false);
+                            const content = await downloadFile(assetPath, false, false);
                             // console.log(
                             //     `[Verification] Download result for ${assetPath}: ${
                             //         content ? `${content.byteLength} bytes` : "null (404)"

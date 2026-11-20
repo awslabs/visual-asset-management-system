@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** The Search page's Map view is a flat map, and it frames every located result: a footprint split at longitude 180 or results on several continents no longer leave the view on an empty area. The map previously followed the basemap style's globe, whose fit-to-bounds chose the wrong view. ([#1680](https://github.com/awslabs/visual-asset-management-system/issues/1680))
 
 -   **Pipelines** Isaac Lab training with `rlLibrary` set to `rl_games` or `skrl` uploads the checkpoints the library writes to the run's `checkpoints/` folder, as `rsl_rl` already did: the `.pth` files of an `rl_games` run and the `agent_<timestep>.pt` and `best_agent.pt` files of a `skrl` run. A training run that finds no checkpoint to upload fails, after its logs and configuration are uploaded. Evaluation without a checkpoint path also finds `.pth` files, and selects the latest checkpoint by the chosen library's file naming, ignoring other libraries' checkpoints on the asset. ([#1315](https://github.com/awslabs/visual-asset-management-system/issues/1315))
+-   **Web** The Needle USD and ThatOpen IFC viewers open files from an external S3 bucket whose CORS rule lists only the VAMS web origin. They now read each file, and each USD dependency, through a presigned URL, so the browser sends the web origin instead of `null`. ([#1630](https://github.com/awslabs/visual-asset-management-system/issues/1630))
 
 ### Chores
 
