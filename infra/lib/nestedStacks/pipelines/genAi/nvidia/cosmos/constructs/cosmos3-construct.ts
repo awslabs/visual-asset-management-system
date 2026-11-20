@@ -40,6 +40,12 @@ import {
     suppressCdkNagEcrAuthTokenWildcard,
 } from "../../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../../constructs/pipelineJobTags";
 import { populateHuggingFaceTokenSecret } from "../../customResources/populateHuggingFaceTokenSecret";
 import { DockerImageAsset, Platform } from "aws-cdk-lib/aws-ecr-assets";
 
@@ -839,7 +845,8 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
                 resultPath: "$.error",
             });
 
-            const batchJob = new tasks.BatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
+            const batchJob = new TaggedBatchSubmitJob(this, `CosmosBatchJob-${modelKey}`, {
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.nvidiaCosmos3),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchJobDefinition.attrJobDefinitionArn,
                 jobQueueArn: jobQueue.ref,
@@ -901,6 +908,7 @@ chown -R 10000:10000 /mnt/efs/cosmos-models
                 }
             );
 
+            suppressBatchJobTaggingNag(pipelineStateMachine);
             // Step Functions cancels the submitted Batch job when the execution stops, which needs
             // TerminateJob. Without it an abort leaves the GPU job running to its attempt limit — eight
             // hours on a g6e or p5 instance — and the execution reports stopped while the compute is

@@ -110,8 +110,8 @@ tools/VamsMCP/
     test_zip_download_tools.py
                              # the Download as Zip tools: gate tiers, the body create builds (the CLI's
                              # own selection helpers), errors as data, the URL tool out of autoApprove
-    test_compliance_tools.py # the compliance tools: the single-response schema listing, the
-                             # maxItems-keyed pages (cascades, evaluations, audit, quarantine), the
+    test_compliance_tools.py # the compliance tools: the maxItems-keyed pages (schemas, cascades,
+                             # evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
                              # bodies, docstring contracts
     test_audit_tools.py      # the opt-in `audit` set (vams_audit_groups, _search, _results, _stop): the set
@@ -188,10 +188,6 @@ asymmetry other callers rely on):
 -   `_bounded_message_list(page, max_items, page_size, noun)` — lifts a **bare
     array** nested under `message` onto `Items`, and flags the bound the route
     applied. Used by the two asset-scoped comment listings (Mandatory Rule 7).
--   `_single_response_list(page, items_key)` — lifts a list a route returns
-    WHOLE, under its own field name and with no envelope and no token, onto
-    `Items` + `count`, carrying the other top-level fields through. Used by the
-    compliance schema listing (Mandatory Rule 7).
 
 ---
 
@@ -311,13 +307,11 @@ asymmetry other callers rely on):
     helper: a bare array under `message` (the asset-scoped comment listings —
     `_bounded_message_list()`), an `Items`/`NextToken` page under `message`
     (subscriptions), and no envelope at all (metadata schemas, API keys, every
-    compliance route). One compliance listing, `schemas`, returns a WHOLE list under
-    a route-specific field with no token and goes through
-    `_single_response_list(page, items_key)`, because `paginate()` would send paging
-    parameters the route ignores and stop after one page anyway. The compliance
+    compliance route). The compliance `schemas`,
     `cascades`, `evaluations`, audit `entries` and `quarantinedAssets` are
     `maxItems`/`startingToken`/`NextToken` pages driven by `paginate()` with that
-    field as `items_key`; the database overview and bindings reads return the
+    field as `items_key` (`list_compliance_schemas` also carries the first page's
+    `createScopes` through, an empty list included); the database overview and bindings reads return the
     route's own page (`summary`, `totalAssets`, `assetOverrideCount` describe the
     full set; `summary.error` is an overlay count of assets whose last evaluation
     errored, not a state) with `max_items`/`starting_token` forwarded and `NextToken`
@@ -325,11 +319,11 @@ asymmetry other callers rely on):
     (`vams-rules-v1` | `legacy`).
 
     **A page can name its page size something other than `pageSize`.** The compliance
-    cascade listing, evaluation history, audit trails and quarantine listing page on
+    schema listing, cascade listing, evaluation history, audit trails and quarantine listing page on
     `maxItems` + `startingToken` and return `NextToken`; `paginate()` still drives them,
     but the `fetch_page` callable renames `params["pageSize"]` to the route's `maxItems`
     (clamped to the route's cap) and passes the route's list field as `items_key`
-    (`cascades`, `evaluations`, `entries`, `quarantinedAssets`).
+    (`schemas`, `cascades`, `evaluations`, `entries`, `quarantinedAssets`).
 
     **A route can accept the pagination parameters and discard the token.** The
     comment listings apply `maxItems`/`pageSize` and return no `NextToken` — the

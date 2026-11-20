@@ -361,8 +361,8 @@ and each row adds `requestedBy`, `isOwn` and the API's `canDownload` /
 `canRemove` decisions. Jobs on assets the caller can no longer read, and expired
 jobs, are left out.
 `get_zip_download_url` (a write-tier tool) also signs another user's archive
-when the caller may download from the asset and every archived file is still
-downloadable.
+when the caller may download from the asset. Every archive, the caller's own or
+another user's, is signed only while every file in it is still downloadable.
 `get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
 CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
@@ -410,8 +410,8 @@ asset held before it. `get_database_compliance_overview` counts only assets
 that have a compliance record, with an `exception` bucket in its `summary` and an
 `error` count that overlays the state buckets (assets whose last evaluation
 errored) rather than adding to them.
-`list_compliance_schemas` returns its whole list in one response under `Items`
-and takes no paging parameters.
+`list_compliance_schemas` (in name order; a page leaves out the schemas the caller
+may not read, so it can be short or empty while a `NextToken` remains),
 `list_compliance_cascades` (pending approval unless `state` names another; each
 row carries `databaseId` / `assetId` / `assetName` of the trigger asset, and an
 automatically opened cascade is not duplicated while one for the same parent is
@@ -818,23 +818,32 @@ narrowed by the schema's file type restriction and the rule's `includePaths` /
 `metadataSchemaRef` must name a schema of the scope's entity type — a missing or
 mismatched schema records an `error` result, never a pass. Registering an
 existing name writes the next version, and `update_compliance_schema` replaces the
-body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
+body wholesale rather than merging. Moving a schema to a database scope (`database_id`
+on an update, or on a create that registers an existing name) is refused while the
+schema is bound (a database binding or an asset override) in another database; moving
+it to GLOBAL is not refused for that reason. `bind_compliance_schema` binds a database (or,
 with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
 that database can be bound, a `legacy` schema is refused, and `auto_eval` is sent on
 the database binding only because the asset route does not read it.
 `unbind_compliance_schema` on a database
 deletes the compliance record of every asset that inherited the binding
 (`removedComplianceRecords`) — evaluation history and the audit trail stay.
-`evaluate_asset_compliance` with `schema_name` evaluates against that schema without
-changing the asset's binding; its response carries `schemaVersion`,
-`exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
-state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
+`evaluate_asset_compliance` evaluates against the asset's bound schema; its response
+carries `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and `dryRun`, and when
+every rule errored the asset's state is left unchanged with `lastEvaluationStatus`
+`error`. A `schema_name` other than the bound one runs a dry run (`dryRun: true`, no
+`evaluationId`): the rule results and verdict are returned and nothing is recorded
+(no evaluation record, no state change, no audit entry, no workflow launch, no
+cascade); pipeline rules do not run and are counted in `pipelineRulesNotRun`. The
+caller needs read access to the named schema, and it must be GLOBAL or available to
+the asset's database. `sweep_compliance_schema` returns `assetsTriggered` plus
 `skipped` (bound assets not evaluated: `skippedNotAuthorized` those the caller may not
 evaluate or read, counted but never listed, and `skippedArchived` the archived assets the caller may see;
 an archived asset the caller may not see is counted nowhere) and
-`assetsRemaining` (still to evaluate); while assets remain the response carries
-`NextToken`, and calling again with it as `starting_token` continues the sweep until no
-token is returned. `evaluate_database_compliance` evaluates
+`assetsRemaining` (the assets this call read and did not reach; a call reads under a
+time budget, so it can be 0 while more remain). While the response carries
+`NextToken`, calling again with it as `starting_token` continues the sweep; it is done
+when no token is returned. `evaluate_database_compliance` evaluates
 the tracked assets of one database, each against its own bound schema, with the same
 bounds and continuation, and adds `registered` and `withoutSchema`. Both remove,
 rather than evaluate, the compliance record of an asset that no longer exists

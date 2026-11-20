@@ -29,7 +29,8 @@ sfn = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'], config
 
 # Deployment-level settings the CDK passes through; per-run values narrow them, never widen them.
 MAX_RUN_SECONDS = int(os.environ.get("MAX_RUN_SECONDS", "3600"))
-ALLOW_INTERNET_RESEARCH = os.environ.get("ALLOW_INTERNET_RESEARCH", "true").strip().lower() == "true"
+# Off when the variable is missing: research sends queries to third-party search engines.
+ALLOW_INTERNET_RESEARCH = os.environ.get("ALLOW_INTERNET_RESEARCH", "false").strip().lower() == "true"
 OPENAI_ENABLED = os.environ.get("OPENAI_ENABLED", "false").strip().lower() == "true"
 # The deployment's bedrockModelId, the one Bedrock model the container role's IAM grant names. A run
 # may name it again but no other Bedrock model, which would fail at InvokeModel after the run had

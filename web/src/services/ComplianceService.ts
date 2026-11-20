@@ -595,29 +595,30 @@ export interface EvaluationRecord {
     closedReason?: string;
     errorMessage?: string;
     /**
-     * Set when a release (`released`) or an exception grant (`exceptionGranted`) made after the
-     * evaluation began outranked its outcome: the verdict is recorded but did not change the
-     * asset's state. `notAppliedMessage` says so in words ("Not applied: ...").
+     * Set when the verdict is recorded but did not change the asset's state: a release
+     * (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began
+     * outranked it, the asset's schema binding changed after it began (`bindingChanged`), or its
+     * outcome could not be written to the asset (`notRecorded`). `notAppliedMessage` says so in
+     * words ("Not applied: ...").
      */
-    notApplied?: "released" | "exceptionGranted" | string;
+    notApplied?: "released" | "exceptionGranted" | "bindingChanged" | "notRecorded" | string;
     notAppliedMessage?: string;
 }
 
 /** Shown for an evaluation closed without a verdict. */
 export const EVALUATION_NOT_COMPLETED_LABEL = "Not completed";
 
-/** Shown beside the verdict of an evaluation whose outcome a later decision outranked. */
+/** Shown beside the verdict of an evaluation whose outcome did not change the asset's state. */
 export const EVALUATION_NOT_APPLIED_LABEL = "Not applied";
 
 /**
- * Why an evaluation's verdict did not change the asset's state, as the API recorded it (a release
- * or exception grant made after the evaluation began), or null for an evaluation whose outcome
- * was applied.
+ * Why an evaluation's verdict did not change the asset's state, as the API recorded it
+ * (`notAppliedMessage`), or null for an evaluation whose outcome was applied.
  */
 export const evaluationNotAppliedMessage = (evaluation: EvaluationRecord): string | null =>
     evaluation.notApplied
         ? evaluation.notAppliedMessage ||
-          "Not applied: a decision made after this evaluation began outranks it"
+          "Not applied: this evaluation's outcome did not change the asset"
         : null;
 
 type ComplianceStateListener = (
@@ -752,6 +753,12 @@ export interface EvaluateAssetResponse {
     pipelineRulesWaiting?: number;
     exceptionApplied?: boolean;
     hasRuleErrors?: boolean;
+    /**
+     * `true` for an evaluation against a named schema other than the asset's bound one (the web
+     * never names one): nothing is recorded and the response has no `evaluationId`. `false` for
+     * the normal evaluation; absent from a response that predates the field.
+     */
+    dryRun?: boolean;
 }
 
 export type CascadeState = "pending_approval" | "executing" | "completed" | "aborted" | "rejected";
@@ -907,22 +914,66 @@ export const liveDatabaseId = (databaseId?: string | null): string | undefined =
 
 // --- Schema Management ---
 
+/** Schemas requested per page of the schema listing: the route's maximum. */
+export const SCHEMA_LISTING_PAGE_SIZE = 200;
+
+/** Upper bound on the pages one schema listing reads, far above any real number of schemas. */
+export const SCHEMA_LISTING_MAX_PAGES = 100;
+
 /**
- * The compliance schemas the caller may read. With `databaseId`, only the schemas that database may
- * bind: the GLOBAL ones and those available to that database alone.
+ * Reads every page of `GET /compliance/schemas`, each request continuing from the previous page's
+ * `NextToken`; a page can be short, or empty, while a token follows. Returns the schemas of every
+ * page and the first page's `createScopes`, or the failure of the first page that failed. A token
+ * that repeats or the page bound ends the read with the schemas read so far.
+ */
+const readSchemaListing = async (
+    databaseId?: string
+): Promise<[true, ComplianceSchemaListing] | [false, string]> => {
+    let schemas: ComplianceSchema[] = [];
+    let createScopes: string[] | undefined;
+    const requested = new Set<string>();
+    let startingToken: string | undefined;
+    for (let page = 0; page < SCHEMA_LISTING_MAX_PAGES; page += 1) {
+        const response = await apiClient.get("compliance/schemas", {
+            queryStringParameters: withFilters(
+                pagingQuery({ maxItems: SCHEMA_LISTING_PAGE_SIZE, startingToken }),
+                { databaseId }
+            ),
+        });
+        if (answerFailed(response)) {
+            return [false, failureMessage(response, "Failed to fetch compliance schemas")];
+        }
+        schemas = schemas.concat(response.schemas || response.Items || []);
+        if (page === 0 && Array.isArray(response.createScopes)) {
+            createScopes = response.createScopes;
+        }
+        startingToken =
+            typeof response.NextToken === "string" && response.NextToken
+                ? response.NextToken
+                : undefined;
+        if (!startingToken) {
+            return [true, { schemas, createScopes }];
+        }
+        if (requested.has(startingToken)) {
+            console.log("Compliance schema listing returned a page token it had already returned");
+            return [true, { schemas, createScopes }];
+        }
+        requested.add(startingToken);
+    }
+    console.log(`Compliance schema listing stopped after ${SCHEMA_LISTING_MAX_PAGES} pages`);
+    return [true, { schemas, createScopes }];
+};
+
+/**
+ * The compliance schemas the caller may read, every page of the listing. With `databaseId`, only
+ * the schemas that database may bind: the GLOBAL ones and those available to that database alone.
  */
 export const fetchComplianceSchemas = async (
     databaseId?: string
 ): Promise<[boolean, ComplianceSchema[] | string]> => {
     try {
-        const response = await apiClient.get(
-            "compliance/schemas",
-            databaseId ? { queryStringParameters: { databaseId } } : {}
-        );
-        if (answerFailed(response)) {
-            return [false, failureMessage(response, "Failed to fetch compliance schemas")];
-        }
-        return [true, response.schemas || response.Items || []];
+        const [success, result] = await readSchemaListing(databaseId);
+        return success ? [true, result.schemas] : [false, result];
     } catch (error: any) {
         console.log("fetchComplianceSchemas error:", error);
         return [false, requestFailureMessage(error, "Failed to fetch compliance schemas")];
@@ -930,26 +981,14 @@ export const fetchComplianceSchemas = async (
 };
 
 /**
- * The unfiltered schema listing: every schema the caller may read, and `createScopes`, the scopes
- * the caller may create a schema in.
+ * The unfiltered schema listing: every schema the caller may read, every page of it, and
+ * `createScopes`, the scopes the caller may create a schema in.
  */
 export const fetchComplianceSchemaListing = async (): Promise<
     [boolean, ComplianceSchemaListing | string]
 > => {
     try {
-        const response = await apiClient.get("compliance/schemas", {});
-        if (answerFailed(response)) {
-            return [false, failureMessage(response, "Failed to fetch compliance schemas")];
-        }
-        return [
-            true,
-            {
-                schemas: response?.schemas || response?.Items || [],
-                createScopes: Array.isArray(response?.createScopes)
-                    ? response.createScopes
-                    : undefined,
-            },
-        ];
+        return await readSchemaListing();
     } catch (error: any) {
         console.log("fetchComplianceSchemaListing error:", error);
         return [false, requestFailureMessage(error, "Failed to fetch compliance schemas")];
@@ -1038,6 +1077,10 @@ export interface EvaluateDatabaseResponse {
         verdict?: string;
         superseded?: boolean;
     }[];
+    /**
+     * The assets this call read and did not reach. It can be 0 while `NextToken` is present: the
+     * call may end before it has read every asset.
+     */
     assetsRemaining: number;
     superseded?: number;
     registered?: number;
@@ -1064,8 +1107,8 @@ const sweepBody = (startingToken?: string) => (startingToken ? { startingToken }
 /**
  * Evaluates every tracked asset of one database, each against its own bound schema (the database
  * binding or the asset's override); no other database is evaluated. Bounded like a sweep: while
- * `assetsRemaining` is above 0 the response carries `NextToken`, and a call with it as
- * `startingToken` continues with the assets not evaluated yet.
+ * any asset remains the response carries `NextToken`, also when `assetsRemaining` is 0, and a call
+ * with it as `startingToken` continues with the assets not evaluated yet.
  */
 export const evaluateDatabaseCompliance = async (
     databaseId: string,
@@ -1085,7 +1128,10 @@ export const evaluateDatabaseCompliance = async (
     }
 };
 
-/** One call of a schema sweep; `startingToken` (the previous call's `NextToken`) continues it. */
+/**
+ * One call of a schema sweep; `startingToken` (the previous call's `NextToken`) continues it. The
+ * response carries `NextToken` while any asset remains, also when `assetsRemaining` is 0.
+ */
 export const sweepSchema = async (
     schemaName: string,
     startingToken?: string

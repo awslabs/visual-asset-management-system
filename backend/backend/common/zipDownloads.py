@@ -137,6 +137,10 @@ MSG_LAUNCH_BUSY = "The archive job could not be started right now. Try again in 
 # The same words as the web's refusal (CreateZipDownloadModal), without naming the file.
 MSG_ARCHIVED_IN_SELECTION = ("The selection includes an archived or deleted item. Remove it from the "
                              "selection, or restore it first.")
+# The download URL's refusal of a finished archive: a file in it is no longer downloadable. The archive
+# is already built, so there is no selection left to change; the create keeps MSG_ARCHIVED_IN_SELECTION.
+MSG_ARCHIVE_FILE_UNAVAILABLE = ("A file in this archive has since been archived or deleted. Restore it, "
+                                "or create a new zip download without it.")
 MSG_NOT_PRODUCED = "The archive was not produced"
 MSG_JOB_FAILED = "The archive job failed"
 MSG_JOB_TIMED_OUT = "The archive job timed out"

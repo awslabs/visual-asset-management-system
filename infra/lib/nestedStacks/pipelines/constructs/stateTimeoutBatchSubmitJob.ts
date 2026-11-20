@@ -7,12 +7,12 @@ import { Duration, Fn, Stack } from "aws-cdk-lib";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
-import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
 import { NagSuppressions } from "cdk-nag";
 import * as ServiceHelper from "../../../helper/service-helper";
+import { TaggedBatchSubmitJob, TaggedBatchSubmitJobProps } from "./pipelineJobTags";
 
-export interface StateTimeoutBatchSubmitJobProps extends tasks.BatchSubmitJobProps {
+export interface StateTimeoutBatchSubmitJobProps extends TaggedBatchSubmitJobProps {
     /**
      * Step Functions bound on the whole state: the time the job waits in the AWS Batch queue plus
      * its attempts. Keep it below the state machine timeout, with room for the states after it, so
@@ -35,8 +35,10 @@ export interface StateTimeoutBatchSubmitJobProps extends tasks.BatchSubmitJobPro
  * Step Functions ends a `.sync` job when the state's own bound fires; the state's pipelineEnd ends the
  * run's job as well, as a backup: give that function `grantBatchStateTimeoutCleanup` on every queue
  * the state can submit to.
+ *
+ * It is a {@link TaggedBatchSubmitJob}, so the job carries the pipeline's job tags (`jobTags`).
  */
-export class StateTimeoutBatchSubmitJob extends tasks.BatchSubmitJob {
+export class StateTimeoutBatchSubmitJob extends TaggedBatchSubmitJob {
     private readonly stateTimeoutSeconds: number;
 
     constructor(scope: Construct, id: string, props: StateTimeoutBatchSubmitJobProps) {
