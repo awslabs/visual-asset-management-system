@@ -2,11 +2,6 @@
     "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a Python dependency file (pyproject.toml, requirements*.txt/.in/.lock, Pipfile, setup.py with install_requires) the audit does not cover unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock.",
     "exemptions": [
         {
-            "path": "backendPipelines/ci/requirements-common.txt",
-            "reason": "Exact pins shared by the pipeline test runner; becomes the export of a backendPipelines/ci project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
             "path": "tools/VamsCLI/pyproject.toml",
             "reason": "Published package with ranged dependencies by design; gets a development-only uv.lock for audit.",
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"

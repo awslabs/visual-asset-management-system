@@ -13,13 +13,17 @@ A test directory is any directory named ``tests`` under ``backendPipelines/`` th
 from, in install order:
 
 1. ``requirements-common.txt`` beside this file: pytest plus the Lambda base layer packages the
-   pipeline Lambdas import at runtime.
+   pipeline Lambdas import at runtime. It is exported from ``uv.lock`` in this directory.
 2. The nearest ``requirements.txt`` above the tests directory, stopping below the pipeline's use-case
-   directory (``lambda/requirements.txt``, ``container/requirements.txt``).
+   directory (``lambda/requirements.txt``, ``container/requirements.txt``). Where the directory has a
+   ``uv.lock`` this file is its pinned export (``uv export``), so the suite runs on the versions the
+   image or Lambda installs.
 3. The directory's ``extraRequirements`` in ``suite-settings.json`` beside this file, when it has
    any, for packages only the tests import: requirement lines, or ``-r <repo-relative path>``.
 
-Directories with the same requirements share one virtual environment. A directory that cannot run on
+Each environment is built with ``uv`` (``uv venv`` and ``uv pip install``), which must be on PATH; the
+CI job installs the version the pyproject files require. Directories with the same requirements share
+one virtual environment. A directory that cannot run on
 a CPU-only runner is listed in ``excluded-test-dirs.json`` beside this file with its reason.
 
 Every CI-only setting for a test directory lives in ``suite-settings.json``, never in the pipeline's
@@ -38,7 +42,7 @@ Usage::
     python backendPipelines/ci/pipeline_tests.py system-packages --group 1
     python backendPipelines/ci/pipeline_tests.py run --group 1 --work-dir /tmp/pipeline-tests
 
-CI adds ``--low-disk``: no pip cache, and each environment is removed after its last suite.
+CI adds ``--low-disk``: no uv cache, and each environment is removed after its last suite.
 
 Standard library only: it runs before any dependency is installed.
 """
@@ -283,11 +287,15 @@ def build_env(suite: Suite, work_dir: Path, python: str, log, low_disk: bool) ->
     if marker.is_file():
         return interpreter, 0.0
     start = time.monotonic()
-    if _run([python, "-m", "venv", str(env_dir)], REPO_ROOT, log) != 0:
+    uv = shutil.which("uv")
+    if uv is None:
+        log.write("uv is not on PATH; the suites' environments are built with uv (https://docs.astral.sh/uv/)\n")
         return None, time.monotonic() - start
-    pip = [str(interpreter), "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "-q"]
+    if _run([uv, "venv", "--quiet", "--python", python, str(env_dir)], REPO_ROOT, log) != 0:
+        return None, time.monotonic() - start
+    pip = [uv, "pip", "install", "--quiet", "--python", str(interpreter)]
     if low_disk:
-        pip.append("--no-cache-dir")
+        pip.append("--no-cache")
     # One install per file, in order, so a pipeline's own pin replaces a common one instead of
     # conflicting with it.
     for requirements in suite.requirement_files:
@@ -386,7 +394,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     run.add_argument(
         "--low-disk",
         action="store_true",
-        help="skip the pip cache and remove each environment after its last suite (CI runners)",
+        help="skip the uv cache and remove each environment after its last suite (CI runners)",
     )
     args = parser.parse_args(argv)
     return {"list": cmd_list, "system-packages": cmd_system_packages, "run": cmd_run}[args.command](args)
