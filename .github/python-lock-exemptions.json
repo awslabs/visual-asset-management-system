@@ -1,5 +1,5 @@
 {
-    "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a pyproject.toml or requirements file with no uv.lock unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock.",
+    "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a Python dependency file (pyproject.toml, requirements*.txt/.in/.lock, Pipfile, setup.py with install_requires) the audit does not cover unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock.",
     "exemptions": [
         {
             "path": "backendPipelines/multi/rapidPipelineEKS/lambdaLayer/pyproject.toml",
@@ -62,6 +62,16 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
+            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
+            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lambda.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
             "path": "backendPipelines/preview/pcPotreeViewer/container/requirements.txt",
             "reason": "CPU pipeline container requirements without a lock.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
@@ -82,6 +92,16 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
+            "path": "backendPipelines/system/genAiMetadata/containers/blender/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
+            "path": "backendPipelines/system/genAiMetadata/containers/media/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
             "path": "backendPipelines/utility/zipArchive/container/requirements.txt",
             "reason": "CPU pipeline container requirements without a lock.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
@@ -99,6 +119,11 @@
         {
             "path": "tools/VamsCLI/requirements-dev.txt",
             "reason": "Ranged development requirements of VamsCLI.",
+            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+        },
+        {
+            "path": "tools/VamsCLI/setup.py",
+            "reason": "setuptools install_requires of the published VamsCLI package, mirroring its ranged pyproject dependencies.",
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
         },
         {
