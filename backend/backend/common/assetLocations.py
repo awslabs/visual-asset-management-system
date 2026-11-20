@@ -14,19 +14,24 @@ asset). A single-file asset holds exactly:
   key (``{file key}/sub/x.obj`` is ``/sub/x.obj``);
 - its own previews ``{file key}.previewFile.{ext}``, at ``/{file name}.previewFile.{ext}``.
 
+A single-file asset behaves like a folder asset; nothing it holds is hidden. The one
+companion entry whose natural path would be the object's own path, ``{file key}/{file name}``,
+is listed one level down, at ``/{file name}/{file name}``, and its previews at
+``/{file name}/{file name}.previewFile.{ext}``. The rule is applied along the whole chain of
+keys named only after the file, so ``{file key}/{file name}/{file name}`` is
+``/{file name}/{file name}/{file name}``: each path names one key and each key has one path.
+Every other key keeps the path after the file key.
+
 S3 ``Prefix`` matching is not path-aware, so a single-file location used as a prefix
 also matches longer keys that only share its characters (``projects/model.glb.bak``,
 ``projects/model.glbx/...``). Those are never part of the asset. Code that lists, reads,
 archives or deletes an asset's objects decides membership with ``contains`` rather
 than with the prefix match alone.
 
-A companion entry whose path is the object's own path (``{file key}/{file name}``) or
-one of its previews' paths is shadowed: the object and its previews win that path.
-
 Pure functions, no AWS calls.
 """
 
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
@@ -54,6 +59,25 @@ def _is_preview_of(base_key: str, object_key: str) -> bool:
     return bool(extension) and "/" not in extension
 
 
+def _split_preview(key: str) -> Tuple[str, str]:
+    """``(base, '.previewFile.{ext}')`` for a preview key, else ``(key, '')``."""
+    index = key.rfind(PREVIEW_FILE_PATTERN)
+    if index > 0 and _is_preview_of(key[:index], key):
+        return key[:index], key[index:]
+    return key, ""
+
+
+def _chain_depth(location: str, key: str) -> Optional[int]:
+    """``n`` when ``key`` is the location followed by ``n`` segments named like its file, else None."""
+    name = _file_name(location)
+    if key == location:
+        return 0
+    if not key.startswith(location + "/"):
+        return None
+    segments = key[len(location) + 1:].split("/")
+    return len(segments) if all(segment == name for segment in segments) else None
+
+
 def contains(location: Optional[str], object_key: Optional[str]) -> bool:
     """Whether an S3 object key belongs to an asset location.
 
@@ -73,33 +97,21 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
     """The asset-relative path (leading ``/``) of an object key, or None when the location does not contain it.
 
     In a folder location the path is the key after the folder (``/`` for the folder
-    marker). In a single-file location the object is ``/{file name}``, a companion
-    entry is the key after ``{file key}`` (``/`` for the companion folder marker) and
-    an own preview is ``/{file name}.previewFile.{ext}``.
+    marker). In a single-file location a key in the chain named only after the file
+    (the object, ``{file key}/{file name}``, ...) and its previews are one level deeper
+    than their natural path; every other key is the path after ``{file key}``
+    (``/`` for the companion folder marker).
     """
     if not contains(location, object_key):
         return None
     loc = normalize_location(location)
     if loc.endswith("/"):
         return "/" + object_key[len(loc):]
-    if object_key == loc:
-        return "/" + _file_name(loc)
-    if object_key.startswith(loc + "/"):
-        return object_key[len(loc):]
-    return "/" + _file_name(loc) + object_key[len(loc):]
-
-
-def is_shadowed(location: Optional[str], object_key: Optional[str]) -> bool:
-    """Whether a single-file location's companion entry has the path of the object or of one of its previews.
-
-    The object and its own previews win their paths, so a listing leaves such an entry
-    out. It still belongs to the asset (``contains`` is true).
-    """
-    loc = normalize_location(location)
-    if not loc or loc.endswith("/") or not object_key or not object_key.startswith(loc + "/"):
-        return False
-    shadow = loc + "/" + _file_name(loc)
-    return object_key == shadow or _is_preview_of(shadow, object_key)
+    body, preview = _split_preview(object_key)
+    depth = _chain_depth(loc, body)
+    if depth is not None:
+        return "/" + "/".join([_file_name(loc)] * (depth + 1)) + preview
+    return object_key[len(loc):]
 
 
 def names_own_object(location: Optional[str], relative_path: Optional[str]) -> bool:
@@ -114,9 +126,10 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
     """The S3 key an asset-relative path names in a location, or None when it names no single key there.
 
     A folder location joins the path under the folder. In a single-file location the
-    file name (or the object's own key) names the object, ``/{file name}.previewFile.{ext}``
-    (or the preview's own key) names an own preview, a path already under ``{file key}/``
-    is used as given, and any other path names the companion entry ``{file key}/{path}``.
+    object's own key, a key under ``{file key}/`` and an own preview's key are used as
+    given; a path made only of the file's name (``/{file name}``, ``/{file name}/{file name}``,
+    ...), with or without a preview suffix, names the key one level up its chain (the object,
+    ``{file key}/{file name}``, ...); any other path names ``{file key}/{path}``.
     ``/`` names the single-file asset as a whole, not one key, and resolves to None.
     """
     loc = normalize_location(location)
@@ -127,12 +140,54 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
         return loc + relative
     if not relative:
         return None
-    name = _file_name(loc)
-    if relative in (loc, name):
-        return loc
-    if relative.startswith(loc + "/"):
+    if relative == loc or relative.startswith(loc + "/") or _is_preview_of(loc, relative):
         return relative
-    for base in (loc, name):
-        if _is_preview_of(base, relative):
-            return loc + relative[len(base):]
+    name = _file_name(loc)
+    body, preview = _split_preview(relative)
+    segments = body.split("/")
+    if all(segment == name for segment in segments):
+        return loc + "/".join([""] + [name] * (len(segments) - 1)) + preview
     return loc + "/" + relative
+
+
+def listing_prefixes(location: Optional[str]) -> List[Tuple[str, Optional[int]]]:
+    """``(prefix, key cap)`` pairs that list the keys a location holds, and no key that only shares its characters.
+
+    A folder location is one uncapped prefix. A single-file location reads its own key with a one-key
+    listing (the smallest key under that prefix is the key itself, when it exists), then its own
+    previews ``{key}.previewFile.`` and its companion folder ``{key}/``. Callers still keep only the
+    keys ``contains`` accepts.
+    """
+    loc = normalize_location(location)
+    if not loc:
+        return []
+    if loc.endswith("/"):
+        return [(loc, None)]
+    return [(loc, 1), (loc + PREVIEW_FILE_PATTERN, None), (loc + "/", None)]
+
+
+def folder_listing_prefix(location: Optional[str], relative_folder: Optional[str]) -> str:
+    """The S3 ``Prefix`` under which every key of an asset-relative folder path is listed.
+
+    A folder location lists ``{folder}{path}``. In a single-file location a folder path
+    made only of the file's name (``/{file name}/``, ...) also holds the chain key one
+    level up and its previews, so the listing drops the trailing ``/``; filter what it
+    returns with ``in_folder``.
+    """
+    loc = normalize_location(location)
+    relative = (relative_folder or "").lstrip("/")
+    if not relative.endswith("/"):
+        relative += "/"
+    if loc.endswith("/"):
+        return loc + relative
+    name = _file_name(loc)
+    if all(segment == name for segment in relative[:-1].split("/")):
+        return loc + "/" + relative[:-1]
+    return loc + "/" + relative
+
+
+def in_folder(location: Optional[str], relative_folder: Optional[str], object_key: Optional[str]) -> bool:
+    """Whether a key of the location sits under an asset-relative folder path (``/sub/``)."""
+    path = relative_path_in(location, object_key)
+    folder = "/" + (relative_folder or "").strip("/") + "/"
+    return path is not None and folder != "//" and path.startswith(folder)

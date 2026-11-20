@@ -23,7 +23,7 @@
  *   * S-10: no AWS KMS key, no KMS decrypt path on any role and no KMS endpoint for the sync;
  *   * R3-1, R3-2: the sync carries the base layer and the add-on's own `cryptography` layer, which no other
  *     function carries, which is absent with the sync off, which is bundled as the core layers are, and whose
- *     Poetry project pins exactly `cryptography`, `cffi` and `pycparser`, none of them a base-layer package;
+ *     uv project pins exactly `cryptography`, `cffi` and `pycparser`, none of them a base-layer package;
  *   * the sync function runs one at a time without retries and pins the document version;
  *   * no CloudWatch alarm, with the sync on or off (owner decision 2026-11-03): the function's outcome log line
  *     and `RootKeySyncFailures` metric are the backend suite's;
@@ -81,9 +81,9 @@ const SYNC_LAYER_PROJECT = path.join(REPO, "backendAddons", "edh", "rootKeySync"
 const BASE_LAYER_PROJECT = path.join(REPO, "backend", "lambdaLayers", "base");
 /** The requirements the sync layer exports: the authorizer layer's pins and markers for these three. */
 const SYNC_LAYER_REQUIREMENTS = [
-    'cffi==2.0.0 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy"',
-    'cryptography==50.0.2 ; python_version >= "3.12" and python_version < "4.0"',
-    'pycparser==2.22 ; python_version >= "3.12" and python_version < "4.0" and platform_python_implementation != "PyPy" and implementation_name != "PyPy"',
+    "cffi==2.0.0 ; platform_python_implementation != 'PyPy' and sys_platform == 'linux'",
+    "cryptography==50.0.2 ; sys_platform == 'linux'",
+    "pycparser==2.22 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy' and sys_platform == 'linux'",
 ];
 
 const synthWith = (name: TemplateName, value: boolean | undefined, key: string): SynthResult =>
@@ -509,12 +509,14 @@ describe("S-10: the run's own key, no KMS key", () => {
 const syncLayers = (s: SynthResult): Resource[] => s.where("AWS::Lambda::LayerVersion", inEdhStack);
 const layerRefsOf = (fn: Resource): string[] =>
     (fn.properties.Layers ?? []).map((l: unknown) => JSON.stringify(l));
-/** `[[package]]` names and versions of a poetry.lock. */
+/** `[[package]]` names and versions of a uv.lock. The lock lists the project itself, which is dropped. */
 const lockedPackages = (lockFile: string): Array<[string, string]> =>
     [
         ...fs
             .readFileSync(lockFile, "utf8")
-            .matchAll(/^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"/gm),
+            .matchAll(
+                /^\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\nsource = \{ (?!virtual)/gm
+            ),
     ].map((m) => [m[1].toLowerCase().replace(/[-_.]+/g, "-"), m[2]]);
 /** The `bundling: { ... }` block of a layer construct's source, whitespace collapsed. */
 const bundlingBlock = (file: string): string => {
@@ -596,44 +598,45 @@ describe("R3-1, R3-2: the sync's own cryptography layer", () => {
         );
     });
 
-    test("its Poetry project pins exactly cryptography, cffi and pycparser at the authorizer layer's versions", () => {
+    test("its uv project pins exactly cryptography, cffi and pycparser at the authorizer layer's versions", () => {
         const requirements = fs
             .readFileSync(path.join(SYNC_LAYER_PROJECT, "requirements.txt"), "utf8")
             .split("\n")
-            .filter((line) => line.trim() !== "");
+            .filter((line) => line.trim() !== "" && !line.startsWith("#"));
         expect(requirements).toEqual(SYNC_LAYER_REQUIREMENTS);
-        expect(lockedPackages(path.join(SYNC_LAYER_PROJECT, "poetry.lock")).sort()).toEqual([
+        expect(lockedPackages(path.join(SYNC_LAYER_PROJECT, "uv.lock")).sort()).toEqual([
             ["cffi", "2.0.0"],
             ["cryptography", "50.0.2"],
             ["pycparser", "2.22"],
         ]);
         const pyproject = fs.readFileSync(path.join(SYNC_LAYER_PROJECT, "pyproject.toml"), "utf8");
         const deps = pyproject.slice(
-            pyproject.indexOf("[tool.poetry.dependencies]"),
-            pyproject.indexOf("[build-system]")
+            pyproject.indexOf("dependencies = ["),
+            pyproject.indexOf("]", pyproject.indexOf("dependencies = ["))
         );
         expect(
             deps
                 .split("\n")
-                .filter((line) => /^[A-Za-z]/.test(line))
-                .map((line) => line.split("=")[0].trim())
+                .map((line) => /^\s*"([A-Za-z0-9._-]+)==/.exec(line))
+                .filter((m): m is RegExpExecArray => m !== null)
+                .map((m) => m[1])
                 .sort()
-        ).toEqual(["cffi", "cryptography", "pycparser", "python"]);
-        // The layer directory is the Poetry project and nothing else: the bundling copies all of it.
+        ).toEqual(["cffi", "cryptography", "pycparser"]);
+        // The layer directory is the uv project and nothing else: the bundling copies all of it.
         expect(fs.readdirSync(SYNC_LAYER_PROJECT).sort()).toEqual([
-            "poetry.lock",
             "pyproject.toml",
             "requirements.txt",
+            "uv.lock",
         ]);
     });
 
     test("none of its packages is a base-layer package, so neither layer replaces the other's package files or metadata", () => {
-        const base = lockedPackages(path.join(BASE_LAYER_PROJECT, "poetry.lock"));
+        const base = lockedPackages(path.join(BASE_LAYER_PROJECT, "uv.lock"));
         // Control: the parser reads the base lock.
         expect(base.length).toBeGreaterThan(10);
         const baseNames = new Set(base.map(([name]) => name));
-        const shared = lockedPackages(path.join(SYNC_LAYER_PROJECT, "poetry.lock")).filter(
-            ([name]) => baseNames.has(name)
+        const shared = lockedPackages(path.join(SYNC_LAYER_PROJECT, "uv.lock")).filter(([name]) =>
+            baseNames.has(name)
         );
         expect(shared).toEqual([]);
     });

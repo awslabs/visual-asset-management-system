@@ -5,8 +5,8 @@
 
 A single-file asset (location key with no trailing ``/``) holds its object, its companion folder
 ``{file key}/`` and its own previews. An upload or workflow output lands in the companion folder, a
-file's preview at its own preview key, and the asset's own file path is refused, since a companion
-entry there would be shadowed by the object. A workflow input of the asset resolves to the object
+file's preview at its own preview key. A user upload at the asset's own file path writes a new version
+of its object, as for any other file; a workflow output at that path is refused. A workflow input of the asset resolves to the object
 itself, not to the companion folder. Asset-type detection after an upload counts only the keys the
 asset holds.
 """
@@ -31,7 +31,7 @@ from backend.tests.handlers.workflows.test_output_metadata_type_key import po  #
 
 FILE_LOCATION = "p1/model.glb"
 CLAIMS = {"tokens": ["alice@corp"]}
-OWN_FILE_MESSAGE = "own file, which an upload cannot replace"
+OWN_FILE_MESSAGE = "A workflow output cannot replace the file of a single-file asset"
 
 
 @pytest.mark.unit
@@ -63,12 +63,12 @@ class TestInitializeUpload:
         assert key.endswith("p1/model.glb/out/scan.laz")
 
     @pytest.mark.parametrize("relative", ["/model.glb", "model.glb", FILE_LOCATION])
-    def test_an_upload_at_the_own_file_path_is_refused(self, relative):
+    def test_an_upload_at_the_own_file_path_writes_a_new_version_of_the_object(self, relative):
         with _initialize_upload_env(_asset(assetLocation={"Key": FILE_LOCATION})) as (uf, mock_s3):
-            with pytest.raises(uf.VAMSGeneralErrorResponse) as e:
-                uf.initialize_upload(_request("assetFile", relative), CLAIMS)
-        assert OWN_FILE_MESSAGE in str(e.value)
-        mock_s3.create_multipart_upload.assert_not_called()
+            uf.initialize_upload(_request("assetFile", relative), CLAIMS)
+        key = mock_s3.create_multipart_upload.call_args.kwargs["Key"]
+        assert key.endswith(FILE_LOCATION)
+        assert not key.endswith(FILE_LOCATION + "/model.glb")
 
 
 def _complete_external(relative, file_size=1024):
@@ -121,23 +121,41 @@ def _contents(*keys):
 
 @pytest.mark.unit
 class TestAssetTypeAfterUpload:
+    """The sample reads the location's own keys by their own prefixes: the object with a one-key listing,
+    its previews and its companion folder. The bare location is never listed as a wide prefix, so keys that
+    only share its characters cannot fill the sample."""
+
+    @staticmethod
+    def _listing(*keys):
+        calls = []
+
+        def _list_all_objects(bucket, prefix, client=None, max_objects=None):
+            calls.append((prefix, max_objects))
+            listed = _contents(*sorted(k for k in keys if k.startswith(prefix)))
+            return listed[:max_objects] if max_objects is not None else listed
+
+        return _list_all_objects, calls
+
     @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
     def test_keys_that_only_share_the_characters_are_not_counted(self, module_name):
         import importlib
         module = importlib.import_module(f"backend.backend.handlers.assets.{module_name}")
-        listed = _contents("p1/model.glb", "p1/model.glb.bak", "p1/model.glbx/inner.txt")
-        with patch.object(module, "list_all_objects", return_value=listed), \
+        fake, calls = self._listing("p1/model.glb", "p1/model.glb.bak", "p1/model.glbx/inner.txt")
+        with patch.object(module, "list_all_objects", side_effect=fake), \
                 patch.object(module, "is_file_archived", return_value=False):
             assert module.determine_asset_type("asset-1", "bucket", FILE_LOCATION) == ".glb"
+        # The location itself is read once, as a one-key listing
+        assert [max_objects for prefix, max_objects in calls if prefix == FILE_LOCATION] == [1], calls
 
     @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
     def test_a_companion_file_makes_a_folder(self, module_name):
         import importlib
         module = importlib.import_module(f"backend.backend.handlers.assets.{module_name}")
-        listed = _contents("p1/model.glb", "p1/model.glb/sub/x.obj")
-        with patch.object(module, "list_all_objects", return_value=listed), \
+        fake, calls = self._listing("p1/model.glb", "p1/model.glb-old/n.txt", "p1/model.glb/sub/x.obj")
+        with patch.object(module, "list_all_objects", side_effect=fake), \
                 patch.object(module, "is_file_archived", return_value=False):
             assert module.determine_asset_type("asset-1", "bucket", FILE_LOCATION) == "folder"
+        assert ("p1/model.glb/", module.ASSET_TYPE_DETECTION_SAMPLE_SIZE) in calls, calls
 
 
 @pytest.mark.unit

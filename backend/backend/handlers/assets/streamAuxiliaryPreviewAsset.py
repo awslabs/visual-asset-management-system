@@ -12,6 +12,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import is_folder_location, normalize_location, object_key_for
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -70,6 +71,37 @@ def get_asset_details(databaseId, assetId):
     except Exception as e:
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving asset")
+
+AUX_PREVIEW_SEGMENT = "/preview/"
+
+
+def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str) -> str:
+    """The auxiliary-bucket key of a preview path ``{relative file path}/preview/...`` in one asset.
+
+    Auxiliary data lives at ``{databaseId}/{file key}/preview/...``. A folder location joins the path under
+    ``{databaseId}/{location}``. A single-file location maps the file part through ``object_key_for``, so
+    ``/{file name}/preview/...`` reads the object's data at ``{databaseId}/{key}/preview/...`` and a
+    companion entry's path reads that entry's data; the file part ends at the first ``/preview/`` that
+    follows a non-empty path. A path that already carries ``{databaseId}/{key}/`` is used as given.
+    """
+    if not location_key or is_folder_location(location_key):
+        return resolve_asset_file_path(f"{database_id}/{location_key}", file_path)
+    location = normalize_location(location_key)
+    db = (database_id or "").strip("/")
+    stripped = (file_path or "").lstrip("/")
+    if stripped.startswith(f"{db}/{location}/"):
+        return stripped
+    path = "/" + stripped
+    start = 1
+    while True:
+        index = path.find(AUX_PREVIEW_SEGMENT, start)
+        if index == -1:
+            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
+        object_key = object_key_for(location, path[:index])
+        if object_key is not None:
+            return f"{db}/{object_key}{path[index:]}"
+        start = index + 1
+
 
 def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     """
@@ -179,7 +211,7 @@ def handle_head_request(event, claims_and_roles):
     # Auxiliary preview objects live under the database-scoped per-file layout
     # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
     # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-    object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+    object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
 
     # The validator bounded the asset-relative part; the resolved key carries the database and asset
     # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
@@ -379,7 +411,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Auxiliary preview objects live under the database-scoped per-file layout
                 # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
                 # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-                object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+                object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
 
                 # The validator bounded the asset-relative part; the resolved key carries the database and
                 # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never

@@ -45,7 +45,7 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import contains, is_folder_location, names_own_object, object_key_for
+from common.assetLocations import contains, is_folder_location, listing_prefixes, names_own_object, object_key_for
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -616,7 +616,11 @@ def determine_asset_type(assetId, bucket, prefix):
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
+        contents = []
+        for list_prefix, cap in listing_prefixes(prefix):
+            contents.extend(list_all_objects(bucket, list_prefix, client=s3,
+                                             max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE,
+                                                             ASSET_TYPE_DETECTION_SAMPLE_SIZE)))
         
         # Filter out archived files
         non_archived_files = []
@@ -823,10 +827,10 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
 
-# A single-file asset's own object is the key its location names; uploads and workflow outputs
-# never replace it.
-OWN_FILE_PATH_MESSAGE = ("This path is the single-file asset's own file, which an upload cannot replace. "
-                         "Choose another file name or folder.")
+# A single-file asset's own object is the key its location names. A user upload at its path writes a new
+# version of it, as for any other file; a workflow output never replaces it.
+OWN_FILE_PATH_MESSAGE = ("A workflow output cannot replace the file of a single-file asset. "
+                         "Write the output under another file name or folder.")
 
 
 def normalize_s3_path(asset_base_key, file_path):
@@ -1434,8 +1438,6 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
         if uploadType == "assetFile":
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
-            if names_own_object(asset_base_key, file.relativeKey):
-                raise VAMSGeneralErrorResponse(OWN_FILE_PATH_MESSAGE)
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path

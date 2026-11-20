@@ -136,7 +136,7 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     Raises:
         VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
     """
-    # A single-file location holds that one object and nothing under or beside it
+    # A single-file location's paths name its object, its previews and its companion folder {key}/
     if asset_base_key and not is_folder_location(asset_base_key):
         object_key = object_key_for(asset_base_key, file_path)
         if object_key is None:

@@ -31,7 +31,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import stamp_asset_version_provenance
-from common.assetLocations import contains, is_shadowed, object_key_for, relative_path_in
+from common.assetLocations import contains, object_key_for, relative_path_in
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -436,7 +436,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
             key = version['Key']
             # Skip folder markers (keys ending with '/')
-            if key.endswith('/') or not contains(location, key) or is_shadowed(location, key):
+            if key.endswith('/') or not contains(location, key):
                 continue
 
             relative_key = relative_path_in(location, key).lstrip('/')
@@ -469,7 +469,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
                 key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if key.endswith('/') or not contains(location, key) or is_shadowed(location, key):
+                if key.endswith('/') or not contains(location, key):
                     continue
 
                 relative_key = relative_path_in(location, key).lstrip('/')

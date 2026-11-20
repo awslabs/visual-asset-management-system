@@ -25,7 +25,7 @@ from common.s3PathPatterns import (
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
-from common.assetLocations import contains, is_folder_location, is_shadowed, relative_path_in
+from common.assetLocations import contains, is_folder_location, relative_path_in
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
 from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
@@ -892,7 +892,7 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                 if start_after_key and key <= start_after_key:
                     continue
 
-                if single_file and (not contains(location, key) or is_shadowed(location, key)):
+                if single_file and not contains(location, key):
                     continue
 
                 is_folder = key.endswith('/')

@@ -81,7 +81,7 @@ from common.compliance import listing
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
-from common.assetLocations import contains, is_shadowed, object_key_for, relative_path_in
+from common.assetLocations import contains, object_key_for, relative_path_in
 from common.s3 import (
     bucket_region_fields,
     list_all_object_versions,
@@ -707,7 +707,7 @@ def list_file_keys_under(bucket: str, prefix: str) -> List[str]:
     keys = set()
     for entry in list_all_objects(bucket, prefix, client=s3_client):
         key = entry.get("Key", "")
-        if not key or key.endswith("/") or not contains(prefix, key) or is_shadowed(prefix, key):
+        if not key or key.endswith("/") or not contains(prefix, key):
             continue
         keys.add(relative_path_in(prefix, key))
     return sorted(keys)
@@ -772,7 +772,7 @@ def get_current_files(database_id: str, asset_id: str,
     for version in listing.get("Versions") or []:
         key = version.get("Key", "")
         if (not version.get("IsLatest") or not key or key.endswith("/")
-                or not contains(prefix, key) or is_shadowed(prefix, key)):
+                or not contains(prefix, key)):
             continue
         relative = relative_path_in(prefix, key)
         version_id = version.get("VersionId")
