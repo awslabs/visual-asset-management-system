@@ -212,7 +212,7 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
 -   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
--   packages a conda image installs from conda-forge (the Potree PDAL image's `conda-packages.txt`), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
+-   packages a conda image installs from conda-forge (the Potree PDAL image's `conda-deps.txt`), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
 -   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
 -   packages that come with a container base image or the Lambda runtime;
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).

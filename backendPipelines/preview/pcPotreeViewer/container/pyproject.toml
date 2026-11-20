@@ -10,7 +10,7 @@ dependencies = [
 
 # Dockerfile_Potree installs the committed requirements.txt with pip, which is exported from uv.lock; uv
 # is a development and CI tool only and is not part of the image. Dockerfile_PDAL (a conda image) installs
-# boto3 and botocore from conda-forge, listed in conda-packages.txt, which this lock does not cover.
+# boto3 and botocore from conda-forge, listed in conda-deps.txt, which this lock does not cover.
 [tool.uv]
 package = false
 required-version = "==0.13.8"

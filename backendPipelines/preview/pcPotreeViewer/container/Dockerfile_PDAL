@@ -100,8 +100,8 @@ ENV OAMS_TRADITIONAL_GIS_ORDER=TRUE
 # copy python scripts app to container
 COPY ./ ./pc_pipeline
 
-# Install requirements (boto3, etc.) from conda-forge; conda-packages.txt is not covered by uv.lock
-RUN conda install -c conda-forge --file ./pc_pipeline/conda-packages.txt
+# Install requirements (boto3, etc.) from conda-forge; conda-deps.txt is not covered by uv.lock
+RUN conda install -c conda-forge --file ./pc_pipeline/conda-deps.txt
 
 # Create the runtime user. This stage needs its own: a user created in the `build` stage above is
 # discarded with it, and uncommenting it there would fail this stage's USER with "unable to find user".
