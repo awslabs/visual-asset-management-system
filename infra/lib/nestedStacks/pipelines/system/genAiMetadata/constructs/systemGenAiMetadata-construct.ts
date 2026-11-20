@@ -30,6 +30,12 @@ import {
 } from "../../../constructs/batch-fargate-pipeline";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
+import {
     SystemGenAiGuardrailReference,
     resolveSystemGenAiGuardrail,
 } from "./systemGenAiGuardrail-construct";
@@ -532,7 +538,11 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
             .when(sfn.Condition.stringEquals("$.renderBranch", "RENDER3D"), render3dTask)
             .when(sfn.Condition.stringEquals("$.renderBranch", "MEDIA"), mediaExtractTask);
         if (batchPipeline) {
-            const fargateRenderJob = new tasks.BatchSubmitJob(this, "FargateRenderJob", {
+            const fargateRenderJob = new TaggedBatchSubmitJob(this, "FargateRenderJob", {
+                jobTags: pipelineJobTags(
+                    props.config,
+                    VAMS_PIPELINE_TAG_VALUES.systemGenAiMetadata
+                ),
                 jobName: sfn.JsonPath.format(
                     "SystemGenAiMetadata-{}",
                     sfn.JsonPath.stringAt("$$.Execution.Name")
@@ -635,6 +645,7 @@ export class SystemGenAiMetadataConstruct extends NestedStack {
                     ],
                 })
             );
+            suppressBatchJobTaggingNag(pipelineStateMachine);
         }
 
         /**

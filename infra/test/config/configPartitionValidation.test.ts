@@ -801,3 +801,91 @@ describe("ConfigBuilder mirror of the Blender agent model id rules", () => {
         expect(agentModelRuleIds("govcloud", "us-gov-west-1", undefined, false)).toEqual([]);
     });
 });
+
+/**
+ * GenAI CAD STEP agent internet research (issue #1703). With research on, the agent sends search
+ * queries written from a run's design prompt to third-party web search engines and fetches public web
+ * pages, so the data leaves AWS and the partition. Research is off by default everywhere, and
+ * `getConfig()` refuses it in the GovCloud and EU Sovereign partitions whether or not the pipeline is
+ * enabled. The commercial partition is the control.
+ */
+const RESEARCH_REFUSED_MESSAGE =
+    /app\.pipelines\.useGenAiCadStepAgent\.allowInternetResearch is true while deploying to the '(aws-us-gov|aws-eusc)' partition/;
+
+describe("CAD STEP agent internet research", () => {
+    const allowResearch = (c: any) => {
+        c.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+    };
+
+    test.each([
+        ["commercial", commercialTemplate],
+        ["GovCloud", govcloudTemplate],
+        ["EU Sovereign", eusovereignTemplate],
+    ])("the %s template ships it off", (_name, template) => {
+        expect((template as any).app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(
+            false
+        );
+    });
+
+    test("a config that leaves it unset resolves to off", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            delete c.app.pipelines.useGenAiCadStepAgent.allowInternetResearch;
+        })();
+        expect(config.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(false);
+    });
+
+    test.each([
+        ["GovCloud", govcloudTemplate, "us-gov-west-1"],
+        ["EU Sovereign", eusovereignTemplate, "eusc-de-east-1"],
+    ])("%s refuses it, even with the pipeline disabled", (_name, template, region) => {
+        expect(loadConfig(template, region, allowResearch)).toThrow(RESEARCH_REFUSED_MESSAGE);
+    });
+
+    test.each([
+        ["GovCloud", govcloudTemplate, "us-gov-west-1"],
+        ["EU Sovereign", eusovereignTemplate, "eusc-de-east-1"],
+    ])("%s accepts the shipped value", (_name, template, region) => {
+        expect(loadConfig(template, region)).not.toThrow();
+    });
+
+    test("the commercial partition still allows it when the operator turns it on", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", allowResearch)();
+        expect(config.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(true);
+    });
+});
+
+describe("the ConfigBuilder mirrors the CAD STEP research refusal", () => {
+    const fired = (cfg: ReturnType<typeof makeDefaultConfig>) =>
+        evaluateRules(cfg).filter(
+            (rule) => rule.id === "cad-step-agent-research-off-in-restricted-partitions"
+        );
+
+    test.each(["govcloud", "eusovereign"] as const)(
+        "the %s preset ships research off and raises nothing",
+        (preset) => {
+            const cfg = makeDefaultConfig(preset);
+            if (preset === "govcloud") cfg.env.region = "us-gov-west-1";
+            expect(cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(false);
+            expect(fired(cfg)).toEqual([]);
+        }
+    );
+
+    test.each([
+        ["govcloud", "us-gov-west-1"],
+        ["eusovereign", "eusc-de-east-1"],
+    ] as const)("raises an error for research on in the %s preset", (preset, region) => {
+        const cfg = makeDefaultConfig(preset);
+        cfg.env.region = region;
+        cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+        const rules = fired(cfg);
+        expect(rules).toHaveLength(1);
+        expect(rules[0].severity).toBe("error");
+    });
+
+    test("is silent in the commercial preset with research on", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-east-1";
+        cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+        expect(fired(cfg)).toEqual([]);
+    });
+});

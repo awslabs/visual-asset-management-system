@@ -458,6 +458,18 @@ class TestConstructPipeline:
         assert exc is None
         assert json.loads(resp["definition"][0])["agent"]["allowInternetResearch"] is False
 
+    def test_research_is_off_when_the_deployment_sets_no_switch(self):
+        # Fail closed: research sends queries to third-party search engines, so a Lambda deployed
+        # without the variable never turns it on.
+        with patch.dict(_ENV), patch.dict(os.environ):
+            _ENV.pop("ALLOW_INTERNET_RESEARCH")
+            os.environ.pop("ALLOW_INTERNET_RESEARCH", None)
+            mod = _load("constructPipeline.py")
+        assert mod.ALLOW_INTERNET_RESEARCH is False
+        resp, _, exc = self._run(mod, _construct_event(), _config(allowInternetResearch=True))
+        assert exc is None
+        assert json.loads(resp["definition"][0])["agent"]["allowInternetResearch"] is False
+
     def test_max_attempts_is_clamped(self):
         mod = _load("constructPipeline.py")
         resp, _, _ = self._run(mod, _construct_event(), _config(maxAttempts=99))
@@ -517,6 +529,21 @@ class TestExecuteBatchJob:
         assert detail["subExecution"]["stageName"] == "CadStepAgentBatchJob"
         assert detail["logs"][0]["logStreamPrefix"] == "jobdef/default/"
         assert detail["logs"][0]["sourceType"] == "batch"
+
+    def test_the_job_carries_the_pipeline_job_tags(self):
+        tags = {"vams:stackname": "vams-core-test", "vams:pipeline": "cadStepAgent"}
+        mod = _load("executeBatchJob.py", {"PIPELINE_JOB_TAGS": json.dumps(tags)})
+        submit = MagicMock(return_value={"jobId": "job-1"})
+        with patch.object(mod.batch, "submit_job", submit), patch.object(mod.events_client, "put_events", MagicMock()):
+            mod.lambda_handler(self._event(), MagicMock())
+        assert submit.call_args.kwargs["tags"] == tags
+
+    def test_without_the_tags_variable_the_job_is_submitted_untagged(self):
+        mod = _load("executeBatchJob.py")
+        submit = MagicMock(return_value={"jobId": "job-1"})
+        with patch.object(mod.batch, "submit_job", submit), patch.object(mod.events_client, "put_events", MagicMock()):
+            mod.lambda_handler(self._event(), MagicMock())
+        assert "tags" not in submit.call_args.kwargs
 
     def test_the_log_names_the_run_and_leaves_out_the_prompt(self):
         mod = _load("executeBatchJob.py")
