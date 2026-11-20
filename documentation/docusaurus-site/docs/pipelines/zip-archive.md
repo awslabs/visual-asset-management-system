@@ -64,7 +64,7 @@ The container decides its mode from the run manifest:
 
 ### Checks Before Writing
 
-Before it writes the first byte, the container resolves every folder and whole-asset entry to the current file versions (or to the versions recorded in an asset version) and head-checks every member on its pinned version. Preview companions (keys containing `.previewFile.`, such as `model.glb.previewFile.png`), which the asset file list hides, are left out of the members unless `includePreviewFiles` is `true`: a Zip Archive run reads it from its template configuration body, and a zip download from its request manifest, which records `false`. A folder that holds only preview companions then counts as empty, and a selection with no member left is refused with `The selection has no files`. The whole archive is refused when a member is a delete marker, a missing version, in the GLACIER or DEEP_ARCHIVE storage class, marked archived or deleted (`vams-status`), or has an extension or media type on the executable blocklist, and when the member count or total size exceeds the limits. A refusal fails the run with a user-safe reason that names the asset-relative path. A zip download carries the deployment's blocklists and limits in its request manifest; a Zip Archive run applies the core blocklists.
+Before it writes the first byte, the container resolves every folder and whole-asset entry to the current file versions (or to the versions recorded in an asset version) and head-checks every member on its pinned version. Preview companions (keys containing `.previewFile.`, such as `model.glb.previewFile.png`), which the asset file list hides, are left out of the members unless `includePreviewFiles` is `true`: a Zip Archive run reads it from its template configuration body, and a zip download from its request manifest, which records `false`. A folder that holds only preview companions then counts as empty, and a selection with no member left is refused with `The selection has no files`. The whole archive is refused when a member is a delete marker, a missing version, in the GLACIER or DEEP_ARCHIVE storage class, marked archived or deleted (`vams-status`), or has an extension or media type on the executable blocklist, when a member's path cannot be an entry name in the archive (a `.` or `..` segment, a backslash or a NUL character) or two members would have the same entry name, and when the member count or total size exceeds the limits. A refusal fails the run with a user-safe reason that names the asset-relative path. A zip download carries the deployment's blocklists and limits in its request manifest; a Zip Archive run applies the core blocklists.
 
 ### Streaming and Multipart Upload
 
@@ -94,6 +94,8 @@ The pipeline is configured by the Download as Zip block, `app.pipelines.useZipDo
 ```
 
 `computeVcpu` and `computeMemoryGiB` size the AWS Fargate job, and `useCodeBuild` builds the image with AWS CodeBuild instead of local Docker (see [Container Image Build](#container-image-build)). The other `app.pipelines.useZipDownloads` keys set the limits of Download as Zip jobs, which are kept for 7 days; see [Zip downloads (`app.pipelines.useZipDownloads`)](../deployment/configuration-reference.md#zip-downloads-apppipelinesusezipdownloads).
+
+The pipeline's AWS Fargate compute environment allows 256 vCPU at a time, so up to 256 / `computeVcpu` archive jobs run at once in a deployment (16 at the default 16 vCPU), and the account's AWS Fargate vCPU quota in the Region also applies. Further jobs wait in the AWS Batch job queue; a job that has not started 30 minutes after it was submitted is cancelled and fails with "The archive job waited too long to start".
 
 ## Running the Zip Archive Workflow
 
@@ -166,15 +168,19 @@ The job role reads and lists object versions in the asset buckets, writes and ab
 
 ### A Job or Run Fails Naming a File
 
-The archive was refused because the named file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has a blocked file type, or the selection exceeds a limit. Unarchive or restore the file, or remove it from the selection, and create the job again.
+The archive was refused because the named file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has a blocked file type, because its path cannot be an entry name in the archive or two files would have the same entry name, or because the selection exceeds a limit. Unarchive or restore the file, or remove it from the selection, and create the job again.
 
 ### A Job Fails With "The archive job timed out"
 
-The run reached the 12-hour task timeout. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
+The archive job reached its 11-hour bound, and VAMS ended its AWS Batch job. Very large archives finish faster with more compute: raise `computeVcpu` and `computeMemoryGiB`, or split the selection into several jobs.
 
 ### A Job Fails With "The archive job was stopped" or "The archive job stopped responding"
 
-The Zip Archive container ended before the archive was written. "The archive job was stopped" means its AWS Batch job was terminated outside VAMS. "The archive job stopped responding" means the container stopped without warning, for example because it ran out of memory or its host was lost, or the job waited in the AWS Batch queue for more than 30 minutes before it started. Create the job again. If it recurs for the same selection, raise `computeMemoryGiB`, or check the account's AWS Fargate vCPU quota and the other Batch jobs in the queue.
+The Zip Archive container ended before the archive was written. "The archive job was stopped" means its AWS Batch job was terminated outside VAMS. "The archive job stopped responding" means the container stopped sending heartbeats for 30 minutes before the 11-hour bound, for example because it ran out of memory or its host was lost; a container still running then is ended. Create the job again. If it recurs for the same selection, raise `computeMemoryGiB`.
+
+### A Job Fails With "The archive job waited too long to start" or "The archive job failed before it started"
+
+The job's container never ran. "The archive job waited too long to start" means the job's container had not started 30 minutes after the job was submitted: the job was still waiting in the AWS Batch queue, usually behind other archive jobs or the account's AWS Fargate vCPU quota, or still starting. VAMS cancels the job. Create the job again later, or raise the AWS Fargate On-Demand vCPU quota. "The archive job failed before it started" means AWS Batch failed the job before its container started, for example because the container image could not be pulled; the job's status reason is in the `pipelineEnd` function's log. Check that the image build finished (see [Container Image Build](#container-image-build)) and create the job again.
 
 ### A Job Fails With "Cancelled from workflow executions"
 

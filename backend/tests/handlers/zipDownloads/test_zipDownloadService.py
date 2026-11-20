@@ -395,7 +395,7 @@ class TestCreate:
                                                {"type": "file", "relativePath": "/old-part.glb"}]})
         assert response["statusCode"] == 400
         message = h.body_of(response)["message"]
-        assert message.endswith(env.zd.MSG_ARCHIVED_IN_SELECTION)
+        assert message == env.zd.MSG_ARCHIVED_IN_SELECTION
         assert "not found" not in message
         assert "old-part" not in response["body"]
         assert env.zip.items == {}
@@ -403,7 +403,7 @@ class TestCreate:
     def test_a_missing_file_is_still_not_found(self, env):
         response = _create(env, {"selection": [{"type": "file", "relativePath": "/never.glb"}]})
         assert response["statusCode"] == 400
-        assert h.body_of(response)["message"].endswith("File not found in S3")
+        assert h.body_of(response)["message"] == "File not found in S3"
 
     def test_delete_marker_version_refused_410(self, env):
         env.s3.add("xasset1/a.glb", version="dm1", delete_marker=True)
@@ -429,6 +429,27 @@ class TestCreate:
         response = _create(e, {"selection": [{"type": "folder", "relativePath": "/textures/"}]})
         assert response["statusCode"] == 400
 
+    def test_file_limit_applies_to_individual_files(self, env):
+        e = h.load_handlers(env={"ZIP_DOWNLOAD_MAX_FILES_PER_REQUEST": "1"})
+        h.put_asset(e)
+        e.s3.objects = env.s3.objects
+        response = _create(e, {"selection": [{"type": "file", "relativePath": "/textures/t1.png"},
+                                             {"type": "file", "relativePath": "/textures/t2.png"}]})
+        assert response["statusCode"] == 400
+        assert "more than 1 files" in h.body_of(response)["message"]
+        assert e.zip.items == {}
+        assert e.lam.calls == []
+
+    def test_byte_limit_applies_to_individual_files(self, env):
+        e = h.load_handlers(env={"ZIP_DOWNLOAD_MAX_TOTAL_BYTES_PER_REQUEST": "40"})
+        h.put_asset(e)
+        e.s3.objects = env.s3.objects
+        response = _create(e, FILE_SELECTION)
+        assert response["statusCode"] == 400
+        assert "larger than 40 bytes" in h.body_of(response)["message"]
+        assert e.zip.items == {}
+        assert e.lam.calls == []
+
     def test_active_cap_429(self, env):
         for _ in range(5):
             assert _create(env, FILE_SELECTION)["statusCode"] == 200
@@ -452,7 +473,7 @@ class TestVersionPinning:
         import sys
         fake = _t.ModuleType("handlers.assets.assetVersions")
         fake.validate_asset_version_exists = lambda db, a, v: True
-        fake.get_asset_file_versions = lambda db, a, v: {"files": files}
+        fake.get_asset_file_versions = lambda db, a, v, **_kw: {"files": files}
         fake.resolve_asset_version_id_from_alias = lambda db, a, alias: (alias_map or {})[alias]
         monkeypatch.setitem(sys.modules, "handlers.assets.assetVersions", fake)
 
@@ -478,6 +499,23 @@ class TestVersionPinning:
             ("/a.glb", "va1"), ("/textures/t1.png", "vt1")]
         # A pinned run launches on the whole asset; the manifest is the authority.
         assert json.loads(env.lam.calls[0][2]["body"])["inputFiles"][0]["relativeFileKey"] == "/"
+
+    def test_a_snapshot_that_cannot_be_read_answers_500_not_a_selection_refusal(self, env, monkeypatch):
+        import sys
+        self._versions(env, monkeypatch, [])
+
+        def _unreadable(db, a, v, raise_errors=False):
+            # The real helper's shape: None for a failed read unless asked to raise.
+            if raise_errors:
+                raise RuntimeError("table unavailable")
+            return None
+
+        monkeypatch.setattr(sys.modules["handlers.assets.assetVersions"], "get_asset_file_versions",
+                            _unreadable)
+        response = _create(env, {"selection": FILE_SELECTION["selection"], "assetVersionId": "3"})
+        assert response["statusCode"] == 500
+        assert env.zip.items == {}
+        assert env.lam.calls == []
 
     def test_alias_resolution(self, env, monkeypatch):
         self._versions(env, monkeypatch, [{"relativeKey": "/a.glb", "versionId": "va1", "size": 100}],

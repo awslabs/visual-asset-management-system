@@ -36,7 +36,7 @@ The `tiff-tga-viewer` entry (`.tga`, `.tif`, `.tiff`) takes two `customParameter
 | `maxDecodeBytes`  | `268435456` | Largest file (256 MiB) the viewer downloads to decode. Checked from the file size and `Content-Length` before the download. |
 | `maxDecodePixels` | `100000000` | Most pixels (100 megapixels) decoded for one image or TIFF page. Checked from the header before decoding.                   |
 
-Above a cap, or when the file cannot be decoded (a truncated file, BigTIFF, TIFF stored in separate colour planes, old-style JPEG TIFF), the viewer shows the file's generated preview with a notice when one exists, and a plain message otherwise. Decoding runs in a same-origin web worker and falls back to the page when the worker cannot start; see [Viewer Plugin Development](../developer/viewer-plugins.md#decoding-in-a-web-worker-optional).
+Above a cap, or when the file cannot be decoded (a truncated file, BigTIFF, TIFF stored in separate colour planes, old-style JPEG TIFF), the viewer shows the file's generated preview with a notice when one exists, a message that gives the reason when the preview exists but could not be loaded, and a plain message otherwise. Decoding runs in a same-origin web worker and falls back to the page when the worker cannot start; see [Viewer Plugin Development](../developer/viewer-plugins.md#decoding-in-a-web-worker-optional).
 
 ---
 

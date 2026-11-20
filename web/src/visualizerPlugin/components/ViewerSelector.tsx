@@ -8,6 +8,7 @@ import Select, { SelectProps } from "@cloudscape-design/components/select";
 import { ViewerPlugin } from "../core/PluginRegistry";
 import { ViewerMode } from "../core/PluginRegistry";
 import { isCompareOnlyViewer } from "../core/viewerSelection";
+import { describeExtensionToken } from "../core/extensionMatching";
 
 interface ViewerSelectorProps {
     viewers: ViewerPlugin[];
@@ -41,7 +42,7 @@ export const ViewerSelector: React.FC<ViewerSelectorProps> = ({
 }) => {
     // Convert viewers to options for Select component with enhanced descriptions
     const options: SelectProps.Option[] = listableViewers(viewers, mode).map((viewer) => {
-        const extensions = viewer.config.supportedExtensions.join(", ");
+        const extensions = viewer.config.supportedExtensions.map(describeExtensionToken).join(", ");
         let capabilityText: string;
         if (mode === "compare" && viewer.config.compareMode) {
             const { minFiles, maxFiles } = viewer.config.compareMode;

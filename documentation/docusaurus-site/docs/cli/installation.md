@@ -10,7 +10,7 @@ Ensure your system meets the following requirements:
 
 | Requirement | Version | Notes                      |
 | ----------- | ------- | -------------------------- |
-| Python      | 3.13+   | Required for CLI runtime   |
+| Python      | 3.12+   | Required for CLI runtime   |
 | pip         | Latest  | Python package installer   |
 | Git         | Any     | For cloning the repository |
 

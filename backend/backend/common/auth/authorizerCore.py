@@ -117,12 +117,32 @@ JWT_ADDITIONAL_AUDIENCES_ENV = os.environ.get('JWT_ADDITIONAL_AUDIENCES')
 ALLOWED_IP_RANGES_ENV = os.environ.get('ALLOWED_IP_RANGES')
 IGNORED_PATHS_ENV = os.environ.get('IGNORED_PATHS')
 
+
 # Parse JSON environment variables
-try:
-    ALLOWED_IP_RANGES = json.loads(ALLOWED_IP_RANGES_ENV) if ALLOWED_IP_RANGES_ENV else []
-except json.JSONDecodeError:
-    logger.error("Failed to parse ALLOWED_IP_RANGES environment variable")
-    ALLOWED_IP_RANGES = []
+def parse_allowed_ip_ranges(raw: Optional[str]) -> Optional[List]:
+    """Parse ALLOWED_IP_RANGES into the list of [min, max] ranges the IP check compares against.
+
+    Unset or empty means no IP restriction ([]). A value that is set but is not a JSON array
+    yields None, which the IP check answers by admitting no caller: CDK always writes a JSON
+    array, so only a hand-edited function environment reaches this, and it is logged at ERROR
+    naming the variable. Entries of a valid array are checked one by one in is_ip_authorized.
+    """
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.error("Failed to parse ALLOWED_IP_RANGES environment variable; every request is refused "
+                     "until it is a JSON array of [min, max] ranges")
+        return None
+    if not isinstance(value, list):
+        logger.error("ALLOWED_IP_RANGES is not a JSON array; every request is refused until it is a "
+                     "JSON array of [min, max] ranges")
+        return None
+    return value
+
+
+ALLOWED_IP_RANGES = parse_allowed_ip_ranges(ALLOWED_IP_RANGES_ENV)
 
 try:
     IGNORED_PATHS = json.loads(IGNORED_PATHS_ENV) if IGNORED_PATHS_ENV else []
@@ -207,6 +227,9 @@ JWT_ADDITIONAL_AUDIENCES = parse_additional_audiences(JWT_ADDITIONAL_AUDIENCES_E
 # API Key Configuration
 API_KEY_HASH_INDEX_NAME = 'apiKeyHashIndex'  # pragma: allowlist secret
 API_KEY_CACHE_TTL = 15  # seconds before a cached entry expires
+# How long past its expiry a cached API key record still answers when the lookup itself fails.
+# Past that the key's status is unknown and the lookup is refused (ApiKeyLookupUnavailableError).
+API_KEY_STALE_FALLBACK_SECONDS = 2 * API_KEY_CACHE_TTL
 
 # User Roles Configuration
 USER_ROLES_CACHE_TTL = 60  # seconds before a cached entry expires
@@ -312,6 +335,8 @@ def _lookup_api_key_by_hash(key_hash: str):
     - Fresh cache hit: return immediately (no DynamoDB call)
     - Expired or missing: query DynamoDB GSI once, cache result for API_KEY_CACHE_TTL seconds
     - Not-found keys are cached as None to prevent DDOS of DynamoDB with invalid keys
+    - Query failure: the cached record answers until API_KEY_STALE_FALLBACK_SECONDS past its
+      expiry; otherwise ApiKeyLookupUnavailableError
     """
     current_time = time.time()
     cached = _api_key_cache.get(key_hash)
@@ -345,9 +370,10 @@ def _lookup_api_key_by_hash(key_hash: str):
         return record
     except Exception as e:
         logger.error(f"Failed to query API key by hash: {str(e)}")
-        # On error, return the cached record if available (even if expired). With nothing
-        # cached the key's status is unknown, which is not the same as "not found".
-        if cached:
+        # On error, return the cached record if it expired no more than
+        # API_KEY_STALE_FALLBACK_SECONDS ago. With nothing cached, or only an older entry, the
+        # key's status is unknown, which is not the same as "not found".
+        if cached and current_time < cached['expiry'] + API_KEY_STALE_FALLBACK_SECONDS:
             return cached['record']
         raise ApiKeyLookupUnavailableError("API key lookup failed") from e
 
@@ -1263,7 +1289,9 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
     Get JWKS URI for external IDP with discovery fallback.
 
     The resolved URI is cached per issuer for CACHE_TTL so OpenID Connect discovery
-    is not performed on the hot path of every authenticated request.
+    is not performed on the hot path of every authenticated request. The fallback used
+    when discovery fails is cached only for JWKS_MIN_REFETCH_INTERVAL_SECONDS, so a
+    transient discovery failure does not pin the fallback for the hour.
 
     Args:
         issuer_url: The issuer URL for the external IDP
@@ -1288,12 +1316,14 @@ def get_jwks_uri_for_external_idp(issuer_url: str) -> str:
         }
         return discovered_uri
 
-    # Fall back to standard .well-known/jwks.json
+    # Fall back to standard .well-known/jwks.json. A failed discovery may be transient, and an IdP
+    # that publishes its keys elsewhere fails every key fetch through the fallback, so the fallback
+    # is kept only for the refetch floor before discovery runs again.
     fallback_uri = EXTERNAL_JWKS_URL_TEMPLATE.format(issuer_url=issuer_url)
     logger.info(f"OpenID Connect discovery failed, falling back to: {fallback_uri}")
     jwks_uri_cache[issuer_url] = {
         "jwks_uri": fallback_uri,
-        "expiry": current_time + CACHE_TTL,
+        "expiry": current_time + JWKS_MIN_REFETCH_INTERVAL_SECONDS,
     }
     return fallback_uri
 
@@ -1378,7 +1408,7 @@ def authenticate_request(event: dict, *, fronted: str = None) -> dict:
 
     # Step 1: IP validation (using shared clientIp module)
     client_ip = resolve_client_ip(event, fronted=fronted)
-    if not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
+    if ALLOWED_IP_RANGES is None or not is_ip_authorized(client_ip, ALLOWED_IP_RANGES):
         logger.info(f"IP {client_ip} not in allowed ranges")
         return _denied("IP address not authorized", FAILURE_FORBIDDEN)
 

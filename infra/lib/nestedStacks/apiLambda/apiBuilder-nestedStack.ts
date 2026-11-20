@@ -703,7 +703,9 @@ export class ApiBuilderNestedStack extends NestedStack {
         // Grant SQS permissions to the large file processor Lambda
         largeFileProcessingQueue.grantConsumeMessages(sqsUploadFileLargeFunction);
         // The consumer records a file's outcome on its upload record, a failure only on the last
-        // delivery before the message is dead-lettered (backend common/uploadStatus.py).
+        // delivery before the message is dead-lettered (backend common/uploadStatus.py). A
+        // redelivery whose audit claim is already taken reads the record to tell a tracked file
+        // from an untracked one, so the role reads as well as updates.
         sqsUploadFileLargeFunction.addEnvironment(
             "LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT",
             String(LARGE_FILE_QUEUE_MAX_RECEIVE_COUNT)
@@ -711,7 +713,7 @@ export class ApiBuilderNestedStack extends NestedStack {
         sqsUploadFileLargeFunction.addToRolePolicy(
             new iam.PolicyStatement({
                 effect: iam.Effect.ALLOW,
-                actions: ["dynamodb:UpdateItem"],
+                actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
                 resources: [storageResources.dynamo.assetUploadsStorageTable.tableArn],
             })
         );

@@ -2568,7 +2568,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "compliance",
         advanced: true,
-        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy. When unset, it follows app.metadataSchema.autoLoadDefaultAssetSchema.",
     },
     {
         path: "app.compliance.quarantineBlocksDownload",

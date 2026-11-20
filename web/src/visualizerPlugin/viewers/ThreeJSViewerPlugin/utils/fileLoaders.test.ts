@@ -23,6 +23,7 @@ import {
     PLY_POINT_SIZE_FRACTION,
     USD_FORMATS,
 } from "./fileLoaders";
+import { ZIP_LIMITS } from "./usdDependencies";
 import { isOcctNoGeometryError, loadOCCTFile, occtNoGeometryMessage } from "./occtLoader";
 
 jest.mock("./occtLoader", () => ({
@@ -238,6 +239,87 @@ describe("loadFile USD", () => {
         const usdz = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]).buffer;
 
         await expect(loadFile(usdz, "usdz", "bomb.usdz")).rejects.toThrow(/expands to/);
+        expect(parse).not.toHaveBeenCalled();
+    });
+});
+
+describe("loadFile 3MF", () => {
+    let parse: jest.Mock;
+    const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]).buffer;
+
+    beforeEach(() => {
+        parse = jest.fn(() => ({ name: "3mf" }));
+        class FakeThreeMFLoader {
+            parse = parse;
+        }
+        (window as any).THREEBundle = {
+            THREE: {
+                LoadingManager: class {
+                    setURLModifier() {
+                        return this;
+                    }
+                },
+            },
+            ThreeMFLoader: FakeThreeMFLoader,
+            fflate: { unzipSync: jest.fn(() => ({})) },
+        };
+    });
+
+    afterEach(() => {
+        delete (window as any).THREEBundle;
+    });
+
+    it("checks a .3mf package's declared size before parsing it", async () => {
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            opts.filter({ name: "3D/model.model", originalSize: 4 * 1024 * 1024 * 1024 });
+            return {};
+        });
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(
+            /The 3MF package expands to/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("checks a .3mf package's entry count before parsing it", async () => {
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            for (let i = 0; i <= ZIP_LIMITS.maxEntries; i++) {
+                opts.filter({ name: `f${i}`, originalSize: 0 });
+            }
+            return {};
+        });
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(/The 3MF package has/);
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("[control] parses a package within the limits", async () => {
+        const result = await loadFile(zip, "3mf", "part.3mf");
+
+        expect(parse).toHaveBeenCalledTimes(1);
+        expect(result.object.name).toBe("3mf");
+    });
+
+    // A zip reader finds the entries from the end of the file, so the check reads every package.
+    it("checks a .3mf package that does not start with a zip entry header", async () => {
+        const prefixed = new Uint8Array([0, 0, 0, 0, 0x50, 0x4b, 0x03, 0x04]).buffer;
+        (window as any).THREEBundle.fflate.unzipSync = jest.fn((_bytes: any, opts: any) => {
+            opts.filter({ name: "3D/model.model", originalSize: 4 * 1024 * 1024 * 1024 });
+            return {};
+        });
+
+        await expect(loadFile(prefixed, "3mf", "part.3mf")).rejects.toThrow(
+            /The 3MF package expands to/
+        );
+        expect(parse).not.toHaveBeenCalled();
+    });
+
+    it("does not parse a .3mf package when the bundle has no zip reader to check it", async () => {
+        delete (window as any).THREEBundle.fflate;
+
+        await expect(loadFile(zip, "3mf", "part.3mf")).rejects.toThrow(
+            /cannot check the 3MF package's size/
+        );
         expect(parse).not.toHaveBeenCalled();
     });
 });

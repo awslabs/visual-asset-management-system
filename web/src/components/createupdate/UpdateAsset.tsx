@@ -25,6 +25,7 @@ import {
     unbindSchemaFromAsset,
 } from "../../services/ComplianceService";
 import { useAllowedRoutes } from "../../features/orchestration/permissions/useAllowedRoutes";
+import { loadFailureMessage } from "../compliance/listingStates";
 import { TagType } from "../../pages/Tag/TagType.interface";
 import {
     validateRequiredTagTypeSelected,
@@ -35,6 +36,8 @@ import {
 // Compliance routes behind the schema-binding field.
 const COMPLIANCE_SCHEMAS_API_ROUTE = "/compliance/schemas";
 const COMPLIANCE_BIND_ASSET_API_ROUTE = "/compliance/bind/{databaseId}/{assetId}";
+// The field reads the asset's override from its compliance state.
+const COMPLIANCE_ASSET_STATE_API_ROUTE = "/compliance/state/{databaseId}/{assetId}";
 
 interface UpdateAssetProps {
     asset: any;
@@ -135,11 +138,24 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
     const { can: canCallRoute } = useAllowedRoutes();
     const canBindComplianceSchema =
         canCallRoute("GET", COMPLIANCE_SCHEMAS_API_ROUTE) &&
-        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE);
+        canCallRoute("PUT", COMPLIANCE_BIND_ASSET_API_ROUTE) &&
+        canCallRoute("GET", COMPLIANCE_ASSET_STATE_API_ROUTE);
+    // Inherit removes an override through the binding's DELETE; while the asset has none it removes
+    // nothing, so it stays offered then.
+    const canUnbindComplianceSchema = canCallRoute("DELETE", COMPLIANCE_BIND_ASSET_API_ROUTE);
     const [schemaOptions, setSchemaOptions] = useState<SelectProps.Option[]>([]);
     const [selectedSchema, setSelectedSchema] = useState<SelectProps.Option | null>(null);
     const [initialSchemaValue, setInitialSchemaValue] = useState<string | null>(null);
     const [loadingSchemas, setLoadingSchemas] = useState(false);
+    // Whether the schema list and the asset's override were read. The field is offered only once
+    // the override is known, so a choice is never compared against an override the form could not
+    // read. A failure shows its reason and a Retry, which reads both again.
+    const [schemasError, setSchemasError] = useState<string | null>(null);
+    const [overrideStatus, setOverrideStatus] = useState<"loading" | "loaded" | "failed">(
+        "loading"
+    );
+    const [overrideError, setOverrideError] = useState<string | null>(null);
+    const [complianceReadAttempt, setComplianceReadAttempt] = useState(0);
 
     if (complete) {
         props.onComplete();
@@ -171,6 +187,7 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
             canBindComplianceSchema &&
             !!complianceDatabaseId &&
             !!assetDetail.assetId &&
+            overrideStatus === "loaded" &&
             selectedValue !== initialSchemaValue;
         if (!sendSave && !sendBinding) {
             close();
@@ -292,9 +309,12 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
 
     useEffect(() => {
         if (!canBindComplianceSchema) return;
+        let cancelled = false;
         const loadSchemas = async () => {
             setLoadingSchemas(true);
+            setSchemasError(null);
             const [success, result] = await fetchComplianceSchemas(complianceDatabaseId);
+            if (cancelled) return;
             if (success && Array.isArray(result)) {
                 setSchemaOptions(
                     bindableSchemas(result).map((s) => ({
@@ -303,31 +323,47 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         description: s.description,
                     }))
                 );
+            } else {
+                setSchemaOptions([]);
+                setSchemasError(loadFailureMessage("the compliance schemas", result));
             }
             setLoadingSchemas(false);
         };
         loadSchemas();
-    }, [canBindComplianceSchema, complianceDatabaseId]);
+        return () => {
+            cancelled = true;
+        };
+    }, [canBindComplianceSchema, complianceDatabaseId, complianceReadAttempt]);
 
     useEffect(() => {
         if (!canBindComplianceSchema || !complianceDatabaseId || !asset?.assetId) return;
+        let cancelled = false;
         const loadBinding = async () => {
+            setOverrideStatus("loading");
+            setOverrideError(null);
             const [success, result] = await fetchComplianceState(
                 complianceDatabaseId,
                 asset.assetId
             );
-            if (
-                success &&
-                typeof result !== "string" &&
-                result.schemaSource === "asset" &&
-                result.schemaName
-            ) {
-                setSelectedSchema({ label: result.schemaName, value: result.schemaName });
-                setInitialSchemaValue(result.schemaName);
+            if (cancelled) return;
+            if (success && typeof result !== "string") {
+                const override =
+                    result.schemaSource === "asset" && result.schemaName ? result.schemaName : null;
+                setSelectedSchema(override ? { label: override, value: override } : null);
+                setInitialSchemaValue(override);
+                setOverrideStatus("loaded");
+            } else {
+                setOverrideStatus("failed");
+                setOverrideError(
+                    loadFailureMessage(`the ${Synonyms.asset}'s compliance schema`, result)
+                );
             }
         };
         loadBinding();
-    }, [canBindComplianceSchema, complianceDatabaseId, asset?.assetId]);
+        return () => {
+            cancelled = true;
+        };
+    }, [canBindComplianceSchema, complianceDatabaseId, asset?.assetId, complianceReadAttempt]);
 
     useEffect(() => {
         // Form Validation Error Check
@@ -454,9 +490,22 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                         label="Compliance Schema"
                         description={`Override the ${Synonyms.database}-level compliance schema for this ${Synonyms.asset}. Choose "Inherit" to use the ${Synonyms.database} schema. Offered: the GLOBAL schemas and those available to this ${Synonyms.asset}'s ${Synonyms.database} only.`}
                         constraintText={`Optional. ${Synonyms.Asset}-level binding overrides ${Synonyms.database}-level.`}
+                        errorText={overrideError || schemasError || undefined}
+                        secondaryControl={
+                            overrideError || schemasError ? (
+                                <Button
+                                    onClick={() =>
+                                        setComplianceReadAttempt((attempt) => attempt + 1)
+                                    }
+                                >
+                                    Retry
+                                </Button>
+                            ) : undefined
+                        }
                     >
                         <Select
                             selectedOption={selectedSchema}
+                            disabled={overrideStatus !== "loaded"}
                             onChange={({ detail }) => {
                                 setSelectedSchema(
                                     detail.selectedOption?.value ? detail.selectedOption : null
@@ -464,7 +513,9 @@ export const UpdateAsset = ({ asset, ...props }: UpdateAssetProps) => {
                                 setIsFormTouched(true);
                             }}
                             options={[
-                                { label: `Inherit from ${Synonyms.database}`, value: "" },
+                                ...(canUnbindComplianceSchema || !initialSchemaValue
+                                    ? [{ label: `Inherit from ${Synonyms.database}`, value: "" }]
+                                    : []),
                                 ...schemaOptions,
                             ]}
                             placeholder={`Inherit from ${Synonyms.database}`}

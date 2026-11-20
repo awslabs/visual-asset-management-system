@@ -4,18 +4,30 @@
  */
 
 import { apiClient } from "../../../services/apiClient";
+import { NETWORK_FAILURE_MESSAGE } from "../../../services/networkFailure";
 import { toTuple, toTupleWithWarnings } from "./client";
 import type { ResultWithWarnings } from "./client";
 import type { ExecuteRequest, Execution, ExecutionDetail, ExecuteResponse } from "../types";
+
+/**
+ * Shown for a launch that got no response: the request may have reached the API, so the run may
+ * have started, and launching again could start a second one.
+ */
+export const LAUNCH_OUTCOME_UNKNOWN_MESSAGE =
+    "The launch request got no reply, so the run may have started. Check the Executions list before launching again.";
 
 export async function executeWorkflow(
     workflowDatabaseId: string,
     workflowId: string,
     body: ExecuteRequest
 ): Promise<[boolean, ExecuteResponse | string]> {
-    return toTuple(() =>
+    const result = await toTuple<ExecuteResponse>(() =>
         apiClient.post(`workflows/${workflowDatabaseId}/${workflowId}/execute`, { body })
     );
+    if (!result[0] && result[1] === NETWORK_FAILURE_MESSAGE) {
+        return [false, LAUNCH_OUTCOME_UNKNOWN_MESSAGE];
+    }
+    return result;
 }
 
 export async function listExecutionsGlobal(

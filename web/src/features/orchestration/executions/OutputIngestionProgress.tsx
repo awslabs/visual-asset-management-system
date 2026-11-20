@@ -148,61 +148,71 @@ const OutputIngestionProgress: React.FC<Props> = ({ executionPhase, outputIngest
                 into the asset. The execution stays running until every file has landed.
             </p>
             {!compact && files.length > 0 && (
-                <table className="mt-3 w-full text-sm" aria-label="Output files being copied">
-                    <thead>
-                        <tr className="text-left text-xs text-gray-600 dark:text-gray-400">
-                            <th className="py-1 pr-3 font-medium">File</th>
-                            <th className="py-1 pr-3 font-medium">Status</th>
-                            <th className="py-1 pr-3 font-medium">Progress</th>
-                            <th className="py-1 pr-3 font-medium">Size</th>
-                            <th className="py-1 font-medium">Reason</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {files.map((file) => {
-                            const value =
-                                file.status === "SUCCEEDED"
-                                    ? 100
-                                    : percent(file.partsDone || 0, file.partsTotal || 0);
-                            return (
-                                <tr
-                                    key={file.relativeKey}
-                                    className="border-t border-blue-100 dark:border-blue-800"
-                                >
-                                    <td className="py-1 pr-3 font-mono break-all">
-                                        {file.relativeKey}
-                                    </td>
-                                    <td className="py-1 pr-3">
-                                        <FileStatusLabel status={file.status} />
-                                    </td>
-                                    <td className="py-1 pr-3 w-40">
-                                        {file.partsTotal > 0 || file.status === "SUCCEEDED" ? (
-                                            <div className="flex items-center gap-2">
-                                                <ProgressBar
-                                                    value={value}
-                                                    label={`${file.relativeKey} ${value}% copied`}
-                                                />
-                                                <span className="text-xs whitespace-nowrap">
-                                                    {value}%
+                // The five columns scroll inside their own box, so on a phone-width page the table
+                // never widens the execution page; the box takes focus so a keyboard user can
+                // scroll it.
+                <div
+                    className="mt-3 overflow-x-auto"
+                    role="region"
+                    aria-label="Output files table, scrolls sideways"
+                    tabIndex={0}
+                >
+                    <table className="w-full text-sm" aria-label="Output files being copied">
+                        <thead>
+                            <tr className="text-left text-xs text-gray-600 dark:text-gray-400">
+                                <th className="py-1 pr-3 font-medium">File</th>
+                                <th className="py-1 pr-3 font-medium">Status</th>
+                                <th className="py-1 pr-3 font-medium">Progress</th>
+                                <th className="py-1 pr-3 font-medium">Size</th>
+                                <th className="py-1 font-medium">Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {files.map((file) => {
+                                const value =
+                                    file.status === "SUCCEEDED"
+                                        ? 100
+                                        : percent(file.partsDone || 0, file.partsTotal || 0);
+                                return (
+                                    <tr
+                                        key={file.relativeKey}
+                                        className="border-t border-blue-100 dark:border-blue-800"
+                                    >
+                                        <td className="py-1 pr-3 font-mono break-all">
+                                            {file.relativeKey}
+                                        </td>
+                                        <td className="py-1 pr-3">
+                                            <FileStatusLabel status={file.status} />
+                                        </td>
+                                        <td className="py-1 pr-3 w-40">
+                                            {file.partsTotal > 0 || file.status === "SUCCEEDED" ? (
+                                                <div className="flex items-center gap-2">
+                                                    <ProgressBar
+                                                        value={value}
+                                                        label={`${file.relativeKey} ${value}% copied`}
+                                                    />
+                                                    <span className="text-xs whitespace-nowrap">
+                                                        {value}%
+                                                    </span>
+                                                </div>
+                                            ) : (
+                                                <span className="text-xs text-gray-600 dark:text-gray-400">
+                                                    Not started
                                                 </span>
-                                            </div>
-                                        ) : (
-                                            <span className="text-xs text-gray-600 dark:text-gray-400">
-                                                Not started
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td className="py-1 pr-3 whitespace-nowrap">
-                                        {formatIngestionBytes(file.bytesTotal || 0)}
-                                    </td>
-                                    <td className="py-1 text-red-700 dark:text-red-400">
-                                        {file.error || ""}
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
+                                            )}
+                                        </td>
+                                        <td className="py-1 pr-3 whitespace-nowrap">
+                                            {formatIngestionBytes(file.bytesTotal || 0)}
+                                        </td>
+                                        <td className="py-1 text-red-700 dark:text-red-400">
+                                            {file.error || ""}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
             )}
             {!compact && outputIngestion.filesTruncated && (
                 <p className="text-xs text-blue-800 dark:text-blue-300 mt-2">

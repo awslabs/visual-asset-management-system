@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { isUnanswered } from "../../services/networkFailure";
+
 /** The message of a plain authorization denial: the API's "Not Authorized" or API Gateway's own. */
 const PERMISSION_DENIAL = /^(not authorized|user is not authorized\b|forbidden$|access denied)/i;
 
@@ -33,6 +35,24 @@ export function downloadResponseApiMessage(response: unknown): string | undefine
     return undefined;
 }
 
+/**
+ * The reason the download route gives for a key that is not in the bucket. The route checks the
+ * object before it signs a URL and answers a missing one with a `400` carrying this text
+ * (`MSG_FILE_NOT_FOUND` in `backend/backend/common/downloadEligibility.py`). The route's whole answer
+ * is in `fileNotFoundBody.testdata.json`, which a web test and a backend handler test both compare,
+ * so the two cannot drift apart unnoticed.
+ */
+export const DOWNLOAD_ROUTE_FILE_NOT_FOUND = "File not found in S3";
+
+/** Whether a failed download answer is the route's missing-file refusal (a `400` naming it). */
+export function isFileNotFoundAnswer(status: number | undefined, apiMessage: unknown): boolean {
+    return (
+        status === 400 &&
+        typeof apiMessage === "string" &&
+        apiMessage.trim().endsWith(DOWNLOAD_ROUTE_FILE_NOT_FOUND)
+    );
+}
+
 /** Statuses whose sentence the viewers word themselves (below), whatever the API's body says. */
 const STATUSES_WORDED_HERE = new Set([401, 403, 404, 410, 429]);
 
@@ -57,13 +77,28 @@ export function apiRefusalMessage(
 }
 
 /**
+ * The message of a failed `downloadAsset` tuple that carries no status because no API answer came
+ * back: a request the deployment's AWS WAF web ACL blocked (its message with the request ID) or one
+ * that never reached the service (`NETWORK_FAILURE_MESSAGE`). `downloadAsset` marks only these two
+ * (`markUnanswered`); any other tuple, such as a status-less failure for another reason, gives
+ * undefined.
+ */
+function unansweredDownloadMessage(response: unknown): string | undefined {
+    if (!isUnanswered(response) || (response as unknown[])[0] !== false) return undefined;
+    const message = (response as unknown[])[1];
+    return typeof message === "string" ? message.trim() || undefined : undefined;
+}
+
+/**
  * Why a preview or a download did not load, for a surface that otherwise shows its own fixed text
  * ("No preview available ..."): the API's refusal reason (`apiRefusalMessage`) of a failed
- * `downloadAsset` tuple, else null.
+ * `downloadAsset` tuple, or the message of one that got no API answer (a WAF block, no response),
+ * else null.
  */
 export function downloadRefusalReason(response: unknown): string | null {
     return (
         apiRefusalMessage(downloadResponseStatus(response), downloadResponseApiMessage(response)) ??
+        unansweredDownloadMessage(response) ??
         null
     );
 }
@@ -72,14 +107,17 @@ export function downloadRefusalReason(response: unknown): string | null {
  * The user-facing message for a failed `downloadAsset`, decided ONLY by the status the API returned
  * (never by the caller's role or any client-side rule): 401 is a missing or expired session, 403 a
  * permission denial, 410 an
- * archived version, 404 a missing file, and anything else returns `subject`, the viewer's own
- * generic wording (e.g. "Failed to download PDF file").
+ * archived version, 404 a missing file, a request with no API answer (a WAF block, no response) its
+ * own message, and anything else returns `subject`, the viewer's own generic wording (e.g. "Failed
+ * to download PDF file").
  *
  * This is the one place every core viewer turns a download failure into a sentence, so the wording
  * is identical across them (#1211). The Text Diff Viewer classifies per side with the same 403
  * wording.
  */
 export function downloadFailureMessage(response: unknown, subject: string): string {
+    const unanswered = unansweredDownloadMessage(response);
+    if (unanswered) return unanswered;
     return downloadStatusMessage(
         downloadResponseStatus(response),
         subject,
@@ -117,25 +155,15 @@ export function downloadStatusMessage(
     return apiRefusalMessage(status, apiMessage) ?? subject;
 }
 
-/** The `message` of a failed response's JSON body (read from a clone), if it carries one. */
-export async function responseApiMessage(response: Response): Promise<string | undefined> {
-    try {
-        const body = await response.clone().json();
-        return typeof body?.message === "string" ? body.message : undefined;
-    } catch {
-        return undefined;
-    }
-}
-
 /**
- * `downloadStatusMessage` for a failed streaming-route response a viewer fetched itself, with the
- * API's own message read from the response body.
+ * The text of `streamResponseFailure` for a failed streaming-route response a viewer fetched
+ * itself, with the API's own message read from the response body.
  */
 export async function streamResponseFailureMessage(
     response: Response,
     subject: string
 ): Promise<string> {
-    return downloadStatusMessage(response.status, subject, await responseApiMessage(response));
+    return (await streamResponseFailure(response, subject)).message;
 }
 
 /**
@@ -157,14 +185,46 @@ export function isApiRefusalError(error: unknown): error is ApiRefusalError {
 }
 
 /**
+ * What a streaming-route 403 says beyond a plain denial: the message and request ID of a block by
+ * the deployment's AWS WAF web ACL (`blockedBy: "waf"`), or the route's own reason (an asset that
+ * does not allow file distribution). undefined for a denial by the authorizer or by Casbin, which
+ * carries no reason of its own.
+ */
+function forbiddenReason(body: any): string | undefined {
+    if (body?.blockedBy === "waf" && typeof body.message === "string") {
+        const requestId =
+            typeof body.requestId === "string" && body.requestId
+                ? ` (request ID ${body.requestId})`
+                : "";
+        return `${body.message}${requestId}`;
+    }
+    const reason = typeof body?.message === "string" ? body.message.trim() : "";
+    return reason && !PERMISSION_DENIAL.test(reason) ? reason : undefined;
+}
+
+/** The JSON body of a failed response (read from a clone), if it carries one. */
+async function responseBody(response: Response): Promise<any> {
+    try {
+        return await response.clone().json();
+    } catch {
+        return undefined;
+    }
+}
+
+/**
  * The error a viewer throws for a failed streaming-route response it fetched itself: an
- * `ApiRefusalError` carrying the API's reason when the API refused the file with one, else an Error
- * with `streamResponseFailureMessage`'s text (the worded 401/403/404/410/429 sentences, or
- * `subject`).
+ * `ApiRefusalError` carrying the reason when the API refused the file with one, or when a 403 says
+ * more than a plain denial (an AWS WAF block with its request ID, an asset that is not
+ * distributable), else an Error with the worded 401/403/404/410 sentence or `subject`, which a
+ * 429 also gets.
  */
 export async function streamResponseFailure(response: Response, subject: string): Promise<Error> {
-    const apiMessage = await responseApiMessage(response);
-    const refusal = apiRefusalMessage(response.status, apiMessage);
+    const body = await responseBody(response);
+    const apiMessage = typeof body?.message === "string" ? body.message : undefined;
+    const refusal =
+        response.status === 403
+            ? forbiddenReason(body)
+            : apiRefusalMessage(response.status, apiMessage);
     if (refusal) return new ApiRefusalError(refusal);
     return new Error(downloadStatusMessage(response.status, subject, apiMessage));
 }
@@ -204,23 +264,12 @@ export function describeStreamFailure(subject: string, failure: StreamFailure): 
     if (status >= 200 && status < 300) {
         return `Unable to display ${subject}: the viewer could not read the file.`;
     }
-    if (status === 403 && body?.blockedBy === "waf" && typeof body.message === "string") {
-        const requestId =
-            typeof body.requestId === "string" && body.requestId
-                ? ` (request ID ${body.requestId})`
-                : "";
-        return `Unable to load ${subject}: ${body.message}${requestId}.`;
-    }
     if (status === 401) {
         return `Unable to load ${subject}: your session is no longer valid. Sign in again.`;
     }
     if (status === 403) {
-        // A denial by the authorizer or by Casbin carries no reason of its own; any other 403 (an
-        // asset that does not allow file distribution) names what to change.
-        const reason = typeof body?.message === "string" ? body.message.trim() : "";
-        if (!reason || PERMISSION_DENIAL.test(reason)) {
-            return `Unable to load ${subject}: you don't have permission to view it.`;
-        }
+        const reason = forbiddenReason(body);
+        if (!reason) return `Unable to load ${subject}: you don't have permission to view it.`;
         return `Unable to load ${subject}: ${reason.replace(/\.$/, "")}.`;
     }
     if (status === 404) return `Unable to load ${subject}: it was not found.`;

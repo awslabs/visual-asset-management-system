@@ -16,6 +16,12 @@
 /** How much of a file is read before deciding whether it is text (git's 8 KB rule). */
 export const TEXT_SAMPLE_BYTES = 8192;
 
+/**
+ * The largest file a text viewer reads whole (20 MiB). A larger text file is not downloaded past
+ * its sample and never rendered: the highlighter and the differ run on the main thread.
+ */
+export const TEXT_VIEWER_MAX_BYTES = 20 * 1024 * 1024;
+
 /** A sample with more than this share of control bytes is binary. */
 export const CONTROL_BYTE_RATIO_LIMIT = 0.1;
 
@@ -48,7 +54,9 @@ export type TextSampleClass =
 export type TextLoadResult =
     | { kind: "text"; text: string; encoding: TextEncodingLabel }
     | { kind: "binary" }
-    | { kind: "unsupported-encoding" };
+    | { kind: "unsupported-encoding" }
+    /** Text larger than {@link TEXT_VIEWER_MAX_BYTES}: read no further than its sample. */
+    | { kind: "too-large" };
 
 /** A refused request, carrying the HTTP status so a viewer can classify it (401/403, 404, 410). */
 export class TextFetchError extends Error {
@@ -58,6 +66,24 @@ export class TextFetchError extends Error {
         this.name = "TextFetchError";
         this.status = status;
     }
+}
+
+/**
+ * What a text viewer shows when reading the file from its presigned URL failed. The URL is the
+ * storage's, not the API's: a 403 or 404 there is an expired link or a file that has gone, never a
+ * VAMS permission answer, and a read with no response (a `TypeError`) is a connection problem.
+ * undefined for any other error, which keeps the viewer's own message.
+ */
+export function textReadFailureMessage(error: unknown): string | undefined {
+    if (error instanceof TextFetchError) {
+        return error.status === 403 || error.status === 404
+            ? "The file could not be read. Open it again to refresh the link."
+            : `The file could not be downloaded (HTTP ${error.status}).`;
+    }
+    if (error instanceof TypeError) {
+        return "The file could not be downloaded. Check your connection and open it again.";
+    }
+    return undefined;
 }
 
 const startsWith = (bytes: Uint8Array, prefix: number[]): boolean =>
@@ -175,18 +201,58 @@ const ensureOk = (response: Response): void => {
     }
 };
 
-/** Finish a classified sample: the notice when it is not text, else the decoded file. */
-const finish = (
+/** The `Content-Length` of a response, when the server gives it. */
+const declaredLength = (response: Response): number | undefined => {
+    const length = Number(response.headers?.get?.("Content-Length"));
+    return Number.isFinite(length) && length > 0 ? length : undefined;
+};
+
+/**
+ * Finish a classified sample: the notice when it is not text, else the decoded file, or `too-large`
+ * when `whole` found it larger than {@link TEXT_VIEWER_MAX_BYTES} (null).
+ */
+const finish = async (
     sample: TextSampleClass,
-    whole: () => Promise<Uint8Array>
-): Promise<TextLoadResult> =>
-    sample.kind === "text"
-        ? whole().then((bytes) => ({
-              kind: "text" as const,
-              text: decodeText(bytes, sample.encoding),
-              encoding: sample.encoding,
-          }))
-        : Promise.resolve(sample);
+    whole: () => Promise<Uint8Array | null>
+): Promise<TextLoadResult> => {
+    if (sample.kind !== "text") return sample;
+    const bytes = await whole();
+    if (!bytes) return { kind: "too-large" };
+    return { kind: "text", text: decodeText(bytes, sample.encoding), encoding: sample.encoding };
+};
+
+/**
+ * Read the rest of a body stream onto `chunks`, or stop and cancel it once it passes
+ * {@link TEXT_VIEWER_MAX_BYTES} (null).
+ */
+const drainCapped = async (
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    chunks: Uint8Array[],
+    length: number
+): Promise<Uint8Array | null> => {
+    for (;;) {
+        if (length > TEXT_VIEWER_MAX_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            return null;
+        }
+        const next = await reader.read();
+        if (next.done) return concat(chunks, length);
+        chunks.push(next.value);
+        length += next.value.length;
+    }
+};
+
+/** A whole response body, or null once it is larger than {@link TEXT_VIEWER_MAX_BYTES}. */
+const readCapped = async (response: Response): Promise<Uint8Array | null> => {
+    if ((declaredLength(response) ?? 0) > TEXT_VIEWER_MAX_BYTES) {
+        await response.body?.cancel?.().catch(() => undefined);
+        return null;
+    }
+    const reader = response.body?.getReader?.();
+    if (reader) return drainCapped(reader, [], 0);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return bytes.length > TEXT_VIEWER_MAX_BYTES ? null : bytes;
+};
 
 /**
  * A full (200) response, read through its body stream: the first {@link TEXT_SAMPLE_BYTES} are
@@ -196,13 +262,15 @@ const finish = (
 const readFullResponse = async (response: Response): Promise<TextLoadResult> => {
     const reader = response.body?.getReader?.();
     if (!reader) {
-        // No readable stream to stop early (older runtimes): classify the first bytes of the whole body.
+        // No readable stream to stop early (older runtimes): classify the first bytes of the whole
+        // body, unless its declared size is already above the cap.
+        if ((declaredLength(response) ?? 0) > TEXT_VIEWER_MAX_BYTES) return { kind: "too-large" };
         const bytes = new Uint8Array(await response.arrayBuffer());
         const sample = classifyTextSample(
             bytes.subarray(0, TEXT_SAMPLE_BYTES),
             bytes.length <= TEXT_SAMPLE_BYTES
         );
-        return finish(sample, async () => bytes);
+        return finish(sample, async () => (bytes.length > TEXT_VIEWER_MAX_BYTES ? null : bytes));
     }
 
     const chunks: Uint8Array[] = [];
@@ -225,16 +293,12 @@ const readFullResponse = async (response: Response): Promise<TextLoadResult> => 
         return sample;
     }
     return finish(sample, async () => {
-        while (!done) {
-            const next = await reader.read();
-            if (next.done) {
-                done = true;
-            } else {
-                chunks.push(next.value);
-                length += next.value.length;
-            }
+        if (done) return length > TEXT_VIEWER_MAX_BYTES ? null : concat(chunks, length);
+        if ((declaredLength(response) ?? 0) > TEXT_VIEWER_MAX_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            return null;
         }
-        return concat(chunks, length);
+        return drainCapped(reader, chunks, length);
     });
 };
 
@@ -250,6 +314,8 @@ const readFullResponse = async (response: Response): Promise<TextLoadResult> => 
  *  - A 416 is what Amazon S3 answers for a range on an empty object: empty text.
  *  - A network `TypeError` (a bucket whose CORS rules refuse the `Range` preflight) is retried once
  *    without `Range` and read as a 200.
+ *  - Text larger than {@link TEXT_VIEWER_MAX_BYTES} (from the 206's total, the `Content-Length`, or
+ *    the bytes read) is `too-large`: the full GET is not sent, or its body is cancelled at the cap.
  *  - Any other refusal throws {@link TextFetchError} with the status. An abort rethrows as-is.
  */
 export async function loadTextFile(
@@ -280,8 +346,9 @@ export async function loadTextFile(
     const sample = classifyTextSample(head.subarray(0, TEXT_SAMPLE_BYTES), isComplete);
     return finish(sample, async () => {
         if (isComplete) return head;
+        if (total !== undefined && total > TEXT_VIEWER_MAX_BYTES) return null;
         const full = await fetchImpl(url, { signal });
         ensureOk(full);
-        return new Uint8Array(await full.arrayBuffer());
+        return readCapped(full);
     });
 }

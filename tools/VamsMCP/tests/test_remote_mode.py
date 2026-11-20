@@ -290,6 +290,94 @@ def test_one_users_slow_calls_do_not_delay_another_users_calls(deployment, tmp_p
     assert "call the tool again" in refused[0]["error"]
 
 
+async def test_a_call_that_never_started_gives_its_slot_back_and_invites_a_retry(deployment, tmp_path, monkeypatch):
+    """A call still waiting for a worker thread when its budget ends: nothing ran, and its slot is free."""
+    import anyio
+
+    env = {"VAMS_MCP_TOOL_TIMEOUT": "10", "VAMS_MCP_TOOLSETS": "all", "VAMS_ENABLE_WRITES": "true"}
+    with remote_server_module(deployment.settings_dict("http://127.0.0.1:9/mcp"), tmp_path, env=env) as server:
+        limiter = anyio.CapacityLimiter(1)
+        monkeypatch.setattr(server, "_tool_limiter", lambda: limiter)
+        identity = VerifiedIdentity(deployment.token("alice"), "alice", "c", None)
+        arguments = {"database_id": "d", "description": "dddd", "default_bucket_id": "b"}
+        deployment.api_delay = 1.5
+        with request_context.acting_for(identity):
+            # The first call holds the only worker thread for the length of the slow API call.
+            first = asyncio.ensure_future(server.create_database(**arguments))
+            await asyncio.sleep(0.3)
+            monkeypatch.setattr(server, "_REMOTE_TIMEOUT_GRACE_SECONDS", -9.8)  # answer after 0.2 s
+            waiting = await server.create_database(**arguments)
+            monkeypatch.setattr(server, "_REMOTE_TIMEOUT_GRACE_SECONDS", 5)
+            assert server._CALLS_IN_FLIGHT.get("alice") == 1  # only the call that is running
+            done = await asyncio.wait_for(first, timeout=10)
+        deployment.api_delay = 0
+        assert server._CALLS_IN_FLIGHT.get("alice", 0) == 0
+    assert "error_type" not in done
+    assert waiting["error_type"] == "ServerBusy" and "outcomeUnknown" not in waiting
+    assert "nothing ran" in waiting["error"] and "call the tool again" in waiting["error"].lower()
+
+
+async def test_a_call_cancelled_while_it_waits_for_a_worker_gives_its_slot_back(deployment, tmp_path, monkeypatch):
+    """A call cancelled while it waits for a worker thread, the cancellation the time budget's
+    `move_on_after` delivers (sent directly here): the slot is freed at once, and the running call
+    frees its own when it ends."""
+    import anyio
+
+    env = {"VAMS_MCP_TOOL_TIMEOUT": "10", "VAMS_MCP_TOOLSETS": "all", "VAMS_ENABLE_WRITES": "true"}
+    with remote_server_module(deployment.settings_dict("http://127.0.0.1:9/mcp"), tmp_path, env=env) as server:
+        limiter = anyio.CapacityLimiter(1)
+        monkeypatch.setattr(server, "_tool_limiter", lambda: limiter)
+        identity = VerifiedIdentity(deployment.token("alice"), "alice", "c", None)
+        arguments = {"database_id": "d", "description": "dddd", "default_bucket_id": "b"}
+        deployment.api_delay = 1.5
+        with request_context.acting_for(identity):
+            first = asyncio.ensure_future(server.create_database(**arguments))
+            await asyncio.sleep(0.3)
+            second = asyncio.ensure_future(server.create_database(**arguments))
+            await asyncio.sleep(0.3)
+            assert server._CALLS_IN_FLIGHT.get("alice") == 2
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+            assert server._CALLS_IN_FLIGHT.get("alice") == 1  # only the call that is running
+            done = await asyncio.wait_for(first, timeout=10)
+        deployment.api_delay = 0
+        assert server._CALLS_IN_FLIGHT.get("alice", 0) == 0
+    assert "error_type" not in done
+
+
+def test_a_worker_that_starts_after_its_call_was_given_up_runs_nothing():
+    from vams_mcp import server
+
+    body = MagicMock(return_value={"ok": True})
+    call = server._RemoteCall()
+    server._CALLS_IN_FLIGHT["carol"] = 1
+    try:
+        assert server._abandon_if_not_started("carol", call) is True
+        assert "carol" not in server._CALLS_IN_FLIGHT
+        assert server._run_counted("carol", call, body, (), {}) is None
+        body.assert_not_called()
+        assert "carol" not in server._CALLS_IN_FLIGHT  # not released a second time
+        assert server._abandon_if_not_started("carol", call) is False
+    finally:
+        server._CALLS_IN_FLIGHT.pop("carol", None)
+
+
+def test_a_call_whose_body_started_is_released_by_its_worker_only():
+    from vams_mcp import server
+
+    call = server._RemoteCall()
+    server._CALLS_IN_FLIGHT["dave"] = 1
+    try:
+        assert server._run_counted("dave", call, lambda: {"ok": True}, (), {}) == {"ok": True}
+        assert "dave" not in server._CALLS_IN_FLIGHT
+        server._CALLS_IN_FLIGHT["dave"] = 1  # another call of the same user still in flight
+        assert server._abandon_if_not_started("dave", call) is False
+        assert server._CALLS_IN_FLIGHT["dave"] == 1
+    finally:
+        server._CALLS_IN_FLIGHT.pop("dave", None)
+
+
 def test_the_per_user_call_limit_is_a_bounded_setting(monkeypatch):
     assert Config.from_env().max_calls_per_user == 8
     monkeypatch.setenv("VAMS_MCP_MAX_CALLS_PER_USER", "3")

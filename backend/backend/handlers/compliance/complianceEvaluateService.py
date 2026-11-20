@@ -844,7 +844,10 @@ def get_evaluations(event, database_id, asset_id, query_params):
     starting_token = query_params.get("startingToken")
     if starting_token:
         exclusive_start_key = _decode_key_token(starting_token, EVALUATION_ASSET_INDEX_KEY_ATTRIBUTES)
-        if exclusive_start_key is None:
+        # A token of another asset's history names another partition of the index, which DynamoDB
+        # refuses as a start key.
+        if exclusive_start_key is None or \
+                exclusive_start_key["databaseId:assetId"] != f"{database_id}:{asset_id}":
             return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
         query_kwargs["ExclusiveStartKey"] = exclusive_start_key
 
