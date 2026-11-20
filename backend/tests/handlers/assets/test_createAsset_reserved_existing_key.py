@@ -105,3 +105,42 @@ class TestReservedExistingKey:
         # The same key placed inside a system folder is refused
         reserved_key = existing_key.replace("projects/", "projects/pipelines/", 1)
         assert _refused(_create(base_prefix, reserved_key)[1])
+
+
+ASSET_ID_MESSAGE = "The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID."
+
+
+def _create_with_id(asset_id, existing_key=None):
+    m = _load(fresh=True)
+    m.asset_table = MagicMock()
+    m.asset_table.get_item.return_value = {}
+    m.database_table = MagicMock()
+    # The database lookup is the first read after the asset id checks; answering "no database"
+    # ends the call there, so reaching it shows the id was accepted.
+    m.database_table.get_item.return_value = {}
+    request = m.CreateAssetRequestModel(
+        databaseId="db-one", assetName="asset-a", description="a description", isDistributable=True, tags=[],
+        assetId=asset_id, bucketExistingKey=existing_key)
+    try:
+        m.create_asset(request, {"tokens": ["tester"], "roles": []})
+    except m.VAMSGeneralErrorResponse as e:
+        return m, str(e)
+    return m, None
+
+
+@pytest.mark.unit
+class TestReservedAssetId:
+    @pytest.mark.parametrize("asset_id", sorted(RESERVED))
+    def test_an_asset_id_that_names_a_system_folder_is_refused_before_any_read(self, asset_id):
+        m, error = _create_with_id(asset_id)
+        assert error is not None and error.endswith(ASSET_ID_MESSAGE), error
+        m.asset_table.get_item.assert_not_called()
+        m.database_table.get_item.assert_not_called()
+        # The same with a bucketExistingKey: the id is refused whatever the location
+        m, error = _create_with_id(asset_id, "projects/model.glb")
+        assert error is not None and error.endswith(ASSET_ID_MESSAGE), error
+        # An id that only contains the name, and a generated id, reach the database lookup
+        for accepted in (asset_id + "-model", "my-" + asset_id, None):
+            m, error = _create_with_id(accepted)
+            assert error is not None and "Database does not exist" in error, (accepted, error)
+            m.database_table.get_item.assert_called_once()

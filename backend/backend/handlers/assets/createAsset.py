@@ -382,6 +382,14 @@ def normalize_location_key(key):
 RESERVED_EXISTING_KEY_FOLDERS = RESERVED_S3_PREFIX_FOLDERS | {AUXILIARY_PREPARED_DOWNLOADS_PREFIX.strip('/')}
 RESERVED_EXISTING_KEY_MESSAGE = ("The specified bucketExistingKey is inside a folder VAMS reserves for system "
                                  "use. Choose another location.")
+RESERVED_ASSET_ID_MESSAGE = ("The specified assetId is the name of a folder VAMS reserves for system use. "
+                             "Choose another asset ID.")
+
+
+def is_reserved_asset_id(asset_id):
+    """Whether an assetId names a reserved VAMS system folder. A location derived from it,
+    ``{base prefix}{assetId}/``, would be that folder."""
+    return bool(asset_id) and asset_id in RESERVED_EXISTING_KEY_FOLDERS
 
 
 def is_reserved_existing_key(s3_key, base_prefix):
@@ -743,6 +751,12 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     # the shared rule.
     if request_model.assetId and not s3ExternalGenerated:
         validate_ascii_asset_id(request_model.assetId)
+
+    # A chosen asset id that names a reserved VAMS system folder would derive that folder as its location.
+    # Refused before any read, so the answer does not depend on what the tables hold.
+    if is_reserved_asset_id(request_model.assetId):
+        logger.error(f"assetId {request_model.assetId} names a reserved VAMS system folder")
+        raise VAMSGeneralErrorResponse(RESERVED_ASSET_ID_MESSAGE)
 
     # Generate asset ID if not provided
     assetId = request_model.assetId if request_model.assetId else f"x{str(uuid.uuid4())}"
