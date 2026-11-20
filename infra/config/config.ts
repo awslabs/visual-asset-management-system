@@ -393,6 +393,16 @@ export const ZIP_DOWNLOADS_DEFAULTS = {
 // it and the authorizer environment reads it.
 export const EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS = ["aud"];
 
+/** The jobs of the 3D Basic Conversion Batch tier: 4 vCPU / 30 GiB, 8 / 60, 16 / 120 (Fargate-valid pairs). */
+export const CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES: ReadonlyArray<{
+    vcpu: number;
+    memoryGiB: number;
+}> = [
+    { vcpu: 4, memoryGiB: 30 },
+    { vcpu: 8, memoryGiB: 60 },
+    { vcpu: 16, memoryGiB: 120 },
+];
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -1358,16 +1368,6 @@ export function resolveConversion3dBasicStepInput(config: { app: any }): void {
         );
     }
 }
-
-/** The jobs of the 3D Basic Conversion Batch tier: 4 vCPU / 30 GiB, 8 / 60, 16 / 120 (Fargate-valid pairs). */
-export const CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES: ReadonlyArray<{
-    vcpu: number;
-    memoryGiB: number;
-}> = [
-    { vcpu: 4, memoryGiB: 30 },
-    { vcpu: 8, memoryGiB: 60 },
-    { vcpu: 16, memoryGiB: 120 },
-];
 
 /**
  * app.pipelines.useConversion3dBasic.batchTier: absent or null is `{ enabled: false, maxMemoryGiB: 120 }`,

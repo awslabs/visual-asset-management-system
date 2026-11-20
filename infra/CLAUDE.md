@@ -151,7 +151,9 @@ infra/
                                  # StopTask (best-effort, into $.stopError), and the ecs:cluster-conditioned grants
     partition/t1RapidPipelineEcsStopTask.test.ts  # T1: that stop route's ARNs in each partition
     pipelines/t1LambdaContainerImageArchitecture.test.ts  # T1: every PackageType Image Lambda function
-                                 # (3dBasic, SYSTEM GenAI metadata) declares Architectures [x86_64]
+                                 # (3dBasic, SYSTEM GenAI metadata) declares Architectures [x86_64]. With
+                                 # useConversion3dBasic.batchTier.enabled (needs the global VPC) 3dBasic
+                                 # also deploys an AWS Batch Fargate tier, see pipelines/CLAUDE.md
     pipelines/preview3dThumbnailComputeTiers.test.ts  # 3D thumbnail tiers: one job definition, the
                                  # Choice, per-tier vCPU/memory overrides, VAMS_COMPUTE_TIER,
                                  # VAMS_TASK_MEMORY_MIB, timeouts

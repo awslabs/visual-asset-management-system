@@ -20,6 +20,7 @@
 import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
+import { Conversion3dBasicConstruct } from "../../lib/nestedStacks/pipelines/conversion/3dBasic/constructs/conversion3dBasic-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
@@ -141,6 +142,48 @@ describe("preview/3dThumbnail openPipeline registration environment", () => {
         expectDeclaredStagesInAsl(
             template,
             path.join(PRODUCERS, "preview", "3dThumbnail", "lambda", "openPipeline.py")
+        );
+    });
+});
+
+describe("conversion/3dBasic openPipeline registration environment (Batch tier)", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("Conversion3dBasicEnvStack", (c) => {
+            c.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = false;
+            c.app.pipelines.useConversion3dBasic.batchTier = { enabled: true, maxMemoryGiB: 120 };
+        });
+        const nested = new Conversion3dBasicConstruct(h.stack, "Conversion3dBasicPipeline", {
+            config: h.config,
+            storageResources: h.storage,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(nested);
+    });
+
+    test("registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(
+            template,
+            env.BATCH_JOB_DEFINITION_NAME
+        );
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("every stage name the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "conversion", "3dBasic", "lambda", "openPipeline.py")
         );
     });
 });
