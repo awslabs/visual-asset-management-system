@@ -118,13 +118,21 @@ class TestObservedDisplaySession:
         assert changed["connectionAvailable"] is True
         assert changed["connectionUnavailableReason"] is None
 
-    @pytest.mark.parametrize("edh_state", ["stopping", "stopped", "pending", "error"])
+    @pytest.mark.parametrize("edh_state", ["stopping", "stopped", "pending"])
     def test_a_desktop_seen_other_than_running_clears_the_reason(self, edh_state):
         for desktop in (_desktop(edh_state), _linked(FALLBACK, edh_state)):
             changed = state.observed_row_attributes(_ended_row(), desktop)
 
             assert changed["connectionUnavailableReason"] is None
             assert "connectionAvailable" not in changed
+
+    def test_a_desktop_seen_in_error_replaces_the_reason_with_the_desktop_error(self):
+        for desktop in (_desktop("error"), _linked(FALLBACK, "error")):
+            changed = state.observed_row_attributes(_ended_row(), desktop)
+
+            assert changed["connectionUnavailableReason"] == "DESKTOP_ERROR"
+            assert "connectionAvailable" not in changed
+            assert changed.get("state", "ACTIVE") == "ACTIVE"
 
 
 @pytest.mark.unit

@@ -359,6 +359,8 @@ export function buildEdhWorkstationServiceFunction(
     grantReadEdhPrivateSubnets(fun, config.app.addons.useEdhWorkstations.edhClusterId);
     // The instance-type catalog shows each type's vCPUs, memory and GPUs.
     grantDescribeInstanceTypes(fun);
+    // A start EDH accepted that EC2 returned to stopped records why, from the instance's EC2 state reason.
+    grantDescribeInstances(fun);
     return fun;
 }
 
@@ -448,9 +450,10 @@ export function buildEdhLaunchWorkerFunction(
 }
 
 /**
- * Lets the launch worker read a stopped desktop's instance for the Availability Zone a refused start
- * names. `ec2:DescribeInstances` accepts no resource ARN or resource-level condition, so the grant
- * names `*`; it is read-only.
+ * Lets a function read a workstation's instance: the launch worker for the Availability Zone a refused
+ * start names, and the workstation service and the session reconciler for the state reason of a start
+ * EC2 accepted and then returned to stopped. `ec2:DescribeInstances` accepts no resource ARN or
+ * resource-level condition, so the grant names `*`; it is read-only.
  */
 export function grantDescribeInstances(fun: lambda.Function): void {
     fun.addToRolePolicy(
@@ -465,7 +468,7 @@ export function grantDescribeInstances(fun: lambda.Function): void {
         [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "ec2:DescribeInstances accepts no resource ARN or resource-level condition, so the read of a stopped workstation's instance, for the Availability Zone a refused start names, names every resource; it is read-only.",
+                reason: "ec2:DescribeInstances accepts no resource ARN or resource-level condition, so the read of a workstation's instance, for the Availability Zone a refused start names and the state reason of a start EC2 returned to stopped, names every resource; it is read-only.",
                 appliesTo: [{ regex: "/^Resource::\\*$/g" }],
             },
         ],
@@ -628,7 +631,7 @@ export function buildEdhSessionReconcilerFunction(
     network: EdhLambdaNetwork,
     secrets: EdhLambdaSecrets
 ): lambda.Function {
-    return buildCommonEdhLambda({
+    const fun = buildCommonEdhLambda({
         scope,
         name: "edhSessionReconciler",
         timeout: Duration.minutes(15),
@@ -639,6 +642,9 @@ export function buildEdhSessionReconcilerFunction(
         network,
         secrets,
     });
+    // A start EDH accepted that EC2 returned to stopped records why, from the instance's EC2 state reason.
+    grantDescribeInstances(fun);
+    return fun;
 }
 
 // The sync waits up to 60 s for its Run Command invocation; the rest covers the reads, the decrypt and the

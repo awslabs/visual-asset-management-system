@@ -89,7 +89,7 @@ PROBE_ENDPOINT_LOG_GROUPS = "GET /audit/log-groups"
 PROBE_ENDPOINT_START = "POST /audit/queries"
 
 # Configuration (environment variables set from app.auditLogging.search by the CDK builder). The
-# defaults apply when a variable is absent, so an upgrade with no configuration behaves as documented.
+# defaults apply when a variable is absent, so a deployment with no configuration behaves as documented.
 # The ceilings mirror infra/config/config.ts and common/auditSearch (CEILING_*).
 ENV_MAX_WINDOW_DAYS = "AUDIT_SEARCH_MAX_QUERY_WINDOW_DAYS"
 ENV_MAX_ROWS = "AUDIT_SEARCH_MAX_ROWS"

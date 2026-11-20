@@ -1876,7 +1876,7 @@ def test_the_file_class_help_lists_the_classifier_ids():
     from vamscli.commands.search import nlp
 
     help_text = next(option.help for option in nlp.params if option.name == 'file_classes')
-    for class_id in ("image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
+    for class_id in ("image", "video", "audio", "document", "text", "data", "tiles3d", "raster", "mesh", "usd", "cad",
                      "pointcloud", "splat", "ifc", "other"):
         assert class_id in help_text
     assert "3d-model" not in help_text

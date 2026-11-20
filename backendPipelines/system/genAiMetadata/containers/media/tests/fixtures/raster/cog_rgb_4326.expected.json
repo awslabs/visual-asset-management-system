@@ -1,0 +1,35 @@
+{
+  "bandCount": 3,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "EPSG:4326",
+  "dataType": "uint8",
+  "file": "cog_rgb_4326.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    -70.0,
+    43.744,
+    -69.744,
+    44.0
+  ],
+  "nodata": null,
+  "overviewCount": 1,
+  "pixelIsPoint": false,
+  "pixelSizeX": 0.001,
+  "pixelSizeY": 0.001,
+  "rotated": false,
+  "wgs84Bounds": [
+    -70.0,
+    43.744,
+    -69.744,
+    44.0
+  ],
+  "width": 256
+}

@@ -288,49 +288,57 @@ describe("EDH add-on Lambdas", () => {
     );
 
     test.each(EDH_TEMPLATES)(
-        "%s: the launch worker reads instances on every resource with a reasoned suppression, and may stop, start or terminate none",
+        "%s: the launch worker, the workstation service and the session reconciler read instances on every resource with a reasoned suppression, and may stop, start or terminate none",
         (name) => {
             const s = edhSynth(name);
             const fns = edhFunctions(s);
-            const [worker] = fns.filter(
-                (r) => handlerOf(r) === "handlers.addon.edh.edhLaunchWorker.lambda_handler"
-            );
-            expect(worker).toBeDefined();
             const allowedOn = (fn: Resource) =>
                 statementsOf(s, fn).filter((st) => st.Effect === "Allow");
-            // A refused start names the Availability Zone of the stopped desktop's instance.
-            const describe = allowedOn(worker).filter((st) =>
-                actionsOf(st).includes("ec2:DescribeInstances")
-            );
-            expect(describe.length).toBeGreaterThan(0);
-            expect([...new Set(describe.flatMap(resourcesOf))]).toEqual(["*"]);
             const covers = (pattern: string, action: string) =>
                 new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i").test(
                     action
                 );
-            const lifecycle = allowedOn(worker)
-                .flatMap(actionsOf)
-                .filter((a) =>
-                    ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"].some(
-                        (x) => covers(a, x)
-                    )
-                );
-            expect(lifecycle).toEqual([]);
-            // Neither API-facing workstation role reads instances: the start runs in the worker.
-            for (const module of ["edhWorkstationService", "edhAdminService"]) {
+            // A refused start names the Availability Zone of the stopped desktop's instance (the worker); a
+            // start EC2 accepted and then returned to stopped records the instance's state reason (the
+            // workstation service's list and get, and the sweep).
+            for (const module of [
+                "edhLaunchWorker",
+                "edhWorkstationService",
+                "edhSessionReconciler",
+            ]) {
                 const [fn] = fns.filter(
                     (r) => handlerOf(r) === `handlers.addon.edh.${module}.lambda_handler`
                 );
+                expect(fn).toBeDefined();
+                const describe = allowedOn(fn).filter((st) =>
+                    actionsOf(st).includes("ec2:DescribeInstances")
+                );
+                expect(describe.length).toBeGreaterThan(0);
+                expect([...new Set(describe.flatMap(resourcesOf))]).toEqual(["*"]);
+                const lifecycle = allowedOn(fn)
+                    .flatMap(actionsOf)
+                    .filter((a) =>
+                        ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"].some(
+                            (x) => covers(a, x)
+                        )
+                    );
+                expect(lifecycle).toEqual([]);
+                const reasons = (
+                    (fn.raw.Metadata?.cdk_nag?.rules_to_suppress ?? []) as Array<{ reason: string }>
+                ).map((r) => r.reason);
                 expect(
-                    allowedOn(fn).some((st) => actionsOf(st).includes("ec2:DescribeInstances"))
-                ).toBe(false);
+                    reasons.some((r) =>
+                        r.startsWith("ec2:DescribeInstances accepts no resource ARN")
+                    )
+                ).toBe(true);
             }
-            const reasons = (
-                (worker.raw.Metadata?.cdk_nag?.rules_to_suppress ?? []) as Array<{ reason: string }>
-            ).map((r) => r.reason);
+            // The admin service does not read instances: its stop and deactivate go through EDH.
+            const [admin] = fns.filter(
+                (r) => handlerOf(r) === "handlers.addon.edh.edhAdminService.lambda_handler"
+            );
             expect(
-                reasons.some((r) => r.startsWith("ec2:DescribeInstances accepts no resource ARN"))
-            ).toBe(true);
+                allowedOn(admin).some((st) => actionsOf(st).includes("ec2:DescribeInstances"))
+            ).toBe(false);
         }
     );
 

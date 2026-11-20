@@ -7,9 +7,11 @@ ArcGIS Pro layer file (`.lyrx`, a JSON document in the CIM schema that names a l
 
 Both write the `sys_geo` group the GeoJSON extractor writes, so the metadata catalog promotes `footprint` to the
 `location` row the same way: `format`, `footprint`, `layers[]` (one entry per layer) and `crs`; a GeoPackage also
-records `featureCount` and `geometryTypes`, which a layer file cannot know. A footprint is written in WGS84 only; a
-layer in another spatial reference keeps its `nativeExtent` with its `crs` and the footprint stays `None`, because
-this module carries no reprojection.
+records `featureCount` and `geometryTypes`, which a layer file cannot know. A footprint is always in WGS84. A layer in
+another registered EPSG reference keeps its `nativeExtent` with its `crs` and is reprojected into WGS84 by the shared
+footprint helper (`geo_reproject`, also used for GeoTIFF), which records the result as the layer's `wgs84Extent`;
+a layer whose extent has no WGS84 box (it contains a pole, crosses the antimeridian, or has no resolvable
+reference) is left out of the footprint with a warning.
 
 A GeoPackage is read through SQLite, which pages the file on demand. The extractor counts the `gpkg_contents` rows,
 reads the first GIS_MAX_LAYERS of them and only the geometry-column and spatial-reference rows those layers name,
@@ -41,6 +43,7 @@ from .common import (
     other_fallback,
     truncate_text,
 )
+from .geo_reproject import extent_to_wgs84_polygon
 
 # Layers recorded per file; a GeoPackage carrying more lists the first ones and says so.
 GIS_MAX_LAYERS = 50
@@ -351,6 +354,39 @@ def _geopackage_layers(connection: sqlite3.Connection, budget: _SqlBudget,
     return layers, layer_total
 
 
+def _epsg_code(label) -> Optional[int]:
+    """The integer of an `EPSG:n` label; None for any other authority or a label that is not a number."""
+    text = str(label or "")
+    if not text.upper().startswith("EPSG:"):
+        return None
+    try:
+        return int(text[5:])
+    except ValueError:
+        return None
+
+
+def _reproject_layers(layers: List[dict], warnings: List[str]) -> List[List[float]]:
+    """The WGS84 extents of the layers that sit in an EPSG reference other than WGS84, each recorded on its layer
+    as `wgs84Extent`. A layer the helper cannot place, or whose box crosses the antimeridian (a west edge above its
+    east edge cannot be unioned into one box), is left out and named in a warning."""
+    extents: List[List[float]] = []
+    for layer in layers:
+        crs = layer.get("crs")
+        if crs in WGS84_CRS_LABELS or "nativeExtent" not in layer:
+            continue
+        code = _epsg_code(crs)
+        if code is None:
+            continue
+        footprint = extent_to_wgs84_polygon(code, bounds=layer["nativeExtent"])
+        if footprint.bounds is None or footprint.bounds[0] > footprint.bounds[2]:
+            reason = footprint.note or "crosses-antimeridian"
+            warnings.append(f"layer {layer.get('name')!r} ({crs}): no WGS84 footprint ({reason})")
+            continue
+        layer["wgs84Extent"] = [round(value, 7) for value in footprint.bounds]
+        extents.append(footprint.bounds)
+    return extents
+
+
 def extract_geopackage(path: str, ctx: ExtractContext) -> BranchResult:
     if not _is_sqlite(path):
         return other_fallback(ctx, "GeoPackage is not an SQLite database")
@@ -380,15 +416,18 @@ def extract_geopackage(path: str, ctx: ExtractContext) -> BranchResult:
     crs_values = sorted({str(layer["crs"]) for layer in layers if layer.get("crs")})
     feature_count = sum(int(layer.get("featureCount", 0)) for layer in feature_layers)
     count_exact = all(layer.get("featureCountExact", True) for layer in feature_layers)
-    # The footprint is the union of the WGS84 layers' extents; other spatial references keep their own extent.
+    # The footprint is the union of the layers' WGS84 extents: a WGS84 layer's own extent, and the reprojected extent
+    # of every layer in another EPSG reference.
     wgs84_extents = [layer["nativeExtent"] for layer in layers
                      if layer.get("crs") in WGS84_CRS_LABELS and "nativeExtent" in layer]
-    footprint = _wgs84_footprint(_union_extent(wgs84_extents))
-    if wgs84_extents and footprint is None:
-        result.warnings.append("the EPSG:4326 layer extents are not a longitude/latitude box; no footprint is written")
-    elif layers and not wgs84_extents and any("nativeExtent" in layer for layer in layers):
+    reprojected_extents = _reproject_layers(layers, result.warnings)
+    footprint = _wgs84_footprint(_union_extent(wgs84_extents + reprojected_extents))
+    if (wgs84_extents or reprojected_extents) and footprint is None:
+        result.warnings.append("the layer extents are not a longitude/latitude box in WGS84; no footprint is written")
+    elif layers and not wgs84_extents and not reprojected_extents and any("nativeExtent" in layer for layer in layers):
         result.warnings.append(
-            "GeoPackage layers are not in EPSG:4326; the native extents are recorded and no footprint is written")
+            "no GeoPackage layer extent could be placed in WGS84; the native extents are recorded and no footprint "
+            "is written")
     sys_geo: Dict[str, object] = {
         "format": _GPKG_FORMAT,
         "type": "GeoPackage",
