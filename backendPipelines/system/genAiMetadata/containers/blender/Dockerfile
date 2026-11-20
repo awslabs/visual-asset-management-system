@@ -49,16 +49,30 @@ RUN dnf install -y \
 # dependency check open the user's USD with; releases before 25.11 carry OpenUSD parser advisories
 # (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442), which Blender 4.5 (25.02) and 5.0/5.1 (25.08) bundle. The
 # checksum is the one Blender publishes in blender-<version>.sha256 beside the release; verifying it in the
-# SAME layer as the download makes a tampered or truncated archive fail the build. The download base is an
-# argument because download.blender.org is not reachable from every build network and its mirrors serve
-# byte-identical archives.
+# SAME layer as the download makes a tampered or truncated archive fail the build. download.blender.org is
+# not reachable from every build network, so the build tries BLENDER_DOWNLOAD_BASE first (a private mirror
+# can be set there with --build-arg) and then two public Blender mirrors, which serve byte-identical
+# archives. Each candidate must match BLENDER_SHA256; one that does not is discarded and the next is tried,
+# and the build fails when none matches.
 ARG BLENDER_SERIES=5.2
 ARG BLENDER_VERSION=5.2.3
 ARG BLENDER_SHA256=78486c018b4443efe5e75ab54c290ed8c15abafd249b862c2c9ce2530a918eec
 ARG BLENDER_DOWNLOAD_BASE=https://download.blender.org/release
-RUN curl -fL "${BLENDER_DOWNLOAD_BASE}/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
-        -o /tmp/blender.tar.xz \
-    && echo "${BLENDER_SHA256}  /tmp/blender.tar.xz" | sha256sum -c - \
+RUN for base in "${BLENDER_DOWNLOAD_BASE}" \
+                "https://ftp.nluug.nl/pub/graphics/blender/release" \
+                "https://mirrors.dotsrc.org/blender/blender-release"; do \
+        rm -f /tmp/blender.tar.xz; \
+        if curl -fL --retry 2 -A "Mozilla/5.0" \
+                "${base}/Blender${BLENDER_SERIES}/blender-${BLENDER_VERSION}-linux-x64.tar.xz" \
+                -o /tmp/blender.tar.xz \
+           && echo "${BLENDER_SHA256}  /tmp/blender.tar.xz" | sha256sum -c -; then \
+            break; \
+        fi; \
+        echo "Rejected Blender ${BLENDER_VERSION} from ${base}: download failed or BLENDER_SHA256 did not match"; \
+        rm -f /tmp/blender.tar.xz; \
+    done \
+    && { test -s /tmp/blender.tar.xz \
+         || { echo "No source served Blender ${BLENDER_VERSION} matching BLENDER_SHA256" >&2; exit 1; }; } \
     && mkdir -p /opt/blender \
     && tar -xJf /tmp/blender.tar.xz -C /opt/blender --strip-components=1 \
     && rm /tmp/blender.tar.xz \

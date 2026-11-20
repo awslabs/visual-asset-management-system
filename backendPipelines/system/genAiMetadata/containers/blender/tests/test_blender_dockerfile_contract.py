@@ -274,3 +274,125 @@ def test_gpl_license_text_travels_with_the_blender_script():
     head = io.open(LICENSE_COPY, encoding="utf-8").read(400)
     assert "GNU GENERAL PUBLIC LICENSE" in head
     assert "Version 3" in head
+
+
+# The download sources, in the order the build tries them. download.blender.org is not reachable from every
+# build network; the two public mirrors serve byte-identical archives.
+MIRROR_BASES = (
+    "https://ftp.nluug.nl/pub/graphics/blender/release",
+    "https://mirrors.dotsrc.org/blender/blender-release",
+)
+
+
+def _download_run():
+    downloads = [i for i in _instructions(_text())
+                 if i.startswith("RUN") and "blender-${BLENDER_VERSION}-linux-x64.tar.xz" in i]
+    assert len(downloads) == 1, downloads
+    return downloads[0]
+
+
+def _download_script(archive):
+    """The shell of the download RUN up to the unpack, with the archive path moved to ``archive``."""
+    run = _download_run()
+    script = run[len("RUN "):].split(" && mkdir -p /opt/blender", 1)[0]
+    assert script != run[len("RUN "):], "the download RUN no longer ends its loop before the unpack"
+    return script.replace("/tmp/blender.tar.xz", archive)
+
+
+@pytest.mark.unit
+def test_download_tries_the_configured_base_then_two_https_mirrors():
+    run = _download_run()
+    sources = ['"${BLENDER_DOWNLOAD_BASE}"'] + [f'"{base}"' for base in MIRROR_BASES]
+    positions = [run.find(source) for source in sources]
+    assert all(p >= 0 for p in positions), dict(zip(sources, positions))
+    assert positions == sorted(positions), "the configured base is tried first, then the mirrors in order"
+    assert run.index("for base in") < positions[0]
+
+
+@pytest.mark.unit
+def test_every_candidate_is_checksummed_before_it_is_kept():
+    """The checksum gates the break out of the loop, so a candidate that fails it is never unpacked."""
+    run = _download_run()
+    gate = run.index('sha256sum -c -; then')
+    assert run.index("curl -fL") < gate < run.index("break;")
+    assert run.index("done") < run.index("test -s /tmp/blender.tar.xz") < run.index("tar -xJf /tmp/blender.tar.xz")
+
+
+_FAKE_CURL = """#!{python}
+import os, sys
+args = sys.argv[1:]
+url = next(a for a in args if "://" in a)
+out = args[args.index("-o") + 1]
+with open(os.environ["FAKE_CURL_LOG"], "a") as log:
+    log.write(url + "\\n")
+plan = dict(item.split("=", 1) for item in os.environ["FAKE_CURL_PLAN"].split(","))
+outcome = next((v for k, v in plan.items() if k in url), "fail")
+if outcome == "fail":
+    sys.exit(22)
+with open(out, "wb") as f:
+    f.write(b"blender-good" if outcome == "ok" else b"blender-tampered")
+"""
+
+
+def _run_download(tmp_path, plan):
+    """Run the Dockerfile's download shell with a stand-in curl; ``plan`` maps a host to ok, bad or fail."""
+    import hashlib
+    import shutil
+    import subprocess
+    import sys
+
+    if shutil.which("sha256sum") is None or shutil.which("sh") is None:
+        pytest.skip("needs sh and sha256sum, as the Lambda base image has")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    fake = bindir / "curl"
+    fake.write_text(_FAKE_CURL.format(python=sys.executable))
+    fake.chmod(0o755)
+    archive = tmp_path / "blender.tar.xz"
+    log = tmp_path / "curl.log"
+    log.write_text("")
+    env = {
+        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "BLENDER_DOWNLOAD_BASE": "https://download.blender.org/release",
+        "BLENDER_SERIES": "5.2",
+        "BLENDER_VERSION": "5.2.3",
+        "BLENDER_SHA256": hashlib.sha256(b"blender-good").hexdigest(),
+        "FAKE_CURL_LOG": str(log),
+        "FAKE_CURL_PLAN": ",".join(f"{host}={outcome}" for host, outcome in plan.items()),
+    }
+    result = subprocess.run(["sh", "-c", _download_script(str(archive))], env=env,
+                            capture_output=True, text=True, timeout=60)
+    urls = [line for line in log.read_text().splitlines() if line]
+    content = archive.read_bytes() if archive.exists() else None
+    return result.returncode, urls, content
+
+
+@pytest.mark.unit
+def test_the_primary_host_is_used_alone_when_it_serves_the_archive(tmp_path):
+    rc, urls, content = _run_download(tmp_path, {"download.blender.org": "ok"})
+    assert rc == 0 and content == b"blender-good"
+    assert urls == ["https://download.blender.org/release/Blender5.2/blender-5.2.3-linux-x64.tar.xz"]
+
+
+@pytest.mark.unit
+def test_an_unreachable_primary_falls_back_to_the_first_mirror(tmp_path):
+    rc, urls, content = _run_download(tmp_path, {"download.blender.org": "fail", "ftp.nluug.nl": "ok"})
+    assert rc == 0 and content == b"blender-good"
+    assert [u.split("/")[2] for u in urls] == ["download.blender.org", "ftp.nluug.nl"]
+
+
+@pytest.mark.unit
+def test_an_archive_that_fails_the_checksum_is_discarded_for_the_next_mirror(tmp_path):
+    rc, urls, content = _run_download(
+        tmp_path, {"download.blender.org": "fail", "ftp.nluug.nl": "bad", "mirrors.dotsrc.org": "ok"})
+    assert rc == 0 and content == b"blender-good"
+    assert [u.split("/")[2] for u in urls] == ["download.blender.org", "ftp.nluug.nl", "mirrors.dotsrc.org"]
+
+
+@pytest.mark.unit
+def test_the_build_fails_when_no_source_serves_a_matching_archive(tmp_path):
+    rc, urls, content = _run_download(
+        tmp_path, {"download.blender.org": "bad", "ftp.nluug.nl": "fail", "mirrors.dotsrc.org": "bad"})
+    assert rc != 0
+    assert content is None, "a tampered archive must not be left for the unpack step"
+    assert len(urls) == 3
