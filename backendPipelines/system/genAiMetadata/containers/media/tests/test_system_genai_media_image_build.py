@@ -35,7 +35,7 @@ _IMPORT_TO_DISTRIBUTION = {
     "PIL": "pillow", "imageio_ffmpeg": "imageio-ffmpeg", "pypdfium2": "pypdfium2", "tinytag": "tinytag",
     "charset_normalizer": "charset-normalizer", "defusedxml": "defusedxml", "boto3": "boto3",
     "botocore": "botocore", "aws_lambda_powertools": "aws-lambda-powertools",
-    "docx": "python-docx", "pptx": "python-pptx", "openpyxl": "openpyxl",
+    "docx": "python-docx", "pptx": "python-pptx", "openpyxl": "openpyxl", "tifffile": "tifffile", "pyproj": "pyproj",
 }
 _LOCAL_PACKAGES = {"media_extractors", "customLogging", "handler", "videoSegments", "contentChunks",
                    "bedrockGuardrail", "vectorsearch", "segment_handler", "executionLogKeys"}
