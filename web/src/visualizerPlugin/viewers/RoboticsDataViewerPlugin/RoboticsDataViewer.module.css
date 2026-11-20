@@ -45,7 +45,8 @@
     justify-content: center;
     flex-direction: column;
     gap: 12px;
-    color: var(--vams-text-secondary, #b5b5b5);
+    /* A fixed light colour: the background is the same fixed dark in both VAMS themes. */
+    color: #d1d5db;
     background: #15151a;
     font-size: 14px;
     text-align: center;

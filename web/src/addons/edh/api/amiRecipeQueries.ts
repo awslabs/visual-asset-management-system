@@ -4,6 +4,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as service from "./amiRecipes";
+import { callService } from "./outcome";
 import {
     ACTIVE_BUILD_STATUSES,
     type EdhAmiBuild,
@@ -28,12 +29,6 @@ export function computeAmiRefetchInterval(
         return !!status && ACTIVE_BUILD_STATUSES.includes(status);
     });
     return moving ? AMI_POLL_MS : false;
-}
-
-async function callService<T>(serviceFn: () => Promise<[boolean, T | string]>): Promise<T> {
-    const [ok, data] = await serviceFn();
-    if (!ok) throw new Error(typeof data === "string" ? data : "Service call failed");
-    return data as T;
 }
 
 export function useEdhAmiRecipes(enabled = true) {

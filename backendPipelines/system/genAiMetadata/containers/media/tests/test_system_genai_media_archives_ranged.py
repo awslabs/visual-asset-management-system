@@ -23,6 +23,7 @@ import json
 import os
 import struct
 import tarfile
+import time
 import zipfile
 
 import pytest
@@ -119,6 +120,20 @@ def _bytes_read(s3, key):
     return total
 
 
+# The cut ZIP's entry time is pinned (#1748). Given a name, writestr stamps the clock into the local header, and at
+# some times (20:52:00 and 20:20:04, for example) the STORED method's zero bytes and the time's low byte read as an
+# H.263 picture start code: ffmpeg, probed before the zip probe, then classes the cut file as video.
+_CUT_ZIP_TIME = (2026, 1, 1, 0, 0, 0)
+
+
+def _cut_zip():
+    """A one-entry STORED ZIP cut at 60,000 bytes, before its central directory, with the pinned entry time."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as archive:
+        archive.writestr(zipfile.ZipInfo("big.bin", date_time=_CUT_ZIP_TIME), bytes(range(256)) * 400)
+    return out.getvalue()[:60_000]
+
+
 @pytest.mark.unit
 class TestZipListedByRange:
     def test_a_zip_over_the_download_bound_is_listed_by_range_without_a_download(self, s3, tmp_path):
@@ -194,11 +209,19 @@ class TestZipListedByRange:
         assert archive["coreProperties"] == {"title": "Line 3 survey", "creator": "QA"}
         assert archive["entryCount"] == 2
 
+    def test_the_cut_zip_is_the_same_bytes_whatever_the_clock(self, monkeypatch):
+        built = []
+        for clock in [(2026, 11, 19, 20, 52, 0), (2026, 11, 19, 9, 31, 17)]:  # the first is a slot ffmpeg misreads
+            monkeypatch.setattr(time, "time", lambda seconds=time.mktime(clock + (0, 0, -1)): seconds)
+            built.append(_cut_zip())
+        assert built[0] == built[1] and len(built[0]) == 60_000
+        year, month, day, hour, minute, second = _CUT_ZIP_TIME
+        # The local header's modification time and date, in DOS format, are the pinned ones.
+        assert struct.unpack_from("<HH", built[0], 10) == (hour << 11 | minute << 5 | second // 2,
+                                                           (year - 1980) << 9 | month << 5 | day)
+
     def test_a_truncated_zip_falls_back_as_today(self, s3):
-        out = io.BytesIO()
-        with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as archive:
-            archive.writestr("big.bin", bytes(range(256)) * 400)
-        data = out.getvalue()[:60_000]  # cut before the central directory
+        data = _cut_zip()
         s3.objects[(_ASSETS, "a1/cut.zip")] = data
         _seed_other(s3, "zip")
         module = _load(s3)

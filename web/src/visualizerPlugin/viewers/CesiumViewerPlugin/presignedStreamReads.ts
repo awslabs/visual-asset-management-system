@@ -107,6 +107,10 @@ function forwardedHeaders(headers: unknown): Record<string, string> | undefined 
  * callback still sees a 401 or 403.
  */
 function presignFailureEvent(Cesium: any, error: any): any {
+    // The download route answers a file that is not in the bucket with a `400` naming it
+    // (`fileNotFound`). The stream route answered such a tile with a 404, so it is one here: a
+    // missing tile is a tile failure Cesium does not retry, not an API refusal shown as text.
+    if (error?.fileNotFound === true) return new Cesium.RequestErrorEvent(404);
     const status = typeof error?.status === "number" ? error.status : undefined;
     const body = isApiRefusalError(error) ? JSON.stringify({ message: error.message }) : undefined;
     return status === undefined

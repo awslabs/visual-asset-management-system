@@ -15,6 +15,7 @@ import fs from "fs";
 import path from "path";
 import { installPresignedStreamReads } from "./presignedStreamReads";
 import { clearPresignedUrlCache } from "../../core/presignedFetch";
+import missingFile from "../../core/fileNotFoundBody.testdata.json";
 
 const mockDownloadAsset = jest.fn();
 jest.mock("../../../services/APIService", () => ({
@@ -403,6 +404,33 @@ describeIfBundle("installPresignedStreamReads with the real Cesium build", () =>
         expect(JSON.parse(error.response).message).toBe(
             "Asset is quarantined and cannot be downloaded"
         );
+        expect(sent).toHaveLength(0);
+    });
+
+    it("fails a tile the download route reports as missing as a 404 without a retry", async () => {
+        // As the viewer's refreshAuthOnDenial: only a 401 or 403 is retried.
+        const retryCallback = jest.fn(
+            async (_r: any, e: any) => e.statusCode === 401 || e.statusCode === 403
+        );
+        mockDownloadAsset.mockResolvedValue([
+            false,
+            "x",
+            missingFile.statusCode,
+            missingFile.body.message,
+        ]);
+        const uninstall = installPresignedStreamReads(Cesium, scope);
+        const error: any = await resourceFor(streamUrl("a1/gone.glb"), {
+            retryAttempts: 1,
+            retryCallback,
+        })
+            .fetchArrayBuffer()
+            .catch((e: any) => e);
+        uninstall();
+        expect(error).toBeInstanceOf(Cesium.RequestErrorEvent);
+        expect(error.statusCode).toBe(404);
+        expect(retryCallback).toHaveBeenCalledTimes(1);
+        expect(retryCallback.mock.results[0].value).resolves.toBe(false);
+        expect(mockDownloadAsset).toHaveBeenCalledTimes(1);
         expect(sent).toHaveLength(0);
     });
 

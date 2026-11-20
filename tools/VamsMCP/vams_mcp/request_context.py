@@ -20,9 +20,10 @@ _DEADLINE: contextvars.ContextVar[Optional[Tuple[float, float]]] = contextvars.C
     "vams_mcp_deadline", default=None
 )
 
-# A paged walk does not start another page once less than this share of the budget remains, so the
-# page it would start (one API request, bounded by the client's read timeout) cannot carry the call
-# past its budget.
+# A paged walk does not start another page once less than this share of the budget remains. The
+# client's read timeout is the whole budget, so the reserve does not bound one page by itself: a page
+# also ends when API Gateway ends its integration (29 seconds), which fits inside the reserve of the
+# default 240-second budget (60 seconds) and of any budget of 116 seconds or more.
 PAGE_RESERVE_FRACTION = 0.25
 
 

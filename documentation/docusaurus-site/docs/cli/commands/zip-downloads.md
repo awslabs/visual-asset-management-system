@@ -5,7 +5,7 @@ title: Zip Download Commands
 
 # Zip Download Commands
 
-Package files, folders, or a whole asset into one zip, tar, or tar.gz archive built in the background, then download it. Each zip download is a job owned by the signed-in user; the commands list and change only your own jobs. See [Zip Downloads](../../user-guide/zip-downloads.md) for the rules that apply to every job.
+Package files, folders, or a whole asset into one zip, tar, or tar.gz archive built in the background, then download it. Each zip download is a job owned by the user who created it. The commands create, cancel and delete only your own jobs; `list --all-users` lists every user's jobs for an asset, and `download` fetches another user's finished archive when you may download files from the asset. See [Zip Downloads](../../user-guide/zip-downloads.md) for the rules that apply to every job.
 
 The `zip-download` commands require a deployment with Download as Zip enabled (`app.pipelines.useZipDownloads.enabled`). On a deployment without it, every command fails with `Zip downloads are not available for this deployment`. The CLI reads this from the profile's feature switches first (`vamscli features list`), and from the API's answer otherwise.
 
@@ -41,6 +41,8 @@ vamscli zip-download create -d my-db -a my-asset --folder /scans/ --wait --downl
 | `--overwrite`             | Replace an existing local file with `--download-to`                                                                                     |
 
 A selection holds at most 1,000 entries; select a folder rather than its files one by one to stay within it. The whole job is refused when a selected file is archived, a deleted version, in an archive storage class, or has a blocked file type, and when the selection exceeds the deployment's limits. `--json-output` prints the created job.
+
+With `--download-to`, the destination is checked before the job is created: a directory must be writable, and a file path must not exist (without `--overwrite`) and must name an existing directory. The archive's own name is known only once the job has run, so a file of that name in the directory is reported after the job succeeds. When a step after the job was created fails (the wait, the URL request, or the transfer), the error names the job's `requestId` (also under `--json-output`); download it with `zip-download download -r <requestId>` instead of creating another job.
 
 ---
 
@@ -103,13 +105,15 @@ vamscli zip-download download -d my-db -a my-asset -r <requestId> --wait --timeo
 | `--timeout`         | Seconds to wait with `--wait` (default 3600)                       |
 | `--overwrite`       | Replace an existing local file                                     |
 
-A job that has not succeeded fails with `The archive is not ready for download`; an expired job fails with `This zip download has expired`.
+A job that has not succeeded fails with `The archive is not ready for download`. A job whose archive holds a file that has since been archived, deleted, or blocked fails with `A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.`, for your own job and another user's alike. A job past its `expiresAt` fails with `Zip download not found`; `This zip download has expired` means the job's archive was removed before the job expired.
+
+Another user's finished job, listed by `zip-download list --all-users` with `canDownload: true`, downloads with the same command. `--wait` follows only your own jobs: for another user's job the command requests the archive directly, which is refused with `The archive is not ready for download` until that job has succeeded.
 
 ---
 
 ## zip-download cancel
 
-Cancel a queued or running job. Its Zip Archive run is stopped and nothing is kept.
+Cancel a queued or running job. Its Zip Archive run is stopped and its partial archive is discarded; the job stays listed as `CANCELLED` until it expires or is deleted.
 
 ```bash
 vamscli zip-download cancel -d my-db -a my-asset -r <requestId> --confirm

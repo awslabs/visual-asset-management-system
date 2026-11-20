@@ -21,6 +21,8 @@ import Breadcrumb from "../components/Breadcrumb";
 import Stepper from "../components/Stepper";
 import { btnPrimary, btnSecondary } from "../components/controlStyles";
 import { BusyButton } from "../components/BusyControls";
+import { DisabledReasonButton, DisabledReasonTooltip } from "../components/DisabledReason";
+import { routeDisabledReason } from "../permissions/routeDisabledReason";
 import { useFocusHandOff } from "../components/useFocusHandOff";
 import { validateWorkflow, allPipelineRefsSelected } from "./workflowValidation";
 import TriggerDraftsEditor from "./TriggerDraftsEditor";
@@ -250,8 +252,19 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
     const queryClient = useQueryClient();
     // Trigger writes go to their own endpoint with their own Tier-1 grant, so a role may create a
     // workflow yet be unable to set a trigger on it.
-    const { loading: permissionsLoading, can } = useAllowedRoutes();
+    const { loading: permissionsLoading, failed: permissionsFailed, can } = useAllowedRoutes();
     const canSetTriggers = can("PUT", TRIGGER_ROUTE);
+    // The View page of a system workflow is open to every role that may read it; Enabled and Save
+    // change the workflow, so they follow the role's update route (web/CLAUDE.md 6.4: the route
+    // check runs first). An ordinary workflow's Edit is only offered with that route.
+    const systemChangeDeniedReason = isSystemWorkflow
+        ? routeDisabledReason(
+              permissionsLoading,
+              !!permissionsFailed,
+              can("PUT", "/database/{databaseId}/workflows/{workflowId}"),
+              "Your role does not allow changing this workflow."
+          )
+        : undefined;
 
     const [state, dispatch] = useReducer(workflowFormReducer, initialState);
     const [wizardStep, setWizardStep] = useState<string>("basic");
@@ -491,6 +504,7 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
 
     const handleSave = async () => {
         if (!isSystemWorkflow && state.validationErrors.length > 0) return;
+        if (systemChangeDeniedReason) return;
 
         dispatch({ type: "SET_SAVING", saving: true });
         dispatch({ type: "SET_SAVE_ERROR", error: null });
@@ -755,17 +769,29 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                     </fieldset>
                     <div>
                         <label className="flex items-center gap-2">
-                            <input
-                                type="checkbox"
-                                checked={state.enabled}
-                                onChange={(e) =>
-                                    dispatch({
-                                        type: "SET_FIELD",
-                                        field: "enabled",
-                                        value: e.target.checked,
-                                    })
-                                }
-                            />
+                            <DisabledReasonTooltip reason={systemChangeDeniedReason}>
+                                <input
+                                    type="checkbox"
+                                    checked={state.enabled}
+                                    aria-disabled={systemChangeDeniedReason ? true : undefined}
+                                    aria-description={systemChangeDeniedReason}
+                                    className={
+                                        systemChangeDeniedReason
+                                            ? "opacity-50 cursor-not-allowed"
+                                            : undefined
+                                    }
+                                    onChange={(e) => {
+                                        // A denied change keeps the box focusable with its reason;
+                                        // the box is controlled, so ignoring the change keeps its value.
+                                        if (systemChangeDeniedReason) return;
+                                        dispatch({
+                                            type: "SET_FIELD",
+                                            field: "enabled",
+                                            value: e.target.checked,
+                                        });
+                                    }}
+                                />
+                            </DisabledReasonTooltip>
                             <span className="text-sm font-medium text-text-primary">
                                 {state.enabled ? "Enabled" : "Disabled"}
                             </span>
@@ -1018,17 +1044,26 @@ const WorkflowBuilder: React.FC<WorkflowBuilderProps> = ({ mode, databaseId, wor
                                 idempotent) so further edits remain saveable, but is withdrawn on
                                 the create path where a second submit would create a second
                                 workflow. Continue only leaves the form. */}
-                            {(!savedWithWarnings || mode === "edit") && (
-                                <BusyButton
-                                    ref={saveRef}
-                                    onClick={handleSave}
-                                    busy={state.saving}
-                                    busyLabel="Saving..."
-                                    disabled={isSaveDisabled}
+                            {systemChangeDeniedReason ? (
+                                <DisabledReasonButton
+                                    disabledReason={systemChangeDeniedReason}
                                     className={btnPrimary}
                                 >
                                     Save
-                                </BusyButton>
+                                </DisabledReasonButton>
+                            ) : (
+                                (!savedWithWarnings || mode === "edit") && (
+                                    <BusyButton
+                                        ref={saveRef}
+                                        onClick={handleSave}
+                                        busy={state.saving}
+                                        busyLabel="Saving..."
+                                        disabled={isSaveDisabled}
+                                        className={btnPrimary}
+                                    >
+                                        Save
+                                    </BusyButton>
+                                )
                             )}
                             {savedWithWarnings && (
                                 <button

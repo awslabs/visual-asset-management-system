@@ -111,7 +111,8 @@ RUN sed -i '/torchmcubes/d' requirements.txt && \
 COPY patches/triposr_bake_texture_device.py /opt/ml/code/patches/triposr_bake_texture_device.py
 RUN python /opt/ml/code/patches/triposr_bake_texture_device.py /opt/triposr/tsr/bake_texture.py
 
-# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
         pip install --no-cache-dir pymeshfix pymeshlab; \

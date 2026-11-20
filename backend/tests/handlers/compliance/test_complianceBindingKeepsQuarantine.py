@@ -307,9 +307,10 @@ class TestAssetOverrides:
 @pytest.mark.unit
 class TestTheMarkerEndsWithAVerdict:
 
-    def _write(self, world, compliance_state, previous):
+    def _write(self, world, compliance_state, previous, evaluated_at=None):
+        # By default the evaluation begins now, after the binding change it is to decide.
         return store._write_evaluation_state(
-            DB, "quarantined", USER, "ev-new", "2026-11-05T00:00:00+00:00", NEW, 1, previous,
+            DB, "quarantined", USER, "ev-new", evaluated_at or store.now_iso(), NEW, 1, previous,
             compliance_state,
             "completed", [], {})
 
@@ -328,11 +329,16 @@ class TestTheMarkerEndsWithAVerdict:
             assert world.download_blocked("quarantined") is False
 
     def test_a_marker_set_after_the_evaluation_started_stays(self):
+        # The evaluation began before the binding change: its verdict is not applied to the
+        # record (the binding fence, bindingChangedAt), so the marker and the quarantine stay.
         with World() as world:
             unmarked = world.state("quarantined")
+            began = store.now_iso()
             world.bind_database(NEW)
-            assert self._write(world, "quarantined", unmarked)
-            assert world.state("quarantined")["awaitingReevaluationReason"] == "schemaBound"
+            assert not self._write(world, "quarantined", unmarked, evaluated_at=began).written
+            row = world.state("quarantined")
+            assert (row["complianceState"], row["awaitingReevaluationReason"]) == (
+                "quarantined", "schemaBound")
 
 
 @pytest.mark.unit
@@ -351,15 +357,15 @@ class TestTheMarkerTimeIsWhenTheChangeReachedTheRecord:
         real_bind, real_unbind = apply_module.bind_record, apply_module.unbind_record
         started = []
 
-        def bind(database_id, asset_id, existing, *args):
+        def bind(database_id, asset_id, existing, *args, **kwargs):
             if asset_id == "quarantined":
                 started.append(store.now_iso())
-            return real_bind(database_id, asset_id, existing, *args)
+            return real_bind(database_id, asset_id, existing, *args, **kwargs)
 
-        def unbind(database_id, item, *args):
+        def unbind(database_id, item, *args, **kwargs):
             if item["assetId"] == "quarantined":
                 started.append(store.now_iso())
-            return real_unbind(database_id, item, *args)
+            return real_unbind(database_id, item, *args, **kwargs)
         # The record has been read; the evaluation begins before the change writes it.
         with patch.object(apply_module, "bind_record", side_effect=bind), \
                 patch.object(apply_module, "unbind_record", side_effect=unbind):
@@ -369,11 +375,13 @@ class TestTheMarkerTimeIsWhenTheChangeReachedTheRecord:
 
     @staticmethod
     def _quarantining_verdict(world, evaluated_at):
-        """That evaluation (under the old binding) ends quarantined."""
+        """That evaluation (under the old binding) ends quarantined. It began before the change
+        reached the record, so the binding fence (bindingChangedAt) keeps its verdict off the
+        record."""
         with patch.object(store, "now_iso", return_value="2026-12-01T00:00:00+00:00"):
-            assert store._write_evaluation_state(
+            assert not store._write_evaluation_state(
                 DB, "quarantined", USER, "ev-mid", evaluated_at, OLD, 1,
-                world.state("quarantined"), "quarantined", "completed", [], {})
+                world.state("quarantined"), "quarantined", "completed", [], {}).written
 
     def test_binding_a_new_schema(self):
         with World(auto_eval=False) as world:

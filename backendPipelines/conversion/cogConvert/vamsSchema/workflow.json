@@ -1,0 +1,18 @@
+{
+    "workflowName": "COG Conversion",
+    "category": "Conversion",
+    "description": "Converts a georeferenced TIFF into a Cloud Optimized GeoTIFF in EPSG:3857 beside the original",
+    "triggers": [
+        {
+            "triggerType": "fileUpload",
+            "inputFileFilters": {
+                "allow": ["*.tif", "*.tiff"],
+                "exclude": ["*.cog.tif"]
+            },
+            "defaultTemplateIds": {
+                "GLOBAL:conversion-cog-convert": "cog-convert-deflate"
+            },
+            "enabled": false
+        }
+    ]
+}

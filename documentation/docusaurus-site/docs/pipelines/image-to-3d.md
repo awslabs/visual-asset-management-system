@@ -20,7 +20,7 @@ One deployment can carry up to seven generation paths -- **Stable-X Stable3DGen*
 | **Execution type**          | Lambda (asynchronous with task token callback)                                                                                                                                                                                                                                                                                                               |
 | **Supported input formats** | `.png`, `.jpg`, `.jpeg` -- one image file per execution; up to four named views of one subject on the Hunyuan3D-2 multi-view template; up to eight photographs plus optionally one existing mesh (`.glb`, `.gltf`, `.obj`, `.stl`, `.ply`) on the Blender agent template                                                                                     |
 | **Outputs**                 | GLB, OBJ with MTL and texture images, STL, and a mesh/gate report written as asset metadata                                                                                                                                                                                                                                                                  |
-| **Timeout**                 | 2 hours (AWS Batch attempt), 3 hours (pipeline state machine), 4 hours (VAMS workflow task token)                                                                                                                                                                                                                                                            |
+| **Timeout**                 | 2 hours (AWS Batch attempt), 2 hours 45 minutes (the AWS Batch state, which counts time waiting in the queue for GPU capacity as well as the attempt; a job still waiting or running at this bound is ended, so a job that waited past it never runs: run the pipeline again later), 3 hours (pipeline state machine), 4 hours (VAMS workflow task token)    |
 
 ## Approximate Run Times
 
@@ -141,6 +141,7 @@ When `useCodeBuild: true`, each enabled model gets an Amazon ECR repository and 
 -   Each CodeBuild project builds its model's Dockerfile and pushes the image to its own Amazon ECR repository, using the previous image as a layer cache.
 -   Builds re-trigger automatically when the container source changes.
 -   Builds run in the same private VPC subnets as the pipeline AWS Batch compute, with NAT Gateway egress for pulling base images and upstream model repositories.
+-   Python packages are installed through an AWS CodeArtifact pull-through cache of PyPI in the Regions that offer CodeArtifact (some commercial Regions, see the [AWS CodeArtifact endpoints page](https://docs.aws.amazon.com/general/latest/gr/codeartifact.html) and [AWS CodeArtifact](../architecture/aws-resources.md#aws-codeartifact)). In other Regions, including AWS GovCloud (US) and the AWS European Sovereign Cloud, no cache is created and the builds install from the public index.
 
 Builds continue asynchronously after `cdk deploy` returns. A failed build leaves the deployment successful but the AWS Batch job failing on an image pull, so check build status before the first execution:
 
@@ -150,7 +151,7 @@ aws codebuild batch-get-builds --ids <build-id>
 ```
 
 :::warning[Docker Hub rate limiting]
-Builds pull the `nvidia/cuda` base image, which is subject to anonymous pull rate limits and can fail with "429 Too Many Requests". Configure registry credentials in AWS Secrets Manager and reference them from the build, or mirror the base image into a private Amazon ECR repository.
+Builds pull their base images (`nvidia/cuda`, and `mambaorg/micromamba` for `sam3d`) from Docker Hub without credentials, so they are subject to Docker Hub's anonymous pull rate limits and can fail with "429 Too Many Requests". Neither the CodeBuild project nor `buildspec.yml` takes registry credentials. Rerun a failed build with `aws codebuild start-build --project-name <ImageTo3d CodeBuild project>`, or mirror the base images into a private Amazon ECR repository and point the `FROM` line of each affected Dockerfile at the mirror.
 :::
 
 ### Local Docker asset

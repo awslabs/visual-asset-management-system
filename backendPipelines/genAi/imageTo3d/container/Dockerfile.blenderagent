@@ -141,7 +141,8 @@ RUN pip install --no-cache-dir "utils3d @ git+https://github.com/EasternJournali
     python -c "from moge.model.v2 import MoGeModel; import utils3d, cv2, huggingface_hub" && \
     echo "MoGe $(cat /opt/moge/VAMS_UPSTREAM_COMMIT)"
 
-# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
         pip install --no-cache-dir pymeshfix pymeshlab; \

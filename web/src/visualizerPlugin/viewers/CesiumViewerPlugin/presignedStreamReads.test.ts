@@ -10,6 +10,7 @@
  */
 import { installPresignedStreamReads } from "./presignedStreamReads";
 import { clearPresignedUrlCache } from "../../core/presignedFetch";
+import missingFile from "../../core/fileNotFoundBody.testdata.json";
 
 const mockDownloadAsset = jest.fn();
 jest.mock("../../../services/APIService", () => ({
@@ -90,6 +91,49 @@ describe("keys with dot segments", () => {
         await tick();
         uninstall();
         expect(mockDownloadAsset.mock.calls[0][0].key).toBe("a1/t/v1.2/tile..b3dm");
+    });
+});
+
+describe("a tile the download route reports as missing", () => {
+    const missing = [false, "x", missingFile.statusCode, missingFile.body.message];
+
+    it("fails the tile as a 404 that is not retried, for data and image requests", async () => {
+        mockDownloadAsset.mockResolvedValue(missing);
+        const uninstall = installPresignedStreamReads(Cesium, scope);
+        const impl = Cesium.Resource._Implementations;
+        const data = { resolve: jest.fn(), reject: jest.fn() };
+        const image = { resolve: jest.fn(), reject: jest.fn() };
+        impl.loadWithXhr(`${PREFIX}a1/t/gone.glb`, "arraybuffer", "GET", undefined, {}, data);
+        impl.createImage({ url: `${PREFIX}a1/t/gone.png` }, false, image);
+        await tick();
+        uninstall();
+        for (const deferred of [data, image]) {
+            const event = deferred.reject.mock.calls[0][0];
+            expect(event).toBeInstanceOf(RequestErrorEvent);
+            expect(event.statusCode).toBe(404);
+            expect(event.response).toBeUndefined();
+        }
+        expect(originalLoadWithXhr).not.toHaveBeenCalled();
+        expect(originalCreateImage).not.toHaveBeenCalled();
+    });
+
+    it("keeps another 400 refusal as the API's own message", async () => {
+        mockDownloadAsset.mockResolvedValue([false, "x", 400, "Asset is quarantined"]);
+        const uninstall = installPresignedStreamReads(Cesium, scope);
+        const data = { resolve: jest.fn(), reject: jest.fn() };
+        Cesium.Resource._Implementations.loadWithXhr(
+            `${PREFIX}a1/t/q.glb`,
+            "arraybuffer",
+            "GET",
+            undefined,
+            {},
+            data
+        );
+        await tick();
+        uninstall();
+        const event = data.reject.mock.calls[0][0];
+        expect(event.statusCode).toBe(400);
+        expect(JSON.parse(event.response).message).toBe("Asset is quarantined");
     });
 });
 
