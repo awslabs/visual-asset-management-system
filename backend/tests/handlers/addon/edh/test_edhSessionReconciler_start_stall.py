@@ -115,11 +115,15 @@ class TestTheSweepRecordsNoStallOtherwise:
         assert written["lastError"] is None and written["startFailure"] is None
         assert written["startAcceptedAt"] is None
 
-    def test_a_stalled_start_whose_desktop_edh_no_longer_has_is_a_failed_launch_not_a_stall(self):
+    def test_a_stalled_start_whose_desktop_edh_no_longer_has_is_recorded_deleted_not_orphaned(self):
+        # A start EDH accepted is of a desktop that has run: one EDH no longer has goes the ACTIVE and STOPPED way,
+        # recorded DELETED with the unlisted stamp a Save and Resume can re-adopt it by.
         row = _accepted_row("a", STALL_SECONDS + 600, lastError="START_STALLED",
                             startFailure={"observedAt": (NOW - timedelta(minutes=10)).isoformat()})
-        _summary_, _revoke, persist, *_ = _run([row], [], states=[])
+        _summary_, revoke_fn, persist, *_ = _run([row], [], states=[])
         written = _written_for(persist, "a")
-        assert written["state"] == rec.STATE_ORPHANED
-        assert written["lastError"] == "LAUNCH_ERROR"
+        assert written["state"] == rec.STATE_DELETED
+        assert written[rec.EDH_UNLISTED_AT_FIELD] == NOW.isoformat()
+        assert written["lastError"] is None
         assert written["startFailure"] is None and written["startAcceptedAt"] is None
+        revoke_fn.assert_called_once()
