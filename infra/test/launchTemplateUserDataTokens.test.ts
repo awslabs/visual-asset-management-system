@@ -75,10 +75,7 @@ describe("launch template user data", () => {
         "%s pins the launch template version so a user-data edit reaches an instance",
         (_relative, file) => {
             const source = fs.readFileSync(file, "utf-8");
-            // Scoped to the L1 pattern, which is where the defect lives. The Isaac Lab construct
-            // passes an L2 launch template to an L2 compute environment, which exposes no version to
-            // set -- it takes the template's DEFAULT version, which is the same staleness and has no
-            // fix at this layer. Its user data carries no tokens, so nothing there is silently wrong.
+            // Scoped to the L1 pattern; the L2 pattern (the Isaac Lab construct) is the next test.
             if (!source.includes("launchTemplateId:")) {
                 return;
             }
@@ -107,6 +104,27 @@ describe("launch template user data", () => {
             // fix to the template alone reached no instance.
             expect(source).not.toContain('version: "$Latest"');
             expect(source).toContain("attrLatestVersionNumber");
+        }
+    );
+
+    test.each(sources.map((file) => [path.relative(PIPELINES_DIR, file), file]))(
+        "%s pins an L2 launch template's version on its L2 compute environment",
+        (_relative, file) => {
+            const source = fs.readFileSync(file, "utf-8");
+            // An L2 launch template passed to an L2 compute environment: the environment renders only
+            // the template id, so Batch takes the template's version as of the environment's last
+            // create or update, and a user-data change on an upgrade reaches no instance. The
+            // construct overrides the rendered property with the template's latest version, which
+            // makes each template change an in-place update of the environment.
+            if (!source.includes("new ec2.LaunchTemplate(") || !source.includes("userData")) {
+                return;
+            }
+            const carriesTokens = TOKEN_INTERPOLATIONS.some((pattern) => pattern.test(source));
+            if (!carriesTokens) {
+                return;
+            }
+            expect(source).toContain('"ComputeResources.LaunchTemplate.Version"');
+            expect(source).toContain("latestVersionNumber");
         }
     );
 

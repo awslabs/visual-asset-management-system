@@ -129,6 +129,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from boto3.dynamodb.conditions import Attr, Key
 
 from common.compliance import databaseRetirement
+from common.compliance import evaluationEngine as engine
 from common.compliance import listing
 from customLogging.logger import safeLogger
 from handlers.compliance import complianceEvaluationStore as store
@@ -481,12 +482,14 @@ def _pending():
 
 def count_assets(database_id: str, operation: str) -> int:
     """How many records the apply goes through, by a count query (no record is read into the
-    request): the database's live assets for a bind or a change; the records that inherit the
+    request): the database's live and archived assets for a bind or a change; the records that inherit the
     database binding for a removal; those still pending or awaiting re-evaluation for
     `evaluatePending`."""
     key = Key("databaseId").eq(database_id)
     if operation in (OPERATION_BIND, OPERATION_CHANGE):
-        return _count(store.asset_table, KeyConditionExpression=key)
+        return (_count(store.asset_table, KeyConditionExpression=key)
+                + _count(store.asset_table,
+                         KeyConditionExpression=Key("databaseId").eq(archived_partition(database_id))))
     if operation == OPERATION_UNBIND:
         return _count(store.asset_state_table, KeyConditionExpression=key,
                       FilterExpression=_not_override())
@@ -993,8 +996,8 @@ def _already_bound(existing: Optional[Dict[str, Any]], schema_name: str,
 
 
 def bind_record(database_id: str, asset_id: str, existing: Optional[Dict[str, Any]],
-                schema_name: str, asset_name: Optional[str], apply: Optional[Dict[str, Any]] = None
-                ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+                schema_name: str, asset_name: Optional[str], apply: Optional[Dict[str, Any]] = None,
+                create: bool = True) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """Apply a database binding to one asset's record, computed from `existing` (the record as
     read, None for none) and conditional on its revision (`store.revision_condition`, D159): an
     asset-level override is left alone; a quarantined record stays quarantined, marked awaiting
@@ -1005,11 +1008,16 @@ def bind_record(database_id: str, asset_id: str, existing: Optional[Dict[str, An
     since the read it is read again consistently and decided as it is now, up to
     `store.STATE_WRITE_ATTEMPTS` tries; after the last it is left as it is (logged).
 
+    Without `create` (an archived asset), a record that does not exist is not created: the asset
+    is registered under the binding when it is unarchived.
+
     Returns `(outcome, change)`: `(WRITTEN, change)`, `(STAMPED, change)` (the change as the stamp
     shows it), `(CURRENT, None)`, or `(None, None)` when nothing was written."""
     for attempt in range(store.STATE_WRITE_ATTEMPTS):
         if attempt:
             existing = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if not existing and not create:
+            return None, None
         if existing and existing.get("schemaSource") == SCHEMA_SOURCE_ASSET:
             return None, None
         already = _already_bound(existing, schema_name, apply) if apply else None
@@ -1025,6 +1033,7 @@ def bind_record(database_id: str, asset_id: str, existing: Optional[Dict[str, An
                 "schemaName": schema_name,
                 "schemaSource": SCHEMA_SOURCE_DATABASE,
                 "updatedAt": written_at,
+                engine.BINDING_CHANGED_AT_FIELD: written_at,
                 **awaiting(written_at, schema_name, REASON_SCHEMA_BOUND),
                 **stamp,
             }
@@ -1036,6 +1045,7 @@ def bind_record(database_id: str, asset_id: str, existing: Optional[Dict[str, An
                 "schemaSource": SCHEMA_SOURCE_DATABASE,
                 "complianceState": STATE_PENDING_EVALUATION,
                 "updatedAt": written_at,
+                engine.BINDING_CHANGED_AT_FIELD: written_at,
                 **listing.asset_name_attributes(asset_id, asset_name),
                 **stamp,
             }
@@ -1075,7 +1085,7 @@ def unbind_record(database_id: str, item: Dict[str, Any], apply: Optional[Dict[s
             if item.get("complianceState") == STATE_QUARANTINED:
                 # No schema applies any more: the record keeps the quarantine and names none.
                 written_at = store.now_iso()
-                updates = {"updatedAt": written_at,
+                updates = {"updatedAt": written_at, engine.BINDING_CHANGED_AT_FIELD: written_at,
                            **awaiting(written_at, None, REASON_SCHEMA_UNBOUND)}
                 if apply:
                     updates[APPLY_STAMP_FIELD] = apply["applyId"]
@@ -1146,12 +1156,27 @@ def _page_kwargs(database_id: str, cursor, page_size: int) -> Dict[str, Any]:
     return kwargs
 
 
+def archived_partition(database_id: str) -> str:
+    """The asset-table partition of the database's archived assets."""
+    return f"{database_id}{store.ARCHIVED_ASSET_SUFFIX}"
+
+
 def _bind_page(database_id, record, cursor, page_size, counts) -> _Page:
-    """One page of the database's asset rows under a bind or a change."""
+    """One page of the database's asset rows under a bind or a change: the live rows, then the
+    archived rows (`archived_partition`). An archived asset keeps its compliance record under the
+    live id, and the binding reaches that record too, so the asset is evaluated under the binding in
+    force once it is unarchived; an archived asset without a record gets none (unarchiving registers
+    it). The cursor names the partition it continues in: the live stage hands over to the archived
+    one with a cursor that names only the archived partition."""
     page = _Page()
+    partition = (cursor or {}).get("databaseId") or database_id
+    archived = partition == archived_partition(database_id)
+    start = cursor if cursor and cursor.get("assetId") else None
     response = store.asset_table.query(ProjectionExpression="assetId, assetName",
-                                       **_page_kwargs(database_id, cursor, page_size))
+                                       **_page_kwargs(partition, start, page_size))
     page.cursor = response.get("LastEvaluatedKey")
+    if page.cursor is None and not archived:
+        page.cursor = {"databaseId": archived_partition(database_id)}
     for row in response.get("Items", []):
         asset_id = row.get("assetId")
         if not asset_id:
@@ -1162,8 +1187,10 @@ def _bind_page(database_id, record, cursor, page_size, counts) -> _Page:
             return page
         counts["assetsProcessed"] += 1
         existing = store.get_compliance_record(database_id, asset_id, consistent_read=True)
+        if archived and not existing:
+            continue
         outcome, entry = bind_record(database_id, asset_id, existing, record["schemaName"],
-                                     row.get("assetName"), record)
+                                     row.get("assetName"), record, create=not archived)
         _tally(counts, outcome, entry)
         if outcome == WRITTEN:
             page.changes.append(entry)

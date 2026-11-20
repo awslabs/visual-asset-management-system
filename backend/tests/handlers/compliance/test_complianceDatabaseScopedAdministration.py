@@ -26,7 +26,7 @@ import pytest
 
 from backend.tests.handlers.compliance._harness import (
     ASSET, CASCADE_ID, DB, RULES_SCHEMA_BODY, USER, body_of, claims_for, live_only_asset_table,
-    mirror_engine, rest_event, schema_row, update_values,
+    mirror_engine, put_items, rest_event, schema_row, update_values,
 )
 from backend.tests.handlers.compliance.test_complianceCascadeExecutor import Graph, _run_executor
 from handlers.compliance import complianceCascadeService as cascade_svc
@@ -99,10 +99,12 @@ SCHEMA_ROWS = [schema_row("global-1", database_id="GLOBAL"), schema_row("own-1",
 
 
 def _schema_tables(schema_rows, query_rows=None):
+    """The listing reads `schema_rows` from the latest-version index; a name's version query
+    answers `query_rows` (the first schema row by default)."""
     schema_table = MagicMock(name="schema_table")
-    schema_table.scan.return_value = {"Items": list(schema_rows)}
-    schema_table.query.return_value = {"Items": list(query_rows if query_rows is not None
-                                                     else schema_rows[:1])}
+    versions = list(query_rows if query_rows is not None else schema_rows[:1])
+    schema_table.query.side_effect = lambda **kwargs: {"Items": list(
+        schema_rows if kwargs.get("IndexName") == schema_svc.LATEST_VERSION_INDEX else versions)}
     database_table = MagicMock(name="database_table")
     database_table.scan.return_value = {"Items": [{"databaseId": DB}, {"databaseId": OTHER_DB}]}
     database_table.get_item.return_value = {"Item": {"databaseId": DB}}
@@ -233,7 +235,9 @@ class TestSchemaWritesAreCheckedInTheirScope:
                        body={"description": "x"}),
             database_admin_rules(), query_rows=[schema_row("own-1", database_id=DB)])
         assert response["statusCode"] == 200
-        table.put_item.assert_called_once()
+        # A new version of an existing schema is written with the latest-version marker moved to
+        # it, in one transaction.
+        assert len(put_items(table)) == 1
 
     def test_moving_a_schema_to_a_scope_the_caller_cannot_write_is_refused(self):
         response, table = _run_schema(

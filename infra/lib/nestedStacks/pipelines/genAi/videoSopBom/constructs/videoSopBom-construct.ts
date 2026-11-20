@@ -42,6 +42,11 @@ import {
 } from "../lambdaBuilder/videoSopBomFunctions";
 import { VideoSopBomCodeBuildConstruct } from "./videoSopBomCodeBuild-construct";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import path = require("path");
 
 export interface VideoSopBomConstructProps extends cdk.StackProps {
@@ -452,6 +457,7 @@ export class VideoSopBomConstruct extends Construct {
         // externalSfnTaskToken and batchJobName beside the callback output for pipelineEnd.
         const videoSopBomBatchJob = new StateTimeoutBatchSubmitJob(this, "VideoSopBomBatchJob", {
             stateTimeout: VIDEO_SOP_BOM_BATCH_STATE_TIMEOUT,
+            jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.videoSopBom),
             jobName: sfn.JsonPath.stringAt("$.batchJobName"),
             jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
             jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
@@ -503,6 +509,9 @@ export class VideoSopBomConstruct extends Construct {
             },
             tracingEnabled: true,
         });
+
+        // The job-tagging grant's wildcard resources (pipelineJobTags.ts).
+        suppressBatchJobTaggingNag(stateMachine);
 
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource

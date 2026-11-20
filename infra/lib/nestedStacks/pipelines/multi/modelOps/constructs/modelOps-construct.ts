@@ -34,6 +34,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    tagEcsTaskDefinition,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface ModelOpsConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -311,6 +316,11 @@ export class ModelOpsConstruct extends NestedStack {
             memoryLimitMiB: 16384, // 16 GB
             cpu: 2048, // 2 vCPU
         });
+        // Each task the state machine starts takes these by propagation (propagatedTagSource below).
+        tagEcsTaskDefinition(
+            taskDefinition,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.modelOps)
+        );
 
         const containerDefinition = taskDefinition.addContainer("ModelOpsContainerDefinition", {
             image: containerImage,

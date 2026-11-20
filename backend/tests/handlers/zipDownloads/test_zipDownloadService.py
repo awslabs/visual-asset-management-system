@@ -595,6 +595,7 @@ class TestUrl:
         row = next(iter(env.zip.items.values()))
         row["status"] = "SUCCEEDED"
         env.s3.add(row["archiveKey"], size=4242, bucket=h.AUX)
+        h.write_resolved_manifest(env, row)
         return request_id, row
 
     def test_url_issued_with_attachment(self, env):

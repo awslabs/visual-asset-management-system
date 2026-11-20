@@ -39,6 +39,11 @@ import {
 } from "../lambdaBuilder/zipArchiveFunctions";
 import { ZipArchiveCodeBuildConstruct } from "./zipArchiveCodeBuild-construct";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import path = require("path");
 
 /** Identity of the zipArchive system pipeline and workflow (one each, database GLOBAL). */
@@ -344,6 +349,10 @@ export class ZipArchiveConstruct extends Construct {
             props.vpc,
             props.pipelineSubnets,
             props.kmsKey
+        );
+        configureLambdaBatchJobTagging(
+            executeBatchJobFunction,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.zipArchive)
         );
 
         const constructPipelineTask = new tasks.LambdaInvoke(this, "ConstructPipelineTask", {
