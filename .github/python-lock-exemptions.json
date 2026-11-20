@@ -17,18 +17,8 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
-            "path": "backendPipelines/system/genAiMetadata/containers/blender/requirements.txt",
-            "reason": "Input of the container's hashed requirements.lock (uv pip compile), which is not a uv.lock and is not audited by this job.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
             "path": "backendPipelines/system/genAiMetadata/containers/media/requirements.txt",
             "reason": "Input of the container's hashed requirements.lock (uv pip compile), which is not a uv.lock and is not audited by this job.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/system/genAiMetadata/containers/blender/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
