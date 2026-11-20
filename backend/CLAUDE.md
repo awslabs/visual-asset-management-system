@@ -482,7 +482,10 @@ backend/
     `S3_OBJECTS_PAGE_SIZE`; both accept an optional `max_keys` / `max_objects` cap for
     best-effort sampling). A bare `list_object_versions(..., MaxKeys=N)` silently drops
     versions beyond `N` (wrong archive status, truncated history). Existence-only checks
-    (`MaxKeys=1`) are the allowed exception.
+    (`MaxKeys=1`) are the allowed exception. To classify one key from its history (live,
+    archived or permanently deleted), use `list_key_versions_to_newest_version()`: it pages
+    until it reaches a version of the key, an entry of another key or the end, so a key with
+    more newer delete markers than one page holds is not read as permanently deleted.
 
     **`MaxKeys=1` is sufficient for an existence check only because of three
     `ListObjectVersions` properties, and each one is load-bearing.** `max-keys` caps

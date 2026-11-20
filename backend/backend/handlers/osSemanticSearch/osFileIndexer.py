@@ -38,7 +38,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
 from common.indexing.documentIds import MAX_OPENSEARCH_DOCUMENT_ID_BYTES, build_file_document_id
-from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, list_key_versions_to_newest_version, region_routing_s3_client, bucket_region_fields
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
 from common.assetLocations import contains, normalize_base_prefix
 from common.fileAttribution import AMBIGUOUS, FileAttribution, attribute_object, binding_of, stored_location
@@ -1548,10 +1548,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
             
             # Check versioning to determine if archived or permanently deleted
             try:
-                # A key's own entries lead its prefix listing, newest first, so one page holds its current state
-                versions_response = list_all_object_versions(
-                    bucket_name, s3_key, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
-                )
+                versions_response = list_key_versions_to_newest_version(bucket_name, s3_key, client=s3_client)
                 
                 delete_markers = versions_response.get('DeleteMarkers', [])
                 versions = versions_response.get('Versions', [])
