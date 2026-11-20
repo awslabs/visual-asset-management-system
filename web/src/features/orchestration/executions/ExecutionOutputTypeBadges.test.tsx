@@ -15,6 +15,10 @@ jest.mock("../api/queries", () => ({
 
 const { useExecutionResults } = require("../api/queries");
 
+// The role's route listing: by default the results route is allowed.
+jest.mock("../permissions/useAllowedRoutes", () => ({ useAllowedRoutes: jest.fn() }));
+const { useAllowedRoutes } = require("../permissions/useAllowedRoutes");
+
 function renderBadges(outputTypes?: string[]) {
     return render(
         <MemoryRouter>
@@ -26,6 +30,7 @@ function renderBadges(outputTypes?: string[]) {
 describe("ExecutionOutputTypeBadges", () => {
     beforeEach(() => {
         jest.clearAllMocks();
+        useAllowedRoutes.mockReturnValue({ loading: false, failed: false, can: () => true });
         useExecutionResults.mockReturnValue({
             data: undefined,
             pageContents: [],
@@ -56,6 +61,23 @@ describe("ExecutionOutputTypeBadges", () => {
         renderBadges(["File", "Metadata", "Result"]);
         expect(screen.getByTestId("output-type-badge-result").tagName).toBe("BUTTON");
         expect(screen.getByTestId("output-type-badge-file").tagName).toBe("SPAN");
+    });
+
+    it("shows Result as a plain label, not a button, to a role that may not read results", () => {
+        useAllowedRoutes.mockReturnValue({
+            loading: false,
+            failed: false,
+            can: (method: string, path: string) =>
+                !(
+                    method === "GET" &&
+                    path === "/workflows/executions/{executionId}/details/results"
+                ),
+        });
+        renderBadges(["Result"]);
+        expect(screen.queryByRole("button", { name: /^Result: / })).toBeNull();
+        expect(screen.getByTestId("output-type-badge-result")).toHaveTextContent("Result");
+        expect(screen.getByTestId("output-type-badge-result").tagName).toBe("SPAN");
+        expect(useExecutionResults).not.toHaveBeenCalledWith("e1", true);
     });
 
     it("names the Result button by the text it shows (#1592)", () => {

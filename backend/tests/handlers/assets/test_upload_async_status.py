@@ -179,6 +179,53 @@ class TestUploadStatusHelper:
         assert us.claim_async_file_audit(uploads, UPLOAD, ASSET, "/a.e57") is None
         assert us.async_file_status(uploads, UPLOAD, ASSET, "/a.e57") is None
 
+    def test_an_outcome_recorded_before_the_completion_ends_is_kept(self, uploads):
+        assert us.track_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        assert us.track_async_file(uploads, UPLOAD, ASSET, "/b.e57")
+        assert us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", False, "rejected")
+        assert us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57", "/b.e57"], False)
+        stored = _stored(uploads)
+        assert stored["asyncFiles"]["/a.e57"]["status"] == us.FILE_FAILED
+        assert stored["asyncFiles"]["/b.e57"]["status"] == us.FILE_PENDING
+        assert stored["status"] == us.STATUS_PROCESSING_ASYNC
+
+    def test_the_completion_settles_an_upload_whose_files_all_finished_first(self, uploads):
+        us.track_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)
+        # The consumer does not settle a record the completion has not marked yet.
+        assert _stored(uploads)["status"] == "processing"
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57"], False)
+        assert _stored(uploads)["status"] == us.STATUS_COMPLETED
+
+    def test_a_file_whose_tracking_was_not_written_is_added_at_the_end(self, uploads):
+        us.track_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        us.begin_async_tracking(uploads, UPLOAD, ASSET, ["/a.e57", "/b.e57"], False)
+        stored = _stored(uploads)
+        assert {k: v["status"] for k, v in stored["asyncFiles"].items()} == {
+            "/a.e57": us.FILE_PENDING, "/b.e57": us.FILE_PENDING}
+        assert stored["status"] == us.STATUS_PROCESSING_ASYNC
+
+    def test_tracking_a_file_again_keeps_its_outcome(self, uploads):
+        us.track_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/a.e57", True)
+        assert us.track_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        assert _stored(uploads)["asyncFiles"]["/a.e57"]["status"] == us.FILE_SUCCEEDED
+
+    def test_untracking_removes_only_a_pending_entry(self, uploads):
+        us.track_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        us.track_async_file(uploads, UPLOAD, ASSET, "/b.e57")
+        us.record_async_file_outcome(uploads, UPLOAD, ASSET, "/b.e57", True)
+        us.untrack_async_file(uploads, UPLOAD, ASSET, "/a.e57")
+        us.untrack_async_file(uploads, UPLOAD, ASSET, "/b.e57")  # condition fails quietly
+        assert set(_stored(uploads)["asyncFiles"]) == {"/b.e57"}
+
+    def test_tracking_needs_the_record_and_never_raises(self, uploads):
+        assert us.track_async_file(uploads, "other", ASSET, "/a.e57") is False
+        broken = MagicMock()
+        broken.update_item.side_effect = RuntimeError("ddb down")
+        assert us.track_async_file(broken, UPLOAD, ASSET, "/a.e57") is False
+        us.untrack_async_file(broken, UPLOAD, ASSET, "/a.e57")
+
 
 # --------------------------------------------------------------------------------------------- #
 # Completion keeps the record
@@ -217,7 +264,8 @@ class TestCompletionKeepsTheRecord:
 
     def test_a_record_kept_for_its_async_files_cannot_be_completed_again(self):
         details = {"uploadId": UPLOAD, "assetId": ASSET, "databaseId": DB, "uploadType": "assetFile",
-                   "expiresAt": 9999999999, "asyncFiles": {"/big.e57": {"status": "PENDING"}}}
+                   "expiresAt": 9999999999, "status": us.STATUS_PROCESSING_ASYNC,
+                   "asyncFiles": {"/big.e57": {"status": "PENDING"}}}
         model = uf.CompleteUploadRequestModel(**{
             "assetId": ASSET, "databaseId": DB, "uploadType": "assetFile",
             "files": [{"relativeKey": "/big.e57", "uploadIdS3": "s3", "parts": [{"PartNumber": 1, "ETag": "e"}]}]})
@@ -229,6 +277,83 @@ class TestCompletionKeepsTheRecord:
             with pytest.raises(uf.VAMSGeneralErrorResponse, match="already been completed"):
                 uf.complete_upload(UPLOAD, model, {"requestContext": {"http": {}}})
         table.update_item.assert_not_called()
+
+    def test_a_record_left_with_no_tracked_file_stays_completable(self):
+        """A file that could not be queued is completed synchronously and its tracking removed; the
+        empty map left behind does not mark the record completed."""
+        details = {"uploadId": UPLOAD, "assetId": ASSET, "databaseId": DB, "uploadType": "assetFile",
+                   "expiresAt": 9999999999, "status": us.STATUS_COMPLETED_WITH_ERRORS, "asyncFiles": {}}
+        model = uf.CompleteUploadRequestModel(**{
+            "assetId": ASSET, "databaseId": DB, "uploadType": "assetFile",
+            "files": [{"relativeKey": "/a.glb", "uploadIdS3": "s3", "parts": [{"PartNumber": 1, "ETag": "e"}]}]})
+
+        class _PastTheGuard(Exception):
+            pass
+
+        with patch.object(uf, "get_upload_details", return_value=details), \
+                patch.object(uf, "get_asset_details", return_value={"databaseId": DB, "assetId": ASSET,
+                                                                    "bucketId": "b1"}), \
+                patch.object(uf, "log_file_upload"), \
+                patch.object(uf, "claims_and_roles", {"tokens": ["user-1"]}, create=True), \
+                patch.object(uf, "asset_upload_table"), \
+                patch.object(uf, "get_default_bucket_details", side_effect=_PastTheGuard):
+            with pytest.raises(_PastTheGuard):
+                uf.complete_upload(UPLOAD, model, {"requestContext": {"http": {}}})
+
+
+@pytest.mark.unit
+class TestAnOutcomeRecordedDuringTheCompletionIsKept:
+    """The queue consumer can record a queued file's outcome before the completion that queued it
+    ends. Both completion routes track the file first, so that outcome survives the completion's
+    own status write."""
+
+    @staticmethod
+    def _fast_consumer(table):
+        def _queue(file_info, _queue_url):
+            us.record_async_file_outcome(table, file_info["uploadId"], file_info["assetId"],
+                                         file_info["relativeKey"], False, "rejected")
+            return True
+        return _queue
+
+    def test_user_completion(self, uploads):
+        from tests.handlers.assets import test_upload_completion_large_files_only as large
+        uploads.put_item(Item={"uploadId": large.UPLOAD_ID, "assetId": "asset-1", "databaseId": "db-1",
+                               "uploadType": "assetFile", "status": "initialized", "expiresAt": 4102444800})
+        with large._env(large._user_record(["/big.e57"])) as (module, m), \
+                patch.object(module, "asset_upload_table", uploads):
+            m["queue"].side_effect = self._fast_consumer(uploads)
+            response = module.complete_upload(large.UPLOAD_ID, large._user_request("/big.e57"), {})
+        assert response.largeFileAsynchronousHandling is True
+        stored = uploads.get_item(Key={"uploadId": large.UPLOAD_ID, "assetId": "asset-1"})["Item"]
+        assert stored["asyncFiles"]["/big.e57"]["status"] == us.FILE_FAILED
+        assert stored["status"] == us.STATUS_COMPLETED_WITH_ERRORS
+
+    def test_external_completion(self, uploads):
+        from tests.handlers.assets import test_upload_completion_large_files_only as large
+        uploads.put_item(Item={"uploadId": large.UPLOAD_ID, "assetId": "asset-1", "databaseId": "db-1",
+                               "uploadType": "assetFile", "isExternalUpload": True,
+                               "status": "initialized", "expiresAt": 4102444800})
+        with large._env(large._external_record()) as (module, m), \
+                patch.object(module, "asset_upload_table", uploads):
+            m["queue"].side_effect = self._fast_consumer(uploads)
+            response = module.complete_external_upload(large.UPLOAD_ID, large._external_request("/big.e57"), {})
+        assert response.largeFileAsynchronousHandling is True
+        stored = uploads.get_item(Key={"uploadId": large.UPLOAD_ID, "assetId": "asset-1"})["Item"]
+        assert stored["asyncFiles"]["/big.e57"]["status"] == us.FILE_FAILED
+        assert stored["status"] == us.STATUS_COMPLETED_WITH_ERRORS
+
+    def test_a_file_that_could_not_be_queued_is_not_left_tracked(self, uploads):
+        from tests.handlers.assets import test_upload_completion_large_files_only as large
+        uploads.put_item(Item={"uploadId": large.UPLOAD_ID, "assetId": "asset-1", "databaseId": "db-1",
+                               "uploadType": "assetFile", "status": "initialized", "expiresAt": 4102444800})
+        with large._env(large._user_record(["/big.e57", "/huge.las"])) as (module, m), \
+                patch.object(module, "asset_upload_table", uploads):
+            # The first file falls back to synchronous completion; the second is queued.
+            m["queue"].side_effect = [False, True]
+            module.complete_upload(large.UPLOAD_ID, large._user_request("/big.e57", "/huge.las"), {})
+        stored = uploads.get_item(Key={"uploadId": large.UPLOAD_ID, "assetId": "asset-1"})["Item"]
+        assert set(stored["asyncFiles"]) == {"/huge.las"}
+        assert stored["status"] == us.STATUS_PROCESSING_ASYNC
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -312,6 +437,7 @@ class TestUploadStatusRoute:
 
     def test_ids_are_validated(self, uploads, monkeypatch):
         _Enforcer.calls = []
+        monkeypatch.setattr(_Enforcer, "api", True)
         monkeypatch.setattr(uf, "CasbinEnforcer", _Enforcer)
         monkeypatch.setattr(uf, "request_to_claims", lambda event: {"tokens": ["u"], "roles": ["r"]})
         event = {"requestContext": {"http": {"path": "/uploads/x", "method": "GET"}},
@@ -319,3 +445,13 @@ class TestUploadStatusRoute:
                  "queryStringParameters": {"assetId": ASSET, "databaseId": DB}, "headers": {}}
         assert uf.lambda_handler(event, MagicMock())["statusCode"] == 400
         assert _Enforcer.calls == []
+
+    @pytest.mark.parametrize("tokens, api", [(["u"], False), ([], True)])
+    def test_the_route_check_runs_before_the_ids_are_validated(self, uploads, monkeypatch, tokens, api):
+        monkeypatch.setattr(_Enforcer, "api", api)
+        monkeypatch.setattr(uf, "CasbinEnforcer", _Enforcer)
+        monkeypatch.setattr(uf, "request_to_claims", lambda event: {"tokens": list(tokens), "roles": ["r"]})
+        event = {"requestContext": {"http": {"path": "/uploads/x", "method": "GET"}},
+                 "pathParameters": {"uploadId": "bad id!"},
+                 "queryStringParameters": None, "headers": {}}
+        assert uf.lambda_handler(event, MagicMock())["statusCode"] == 403

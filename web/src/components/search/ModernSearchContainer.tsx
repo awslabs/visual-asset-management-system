@@ -66,9 +66,9 @@ export const nlpTopMatchesNote = (count: number): string =>
 
 export const REDUCED_FILE_COLUMNS = [
     "relevance",
+    "str_key",
     "str_assetname",
     "str_databaseid",
-    "str_key",
     "str_fileext",
     "num_filesize",
     "bool_archived",

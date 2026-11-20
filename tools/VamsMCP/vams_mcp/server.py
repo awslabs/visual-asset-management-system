@@ -499,11 +499,52 @@ def _release_call(user_id: str) -> None:
             _CALLS_IN_FLIGHT.pop(user_id, None)
 
 
-def _run_counted(user_id: str, fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
+class _RemoteCall:
+    """Whether a claimed call's body started in its worker thread, or was given up before it did.
+
+    Both flags change only under ``_CALLS_LOCK``, so exactly one side gives the user's slot back: the
+    worker thread when the body ran, the wrapper when the call ended before the body started.
+    """
+
+    __slots__ = ("started", "abandoned")
+
+    def __init__(self) -> None:
+        self.started = False
+        self.abandoned = False
+
+
+def _run_counted(
+    user_id: str, call: _RemoteCall, fn: Callable[..., Any], args: Tuple[Any, ...], kwargs: Dict[str, Any]
+) -> Any:
+    with _CALLS_LOCK:
+        if call.abandoned:
+            # The wrapper already answered this call and gave its slot back: run nothing.
+            return None
+        call.started = True
     try:
         return _run_remote_body(fn, args, kwargs)
     finally:
         _release_call(user_id)
+
+
+def _abandon_if_not_started(user_id: str, call: _RemoteCall) -> bool:
+    """Give back the slot of a call whose body never started; True when nothing ran."""
+    with _CALLS_LOCK:
+        if call.started or call.abandoned:
+            return False
+        call.abandoned = True
+    _release_call(user_id)
+    return True
+
+
+def _remote_busy(tool_name: str) -> Dict[str, Any]:
+    return {
+        "error": (
+            f"The server had no free worker to start {tool_name} within its time budget of "
+            f"{CONFIG.tool_timeout} seconds, so nothing ran. Call the tool again."
+        ),
+        "error_type": "ServerBusy",
+    }
 
 
 def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -525,16 +566,22 @@ def _remote_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
                 "error_type": "TooManyConcurrentCalls",
             }
         else:
-            with request_context.time_budget(CONFIG.tool_timeout):
-                # Copied after the budget is set, so the worker thread sees the identity and the deadline.
-                context = contextvars.copy_context()
-                with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
-                    result = await anyio.to_thread.run_sync(
-                        context.run, _run_counted, identity.user_id, fn, args, kwargs,
-                        abandon_on_cancel=True, limiter=_tool_limiter(),
-                    )
+            call = _RemoteCall()
+            try:
+                with request_context.time_budget(CONFIG.tool_timeout):
+                    # Copied after the budget is set, so the worker thread sees the identity and the deadline.
+                    context = contextvars.copy_context()
+                    with anyio.move_on_after(CONFIG.tool_timeout + _REMOTE_TIMEOUT_GRACE_SECONDS) as scope:
+                        result = await anyio.to_thread.run_sync(
+                            context.run, _run_counted, identity.user_id, call, fn, args, kwargs,
+                            abandon_on_cancel=True, limiter=_tool_limiter(),
+                        )
+            finally:
+                # When the time budget runs out before a worker picks the call up, its body never
+                # started: it gives its slot back here, and its worker, if one picks it up later, runs nothing.
+                never_started = _abandon_if_not_started(identity.user_id, call)
             if scope.cancelled_caught:
-                result = _remote_timeout(fn.__name__)
+                result = _remote_busy(fn.__name__) if never_started else _remote_timeout(fn.__name__)
         outcome = result.get("error_type", "ok") if isinstance(result, dict) else "ok"
         _REMOTE_LOG.info(
             "[vams-mcp] tool=%s user=%s client=%s outcome=%s ms=%d",
@@ -738,10 +785,10 @@ def _paginate_with_page_metadata(
 def _single_response_list(page: Any, items_key: str) -> Dict[str, Any]:
     """Shape a route that returns its whole list in ONE response, under its own field name.
 
-    The compliance schema and pending-cascade listings carry no ``message`` envelope and no
-    continuation token, so ``paginate()`` has nothing to follow and a bare ``Items`` read finds
-    nothing. The list is lifted onto ``Items`` with a ``count`` so the tool matches every other list
-    tool, and every other top-level field is carried through.
+    The compliance schema listing carries no ``message`` envelope and no continuation token, so
+    ``paginate()`` has nothing to follow and a bare ``Items`` read finds nothing. The list is lifted
+    onto ``Items`` with a ``count`` so the tool matches every other list tool, and every other
+    top-level field is carried through.
     """
     items = page.get(items_key) if isinstance(page, dict) else None
     if not isinstance(items, list):
@@ -1386,7 +1433,7 @@ _NLP_SIZE_MAX = 100
 # id with a 400 as well; the tool refuses it before the call, with the list in the error.
 # tests/test_search_nlp_tool.py pins this copy to the backend's.
 _NLP_FILE_CLASSES = (
-    "image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
+    "image", "video", "audio", "document", "text", "data", "tiles3d", "raster", "mesh", "usd", "cad",
     "pointcloud", "splat", "ifc", "other",
 )
 
@@ -1473,7 +1520,7 @@ def search_nlp(
 
     query: 1..1000 characters. database_ids: at most 100 ids. entity_type: "file" or "asset" (each
     asset's best file). size: 1..100; no offset paging, so narrow the filters instead.
-    file_classes: image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud,
+    file_classes: image, video, audio, document, text, data, tiles3d, raster, mesh, usd, cad, pointcloud,
     splat, ifc, other. metadata_query, geo_search and tags need OpenSearch (else ignored with a
     warning). include_segments=False matches whole-file vectors only.
 
@@ -3400,9 +3447,10 @@ if CONFIG.enable_writes:
         workflow that takes exactly one file needs exactly one file selected, else the rule records an
         `error` result. A pipeline writing no `compliance-output.json` is checked on `execution_success`
         and `processing_duration_seconds` only. Saving a pipeline rule needs the right to run its workflow,
-        else 403 "Not authorized to run the workflow of pipeline rule '<name>'". `database_id` scopes the
-        schema (omitted: GLOBAL). Response `warnings`: `pipelineRulesShareWorkflow` (rules that share a
-        workflow run one after another); `extendsSchemaNotFound` (the `extends` parent was not found, or you
+        else 403 "Not authorized to run the workflow of pipeline rule rules[<n>]" (the rule's position
+        in `rules`, from 0). `database_id` scopes the schema (omitted: GLOBAL). Response `warnings`:
+        `pipelineRulesShareWorkflow` (rules that share a workflow run one after another);
+        `extendsSchemaNotFound` (the `extends` parent was not found, or you
         may not read it: do not tell the user the parent does not exist; relay the message)."""
         payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
         if database_id:

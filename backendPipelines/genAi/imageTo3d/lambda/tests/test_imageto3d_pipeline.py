@@ -897,6 +897,71 @@ class TestPipelineEnd:
         assert failure.call_args.kwargs["cause"] == "Essential container in task exited"
         assert out == event
 
+    def test_a_batch_state_timeout_names_the_queue_wait(self):
+        # The Batch state's own bound ends a job that waited for GPU capacity; Step Functions gives
+        # that States.Timeout no cause, so the waiting task gets one that says what the limit counts.
+        mod = self._load()
+        event = {
+            "jobName": "ImageTo3dJob_x",
+            "externalSfnTaskToken": "tok-123",
+            "error": {"Error": "States.Timeout"},
+        }
+        success, failure = MagicMock(), MagicMock()
+        with patch.object(mod.sfn, "send_task_success", success), \
+                patch.object(mod.sfn, "send_task_failure", failure):
+            mod.lambda_handler(event, MagicMock())
+        success.assert_not_called()
+        assert failure.call_args.kwargs["error"] == "States.Timeout"
+        assert "AWS Batch queue" in failure.call_args.kwargs["cause"]
+        assert failure.call_args.kwargs["cause"] == mod.STATE_TIMEOUT_CAUSE
+
+    def test_a_batch_state_timeout_ends_the_runs_job_on_every_queue(self):
+        # Step Functions ends the .sync job at the state's bound; pipelineEnd ends it too, as a
+        # backup, so a queued GPU job does not start after the run has failed.
+        mod = self._load()
+        event = {"jobName": "ImageTo3dJob_x", "externalSfnTaskToken": "tok-123",
+                 "error": {"Error": "States.Timeout"}}
+        listings = {
+            "general": {"jobSummaryList": [{"jobId": "j-old", "status": "FAILED"},
+                                           {"jobId": "j-queued", "status": "RUNNABLE"}]},
+            "large-gpu": {"jobSummaryList": [{"jobId": "j-running", "status": "RUNNING"}]},
+        }
+        batch = MagicMock()
+        batch.list_jobs.side_effect = lambda jobQueue, filters: listings[jobQueue]
+        failure = MagicMock()
+        with patch.object(mod, "batch", batch), \
+                patch.object(mod, "BATCH_JOB_QUEUES", ["general", "large-gpu"]), \
+                patch.object(mod.sfn, "send_task_failure", failure):
+            mod.lambda_handler(event, MagicMock())
+        assert all(c.kwargs["filters"] == [{"name": "JOB_NAME", "values": ["ImageTo3dJob_x"]}]
+                   for c in batch.list_jobs.call_args_list)
+        assert sorted(c.kwargs["jobId"] for c in batch.terminate_job.call_args_list) == [
+            "j-queued", "j-running"]
+        failure.assert_called_once()
+
+    def test_another_failure_ends_no_job(self):
+        mod = self._load()
+        event = {"jobName": "ImageTo3dJob_x", "externalSfnTaskToken": "tok-123",
+                 "error": {"Error": "States.TaskFailed", "Cause": "exit 1"}}
+        batch = MagicMock()
+        with patch.object(mod, "batch", batch), patch.object(mod, "BATCH_JOB_QUEUES", ["general"]), \
+                patch.object(mod.sfn, "send_task_failure", MagicMock()):
+            mod.lambda_handler(event, MagicMock())
+        batch.list_jobs.assert_not_called()
+        batch.terminate_job.assert_not_called()
+
+    def test_a_failed_job_lookup_still_reports_the_timeout(self):
+        mod = self._load()
+        event = {"jobName": "ImageTo3dJob_x", "externalSfnTaskToken": "tok-123",
+                 "error": {"Error": "States.Timeout"}}
+        batch = MagicMock()
+        batch.list_jobs.side_effect = RuntimeError("throttled")
+        failure = MagicMock()
+        with patch.object(mod, "batch", batch), patch.object(mod, "BATCH_JOB_QUEUES", ["general"]), \
+                patch.object(mod.sfn, "send_task_failure", failure):
+            mod.lambda_handler(event, MagicMock())
+        assert failure.call_args.kwargs["cause"] == mod.STATE_TIMEOUT_CAUSE
+
     def test_truncates_an_oversized_error_and_cause(self):
         mod = self._load()
         event = {

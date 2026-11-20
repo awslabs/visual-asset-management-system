@@ -415,6 +415,16 @@ class TestStartWaitsForEdhToListTheDesktopStopped:
     EDH's session state, not the one the row last stored: a stop leaves the row the state EDH reported
     before it."""
 
+    def test_a_stopped_row_edh_reports_in_error_is_refused_with_the_desktop_error(self, monkeypatch):
+        response, fakes, revoke_fn, session_fn, order = _run(
+            monkeypatch, "POST", "start", _keyed_row(state="STOPPED", connectionAvailable=False),
+            desktop_states=[_listed("error")])
+        assert response["statusCode"] == 409
+        assert response_body(response)["code"] == "DESKTOP_ERROR"
+        assert order == ["get_desktop_states"]
+        revoke_fn.assert_not_called()
+        session_fn.assert_not_called()
+
     @pytest.mark.parametrize("edh_state", ["stopping", "interrupting", "interrupted", "hibernating"],
                              ids=["stopping", "interrupting", "interrupted", "outside the mapping"])
     def test_a_desktop_edh_lists_short_of_stopped_is_refused_before_anything_is_minted(

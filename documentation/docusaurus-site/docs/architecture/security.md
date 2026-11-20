@@ -243,7 +243,8 @@ VAMS uses the Casbin policy engine to enforce fine-grained attribute-based acces
 flowchart TD
     REQ["Incoming Request"] --> AUTH["Custom Lambda Authorizer"]
     AUTH -->|Valid JWT| HANDLER["Lambda Handler"]
-    AUTH -->|Invalid| DENY1["403 Forbidden"]
+    AUTH -->|Credential not accepted| DENY0["401 Unauthorized"]
+    AUTH -->|IP not allowed or user has no roles| DENY1["403 Forbidden"]
 
     HANDLER --> CLAIMS["Extract User Claims + Roles"]
     CLAIMS --> T1{"Tier 1: API Route Auth"}

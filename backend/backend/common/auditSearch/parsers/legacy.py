@@ -4,7 +4,7 @@
 """
 The legacy adapters: records written without ``auditVersion``.
 
-These are the records of v2.6.x (``main``) and of development before the record contract: the same
+These are the records written before the record contract: the same
 bracketed prefix and a payload whose keys depend on the writing function. One adapter per prefix
 family, named by ``AuditLogGroup.legacy_parser``:
 

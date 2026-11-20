@@ -127,8 +127,13 @@ class TestThe3dModelQualityTemplate:
         template_path = os.path.join(CONVERSION_SCHEMA_DIR, "templates", f"{rule.pipelineRef.templateId}.json")
         output_extension = json.loads(_load(template_path)["configBody"])["outputType"]
         assert f"*{output_extension}" in accepted, "the pipeline accepts its own output format"
-        assert rule.inputFiles.filter == [
-            pattern for pattern in accepted if pattern != f"*{output_extension}"]
+        # The filter names formats the pipeline accepts, never its output. It is a subset rather than
+        # every other accepted format: the template keeps the mesh formats it was written for, and
+        # leaves out STEP, which the pipeline refuses unless a deployment enables it.
+        assert rule.inputFiles.filter, rule.inputFiles.filter
+        assert f"*{output_extension}" not in rule.inputFiles.filter
+        assert set(rule.inputFiles.filter) <= set(accepted), sorted(set(rule.inputFiles.filter) - set(accepted))
+        assert not {"*.step", "*.stp"} & set(rule.inputFiles.filter)
         assert "leaves out *.glb" in _load(os.path.join(TEMPLATES_DIR, "3d-model-quality.json"))["description"]
 
     def test_the_checks_read_only_the_measurements_every_execution_provides(self):

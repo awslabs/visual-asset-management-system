@@ -133,8 +133,10 @@ def _stand_in(refuse=()):
     return stand_in, (lambda _claims: stand_in.instance)
 
 
-REFUSED = {"message": "Not authorized to run the workflow of pipeline rule 'convert'",
-           "ruleName": "convert"}
+# `_body` keeps the shared body's other rules first, so the `convert` rule is the last one.
+CONVERT_POSITION = len(_body(convert={})["rules"]) - 1
+REFUSED = {"message": f"Not authorized to run the workflow of pipeline rule rules[{CONVERT_POSITION}]",
+           "rulePosition": CONVERT_POSITION}
 
 
 @pytest.mark.unit
@@ -157,6 +159,14 @@ class TestTheCheckOnCreate:
             status, body = world.create(_body(convert=_rule()))
             assert (status, body) == (403, REFUSED)
             assert world.versions() == 0
+
+    def test_the_refusal_locates_the_rule_by_position_and_does_not_repeat_its_name(self):
+        _, factory = _stand_in(("execute",))
+        with World(factory) as world:
+            status, body = world.create(_body(**{"caller-named-rule": _rule()}))
+            assert status == 403
+            assert body["rulePosition"] == CONVERT_POSITION
+            assert "caller-named-rule" not in json.dumps(body)
 
     def test_the_rules_own_pipeline_is_checked_too(self):
         stand_in, factory = _stand_in()

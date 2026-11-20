@@ -11,7 +11,9 @@ workflow_execution_completed_event`). The event's `detail-type` must be that det
 `executionGroupId`. Anything else is logged and skipped.
 
 The execution is correlated to a compliance evaluation through the evaluation table's
-ExecutionIdIndex. On a succeeded execution the pipeline's `compliance-output.json` is read from
+ExecutionIdIndex, and its outcome is the terminal status its V2 main row records (read consistently;
+the event's own `status` decides nothing, and an execution whose row records no terminal status is
+left as it is). On a succeeded execution the pipeline's `compliance-output.json` is read from
 the execution's recorded output-result rows (PipelineExecutions -> PipelineExecutionOutputResults,
 V2 execution records) and the pipeline rule's checks run against its measurements; any other
 terminal status fails the rule, and the rule's result carries the failure reason the execution
@@ -38,6 +40,7 @@ from common.compliance import evaluationEngine as engine
 from common.dynamodb import query_all_items
 from common.resourceNames import ResourceKeys, get_table_name
 from common.workflows import executionAccess
+from common.workflows.executionOutputs import TERMINAL_STATUSES
 from common.workflows.executionRecords import WORKFLOW_EXECUTION_COMPLETED_DETAIL_TYPE
 from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 from customLogging.logger import safeLogger
@@ -190,6 +193,22 @@ def process_completed_execution(execution_id: str, execution_status: str,
         return {"statusCode": 200, "body": "Not a compliance execution"}
     evaluation, rule_name = resolved
 
+    # The outcome is the one the execution's main row records: the writer whose terminal status
+    # landed there publishes the event after that write, so the row is read consistently and the
+    # event only says when to look.
+    main_row = read_execution_record(execution_id)
+    recorded_status = main_row.get("executionStatus")
+    if recorded_status not in TERMINAL_STATUSES:
+        logger.warning(f"Execution {execution_id}: its record holds no terminal status; the "
+                       "completion event is not acted on")
+        return {"statusCode": 200, "body": "No terminal status recorded"}
+    if recorded_status != execution_status:
+        logger.warning(f"Execution {execution_id}: the completion event's status differs from the "
+                       f"recorded {recorded_status}, which is used")
+    execution_status = recorded_status
+    started_at = main_row.get("executionStartDate") or started_at
+    completed_at = main_row.get("executionStopDate") or completed_at
+
     # A SUCCEEDED of the same execution that already reported FAILED replaces that outcome (#1504:
     # overlapping end-state attempts, #1271), on a pending or finalized evaluation alike. A FAILED
     # never replaces a SUCCEEDED, and another execution's announcement never reaches this rule.
@@ -268,6 +287,13 @@ def process_completed_execution(execution_id: str, execution_status: str,
             details={"ruleName": rule_name, "executionStatus": execution_status,
                      "finalized": bool(outcome.get("finalized")), "verdict": outcome.get("verdict")})
     return {"statusCode": 200, "body": json.dumps(outcome)}
+
+
+def read_execution_record(execution_id: str) -> Dict[str, Any]:
+    """The execution's V2 main row, read consistently (its writer publishes the completion event
+    after writing it); empty when there is none."""
+    return executionAccess.read_execution_main_row(
+        workflow_executions_table, execution_id, consistent_read=True) or {}
 
 
 def read_execution_failure_reason(execution_id: str) -> Optional[str]:

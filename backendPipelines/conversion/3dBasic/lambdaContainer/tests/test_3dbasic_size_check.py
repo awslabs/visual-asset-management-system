@@ -30,6 +30,95 @@ FUNCTION_MEMORY_MB = 5308
 BIG_DISK = 4096 * MB
 
 
+MEGABYTE = 1000 ** 2
+
+
+@pytest.mark.unit
+class TestTheLimitDependsOnTheOutput:
+    """A USD or COLLADA output needs more memory per input byte than the other outputs (the reviewer
+    measured a 330 MB STL to USDA peaking at 5,307 of 5,308 MB). Each pair that needs clearly more
+    has its own factor, so every output keeps the same headroom at its limit."""
+
+    def test_a_330_mb_stl_to_usda_is_refused_naming_the_output(self):
+        with pytest.raises(size_check.InputTooLargeError,
+                           match=r"near\.stl is 314\.7 MB, over the [\d.]+ MB limit for converting \.stl "
+                                 r"to \.usda\. The limit is set by the function memory\..* A conversion to "
+                                 r"another format may accept it\."):
+            size_check.check_size("near.stl", ".stl", 330 * MEGABYTE, FUNCTION_MEMORY_MB * MB, BIG_DISK * 100,
+                                  output_extension=".usda")
+
+    @pytest.mark.parametrize("output", [".glb", ".gltf", ".obj", ".ply", ".stl", ".off", ".3mf"])
+    def test_the_same_stl_to_another_format_is_admitted(self, output):
+        assert size_check.check_size("near.stl", ".stl", 330 * MEGABYTE, FUNCTION_MEMORY_MB * MB,
+                                     BIG_DISK * 100, output_extension=output) is not None
+
+    @pytest.mark.parametrize("output", [".usdc", ".usda", ".usdz", ".dae"])
+    def test_every_heavier_output_is_refused_for_it(self, output):
+        with pytest.raises(size_check.InputTooLargeError, match=f"to \\{output}"):
+            size_check.check_size("near.stl", ".stl", 330 * MEGABYTE, FUNCTION_MEMORY_MB * MB, BIG_DISK * 100,
+                                  output_extension=output)
+
+    def test_the_measured_peak_at_each_limit_keeps_the_same_headroom(self):
+        # The measured peaks per input byte (built image, 163,842-vertex sphere) of the pairs with an
+        # entry: at the admitted maximum the peak stays at or under 85 percent of the function memory.
+        measured = {(".stl", ".usda"): 16.5, (".stl", ".usdc"): 17.1, (".stl", ".dae"): 19.9,
+                    (".glb", ".usdc"): 32.6, (".ply", ".usda"): 32.5, (".3mf", ".dae"): 118.1,
+                    (".usdc", ".usdz"): 42.4, (".off", ".usdc"): 18.9}
+        memory = FUNCTION_MEMORY_MB * MB
+        for (source, output), per_byte in measured.items():
+            limit, _ = size_check.limits(source, memory, None, output)
+            peak = size_check.BASE_MEMORY_BYTES + per_byte * limit
+            assert peak <= 0.85 * memory, (source, output, peak / memory)
+
+    def test_the_pr1_conversions_keep_their_limits(self):
+        for source in (".stl", ".obj", ".ply", ".glb", ".gltf", ".xyz"):
+            for output in (".stl", ".obj", ".ply", ".glb", ".gltf"):
+                assert size_check.expansion_factor(source, output) == size_check.MEMORY_EXPANSION_FACTORS[source]
+
+    def test_the_input_only_message_is_unchanged_without_an_output(self):
+        with pytest.raises(size_check.InputTooLargeError, match=r"limit for \.stl inputs\. The limit"):
+            size_check.check_size("x.stl", ".stl", 10 ** 12, FUNCTION_MEMORY_MB * MB, None)
+
+    def test_every_entry_is_at_least_the_input_factor(self):
+        for output, entries in size_check.OUTPUT_EXPANSION_FACTORS.items():
+            for source, factor in entries.items():
+                assert factor >= size_check.MEMORY_EXPANSION_FACTORS[source], (source, output)
+
+
+@pytest.mark.unit
+class TestTheDeployedFunctionMemory:
+    """The function runs at 10,240 MB (CONVERSION_MEMORY_SIZE_MB in conversion3dBasicFunctions.ts): the
+    limits the pipeline page lists at that memory, and the peaks measured there in the built image with
+    the worker's limits, scaled to each pair's limit, at or under 85 percent of the function memory."""
+
+    MEMORY = 10240 * MB
+
+    @pytest.mark.parametrize("source,output,limit_mb", [
+        (".step", ".usdc", 81.8), (".stl", ".usda", 424.6), (".glb", ".glb", 330.2), (".stl", ".stl", 636.9),
+        (".obj", ".obj", 990.7), (".3mf", ".usdc", 84.1), (".usdc", ".dae", 99.1),
+    ])
+    def test_the_documented_limits(self, source, output, limit_mb):
+        limit, resource = size_check.limits(source, self.MEMORY, None, output)
+        assert round(limit / MB, 1) == limit_mb and resource == size_check.MEMORY_RESOURCE
+
+    def test_six_gib_of_disk_keeps_memory_the_binding_limit(self):
+        disk = 6 * 1024 * MB - 200 * MB  # less what the image and the runtime keep in /tmp
+        for source in size_check.MEMORY_EXPANSION_FACTORS:
+            assert size_check.limits(source, self.MEMORY, disk)[1] == size_check.MEMORY_RESOURCE, source
+
+    @pytest.mark.parametrize("source,output,input_mb,peak_mb", [
+        # Measured at 10,240 MB with the worker's address-space and file-size limits (built image);
+        # peak_mb includes the interpreter and library baseline of about 100 MB.
+        (".stl", ".stl", 617.8, 7063), (".stl", ".usda", 411.8, 4764), (".glb", ".glb", 384.4, 2017),
+        (".step", ".usdc", 54.6, 1681), (".obj", ".obj", 550.2, 3249), (".obj", ".usdc", 378.3, 4071),
+    ])
+    def test_the_measured_peak_scaled_to_the_limit_keeps_the_headroom(self, source, output, input_mb, peak_mb):
+        limit, _ = size_check.limits(source, self.MEMORY, None, output)
+        per_byte = peak_mb / input_mb
+        assert per_byte * limit <= 0.85 * self.MEMORY, (source, output, per_byte * limit / self.MEMORY)
+        assert peak_mb * MB <= size_check.address_space_limit_bytes({"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": "10240"})
+
+
 @pytest.mark.unit
 class TestLimits:
     def test_the_memory_limit_is_the_usable_share_less_the_base_over_the_format_factor(self):
@@ -56,6 +145,25 @@ class TestLimits:
 
     def test_the_factors_cover_exactly_the_accepted_input_formats(self):
         assert set(size_check.MEMORY_EXPANSION_FACTORS) == _load().SUPPORTED_INPUT_FORMATS
+
+    @pytest.mark.parametrize("extension", [".usd", ".usda", ".usdc", ".usdz", ".dae", ".3mf", ".off"])
+    def test_every_new_input_format_has_its_own_measured_factor(self, extension):
+        assert extension in size_check.MEMORY_EXPANSION_FACTORS
+        # COLLADA output needs more than the input factor for every new input except the generic .usd,
+        # whose factor (that of a binary layer) already covers a text layer to COLLADA.
+        assert extension in size_check.OUTPUT_EXPANSION_FACTORS[".dae"] or extension == ".usd"
+
+    def test_a_collada_output_never_lowers_the_factor_and_raises_it_where_measured(self):
+        for extension, base in size_check.MEMORY_EXPANSION_FACTORS.items():
+            assert size_check.expansion_factor(extension, ".dae") >= base, extension
+            assert size_check.expansion_factor(extension, ".glb") == base, extension
+        assert size_check.expansion_factor(".glb", ".dae") > size_check.expansion_factor(".glb", ".obj")
+        assert size_check.expansion_factor(".glb") == 27, "an existing format keeps its factor for other outputs"
+
+    def test_the_collada_limit_is_lower_for_the_same_input(self):
+        plain, _ = size_check.limits(".glb", FUNCTION_MEMORY_MB * MB, BIG_DISK * 100)
+        collada, _ = size_check.limits(".glb", FUNCTION_MEMORY_MB * MB, BIG_DISK * 100, ".dae")
+        assert collada < plain
 
     def test_a_larger_function_converts_a_larger_input(self):
         small, _ = size_check.limits(".obj", 2048 * MB, None)
@@ -178,6 +286,24 @@ class TestTheConversionRefusesBeforeDownloading:
         download.assert_not_called()
         assert "model.ply" in str(excinfo.value) and "2,000.0 MB" in str(excinfo.value)
         client.head_object.assert_called_once_with(Bucket="abkt", Key="xid/model.ply")
+
+    @pytest.mark.parametrize("output", [".usda", ".usdc", ".dae"])
+    def test_a_330_mb_stl_to_a_heavier_output_is_refused_before_download_naming_it(self, output):
+        mod = _load()
+        client = _client(330 * 1000 ** 2)
+        download = MagicMock()
+        with patch.object(mod, "_s3_client_for_bucket", lambda bucket: client), \
+                patch.object(mod, "download", download), \
+                patch.dict(os.environ, {"AWS_LAMBDA_FUNCTION_MEMORY_SIZE": str(FUNCTION_MEMORY_MB)}), \
+                patch.object(size_check, "free_disk_bytes", lambda path: BIG_DISK * 100):
+            with pytest.raises(size_check.InputTooLargeError, match=f"limit for converting \\.stl to \\{output}"):
+                mod.convert_input_output("s3://abkt/xid/near.stl", OUTPUT, output, "", "")
+        download.assert_not_called()
+
+    def test_the_same_stl_to_glb_is_still_downloaded(self):
+        mod = _load()
+        download = _convert(mod, _client(330 * 1000 ** 2), key="xid/near.stl", free=BIG_DISK * 100)
+        download.assert_called_once()
 
     def test_the_head_reads_the_launch_version(self):
         mod = _load()

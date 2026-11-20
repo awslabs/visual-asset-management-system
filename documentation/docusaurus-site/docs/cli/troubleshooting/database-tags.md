@@ -339,7 +339,7 @@ that database lists both in its tag picker.
 **Resolution:**
 
 -   Run `vamscli tag list --scope all` to find the database-specific entry.
--   Delete it with `vamscli tag delete --tag-name <name> --database <databaseId> --confirm` once the
+-   Delete it with `vamscli tag delete <name> --database <databaseId> --confirm` once the
     global entry covers the same meaning. Assets already carrying the name keep it.
 
 ---

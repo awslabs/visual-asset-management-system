@@ -15,6 +15,7 @@ import React from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import TextDiffViewerComponent from "./TextDiffViewerComponent";
+import { TEXT_VIEWER_MAX_BYTES } from "../../core/textContent";
 
 const mockDownloadAsset = jest.fn();
 jest.mock("../../../services/APIService", () => ({
@@ -687,5 +688,55 @@ describe("TextDiffViewerComponent", () => {
         });
         await waitFor(() => expect(screen.getByTestId("diff-right").textContent).toBe('{"a": 0}'));
         expect(screen.queryByTestId("text-diff-identical-notice")).toBeNull();
+    });
+});
+
+describe("a side the storage link could not serve", () => {
+    it("words a storage 403 as a link to refresh, not as a permission denial", async () => {
+        const fetchFor = global.fetch as jest.Mock;
+        const served = fetchFor.getMockImplementation() as (url: string, init: any) => any;
+        fetchFor.mockImplementation(async (url: string, init: any) =>
+            url.includes("asset-B")
+                ? { ok: false, status: 403, headers: { get: () => null } }
+                : served(url, init)
+        );
+
+        renderDiff();
+
+        await waitFor(() =>
+            expect(
+                screen.getByText("The file could not be read. Open it again to refresh the link.")
+            ).toBeInTheDocument()
+        );
+        expect(screen.queryByText("Not authorized")).toBeNull();
+        expect(
+            screen.queryByText("You do not have permission to view or download this file.")
+        ).toBeNull();
+    });
+
+    it("says a side larger than the cap is too large to compare, and still renders the other side", async () => {
+        const fetchFor = global.fetch as jest.Mock;
+        const served = fetchFor.getMockImplementation() as (url: string, init: any) => any;
+        fetchFor.mockImplementation(async (url: string, init: any) =>
+            url.includes("asset-B")
+                ? {
+                      ok: true,
+                      status: 200,
+                      headers: {
+                          get: (name: string) =>
+                              name === "Content-Length" ? String(TEXT_VIEWER_MAX_BYTES + 1) : null,
+                      },
+                      arrayBuffer: async () => new TextEncoder().encode('{"a": 2}').buffer,
+                  }
+                : served(url, init)
+        );
+
+        renderDiff();
+
+        await waitFor(() =>
+            expect(screen.getByTestId("text-diff-side-too-large")).toBeInTheDocument()
+        );
+        expect(screen.getByText("File too large")).toBeInTheDocument();
+        expect(screen.getByTestId("highlighted").textContent).toBe('{"a": 1}');
     });
 });

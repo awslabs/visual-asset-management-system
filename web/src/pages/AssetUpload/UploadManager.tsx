@@ -120,6 +120,8 @@ export default function UploadManager({
     const [fileUploadItems, setFileUploadItems] = useState<FileUploadTableItem[]>(fileItems);
     // Uploads whose completion accepted files over 1 GiB for asynchronous processing.
     const [asyncUploadIds, setAsyncUploadIds] = useState<string[]>([]);
+    // Set once every large file processed after the upload is in the asset.
+    const [asyncFilesLanded, setAsyncFilesLanded] = useState(false);
     const [isMultiSequence, setIsMultiSequence] = useState(false);
     const [totalSequences, setTotalSequences] = useState(0);
     const [completedInitSequences, setCompletedInitSequences] = useState(0);
@@ -267,6 +269,8 @@ export default function UploadManager({
                             setAsyncUploadIds((prev) =>
                                 prev.includes(asyncUploadId) ? prev : [...prev, asyncUploadId]
                             );
+                            // A new large-file upload has files still to land.
+                            setAsyncFilesLanded(false);
                         }
                     }
                 }
@@ -1656,7 +1660,7 @@ export default function UploadManager({
                     </Alert>
                 )}
 
-                {(uploadState.largeFileAsynchronousHandling ||
+                {((uploadState.largeFileAsynchronousHandling && !asyncFilesLanded) ||
                     uploadState.hasUnverifiedCompletions) && (
                     <Alert type="warning" header="Extended Processing Time">
                         The service returned some responses indicating longer processing times. Your
@@ -1671,6 +1675,7 @@ export default function UploadManager({
                             uploadIds={asyncUploadIds}
                             assetId={(uploadState.createdAssetId || assetDetail.assetId) as string}
                             databaseId={assetDetail.databaseId || ""}
+                            onAllLanded={() => setAsyncFilesLanded(true)}
                         />
                     )}
 

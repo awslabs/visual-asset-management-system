@@ -8,6 +8,7 @@ import Dialog from "../components/Dialog";
 import { useExecutionResults } from "../api/queries";
 import { btnSecondary } from "../components/controlStyles";
 import LoadMoreButton from "../components/LoadMoreButton";
+import { toastErrorMessage } from "../components/ToastProvider";
 import ResultText from "./ResultText";
 import { ResultDownloadButton } from "./ResultDownloadButton";
 
@@ -51,10 +52,18 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
         readFullText,
         isLoading,
         isError,
+        error,
         hasNextPage,
         isFetchingNextPage,
         fetchNextPage,
+        refetch,
     } = useExecutionResults(executionId, open);
+    // A failed next page keeps the pages already read (TanStack Query keeps them in `data`), so
+    // only a failure with nothing read yet replaces the result; a failed Load more is a line beside
+    // the button, which reads the page again.
+    const failedFirstPage = isError && !data;
+    const failedNextPage = isError && !!data;
+    const errorText = error ? toastErrorMessage(error).replace(/\.$/, "") : "";
 
     const hasContent = pageContents.some((page) => page.length > 0);
     const truncated = Boolean(data?.resultContentTruncated);
@@ -94,13 +103,20 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                 </div>
             )}
 
-            {isError && (
-                <div className="py-8 text-vams-error" role="alert">
-                    The result could not be loaded.
+            {failedFirstPage && (
+                <div className="flex items-center gap-3 py-8">
+                    <p className="m-0 text-vams-error" role="alert">
+                        {errorText
+                            ? `The result could not be loaded: ${errorText}.`
+                            : "The result could not be loaded."}
+                    </p>
+                    <button type="button" className={btnSecondary} onClick={() => refetch()}>
+                        Retry
+                    </button>
                 </div>
             )}
 
-            {!isLoading && !isError && (
+            {!isLoading && !failedFirstPage && (
                 <div className="flex flex-col gap-3">
                     <div className="flex items-center justify-between gap-3 text-sm text-text-secondary">
                         <span data-testid="result-surface-caption">
@@ -166,9 +182,17 @@ const ExecutionResultSurface: React.FC<ExecutionResultSurfaceProps> = ({
                                 busyLabel="Loading…"
                                 data-testid="result-surface-load-more"
                             />
-                            <span className="text-text-secondary" aria-live="polite">
-                                More result text remains.
-                            </span>
+                            {failedNextPage ? (
+                                <span className="text-vams-error" role="alert">
+                                    {`Could not load more of the result${
+                                        errorText ? `: ${errorText}` : ""
+                                    }. Choose Load more to try again.`}
+                                </span>
+                            ) : (
+                                <span className="text-text-secondary" aria-live="polite">
+                                    More result text remains.
+                                </span>
+                            )}
                         </div>
                     )}
                 </div>

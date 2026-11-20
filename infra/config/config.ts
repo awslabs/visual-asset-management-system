@@ -1341,6 +1341,24 @@ export function applyZipDownloadsDefaults(config: ConfigPublic): void {
     config.app.pipelines.useZipDownloads = filled;
 }
 
+/**
+ * app.pipelines.useConversion3dBasic.enableStepInput: absent or null is false, so a config.json written
+ * before the key keeps an image without Open CASCADE; any other value must be a JSON boolean.
+ */
+export function resolveConversion3dBasicStepInput(config: { app: any }): void {
+    const block = config.app.pipelines.useConversion3dBasic;
+    const value = block.enableStepInput;
+    if (value === undefined || value === null) {
+        block.enableStepInput = false;
+        return;
+    }
+    if (typeof value !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.enableStepInput must be true or false (a JSON boolean). Leave it out to keep STEP input off."
+        );
+    }
+}
+
 /** Reject an app.pipelines.useZipDownloads value outside its type or bounds, and an invalid Fargate size. */
 export function validateZipDownloadsConfig(config: ConfigPublic): void {
     const block = config.app.pipelines.useZipDownloads;
@@ -2570,9 +2588,20 @@ export function getConfig(app: cdk.App): Config {
     if (config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS == undefined) {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
+    resolveConversion3dBasicStepInput(config);
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
         config.app.pipelines.useConversionCoordinateTransform = {
+            enabled: false,
+            useCodeBuild: false,
+            autoRegisterWithVAMS: false,
+            autoRegisterAutoTriggerOnFileUpload: false,
+        };
+    }
+
+    // TIF to COG conversion: opt-in, off by default, and its upload trigger ships disabled.
+    if (config.app.pipelines.useCogConversion == undefined) {
+        config.app.pipelines.useCogConversion = {
             enabled: false,
             useCodeBuild: false,
             autoRegisterWithVAMS: false,
@@ -2686,6 +2715,7 @@ export function getConfig(app: cdk.App): Config {
 
     defaultAutoRegisterFlags(config.app.pipelines.useConversion3dBasic);
     defaultAutoRegisterFlags(config.app.pipelines.useConversionCoordinateTransform, true);
+    defaultAutoRegisterFlags(config.app.pipelines.useCogConversion, true);
     defaultAutoRegisterFlags(config.app.pipelines.useGenAiCadStepAgent, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreviewPcPotreeViewer, true);
     defaultAutoRegisterFlags(config.app.pipelines.usePreview3dThumbnail, true);
@@ -2718,6 +2748,7 @@ export function getConfig(app: cdk.App): Config {
         autoRegisterAutoTriggerOnFileUpload?: boolean;
     }>({
         useConversionCoordinateTransform: config.app.pipelines.useConversionCoordinateTransform,
+        useCogConversion: config.app.pipelines.useCogConversion,
         useGenAiCadStepAgent: config.app.pipelines.useGenAiCadStepAgent,
         usePreviewPcPotreeViewer: config.app.pipelines.usePreviewPcPotreeViewer,
         usePreview3dThumbnail: config.app.pipelines.usePreview3dThumbnail,
@@ -2968,15 +2999,19 @@ export function getConfig(app: cdk.App): Config {
     applyZipDownloadsDefaults(config);
     validateZipDownloadsConfig(config);
 
-    // Initialize compliance configuration if undefined (backward compatibility)
+    // Initialize compliance configuration if undefined (backward compatibility). An unset
+    // autoLoadDefaultSchema follows autoLoadDefaultAssetSchema: the default compliance schema needs
+    // the default asset metadata schema (checked below), so a config that turned that one off and
+    // predates the compliance block keeps deploying.
     if (config.app.compliance == undefined) {
         config.app.compliance = {
-            autoLoadDefaultSchema: true,
+            autoLoadDefaultSchema: !!config.app.metadataSchema.autoLoadDefaultAssetSchema,
             quarantineBlocksDownload: false,
         };
     }
     if (config.app.compliance.autoLoadDefaultSchema == undefined) {
-        config.app.compliance.autoLoadDefaultSchema = true;
+        config.app.compliance.autoLoadDefaultSchema =
+            !!config.app.metadataSchema.autoLoadDefaultAssetSchema;
     }
     if (config.app.compliance.quarantineBlocksDownload == undefined) {
         config.app.compliance.quarantineBlocksDownload = false;
@@ -3165,10 +3200,11 @@ export function getConfig(app: cdk.App): Config {
     if (!codeBuildSupportedPartitions.includes(resolvedPartition)) {
         const pipelines = config.app.pipelines as unknown as Record<
             string,
-            { useCodeBuild?: boolean } | undefined
+            { enabled?: boolean; useCodeBuild?: boolean } | undefined
         >;
         const codeBuildPipelinePaths = [
             "useConversionCoordinateTransform",
+            "useCogConversion",
             "useGenAiCadStepAgent",
             "useSplatToolbox",
             "useIsaacLabTraining",
@@ -3178,8 +3214,10 @@ export function getConfig(app: cdk.App): Config {
             "useGenAiVideoSopBom",
             "useImageTo3d",
         ];
+        //A disabled pipeline builds nothing, so only enabled ones are named (an upgraded config's
+        //backfilled blocks carry useCodeBuild true with the pipeline off).
         const enabledOutsideSupport = codeBuildPipelinePaths
-            .filter((name) => pipelines[name]?.useCodeBuild === true)
+            .filter((name) => !!pipelines[name]?.enabled && pipelines[name]?.useCodeBuild === true)
             .map((name) => `app.pipelines.${name}`);
         if (
             config.app.pipelines.useZipDownloads?.enabled &&
@@ -3322,6 +3360,8 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.useImageTo3d");
     if (config.app.pipelines.useConversionCoordinateTransform.enabled)
         vpcRequiringFeatures.push("pipelines.useConversionCoordinateTransform");
+    if (config.app.pipelines.useCogConversion?.enabled)
+        vpcRequiringFeatures.push("pipelines.useCogConversion");
     if (config.app.pipelines.useGenAiVideoSopBom.enabled)
         vpcRequiringFeatures.push("pipelines.useGenAiVideoSopBom");
     if (config.app.pipelines.useGenAiCadStepAgent.enabled)
@@ -5262,6 +5302,13 @@ export function getConfig(app: cdk.App): Config {
     // `ipaddress` module, so an IPv6 range is expressible and matches. Both endpoints of one
     // entry must be the same family — a mixed pair has no meaningful ordering, and the authorizer
     // skips it rather than allowing it, so rejecting it here is what surfaces the mistake.
+    // The list itself must be an array: the authorizer refuses every request when the value it
+    // receives is not a JSON array, so another shape is rejected here rather than deployed.
+    if (!Array.isArray(config.app.authProvider.authorizerOptions.allowedIpRanges)) {
+        throw new Error(
+            "Configuration Error: app.authProvider.authorizerOptions.allowedIpRanges must be an array of [min, max] IP address ranges ([] for no restriction)."
+        );
+    }
     if (config.app.authProvider.authorizerOptions.allowedIpRanges) {
         for (let i = 0; i < config.app.authProvider.authorizerOptions.allowedIpRanges.length; i++) {
             const range = config.app.authProvider.authorizerOptions.allowedIpRanges[i];
@@ -6420,8 +6467,18 @@ export interface ConfigPublic {
             useConversion3dBasic: {
                 enabled: boolean;
                 autoRegisterWithVAMS: boolean;
+                /** Read STEP (.step, .stp) input. The container image then includes cascadio (Open
+                 *  CASCADE, LGPL-2.1 with the OCCT exception); without it a STEP run is refused before
+                 *  download. Absent = false. */
+                enableStepInput: boolean;
             };
             useConversionCoordinateTransform: {
+                enabled: boolean;
+                useCodeBuild: boolean;
+                autoRegisterWithVAMS: boolean;
+                autoRegisterAutoTriggerOnFileUpload: boolean;
+            };
+            useCogConversion: {
                 enabled: boolean;
                 useCodeBuild: boolean;
                 autoRegisterWithVAMS: boolean;

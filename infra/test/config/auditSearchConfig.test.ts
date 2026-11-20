@@ -145,7 +145,7 @@ describe("resolveAuditLoggingConfig: search limits", () => {
         expect(resolved({ maxRows: 10 }).handleRetentionMinutes).toBe(60);
     });
 
-    test("an upgrade whose config lacks the block behaves with the defaults", () => {
+    test("a config that lacks the block behaves with the defaults", () => {
         const config: any = { app: { api: { apiGatewayRest: {} } } };
         Config.resolveAuditLoggingConfig(config);
         expect(config.app.auditLogging).toEqual({

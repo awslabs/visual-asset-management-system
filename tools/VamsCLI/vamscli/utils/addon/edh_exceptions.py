@@ -37,6 +37,12 @@ class EdhUnavailableError(EdhError):
     pass
 
 
+class EdhQuotaExceededError(EdhError):
+    """Raised when EDH refuses a request (429) because a quota, session count or budget is exhausted.
+    Resending does not clear it until something that counts toward the quota ends."""
+    pass
+
+
 class EdhOutcomeUnknownError(EdhUnavailableError):
     """Raised when EDH did not confirm a mutating request, which may still be in progress."""
     # Carried into --json-output beside the error, as the API's own error body carries it.
@@ -65,6 +71,16 @@ class EdhDisplaySessionEndedError(EdhOperationError):
     it, then start it again, to reconnect."""
     # Carried into --json-output beside the error, as the API's own error body carries it.
     json_fields = {"code": "DISPLAY_SESSION_ENDED"}
+
+
+class EdhDesktopErrorError(EdhOperationError):
+    """Raised when a connect, a desktop sign-in or a start is refused (409 `code` DESKTOP_ERROR) because EDH
+    reports a workstation that has run in its error state: its remote display stopped responding (its Amazon DCV
+    health check failed). The workstation keeps its state, disk and data and records
+    `connectionUnavailableReason` DESKTOP_ERROR; wait a few minutes for EDH to recover it, or stop it, then start
+    it again."""
+    # Carried into --json-output beside the error, as the API's own error body carries it.
+    json_fields = {"code": "DESKTOP_ERROR"}
 
 
 class EdhReservationNotPermittedError(PermissionDeniedError, EdhError):

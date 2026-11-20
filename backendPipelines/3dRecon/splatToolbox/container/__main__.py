@@ -583,7 +583,7 @@ def main():
     if missing_version_cause:
         print(missing_version_cause)
         if pipeline_def.get('externalSfnTaskToken'):
-            sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'),
+            sfn_client = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'],
                                       config=retry_config)
             sfn_client.send_task_failure(taskToken=pipeline_def['externalSfnTaskToken'],
                                          error='Pipeline Failure',
@@ -652,7 +652,7 @@ def main():
         print("Pipeline completed successfully")
 
         # A zero exit status does not mean the run uploaded anything (see missing_output_cause)
-        region = os.environ.get('AWS_REGION', 'us-east-1')
+        region = os.environ['AWS_REGION']
         output_bucket, output_prefix = output_listing_prefix(
             os.environ['S3_OUTPUT'], os.environ['UUID'])
         no_output_cause = missing_output_cause(
@@ -687,7 +687,7 @@ def main():
         # Send failure callback if task token exists
         if task_token:
             print(f"Sending failure callback with task token")
-            region = os.environ.get('AWS_REGION', 'us-east-1')
+            region = os.environ['AWS_REGION']
             sfn_client = boto3.client('stepfunctions', region_name=region, config=retry_config)
             sfn_client.send_task_failure(
                 taskToken=task_token,

@@ -1130,7 +1130,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Convert between STL, OBJ, PLY, GLTF, GLB, etc. No VPC required.",
+        help: "Convert between STL, OBJ, PLY, GLTF, GLB, USD, DAE, 3MF, OFF and FBX, with unit and up-axis options. No VPC required.",
     },
     {
         path: "app.pipelines.useConversion3dBasic.autoRegisterWithVAMS",
@@ -1138,6 +1138,15 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.enableStepInput",
+        label: "3D basic conversion — STEP input",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Read STEP (.step, .stp) files. Adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the conversion image; off, a STEP run is refused before download.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
@@ -1174,6 +1183,38 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         visibleWhen: (c) =>
             !!getByPath(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.enabled",
+        label: "TIF to COG conversion",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Convert a georeferenced TIFF into a Cloud Optimized GeoTIFF in EPSG:3857 so the Search map can draw it. Requires VPC.",
+    },
+    {
+        path: "app.pipelines.useCogConversion.useCodeBuild",
+        label: "TIF to COG — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.autoRegisterWithVAMS",
+        label: "TIF to COG — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.autoRegisterAutoTriggerOnFileUpload",
+        label: "TIF to COG — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
     },
     {
         path: "app.pipelines.useGenAiCadStepAgent.enabled",
@@ -2527,7 +2568,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "compliance",
         advanced: true,
-        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy. When unset, it follows app.metadataSchema.autoLoadDefaultAssetSchema.",
     },
     {
         path: "app.compliance.quarantineBlocksDownload",

@@ -64,6 +64,7 @@ const EXPECTED_REPOSITORIES = [
     "CadStepAgentPipelineCadStepAgentCodeBuildEcrRepoCadStepAgent",
     "ImageTo3dCodeBuildEcrRepostable3dgen",
     "ZipArchivePipelineZipArchiveCodeBuildEcrRepoZipArchive",
+    "CogConvertPipelineCogConvertCodeBuildEcrRepoCogConvert",
 ];
 
 /** The repositories with an explicit `repositoryName`, each with the name it ends in without the key. */
@@ -72,6 +73,7 @@ const EXPLICITLY_NAMED: Record<string, string> = {
     [EXPECTED_REPOSITORIES[8]]: "-videosopbom",
     [EXPECTED_REPOSITORIES[9]]: "-cadstepagent",
     [EXPECTED_REPOSITORIES[11]]: "-ziparchive",
+    [EXPECTED_REPOSITORIES[12]]: "-cogconvert",
 };
 
 /**
@@ -83,6 +85,7 @@ const EXPLICITLY_NAMED: Record<string, string> = {
  */
 const EXPECTED_CODEBUILD_PIPELINES = [
     "useConversionCoordinateTransform",
+    "useCogConversion",
     "useSplatToolbox",
     "useIsaacLabTraining",
     "useNvidiaCosmos",

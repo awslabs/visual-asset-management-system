@@ -38,7 +38,7 @@
             "enabled": true,
             "useForAllLambdas": false,
             "addVpcEndpoints": true,
-            "addCrossRegionS3Endpoints": true,
+            "addCrossRegionS3Endpoints": false,
             "optionalExternalVpcId": null,
             "optionalExternalIsolatedSubnetIds": null,
             "optionalExternalPrivateSubnetIds": null,
@@ -104,7 +104,8 @@
             ],
             "useConversion3dBasic": {
                 "enabled": true,
-                "autoRegisterWithVAMS": true
+                "autoRegisterWithVAMS": true,
+                "enableStepInput": false
             },
             "usePreview3dThumbnail": {
                 "enabled": false,
@@ -159,6 +160,12 @@
                 }
             },
             "useConversionCoordinateTransform": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
+            },
+            "useCogConversion": {
                 "enabled": false,
                 "useCodeBuild": false,
                 "autoRegisterWithVAMS": true,

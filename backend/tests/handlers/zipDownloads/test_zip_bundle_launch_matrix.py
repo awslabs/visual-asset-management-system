@@ -53,7 +53,7 @@ def versions(monkeypatch):
     """The asset version snapshot an asset-version pin resolves against."""
     fake = types.ModuleType("handlers.assets.assetVersions")
     fake.validate_asset_version_exists = lambda db, a, v: True
-    fake.get_asset_file_versions = lambda db, a, v: {"files": [
+    fake.get_asset_file_versions = lambda db, a, v, **_kw: {"files": [
         {"relativeKey": "/a.glb", "versionId": "va1", "size": 100},
         {"relativeKey": "/textures/t1.png", "versionId": "vt1", "size": 20}]}
     fake.resolve_asset_version_id_from_alias = lambda db, a, alias: "3"

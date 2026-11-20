@@ -375,8 +375,9 @@ describe("the ConfigBuilder mirrors the useFips EU Sovereign warning", () => {
  * `false` the operator supplies the network path and the configuration is accepted. The check is
  * keyed on the resolved partition, not `app.govCloud.enabled`. The commercial case is the control;
  * the no-cross-Region-bucket case proves the flag is inert until such a bucket appears, which is why
- * every shipped template carries it `true`. A cross-Region DEFAULT bucket is rejected in every
- * partition. The ConfigBuilder's hand-ported rules are asserted from the same arms.
+ * the commercial template carries it `true`. The GovCloud and EU Sovereign templates ship it `false`,
+ * so adding a bucket in another Region to either template is accepted as shipped. A cross-Region
+ * DEFAULT bucket is rejected in every partition. The ConfigBuilder's hand-ported rules are asserted from the same arms.
  */
 const CROSS_REGION_ENDPOINT_MESSAGE =
     /app\.useGlobalVpc\.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only/;
@@ -424,7 +425,13 @@ describe("cross-Region S3 interface endpoint partition gate", () => {
     test.each(restrictedArms)(
         "%s (%s) names the flag and both Regions in the error",
         (region, partition, bucketRegion, base) => {
-            const run = loadConfig(base(), region, withCrossRegionBucket(bucketRegion, partition));
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+                })
+            );
             expect(run).toThrow(
                 new RegExp(
                     `addCrossRegionS3Endpoints[\\s\\S]*'${bucketRegion}'[\\s\\S]*'${region}'[\\s\\S]*\\(${partition}\\)[\\s\\S]*Set app\\.useGlobalVpc\\.addCrossRegionS3Endpoints to false`
@@ -457,6 +464,16 @@ describe("cross-Region S3 interface endpoint partition gate", () => {
                     c.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
                 })
             );
+            expect(run).not.toThrow();
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts a bucket in %s added to the shipped template as it ships",
+        (region, partition, bucketRegion, base) => {
+            // The template's own default must not be the value getConfig() refuses there.
+            expect((base() as any).app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(false);
+            const run = loadConfig(base(), region, withCrossRegionBucket(bucketRegion, partition));
             expect(run).not.toThrow();
         }
     );
@@ -590,19 +607,26 @@ describe("ConfigBuilder mirror of the cross-Region S3 endpoint rules", () => {
             const cfg = makeDefaultConfig(profile as any);
             cfg.env.region = region;
             withBucket(cfg, bucketRegion, partition);
+            cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
             expect(ruleIds(cfg)).toEqual([CROSS_REGION_ENDPOINT_RULE_ID]);
             const rule = evaluateRules(cfg).find((r) => r.id === CROSS_REGION_ENDPOINT_RULE_ID);
             expect(rule?.severity).toBe("error");
         }
     );
 
-    test("govcloud preset clears the endpoint rule with the flag false", () => {
-        const cfg = makeDefaultConfig("govcloud");
-        cfg.env.region = "us-gov-west-1";
-        withBucket(cfg, "us-gov-east-1", "aws-us-gov");
-        cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
-        expect(ruleIds(cfg)).toEqual([]);
-    });
+    test.each([
+        ["govcloud", "us-gov-west-1", "us-gov-east-1", "aws-us-gov"],
+        ["eusovereign", "eusc-de-east-1", "eusc-de-west-1", "aws-eusc"],
+    ])(
+        "%s preset as it ships reports no endpoint rule with a cross-Region bucket",
+        (profile, region, bucketRegion, partition) => {
+            const cfg = makeDefaultConfig(profile as any);
+            cfg.env.region = region;
+            withBucket(cfg, bucketRegion, partition);
+            expect(cfg.app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(false);
+            expect(ruleIds(cfg)).toEqual([]);
+        }
+    );
 
     test("govcloud preset with in-VPC Lambdas and the flag false reports the warning", () => {
         const cfg = makeDefaultConfig("govcloud");

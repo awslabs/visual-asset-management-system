@@ -26,8 +26,11 @@ import {
 
 const MiB = 1024 * 1024;
 
-/** USDZ size guard: limits checked on the archive's directory before anything is extracted. */
-export const USDZ_LIMITS = {
+/**
+ * Size guard for the zip packages the viewer opens (.usdz, .3mf): limits checked on the archive's
+ * directory before anything is extracted.
+ */
+export const ZIP_LIMITS = {
     /** Uncompressed total may be at most this multiple of the archive size, plus the allowance. */
     expansionFactor: 4,
     expansionAllowanceBytes: 64 * MiB,
@@ -55,7 +58,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-/** True for a ZIP local file header (`PK\x03\x04`), which a .usdz starts with. */
+/** True for a ZIP local file header (`PK\x03\x04`), which a .usdz (and a .3mf) starts with. */
 export function isUsdzBytes(bytes: Uint8Array): boolean {
     return (
         bytes.length >= 4 &&
@@ -81,10 +84,15 @@ export function isUsdcBytes(bytes: Uint8Array): boolean {
 }
 
 /**
- * Rejects a .usdz whose directory declares more entries or more uncompressed bytes than the
- * USDZ_LIMITS allow. Reads metadata only: the filter returns false, so nothing is inflated.
+ * Rejects a zip package (a .usdz, or a .3mf with `format` "3MF") whose directory declares more
+ * entries or more uncompressed bytes than the ZIP_LIMITS allow. Reads metadata only: the filter
+ * returns false, so nothing is inflated.
  */
-export function checkUsdzSize(bytes: Uint8Array, unzipSync: (data: Uint8Array, opts: any) => any) {
+export function checkZipSize(
+    bytes: Uint8Array,
+    unzipSync: (data: Uint8Array, opts: any) => any,
+    format = "USDZ"
+) {
     let entries = 0;
     let uncompressed = 0;
     try {
@@ -96,19 +104,19 @@ export function checkUsdzSize(bytes: Uint8Array, unzipSync: (data: Uint8Array, o
             },
         });
     } catch (error: any) {
-        throw new Error(`The USDZ package could not be read: ${error?.message || error}`);
+        throw new Error(`The ${format} package could not be read: ${error?.message || error}`);
     }
 
     const maxBytes =
-        USDZ_LIMITS.expansionFactor * bytes.byteLength + USDZ_LIMITS.expansionAllowanceBytes;
-    if (entries > USDZ_LIMITS.maxEntries) {
+        ZIP_LIMITS.expansionFactor * bytes.byteLength + ZIP_LIMITS.expansionAllowanceBytes;
+    if (entries > ZIP_LIMITS.maxEntries) {
         throw new Error(
-            `The USDZ package has ${entries} entries, more than the ${USDZ_LIMITS.maxEntries} this viewer opens.`
+            `The ${format} package has ${entries} entries, more than the ${ZIP_LIMITS.maxEntries} this viewer opens.`
         );
     }
     if (uncompressed > maxBytes) {
         throw new Error(
-            `The USDZ package expands to ${Math.ceil(
+            `The ${format} package expands to ${Math.ceil(
                 uncompressed / MiB
             )} MiB, more than the ${Math.floor(
                 maxBytes / MiB
@@ -177,7 +185,7 @@ function usdcSubLayerValues(parser: any): string[] {
     const values: string[] = [];
     try {
         reader.seek(field.valueRep.payload);
-        const count = Math.min(reader.readUint64(), USDZ_LIMITS.maxEntries);
+        const count = Math.min(reader.readUint64(), ZIP_LIMITS.maxEntries);
         for (let i = 0; i < count; i++) {
             const value = parser.tokens?.[parser.strings?.[reader.readUint32()]];
             if (typeof value === "string") {
@@ -335,7 +343,7 @@ export async function buildUsdPackage(input: UsdPackageInput): Promise<UsdPackag
     const layers: Array<{ entry: string; depth: number }> = [];
 
     if (isUsdzBytes(rootBytes)) {
-        checkUsdzSize(rootBytes, fflate.unzipSync);
+        checkZipSize(rootBytes, fflate.unzipSync);
         const files = fflate.unzipSync(rootBytes);
         Object.keys(files).forEach((name) => entries.set(name, files[name]));
     } else {

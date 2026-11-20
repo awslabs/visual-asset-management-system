@@ -65,29 +65,94 @@ def async_relative_keys(file_results):
     return keys
 
 
-def begin_async_tracking(table, upload_id, asset_id, relative_keys, has_sync_failures):
-    """Keep the upload record and track each file accepted for asynchronous ingestion as PENDING.
-    Returns True when written."""
-    now = _now()
+def track_async_file(table, upload_id, asset_id, relative_key):
+    """Track one file as PENDING on its upload record before it is queued for asynchronous
+    ingestion, so an outcome its writer records before the completion ends is kept. An entry
+    already present is left as it is. Returns True when the file is tracked. Never raises: a file
+    whose tracking cannot be written is still queued, and begin_async_tracking adds it at the end."""
+    if not (upload_id and asset_id and relative_key):
+        return False
+    try:
+        # Two writes: a nested path can only be set once its map exists, and one expression cannot
+        # name both the map and a key inside it.
+        table.update_item(
+            Key={"uploadId": upload_id, "assetId": asset_id},
+            UpdateExpression="SET asyncFiles = if_not_exists(asyncFiles, :empty)",
+            ConditionExpression="attribute_exists(uploadId)",
+            ExpressionAttributeValues={":empty": {}},
+        )
+        _add_pending_entry(table, upload_id, asset_id, relative_key, _now())
+        return True
+    except Exception as e:
+        logger.warning(f"Could not track {relative_key} on upload {upload_id} before queueing it: "
+                       f"{e.__class__.__name__}")
+        return False
+
+
+def untrack_async_file(table, upload_id, asset_id, relative_key):
+    """Remove the PENDING entry track_async_file wrote for a file that could not be queued and is
+    completed synchronously instead. Only while its outcome is still PENDING. Best-effort (logged,
+    never raises)."""
+    if not (upload_id and asset_id and relative_key):
+        return
     try:
         table.update_item(
             Key={"uploadId": upload_id, "assetId": asset_id},
-            UpdateExpression=("SET #status = :s, asyncFiles = :f, hasSyncFailures = :h, "
-                              "expiresAt = :e, updatedAt = :u"),
+            UpdateExpression="REMOVE asyncFiles.#rel",
+            ConditionExpression="attribute_exists(asyncFiles.#rel) AND asyncFiles.#rel.#st = :p",
+            ExpressionAttributeNames={"#rel": relative_key, "#st": "status"},
+            ExpressionAttributeValues={":p": FILE_PENDING},
+        )
+    except Exception as e:
+        logger.info(f"Tracking of {relative_key} on upload {upload_id} not removed ({e.__class__.__name__})")
+
+
+def _add_pending_entry(table, upload_id, asset_id, relative_key, now):
+    """Add a PENDING entry for one file unless the record already has one (the asyncFiles map must
+    exist). Returns the record as written."""
+    return table.update_item(
+        Key={"uploadId": upload_id, "assetId": asset_id},
+        UpdateExpression="SET asyncFiles.#rel = if_not_exists(asyncFiles.#rel, :entry)",
+        ConditionExpression="attribute_exists(uploadId)",
+        ExpressionAttributeNames={"#rel": relative_key},
+        ExpressionAttributeValues={":entry": {"status": FILE_PENDING, "updatedAt": _iso(now)}},
+        ReturnValues="ALL_NEW",
+    ).get("Attributes") or {}
+
+
+def begin_async_tracking(table, upload_id, asset_id, relative_keys, has_sync_failures):
+    """Keep the upload record (processing_async) once its completion ran, for the files it accepted
+    for asynchronous ingestion. Each file was tracked before it was queued (track_async_file), so an
+    outcome recorded while the completion still ran is kept rather than reset to PENDING; a file
+    whose tracking could not be written then is added as PENDING here. When every file's outcome is
+    already recorded the upload is settled here, since no later writer will. Returns True when
+    written."""
+    now = _now()
+    try:
+        response = table.update_item(
+            Key={"uploadId": upload_id, "assetId": asset_id},
+            UpdateExpression=("SET #status = :s, asyncFiles = if_not_exists(asyncFiles, :empty), "
+                              "hasSyncFailures = :h, expiresAt = :e, updatedAt = :u"),
             ExpressionAttributeNames={"#status": "status"},
             ExpressionAttributeValues={
                 ":s": STATUS_PROCESSING_ASYNC,
-                ":f": {key: {"status": FILE_PENDING, "updatedAt": _iso(now)} for key in relative_keys},
+                ":empty": {},
                 ":h": bool(has_sync_failures),
                 ":e": expires_at(now),
                 ":u": _iso(now),
             },
             ConditionExpression="attribute_exists(uploadId)",
+            ReturnValues="ALL_NEW",
         )
-        return True
+        record = response.get("Attributes") or {}
+        for key in relative_keys:
+            if key not in (record.get("asyncFiles") or {}):
+                record = _add_pending_entry(table, upload_id, asset_id, key, now) or record
     except Exception as e:
         logger.warning(f"Could not record the asynchronous files of upload {upload_id}: {e}")
         return False
+    _settle(table, record)
+    return True
 
 
 def record_async_file_outcome(table, upload_id, asset_id, relative_key, succeeded, reason="",

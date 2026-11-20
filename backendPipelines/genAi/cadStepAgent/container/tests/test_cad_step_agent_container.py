@@ -335,6 +335,53 @@ def _alive(pid):
     return True
 
 
+# The image init's command line as /proc/1/cmdline holds it (NUL-separated, NUL-terminated).
+_IMAGE_INIT_ARGV = [b"python3", b"-m", b"cad_step_agent.init", b"python3", b"-m", b"cad_step_agent.agentcore_app", b""]
+
+
+@pytest.mark.unit
+class TestLeftoverProcesses:
+    """``sandbox.end_leftover_processes``. ``os.kill`` is replaced in every test here: the real call
+    signals every process of the test runner's uid."""
+
+    @pytest.fixture(autouse=True)
+    def kills(self, monkeypatch):
+        sent = []
+        monkeypatch.setattr(sandbox.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+        return sent
+
+    def test_under_the_image_init_every_other_process_of_the_uid_is_ended(self, kills, monkeypatch):
+        monkeypatch.setattr(sandbox.os, "getppid", lambda: 1)
+        monkeypatch.setattr(sandbox, "_pid1_argv", lambda: _IMAGE_INIT_ARGV)
+        assert sandbox.end_leftover_processes() is True
+        # kill(-1): every process the caller may signal except PID 1 and the caller, in one call.
+        assert kills == [(-1, signal.SIGKILL)]
+
+    @pytest.mark.parametrize("ppid, argv", [
+        (4242, _IMAGE_INIT_ARGV),             # the server's parent is not PID 1
+        (1, [b"/sbin/init", b""]),            # PID 1 is another init (a developer's machine)
+        (1, [b"python3", b"-m", b"pytest"]),  # PID 1 is another module
+        (1, []),                              # PID 1's command line cannot be read
+    ])
+    def test_outside_the_image_init_nothing_is_signalled(self, kills, monkeypatch, ppid, argv):
+        monkeypatch.setattr(sandbox.os, "getppid", lambda: ppid)
+        monkeypatch.setattr(sandbox, "_pid1_argv", lambda: argv)
+        assert sandbox.end_leftover_processes() is False
+        assert kills == []
+
+    def test_no_other_process_left_is_not_an_error(self, monkeypatch):
+        def none_left(pid, sig):
+            raise ProcessLookupError(pid)
+        monkeypatch.setattr(sandbox.os, "kill", none_left)
+        monkeypatch.setattr(sandbox.os, "getppid", lambda: 1)
+        monkeypatch.setattr(sandbox, "_pid1_argv", lambda: _IMAGE_INIT_ARGV)
+        assert sandbox.end_leftover_processes() is True
+
+    def test_the_test_runner_itself_is_outside_the_image_init(self, kills):
+        assert sandbox.end_leftover_processes() is False
+        assert kills == []
+
+
 # ---------------------------------------------------------------------------------------------------
 # report
 # ---------------------------------------------------------------------------------------------------
@@ -2281,6 +2328,11 @@ def agentcore_app(monkeypatch):
     sys.modules.pop("cad_step_agent.agentcore_app", None)
     import importlib
     module = importlib.import_module("cad_step_agent.agentcore_app")
+    # The real sweep signals every process of the uid; the tests record each call and the slot's
+    # holder at that moment instead.
+    module.test_sweeps = []
+    monkeypatch.setattr(sandbox, "end_leftover_processes",
+                        lambda: module.test_sweeps.append(module.active_job()) or True)
     yield module
     sys.modules.pop("cad_step_agent.agentcore_app", None)
 
@@ -2419,6 +2471,72 @@ class TestAgentCoreApp:
         import asyncio
         reply = asyncio.run(agentcore_app.invoke({"definition": {"mode": "modify"}}))
         assert reply["accepted"] is False and "taskToken" in reply["error"]
+        assert agentcore_app.active_job() is None
+        assert agentcore_app.test_sweeps == []
+
+    @pytest.mark.parametrize("outcome", ["done", "failed", "fault"])
+    def test_leftover_processes_are_ended_before_a_run_starts_and_before_its_slot_frees(self, agentcore_app, outcome):
+        import asyncio
+        seen = []
+
+        def recording_run(definition, task_token):
+            seen.append(list(agentcore_app.test_sweeps))
+            if outcome == "failed":
+                raise run.RunFailed("no valid STEP")
+            if outcome == "fault":
+                raise RuntimeError("unclassified")
+
+        reply = asyncio.run(self._run_to_completion(agentcore_app, recording_run))
+        assert reply == {"accepted": True, "jobName": "job-1"}
+        # Once before the run starts and once after it ends, both while this run holds the slot.
+        assert seen == [["job-1"]]
+        assert agentcore_app.test_sweeps == ["job-1", "job-1"]
+        assert agentcore_app.active_job() is None
+
+    def test_a_refused_invocation_ends_no_process(self, agentcore_app):
+        import asyncio
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_run(definition, task_token):
+            started.set()
+            release.wait(10)
+
+        async def scenario():
+            with patch.object(agentcore_app.run, "run_job", slow_run):
+                await agentcore_app.invoke(self._payload("job-1"))
+                await asyncio.to_thread(started.wait, 5)
+                busy = await agentcore_app.invoke(self._payload("job-2"))
+                during = list(agentcore_app.test_sweeps)
+                release.set()
+                for _ in range(200):
+                    if agentcore_app.active_job() is None:
+                        break
+                    await asyncio.sleep(0.01)
+            return busy, during
+
+        busy, during = asyncio.run(scenario())
+        assert busy["accepted"] is False
+        assert during == ["job-1"]
+        assert agentcore_app.test_sweeps == ["job-1", "job-1"]
+
+    def test_a_sweep_that_cannot_run_is_a_warning(self, agentcore_app, monkeypatch, caplog):
+        import asyncio
+        monkeypatch.setattr(sandbox, "end_leftover_processes", lambda: False)
+        with caplog.at_level(logging.WARNING, logger="cad_step_agent.agentcore"):
+            asyncio.run(self._run_to_completion(agentcore_app, lambda definition, task_token: None))
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 2 and all("leftover processes not ended job=job-1" in w for w in warnings)
+        assert agentcore_app.active_job() is None
+
+    def test_a_sweep_that_raises_frees_the_slot(self, agentcore_app, monkeypatch):
+        import asyncio
+
+        def broken():
+            raise OSError("signal failed")
+        monkeypatch.setattr(sandbox, "end_leftover_processes", broken)
+        with pytest.raises(OSError):
+            asyncio.run(agentcore_app.invoke(self._payload("job-1")))
         assert agentcore_app.active_job() is None
 
     def test_the_entry_point_quiets_the_http_client_loggers(self, agentcore_app):

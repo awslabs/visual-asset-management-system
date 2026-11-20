@@ -4,6 +4,7 @@
  */
 
 import { apiClient, isNetworkFailure, NETWORK_FAILURE_MESSAGE } from "./apiClient";
+import { requestFailureMessage } from "./networkFailure";
 import { fetchAssetS3Files } from "./APIService";
 
 /**
@@ -155,7 +156,7 @@ export const fetchAssetVersions = async ({
         }
     } catch (error) {
         console.log("Error fetching asset versions:", error);
-        return [false, (error as any)?.message || "Failed to fetch asset versions"];
+        return [false, requestFailureMessage(error, "Failed to fetch asset versions")];
     }
 };
 
