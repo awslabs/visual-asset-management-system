@@ -33,6 +33,10 @@ from tests.handlers.assets.test_streamAuxiliaryPreviewAsset_range_header_casing 
 )
 
 
+# The viewer data of a companion entry {key}/preview/x.glb, inside the object's preview/ folder
+OBJECT_PREVIEW_COMPANION_DATA = "db1/p1/model.glb/preview/x.glb/preview/PotreeViewer/r.bin"
+
+
 @pytest.mark.unit
 class TestAuxiliaryDataOfTheObject:
     @pytest.mark.parametrize("location,key,expected", [
@@ -47,20 +51,26 @@ class TestAuxiliaryDataOfTheObject:
 
     def test_deleting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         calls = []
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", lambda prefix, keep=None: calls.append(prefix))
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files",
+                            lambda prefix, keep=None: calls.append((prefix, keep)))
         af.delete_file("db1", "a1", "/sub/x.obj", False, True, CLAIMS)
         af.delete_file("db1", "a1", "/model.glb", False, True, CLAIMS)
-        # A companion entry's own data goes with it; the object's stops at preview/
-        assert calls == ["db1/p1/model.glb/sub/x.obj/", "db1/p1/model.glb/preview/"]
+        # A companion entry's own data goes with it; the object's stops at preview/ and leaves the data of
+        # companion entries in {key}/preview/
+        assert [prefix for prefix, _ in calls] == ["db1/p1/model.glb/sub/x.obj/", "db1/p1/model.glb/preview/"]
+        assert calls[0][1] is None
+        assert calls[1][1]("db1/p1/model.glb/preview/r.bin") and not calls[1][1](OBJECT_PREVIEW_COMPANION_DATA)
 
     def test_reverting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         first = af.test_client.list_object_versions(Bucket=BUCKET, Prefix=OWN_KEY)["Versions"]
         first_id = [v for v in first if v["Key"] == OWN_KEY][0]["VersionId"]
         af.test_client.put_object(Bucket=BUCKET, Key=OWN_KEY, Body=b"second")
         calls = []
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", lambda prefix, keep=None: calls.append(prefix))
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files",
+                            lambda prefix, keep=None: calls.append((prefix, keep)))
         af.revert_file_version("db1", "a1", "/model.glb", first_id, CLAIMS)
-        assert calls == ["db1/p1/model.glb/preview/"]
+        assert [prefix for prefix, _ in calls] == ["db1/p1/model.glb/preview/"]
+        assert calls[0][1]("db1/p1/model.glb/preview/r.bin") and not calls[0][1](OBJECT_PREVIEW_COMPANION_DATA)
 
     def test_the_object_and_a_companion_folder_named_preview_keep_their_viewer_data_apart(self, af, monkeypatch):
         """The object's data and that of companion entries in {key}/preview/ share db/{key}/preview/."""
