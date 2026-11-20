@@ -287,6 +287,23 @@ describe("the cogConvert image", () => {
         expect(text).toContain("--require-hashes");
     });
 
+    it("fetches nothing but its hash-checked package lists", () => {
+        // The Image to 3D download rule below wants every curl or wget checked against a SHA-256 in the
+        // same instruction. This image runs neither and clones nothing, so its only network inputs are
+        // conda-explicit.txt and the hash lock, and each conda package line has to carry its SHA-256.
+        // Its two base images are covered by the digest rule's walk over every pipeline Dockerfile.
+        const steps = instructions(text).filter((s) => !/^\s*#/.test(s));
+        expect(
+            steps.filter((s) => DOWNLOAD.test(s) || /git clone|^ADD\s+https?:/i.test(s))
+        ).toEqual([]);
+        const packages = fs
+            .readFileSync(path.join(path.dirname(COG_DOCKERFILE), "conda-explicit.txt"), "utf-8")
+            .split(/\r?\n/)
+            .filter((l) => /^https:\/\//.test(l));
+        expect(packages.length).toBeGreaterThan(0);
+        expect(packages.filter((l) => !/#[0-9a-f]{64}$/.test(l))).toEqual([]);
+    });
+
     it("drops root before the entrypoint", () => {
         const userAt = lines.findIndex((l) => /^USER\s+\w/.test(l));
         expect(userAt).toBeGreaterThan(-1);
