@@ -1,0 +1,18 @@
+[project]
+name = "video-sop-bom-pipeline"
+version = "0.1.0"
+description = "Video SOP and BOM pipeline container image"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "boto3==1.43.93",
+    "botocore==1.43.93",
+    "jsonschema==4.26.0",
+    "Pillow==13.0.0",
+]
+
+# The image installs the committed requirements.txt with pip. It is exported from uv.lock; uv is a
+# development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
