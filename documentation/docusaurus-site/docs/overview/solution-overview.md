@@ -12,18 +12,20 @@ Through a web interface, command-line tool, and REST API, VAMS enables any autho
 
 VAMS can store, manage, and version **any file type** — it is not limited to a fixed set of formats. However, the following data types have built-in viewer and pipeline support out of the box. Because VAMS is extensible through custom viewer plugins and processing pipelines, this list represents the current set of native integrations, not a limitation of the platform.
 
-| Category                        | Formats with Built-in Viewer/Pipeline Support                         |
-| ------------------------------- | --------------------------------------------------------------------- |
-| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF, AMF, OFF, WRL, 3DM      |
-| **CAD Models**                  | STEP, STP, IGES, IGS, BREP                                            |
-| **BIM**                         | IFC, IFCZIP                                                           |
-| **Point Clouds**                | E57, LAS, LAZ, PLY                                                    |
-| **Geospatial**                  | 3D Tiles tilesets (JSON)                                              |
-| **Universal Scene Description** | USD, USDA, USDC, USDZ                                                 |
-| **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                 |
-| **Robotics Data**               | MCAP, ROS 1 and ROS 2 bags (BAG, DB3), PX4 ULog (ULG, ULOG)           |
-| **Documents and Media**         | PDF, images, video, audio, CSV, FCS, HTML, text                       |
-| **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins |
+| Category                        | Formats with Built-in Viewer/Pipeline Support                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF, AMF, OFF, WRL, BIM, 3DM¹                         |
+| **CAD Models**                  | STEP, STP, IGES, IGS, BREP                                                                     |
+| **BIM**                         | IFC, IFCZIP¹                                                                                   |
+| **Point Clouds**                | E57, LAS, LAZ, PLY                                                                             |
+| **Geospatial**                  | 3D Tiles tilesets (JSON); GeoTIFF / Cloud Optimized GeoTIFF (map view needs location services) |
+| **Universal Scene Description** | USD, USDA, USDC, USDZ                                                                          |
+| **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                                          |
+| **Robotics Data**               | MCAP, ROS 1 and ROS 2 bags (BAG, DB3), PX4 ULog (ULG, ULOG)¹                                   |
+| **Documents and Media**         | PDF, images, video, audio, CSV, FCS, HTML, text                                                |
+| **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins                          |
+
+¹ BIM (IFC, IFCZIP), Rhinoceros 3D (3DM) and robotics formats need `app.webUi.allowUnsafeEvalFeatures`, which the shipped templates leave off.
 
 For the complete viewer-to-extension mapping, see [File Viewers](../concepts/viewers.md).
 

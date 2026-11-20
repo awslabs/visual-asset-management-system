@@ -177,7 +177,7 @@ Enable this pipeline in `infra/config/config.json`:
 | `enableStepInput`      | `false` | Read STEP (`.step`, `.stp`) input; adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the image.                                  |
 
 :::tip[Enabled by Default]
-Unlike other built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
+Unlike most built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
 :::
 
 ## Input Parameters

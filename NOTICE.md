@@ -228,7 +228,7 @@ This software includes third party software subject to the following copyrights:
 | FFmpeg          | Ubuntu `ffmpeg` package (installed at image build time, not version-pinned)                                                                               | NVIDIA COSMOS PREDICT, COSMOS REASON, COSMOS TRANSFER, COSMOS 3, GR00T FINE-TUNING | GPL-2.0-or-later |
 | FFmpeg          | Debian trixie `ffmpeg` package (7.1.x, installed at build time; 7:7.1.5-0+deb13u1 in the reference build)                                                 | VIDEO SOP/BOM EXTRACTION                                                           | GPL-2.0-or-later |
 
-The Mambaforge and Miniforge3 base images also carry the conda packages their installers add, each under its own license (`pkgs/<package>/info/licenses` in the image).
+The Mambaforge and Miniforge3 base images also carry the conda packages their installers add, each under its own license (recorded as SPDX identifiers in `/opt/conda/conda-meta/<package>.json`). Both images are built on Ubuntu, and their Ubuntu base layers carry the OS packages' own licenses.
 
 ### Preview 3D Thumbnail Pipeline
 
