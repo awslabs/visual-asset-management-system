@@ -178,10 +178,23 @@ class TestWorkstationList:
         assert fakes.edh.calls_to("get_desktop_connection") == []
         assert len(fakes.edh.calls) <= 1
 
-    def test_a_desktop_in_error_orphans_the_row_with_a_generic_code(self, monkeypatch):
+    def test_a_running_desktop_in_error_stays_active_and_records_why(self, monkeypatch):
         fakes = install_service_fakes(
             monkeypatch, edh=FakeEdhClient(get_desktop_states=[_desktop(SESSION_OWN, state="error")]))
         fakes.table.query.return_value = {"Items": [own_row()]}
+
+        response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
+
+        item = _items(response)[0]
+        assert (item["state"], item["lastError"]) == ("ACTIVE", None)
+        assert (item["connectionAvailable"], item["connectionUnavailableReason"]) == (False, "DESKTOP_ERROR")
+        assert item["activity"] is None
+
+    def test_a_new_launch_in_error_is_orphaned_with_a_generic_code(self, monkeypatch):
+        fakes = install_service_fakes(
+            monkeypatch, edh=FakeEdhClient(get_desktop_states=[_desktop(SESSION_OWN, state="error")]))
+        fakes.table.query.return_value = {"Items": [
+            own_row(state="CREATING", edhState="placing", connectionAvailable=False)]}
 
         response = fakes.module.lambda_handler(make_event("GET", WORKSTATIONS_PATH), {})
 

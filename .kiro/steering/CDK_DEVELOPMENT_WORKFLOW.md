@@ -970,6 +970,15 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see "Sizing a Container's Work to Its Task" below. The SYSTEM GenAI media image, which has no `xml_mesh_handler`, parses the XML parts of Office files and of the generic zip probe with `defusedxml` and reads every zip member through `backendPipelines/system/genAiMetadata/containers/media/media_extractors/common.read_zip_member`, which refuses, without decompressing it, a member whose central-directory size is above `ZIP_MEMBER_READ_MAX_BYTES` (4 MiB).
 
+### **Reading a File's Header, Not the File**
+
+A pipeline whose facts all live in a file's header (a TIFF's directories) reads that header by ranged GETs of the S3 object at the run's version, never the whole file and never a pixel. `media_extractors/raster.py` is the worked example, over `media_extractors/s3_ranged.RangedS3Reader` (a seekable file object that serves a read from the bytes a previous GET returned and refuses a read past its byte or request bound):
+
+-   Walk the structure with `struct` under limits before a library decodes anything: a directory count, the entries in one directory, the bytes of any single array the library loads whole (tifffile loads the strip and tile offset arrays, strings and `SubIFDs` eagerly), and a total for all of them. Compare every declared count and offset with the object's size before reading or allocating, so a tag that claims gigabytes is refused by arithmetic and not by running out of memory.
+-   A header past a limit is described from what the walk read and flagged (`offsetsTruncated: true`), not failed; a file that is not the format falls back to the `other` class with a warning that names the reason.
+-   Decode the first image with the library only when the walk passed, and hand the library the reader positioned at 0 (tifffile takes a file object's current position as the start of the file). A library's convenience default can invent a value (tifffile reports `nodata` 0 for a file with no `GDAL_NODATA` tag): read the tag itself.
+-   A footprint comes from one shared helper (`media_extractors/geo_reproject.py`): longitude-first axis order, edges densified, an antimeridian crossing cut into a `MultiPolygon`, no footprint for an extent containing a pole, and no footprint (never an assumed WGS84) for a CRS that does not resolve.
+
 ### **Sizing a Container's Work to Its Task**
 
 A Batch/Fargate container sizes its work to the limits of the task it runs in rather than to a tier name or a constant, so it stays inside whichever job size started it. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/resources.py` is the worked example:
@@ -1792,11 +1801,13 @@ export class NewPipelineNestedStack extends NestedStack {
 backendPipelines/newPipeline/
 ├── lambda/
 │   ├── lambda_function.py      # Pipeline orchestration Lambda
-│   └── requirements.txt        # Lambda dependencies
+│   └── requirements.txt        # Only if the Lambda ships its own packages; then also pyproject.toml + uv.lock
 ├── container/
 │   ├── Dockerfile              # Container definition
 │   ├── app.py                  # Container application
-│   ├── requirements.txt        # Container dependencies
+│   ├── pyproject.toml          # uv project: direct Python dependencies
+│   ├── uv.lock                 # uv lock; audited by the python-dependency-audit CI job
+│   ├── requirements.txt        # uv export of uv.lock; the Dockerfile pip-installs it
 │   └── scripts/                # Processing scripts
 └── README.md                   # Pipeline documentation
 ```
@@ -2070,7 +2081,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
     Which flags belong where is read from the source, and the two lists below are asserted against it by `infra/test/platform/steeringVectorSearchRelease.test.ts` (the block anchors are shared with `infra/test/security/vpcEndpointsAndAuthGrants.test.ts`):
 
-    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
+    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useCogConversion`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
 
     Private-subnet flags (all three blocks): `useGenAiCadStepAgent.runtime`, `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
 
@@ -2113,6 +2124,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 16. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 17. **A Feature Tracks Its Own Workflow Runs; Core Never Names a Pipeline** (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" and `infra/CLAUDE.md`): A feature that runs a workflow tracks it by storing the `workflowExecutionId` on its own record and reading the run status from the existing execution tracking (execution rows, read-time reconcile, the status-change rule) when its own record is read; it does not register a callback with the workflow core. Core workflow code never names or calls a specific pipeline. Clean up a feature's leftover artefacts with S3 lifecycle rules (e.g. abort incomplete multipart uploads) rather than a terminal hook. A system run's trigger value is the feature's own `System-<Identifier>` string (format checked by `systemPipelines.is_system_trigger`), never a value added to a core list; `backend/tests/handlers/workflows/test_system_pipeline_hooks.py` fails when `lambdaBuilder/workflowFunctions.ts` or the backend workflow core names a feature-specific trigger.
+18. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`. (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" item 22)
 
 #### **Pipeline Configuration Rules**
 

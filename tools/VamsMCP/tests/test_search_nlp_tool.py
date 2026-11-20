@@ -88,7 +88,7 @@ def test_search_nlp_file_class_ids_match_the_backend_classifier():
     phrases = re.search(r"FILE_CLASS_PHRASES: Dict\[str, str\] = \{(.*?)\n\}", backend_source, re.S)
     assert phrases, "FILE_CLASS_PHRASES not found in the backend classifier module"
     backend_ids = re.findall(r'^\s+"([a-z0-9]+)":', phrases.group(1), re.M)
-    assert len(backend_ids) == 14
+    assert len(backend_ids) == 15
     assert list(server._NLP_FILE_CLASSES) == backend_ids
     doc = " ".join(_docstring_of("search_nlp").split())  # the list wraps across docstring lines
     assert ", ".join(backend_ids) in doc, "the docstring must list the exact ids an agent may pass"

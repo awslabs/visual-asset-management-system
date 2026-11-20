@@ -32,6 +32,8 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 PIPELINES = (
     ("splatToolbox", "backendPipelines/3dRecon/splatToolbox",
      "infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct.ts"),
+    ("cogConvert", "backendPipelines/conversion/cogConvert",
+     "infra/lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct.ts"),
     ("coordinateTransform", "backendPipelines/conversion/coordinateTransform",
      "infra/lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/"
      "coordinateTransform-construct.ts"),
