@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import re
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from common.timestamps import utc_now
 from typing import Dict, List, Tuple, Optional, Any
@@ -880,6 +881,17 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     return deleted_files
 
 
+# Answers for a delete Amazon S3 does not complete. Generic: they name no key, bucket or path.
+FILE_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting file: the file could not be fully deleted from the asset's storage. Check that VAMS "
+    "can delete objects in the asset's storage bucket (its permissions and any object lock), then try "
+    "again. The file and its previews were kept.")
+PREFIX_DELETE_INCOMPLETE_MESSAGE = (
+    "Error deleting files: the files under the prefix could not all be deleted from the asset's storage. "
+    "Check that VAMS can delete objects in the asset's storage bucket (its permissions and any object "
+    "lock), then try again. The remaining files were kept.")
+
+
 class S3PrefixDeleteIncomplete(Exception):
     """A prefix delete left at least one object version or delete marker in place.
 
@@ -908,7 +920,8 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
 
     Raises:
         S3PrefixDeleteIncomplete: The prefix could not be listed, or a key keeps a version or delete
-            marker. It names the keys that were deleted and the keys that were not.
+            marker. It names the keys that were deleted and the keys that were not. A bucket that does
+            not exist is an empty listing, not a failure.
     """
     # Collect unique keys across all pages (versions and delete markers)
     keys_to_delete = []
@@ -926,6 +939,13 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
                 if key not in processed_keys:
                     processed_keys.add(key)
                     keys_to_delete.append(key)
+    except ClientError as e:
+        # A bucket that no longer exists holds nothing, so there is nothing left to delete
+        if e.response.get('Error', {}).get('Code') == 'NoSuchBucket':
+            logger.warning(f"Bucket {bucket} does not exist, so nothing is left to delete under prefix {prefix}")
+            return []
+        logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
+        raise S3PrefixDeleteIncomplete([], []) from e
     except Exception as e:
         logger.exception(f"Error listing object versions under prefix {prefix}: {e}")
         raise S3PrefixDeleteIncomplete([], []) from e
@@ -2244,6 +2264,82 @@ def delete_file_version_records(databaseId: str, assetId: str, file_paths: list)
     return deleted_count
 
 
+def delete_files_metadata(databaseId: str, assetId: str, relative_file_paths: List[str]) -> int:
+    """Delete the metadata and attributes of several files of one asset, in batches.
+
+    Each table's rows of the asset are read once from its ``DatabaseIdAssetIdIndex`` (paged to
+    exhaustion), and the rows of the given files are batch-deleted, so the cost follows the asset's
+    rows instead of two queries per file. Folder paths and an empty path (the asset's own metadata)
+    are skipped. Failures are logged, not raised.
+
+    Args:
+        databaseId: The database ID
+        assetId: The asset ID
+        relative_file_paths: Asset-relative file paths, with or without a leading slash
+
+    Returns:
+        Number of rows deleted
+    """
+    composite_keys = set()
+    for path in relative_file_paths or []:
+        path = (path or '').strip().lstrip('/')
+        if path and not path.endswith('/'):
+            composite_keys.add(f"{databaseId}:{assetId}:/{path}")
+    if not composite_keys:
+        return 0
+
+    deleted_count = 0
+    for table, row_key in ((asset_file_metadata_table, 'metadataKey'), (file_attribute_table, 'attributeKey')):
+        if not table:
+            continue
+        try:
+            items = query_all_items(
+                table,
+                IndexName='DatabaseIdAssetIdIndex',
+                KeyConditionExpression=Key('databaseId:assetId').eq(f"{databaseId}:{assetId}")
+            )
+            with table.batch_writer() as batch:
+                for item in items:
+                    file_key = item.get('databaseId:assetId:filePath')
+                    if file_key in composite_keys and row_key in item:
+                        batch.delete_item(Key={row_key: item[row_key], 'databaseId:assetId:filePath': file_key})
+                        deleted_count += 1
+        except Exception as e:
+            logger.warning(f"Error deleting file {row_key} rows for {databaseId}:{assetId}: {e}")
+
+    logger.info(f"Deleted {deleted_count} metadata and attribute row(s) for {len(composite_keys)} file(s) "
+                f"in {databaseId}:{assetId}")
+    return deleted_count
+
+
+def delete_auxiliary_files_of_keys(databaseId: str, location: str, keys: List[str], kept_keys: List[str]) -> None:
+    """Delete the auxiliary data of deleted files, keeping the data of the files that remain.
+
+    Each file's data sits under its own prefix (``aux_file_base``). A deleted file whose prefix also
+    holds the data of a kept file (a file named like a folder that still holds files) keeps it. The
+    deletes run on the S3 worker pool and log their failures.
+
+    Args:
+        databaseId: The database ID owning the asset
+        location: The asset location key the files belong to
+        keys: Full S3 keys of the files whose every version is gone
+        kept_keys: Full S3 keys that still have a version or delete marker
+    """
+    kept_bases = sorted(aux_file_base(databaseId, location, key) for key in kept_keys or [] if not key.endswith('/'))
+
+    def holds_kept_data(prefix):
+        index = bisect_left(kept_bases, prefix)
+        return index < len(kept_bases) and kept_bases[index].startswith(prefix)
+
+    prefixes = sorted({aux_file_base(databaseId, location, key) for key in keys or [] if not key.endswith('/')})
+    prefixes = [prefix for prefix in prefixes if not holds_kept_data(prefix)]
+    if not prefixes:
+        return
+
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_S3_WORKERS, len(prefixes))) as executor:
+        list(executor.map(delete_assetAuxiliary_files, prefixes))
+
+
 def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, confirm_permanent_delete: bool, claims_and_roles: Dict) -> FileOperationResponseModel:
     """Permanently delete a file or files under a prefix
     
@@ -2335,7 +2431,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     if is_prefix:
         # Delete all files under prefix including all versions; a partial delete still clears the
-        # records of the files it removed, then fails
+        # records and auxiliary data of the files it removed, then fails
         try:
             deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder)
         except S3PrefixDeleteIncomplete as e:
@@ -2345,22 +2441,26 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         # Delete aux files under prefix if they exist; the files that remain keep theirs
         if incomplete is None:
             delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        else:
+            removed_files = [key for key in deleted_keys if contains(base_key, key)]
+            delete_auxiliary_files_of_keys(databaseId, base_key, removed_files, incomplete.failed_keys)
         
-        # Convert full keys to relative paths and delete metadata
+        # Convert full keys to relative paths and delete the metadata of non-folder files
         for key in deleted_keys:
             if contains(base_key, key):
-                relative_path = _relative_to_location(base_key, key).lstrip('/')
-                affected_files.append(relative_path)
-                
-                # Delete metadata for non-folder files
-                if not key.endswith('/'):
-                    delete_file_metadata(databaseId, assetId, relative_path)
+                affected_files.append(_relative_to_location(base_key, key).lstrip('/'))
+        delete_files_metadata(databaseId, assetId, affected_files)
     else:
         # Check if this is a preview file - don't allow direct operations on preview files
         if is_preview_file(file_path):
             raise VAMSGeneralErrorResponse(f"Cannot directly delete preview files. Delete the base file instead.")
             
-        # For base files, also delete any associated preview files the asset holds
+        # Delete the main file including all versions; when S3 keeps a version, its previews and
+        # derived data stay with it
+        if not delete_s3_object_all_versions(bucket, full_key):
+            raise VAMSGeneralErrorResponse(FILE_DELETE_INCOMPLETE_MESSAGE)
+
+        # Also delete any associated preview files the asset holds
         preview_files = [preview_file for preview_file in find_preview_files_for_base(bucket, full_key)
                          if contains(base_key, preview_file)]
         for preview_file in preview_files:
@@ -2371,14 +2471,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 affected_files.append(rel_preview_path)
                 logger.info(f"Deleted preview file: {rel_preview_path}")
         
-        # Delete the main file including all versions
-        success = delete_s3_object_all_versions(bucket, full_key)
-
         # Delete aux files if they exist
         delete_assetAuxiliary_files(aux_file_base(databaseId, base_key, full_key))
-        
-        if not success:
-            raise VAMSGeneralErrorResponse(f"Failed to delete file.")
         
         affected_files.append(file_path)
         
@@ -2391,8 +2485,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     delete_file_version_records(databaseId, assetId, affected_files)
 
     if incomplete is not None:
-        raise VAMSGeneralErrorResponse("Error deleting files: not every file under the prefix could be deleted "
-                                       "from Amazon S3. The remaining files were kept, so the delete can be retried.")
+        raise VAMSGeneralErrorResponse(PREFIX_DELETE_INCOMPLETE_MESSAGE)
 
     # Send email for asset file change
     send_subscription_email(databaseId, assetId)

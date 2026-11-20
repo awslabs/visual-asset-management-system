@@ -23,7 +23,7 @@ from handlers.auth import request_to_claims
 from handlers.assets.assetCount import update_asset_count
 from handlers.assets.assetFiles import (
     delete_s3_prefix_all_versions, aux_bucket_asset_file_base, S3PrefixDeleteIncomplete,
-    delete_file_metadata, delete_file_version_records,
+    delete_files_metadata, delete_file_version_records, delete_auxiliary_files_of_keys,
 )
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
@@ -1724,18 +1724,25 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
             continue
 
 
+# The answer to a permanent delete Amazon S3 does not complete. Generic: it names no key or bucket.
+ASSET_DELETE_INCOMPLETE_MESSAGE = (
+    "Error permanently deleting asset: the asset's storage could not be fully deleted. Check that VAMS "
+    "can delete objects in the asset's storage bucket (its permissions and any object lock), then try "
+    "again. The asset and its remaining files were kept.")
+
+
 def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id, asset_id, deleted_items):
     """Delete every object version and delete marker in the asset's file and preview locations.
 
     Runs before any record of the asset is removed. When S3 keeps a version or delete marker, the
     files whose every version is gone lose their file records (metadata, attributes and version
-    snapshot rows, as a file delete removes), the asset keeps everything else, and the delete
-    raises so it can be retried. A path that a kept key still names (a single-file asset's shadowed
-    companion entry names its object's path) keeps its records. The auxiliary files are deleted only
-    once every file is gone.
+    snapshot rows, as a file delete removes) and their auxiliary data, the asset keeps everything
+    else, and the delete raises so it can be retried. Each key has its own asset-relative path, so a
+    kept file keeps its records. The records are removed in batches, not one file at a time.
     """
     location = None
-    removed_keys, kept_keys, complete = [], [], True
+    removed_keys, kept_keys = [], []
+    files_complete, complete = True, True
 
     if "assetLocation" in asset and "Key" in asset["assetLocation"]:
         location = asset["assetLocation"]["Key"]
@@ -1744,11 +1751,12 @@ def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id
             try:
                 removed_keys = delete_s3_prefix_all_versions(bucket_name, location, location=location)
             except S3PrefixDeleteIncomplete as incomplete:
-                removed_keys, kept_keys, complete = incomplete.deleted_keys, incomplete.failed_keys, False
+                removed_keys, kept_keys = incomplete.deleted_keys, incomplete.failed_keys
+                files_complete = complete = False
             deleted_items["s3_objects"].extend(removed_keys)
 
             # Also delete any auxiliary files
-            if complete:
+            if files_complete:
                 delete_assetAuxiliary_files(database_id, asset["assetLocation"])
 
     if complete and "previewLocation" in asset and "Key" in asset["previewLocation"]:
@@ -1763,21 +1771,16 @@ def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id
     if complete:
         return
 
-    kept_paths = {relative_path_in(location, key) for key in kept_keys}
-    removed_paths = []
-    for key in removed_keys:
-        path = relative_path_in(location, key)
-        if key.endswith('/') or path is None or path in kept_paths:
-            continue
-        delete_file_metadata(database_id, asset_id, path)
-        removed_paths.append(path)
+    removed_files = [key for key in removed_keys if not key.endswith('/') and relative_path_in(location, key)]
+    removed_paths = [relative_path_in(location, key) for key in removed_files]
+    delete_files_metadata(database_id, asset_id, removed_paths)
     delete_file_version_records(database_id, asset_id, removed_paths)
+    if not files_complete:
+        delete_auxiliary_files_of_keys(database_id, location, removed_files, kept_keys)
 
     logger.error(f"Permanent delete of asset {asset_id} stopped with the asset kept: {len(removed_keys)} S3 "
                  f"key(s) deleted, {len(kept_keys)} kept, {len(removed_paths)} file record(s) removed")
-    raise VAMSGeneralErrorResponse("Error permanently deleting asset: not every file could be deleted from "
-                                   "Amazon S3. The asset and its remaining files were kept, so the delete "
-                                   "can be retried.")
+    raise VAMSGeneralErrorResponse(ASSET_DELETE_INCOMPLETE_MESSAGE)
 
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
