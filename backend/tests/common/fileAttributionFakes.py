@@ -91,8 +91,12 @@ class AttributionAssetTable:
                    if r.get(al.LOCATION_BUCKET_ATTRIBUTE) == values[':b'] and r.get(al.LOCATION_KEY_ATTRIBUTE)]
         if 'begins_with' in kwargs['KeyConditionExpression']:
             matches = [r for r in indexed if r[al.LOCATION_KEY_ATTRIBUTE].startswith(values[':p'])]
-        else:
+        elif ':k' in values:
             matches = [r for r in indexed if r[al.LOCATION_KEY_ATTRIBUTE] == values[':k']]
+        else:
+            # The whole partition of one bucket (a bulk load)
+            assert kwargs['KeyConditionExpression'] == '#b = :b', kwargs
+            matches = indexed
         matches.sort(key=lambda r: (r[al.LOCATION_KEY_ATTRIBUTE], r['databaseId'], r['assetId']))
         projected = [{k: r[k] for k in ('databaseId', 'assetId', 'bucketId', al.LOCATION_BUCKET_ATTRIBUTE,
                                         al.LOCATION_KEY_ATTRIBUTE)} for r in matches]

@@ -519,6 +519,62 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
     return conflicts
 
 
+class BucketLocations:
+    """Every index row of one bucket, held in memory for bulk attribution (a reindex walk).
+
+    `owner(key)` answers like `resolve_owner` without a read per key: the deepest candidate location
+    holding a row that `contains` the key wins, a live row wins over an archived one there, two rows of
+    the chosen state on one location answer AMBIGUOUS, and a key with too many candidates answers
+    TOO_DEEP. The rows are not confirmed against the table; a bulk walk reads a snapshot.
+    """
+
+    def __init__(self, entries):
+        self._by_location: Dict[str, List[LocationEntry]] = {}
+        for entry in entries:
+            self._by_location.setdefault(entry.location, []).append(entry)
+
+    def __len__(self) -> int:
+        return sum(len(entries) for entries in self._by_location.values())
+
+    def owner(self, object_key: Optional[str], include_archived: bool = False) -> Resolution:
+        key = normalize_location(object_key)
+        candidates = candidate_locations(key)
+        if not candidates:
+            return Resolution(RESOLVED_NOT_FOUND)
+        if len(candidates) > MAX_CANDIDATE_LOCATIONS:
+            return Resolution(RESOLVED_TOO_DEEP)
+        for location in candidates:
+            if not contains(location, key):
+                continue
+            entries = [e for e in self._by_location.get(location, ()) if include_archived or not e.archived]
+            if not entries:
+                continue
+            live = [e for e in entries if not e.archived]
+            chosen = live or entries
+            if len(chosen) > 1:
+                return Resolution(RESOLVED_AMBIGUOUS, candidates=tuple(chosen))
+            return Resolution(RESOLVED_FOUND, entry=chosen[0])
+        return Resolution(RESOLVED_NOT_FOUND)
+
+
+def load_bucket_locations(table, bucket: str) -> BucketLocations:
+    """Every index row of `bucket` (one Query on its `AssetLocationGSI` partition, paged on the
+    presence of LastEvaluatedKey to the end), live and archived, for in-memory attribution.
+    Callers must not act on it before `index_ready()` is True."""
+    if not bucket:
+        return BucketLocations(())
+    query_kwargs = _index_query_kwargs(table.name, '#b = :b', {':b': bucket})
+    query_kwargs['ExpressionAttributeNames'] = {'#b': LOCATION_BUCKET_ATTRIBUTE}
+    entries: List[LocationEntry] = []
+    client = table.meta.client
+    while True:
+        response = client.query(**query_kwargs)
+        entries.extend(_entry_from_item(item) for item in response.get('Items', []))
+        if 'LastEvaluatedKey' not in response:
+            return BucketLocations(entries)
+        query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
 #######################
 # Readiness
 #######################
