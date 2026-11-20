@@ -930,6 +930,12 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useNvidiaGr00t.enabled"),
     },
     {
+        id: "vpc-required-image-to-3d",
+        label: "pipelines.useImageTo3d",
+        fieldPaths: ["app.pipelines.useImageTo3d.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useImageTo3d.enabled"),
+    },
+    {
         id: "vpc-required-coordinate-transform",
         label: "pipelines.useConversionCoordinateTransform",
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
