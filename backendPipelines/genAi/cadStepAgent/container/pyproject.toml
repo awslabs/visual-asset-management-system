@@ -18,3 +18,8 @@ dependencies = [
 package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
+
+# mcp 2.1.1 carries five advisories (CVE-2026-59951, CVE-2026-116684, CVE-2026-116685, CVE-2026-116686,
+# CVE-2026-115563), fixed in 1.30.0 and 2.2.0. strands-agents 1.57.0 requires mcp below 2.2, so the lock
+# takes the 1.x fix. Remove when strands-agents is moved to a release that allows mcp 2.2 or later.
+constraint-dependencies = ["mcp>=1.30.0,<2"]
