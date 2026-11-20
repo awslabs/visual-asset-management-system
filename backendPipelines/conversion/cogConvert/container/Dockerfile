@@ -5,8 +5,8 @@
 # and the runtime stage is a slim Debian (trixie-slim) that receives only /opt/cog, so conda, its own Python and
 # its crates never reach the image that runs on untrusted TIFFs.
 # The GDAL stack is NOT solved at build time: conda-explicit.txt lists every package by URL and SHA-256, so two
-# builds of one commit install the same bytes. Python packages come from requirements.lock
-# (uv pip compile --generate-hashes) with --require-hashes.
+# builds of one commit install the same bytes. Python packages come from requirements.txt
+# (the hashed export of uv.lock) with --require-hashes.
 
 FROM --platform=linux/amd64 condaforge/miniforge3:26.5.3-0@sha256:66f4b7d5dd07883181ef5370f44b43857008a61e8f5b9bcc07f3f3ee027f7e63 AS build
 
@@ -17,12 +17,12 @@ RUN apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY ./conda-explicit.txt ./requirements.lock ./
+COPY ./conda-explicit.txt ./requirements.txt ./
 # Exact packages, no solver. The environment sits at the path the runtime stage copies it from.
 # The package manager only installs the lock; it is removed so the runtime does not ship it.
 # Each conda package's license files are copied to /opt/cog/licenses before the package cache is cleaned.
 RUN conda create --yes --prefix /opt/cog --file conda-explicit.txt \
-    && /opt/cog/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock \
+    && /opt/cog/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.txt \
     && /opt/cog/bin/python -m pip uninstall -y pip \
     && mkdir -p /opt/cog/licenses \
     && for d in /opt/conda/pkgs/*/info/licenses; do \

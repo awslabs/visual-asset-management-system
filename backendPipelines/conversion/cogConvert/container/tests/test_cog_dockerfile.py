@@ -72,8 +72,10 @@ class TestDockerfile:
 
     def test_python_packages_install_from_the_hash_lock(self):
         assert "--require-hashes" in DOCKERFILE.read_text()
-        lock = (CONTAINER / "requirements.lock").read_text()
+        lock = (CONTAINER / "requirements.txt").read_text()
         assert "--hash=sha256:" in lock and "boto3==" in lock
+        assert (CONTAINER / "uv.lock").is_file() and not (CONTAINER / "requirements.lock").exists()
+        assert "-r requirements.txt" in DOCKERFILE.read_text()
 
     def test_the_package_manager_is_removed_in_the_builder_stage(self):
         assert "pip uninstall -y pip" in " ".join(_instructions())
