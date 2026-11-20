@@ -830,8 +830,8 @@ def _desktop_for_row(row, desktops):
 
 def _start_return(row, changed):
     """What a start EDH accepted that ended stopped records (``start_returned_to_stopped``): the code its instance's
-    EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``); nothing for a shutdown a user or
-    the instance initiated, or for any other change. A read of the instance that fails is logged by the error's type
+    EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``); nothing for a stop or hibernation
+    a user or the instance initiated, or for any other change. A read of the instance that fails is logged by the error's type
     and records the start failed without an AWS error code."""
     if not start_returned_to_stopped(row, changed):
         return {}

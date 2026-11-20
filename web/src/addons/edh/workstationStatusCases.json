@@ -75,6 +75,27 @@
             "startFailureDetail": null
         },
         {
+            "name": "a stalled start EDH then reports in error, which has run and so keeps both: the start stall's badge and sentence, the desktop error's Connect sentence",
+            "record": {
+                "state": "CREATING",
+                "edhState": "error",
+                "activity": null,
+                "lastError": "START_STALLED",
+                "startFailure": {
+                    "observedAt": "2026-10-24T11:40:00Z"
+                },
+                "sessionId": "s-1",
+                "connectionAvailable": false,
+                "connectionUnavailableReason": "DESKTOP_ERROR",
+                "instanceType": "g5.16xlarge"
+            },
+            "badge": "Start stalled",
+            "state": "STALLED",
+            "startFailureMessage": "EDH has not finished starting this workstation after 30 minutes. Stop it, then start it again; if it stalls again, ask your administrator.",
+            "startFailureDetail": null,
+            "connectionUnavailableMessage": "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect."
+        },
+        {
             "name": "a new launch EDH has not placed after 3 hours",
             "record": {
                 "state": "CREATING",

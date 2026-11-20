@@ -92,11 +92,21 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
             CASES.filter(
                 (c) =>
                     c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
-                    c.record.lastError !== "LAUNCH_STALLED"
+                    c.record.lastError !== "LAUNCH_STALLED" &&
+                    c.record.lastError !== "START_STALLED"
             )
                 .map((c) => c.record.state)
                 .sort()
         ).toEqual(["ACTIVE", "CREATING", "STOPPED"]);
+        // A stalled start EDH then reports in error has run, so it keeps both codes: the start
+        // stall's badge and the desktop error's Connect sentence.
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError === "START_STALLED"
+            ).map((c) => [c.badge, c.connectionUnavailableMessage !== undefined])
+        ).toEqual([["Start stalled", true]]);
         // Both at once: a stalled launch EDH reports in error is orphaned, and a record carrying both
         // codes anyway reads as the launch stall.
         expect(

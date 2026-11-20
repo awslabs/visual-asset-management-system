@@ -465,8 +465,8 @@ def _start_return(row: Dict[str, Any], updates: Dict[str, Any], now: datetime) -
     """The attributes that record why a start EDH accepted ended stopped: a row this pass moves from CREATING to
     STOPPED while it carries ``startAcceptedAt`` and no stop through VAMS (``start_returned_to_stopped``) records the
     code its instance's EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``), in the pass's
-    own conditional write; nothing for a shutdown a user or the instance initiated, or for any other row. The row
-    stays STOPPED, keeps its disk and may be started again."""
+    own conditional write; nothing for a stop or hibernation a user or the instance initiated, or for any other row.
+    The row stays STOPPED, keeps its disk and may be started again."""
     if not start_returned_to_stopped(row, updates):
         return {}
     code, zone = _instance_state_reason(row, updates.get("instanceId") or row.get("instanceId"))

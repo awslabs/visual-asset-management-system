@@ -121,7 +121,8 @@ CAPACITY_RESERVATION_FALLBACK_REASONS = (CAPACITY_RESERVATION_FALLBACK_FULL, CAP
 START_FAILURE_FIELD = "startFailure"
 # Amazon EC2's state reason codes (``StateReason.Code`` of a DescribeInstances answer) that decide what a start EDH
 # accepted records when EC2 returns the instance to stopped: no capacity for the instance type in its Availability
-# Zone, and the shutdowns a user (a stop through EC2 or EDH) or the instance itself initiated, which are no failure.
+# Zone, and the stops and the hibernation a user (a stop through EC2 or EDH) or the instance itself initiated, which
+# are no failure.
 # Any other code records the start failed with that code.
 EC2_STATE_REASON_INSUFFICIENT_CAPACITY = "Server.InsufficientInstanceCapacity"
 EC2_STATE_REASONS_NOT_A_FAILURE = frozenset({
@@ -807,8 +808,9 @@ def start_return_attributes(row, state_reason_code, availability_zone, now) -> D
     instance's state reason: ``CAPACITY_UNAVAILABLE`` for ``Server.InsufficientInstanceCapacity``
     (``RESERVATION_FULL`` on a row launched into a capacity reservation, ``capacityReservationId``, as a failed
     launch of one is classified), ``START_FAILED`` for any other code and when the reason could not be read, each
-    with a ``startFailure`` naming the code and the Availability Zone when known; nothing for a shutdown a user or the
-    instance initiated (``EC2_STATE_REASONS_NOT_A_FAILURE``). The desktop keeps its disk and may be started again."""
+    with a ``startFailure`` naming the code and the Availability Zone when known; nothing for a stop or hibernation a
+    user or the instance initiated (``EC2_STATE_REASONS_NOT_A_FAILURE``). The desktop keeps its disk and may be started
+    again."""
     code = (state_reason_code if isinstance(state_reason_code, str)
             and AWS_ERROR_CODE_PATTERN.fullmatch(state_reason_code) else None)
     if code in EC2_STATE_REASONS_NOT_A_FAILURE:

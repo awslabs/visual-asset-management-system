@@ -51,7 +51,9 @@ def _refusing_client(monkeypatch, body):
 
 
 IN_ERROR = [c for c in CASES if c["record"].get("connectionUnavailableReason") == "DESKTOP_ERROR"
-            and c["record"].get("lastError") != "LAUNCH_STALLED"]
+            and c["record"].get("lastError") not in ("LAUNCH_STALLED", "START_STALLED")]
+START_STALLED_IN_ERROR = [c for c in CASES if c["record"].get("connectionUnavailableReason") == "DESKTOP_ERROR"
+                          and c["record"].get("lastError") == "START_STALLED"]
 BOTH = [c for c in CASES if c["record"].get("connectionUnavailableReason") == "DESKTOP_ERROR"
         and c["record"].get("lastError") == "LAUNCH_STALLED"]
 
@@ -63,6 +65,26 @@ def test_the_shared_fixture_has_the_cases():
     assert {case["connectionUnavailableMessage"] for case in IN_ERROR} == {SENTENCE}
     assert [(case["badge"], case["state"]) for case in BOTH] == [("Launch stalled", "STALLED")]
     assert "connectionUnavailableMessage" not in BOTH[0]
+    assert [(case["badge"], case["state"], case["connectionUnavailableMessage"])
+            for case in START_STALLED_IN_ERROR] == [("Start stalled", "STALLED", SENTENCE)]
+
+
+def test_a_stalled_start_edh_then_reports_in_error_shows_both_sentences(cli_runner, generic_command_mocks):
+    """A started desktop has run, so EDH's error keeps it CREATING with DESKTOP_ERROR and its START_STALLED: `get`
+    reads STALLED with the stall's Start Failure sentence, and prints the desktop error's sentence as Connection."""
+    case = START_STALLED_IN_ERROR[0]
+    record = {"bootstrapId": "b-1", "userId": "user@example.com", "edhUid": "vabcdefghij23456",
+              "name": "Render-box", "imageId": "12", "osFamily": "linux", "createdAt": "2026-11-19T10:00:00Z",
+              "updatedAt": "2026-11-19T15:19:13Z", "launchAttempts": 1, **case["record"]}
+    with generic_command_mocks('addon.edh') as mocks:
+        mocks['api_client'].get_edh_workstation.return_value = record
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1'])
+        assert result.exit_code == 0, result.output
+        lines = result.output.splitlines()
+        assert "  State:           STALLED" in lines
+        assert f"  Start Failure:   {case['startFailureMessage']}" in lines
+        assert lines[lines.index("  Connectable:     False") + 1] == f"  Connection:      {SENTENCE}"
+        assert not any("vamscli edh workstation delete" in line for line in lines)
 
 
 def test_a_launch_stall_outranks_a_desktop_error_on_one_record(cli_runner, generic_command_mocks):
