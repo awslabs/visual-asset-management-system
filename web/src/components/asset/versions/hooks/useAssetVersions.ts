@@ -67,7 +67,7 @@ export const useAssetVersions = (databaseId: string, assetId: string) => {
                 setAllVersions(response.versions);
             } else {
                 console.error("Failed to load asset versions:", response);
-                setError("Failed to load asset versions");
+                setError(typeof response === "string" ? response : "Failed to load asset versions");
             }
         } catch (err) {
             setError("An error occurred while loading versions");

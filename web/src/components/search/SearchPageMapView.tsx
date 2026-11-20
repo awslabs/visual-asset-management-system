@@ -19,6 +19,7 @@ import { SearchPageViewProps } from "./SearchPageTypes";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Link from "@cloudscape-design/components/link";
+import Toggle from "@cloudscape-design/components/toggle";
 import Pagination from "@cloudscape-design/components/pagination";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Popover from "@cloudscape-design/components/popover";
@@ -46,6 +47,27 @@ import {
     popupOffsetsFor,
 } from "./utils/mapPopupPlacement";
 import { formatFileSizeForDisplay } from "../../common/utils/fileSize";
+import { shownRasterKey } from "./SearchRasterLayers.keys";
+import type { SearchRasterRequest } from "./SearchRasterLayers";
+
+// Loaded on the first "Show raster", so the COG reader is not part of the Search page bundle.
+const SearchRasterLayers = React.lazy(() => import("./SearchRasterLayers"));
+
+/** A file hit can be shown as a raster when it is a TIFF (a converted .cog.tif included) with a footprint. */
+export function canShowRaster(item: {
+    rectype: string;
+    type: string;
+    fileKey?: string;
+    geoJson?: any;
+}): boolean {
+    return (
+        item.rectype === "file" &&
+        item.type === "geojson" &&
+        !!item.geoJson &&
+        !!item.fileKey &&
+        /\.tiff?$/i.test(item.fileKey)
+    );
+}
 
 interface LocationDataWithDetails {
     id: string;
@@ -269,7 +291,7 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     const isFileSearchMode = state.filters?._rectype?.value === "file";
 
     // Extract location data from search results
-    const locationData: LocationDataWithDetails[] = React.useMemo(() => {
+    const allLocationData: LocationDataWithDetails[] = React.useMemo(() => {
         if (!state.result?.hits?.hits) return [];
 
         const validData: LocationDataWithDetails[] = [];
@@ -324,6 +346,22 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
         );
         return validData;
     }, [state.result, isFileSearchMode]);
+
+    // The "Show raster files" view filter: ON each visit, never stored. Off takes the hits that can be
+    // shown as a raster (their footprints, pins and popups) and every drawn raster off the map; the
+    // API still decides each download.
+    const [showRasterFiles, setShowRasterFiles] = useState(true);
+    const rasterHitCount = React.useMemo(
+        () => allLocationData.filter((item) => canShowRaster(item)).length,
+        [allLocationData]
+    );
+    const locationData: LocationDataWithDetails[] = React.useMemo(
+        () =>
+            showRasterFiles
+                ? allLocationData
+                : allLocationData.filter((item) => !canShowRaster(item)),
+        [allLocationData, showRasterFiles]
+    );
 
     // Reset selected items when location data changes (page change or new search)
     useEffect(() => {
@@ -386,6 +424,31 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     // onLoad, and running again on it, frames those results too. Points and GeoJSON shapes both count,
     // so a page of shapes alone is framed as well (locationDataBounds).
     const [mapLoaded, setMapLoaded] = useState(false);
+    const [rasterRequests, setRasterRequests] = useState<SearchRasterRequest[]>([]);
+    // The hits whose raster is on the map, reported by the raster layers (a layer removed from the
+    // list turns its popup button back to "Show raster").
+    const [shownRasters, setShownRasters] = useState<Set<string>>(new Set());
+    const rasterKeyOf = (item: LocationDataWithDetails) =>
+        item.fileKey
+            ? shownRasterKey({
+                  databaseId: item.databaseId,
+                  assetId: item.assetId,
+                  key: item.fileKey,
+              })
+            : "";
+    const requestRaster = (item: LocationDataWithDetails, action: "show" | "hide") => {
+        const key = item.fileKey;
+        if (!key) return;
+        setRasterRequests((current) => [
+            ...current,
+            {
+                seq: (current[current.length - 1]?.seq ?? 0) + 1,
+                action,
+                file: { databaseId: item.databaseId, assetId: item.assetId, key },
+                sizeBytes: item.fileSize,
+            },
+        ]);
+    };
     useEffect(() => {
         if (!mapLoaded || !mapRef.current) return;
         const bounds = locationDataBounds(locationData);
@@ -464,20 +527,82 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
     return (
         <SpaceBetween direction="vertical" size="m">
             {/* Header with result count */}
-            {getTotalResultCount(state?.result) ? (
-                <Box variant="h2">
-                    {locationData.length} of {formatTotalResultCount(state.result)} result
-                    {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
-                        ? "s"
-                        : ""}{" "}
-                    with location data
-                </Box>
-            ) : (
-                <Box variant="h2">No search results with location data</Box>
-            )}
+            <div
+                data-testid="map-results-title-row"
+                style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px 16px",
+                }}
+            >
+                {getTotalResultCount(state?.result) ? (
+                    <Box variant="h2">
+                        {locationData.length} of {formatTotalResultCount(state.result)} result
+                        {getTotalResultCount(state.result) !== 1 || isTotalLowerBound(state.result)
+                            ? "s"
+                            : ""}{" "}
+                        with location data
+                        {!showRasterFiles && rasterHitCount > 0 && (
+                            <>
+                                {" "}
+                                <Box
+                                    variant="span"
+                                    color="text-body-secondary"
+                                    fontWeight="normal"
+                                    data-testid="map-raster-hidden-count"
+                                >
+                                    ({rasterHitCount} raster file{rasterHitCount !== 1 ? "s" : ""}{" "}
+                                    hidden)
+                                </Box>
+                            </>
+                        )}
+                    </Box>
+                ) : (
+                    <Box variant="h2">No search results with location data</Box>
+                )}
+                {allLocationData.length > 0 && (
+                    <div
+                        data-testid="map-raster-filter"
+                        style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                    >
+                        <Popover
+                            triggerType="custom"
+                            size="large"
+                            position="bottom"
+                            header="Raster files and location data"
+                            dismissButton
+                            content={
+                                <Box data-testid="map-raster-info">
+                                    Footprint boxes and pins come from the <code>location</code> or
+                                    latitude / longitude metadata. GeoTIFF and COG rasters are
+                                    loaded separately: <strong>Show raster</strong> draws the raster
+                                    itself from the file&apos;s own georeferencing tags, not from
+                                    any metadata field.
+                                </Box>
+                            }
+                        >
+                            <Button
+                                variant="inline-icon"
+                                iconName="status-info"
+                                ariaLabel="About raster files on the map"
+                                data-testid="map-raster-info-button"
+                            />
+                        </Popover>
+                        <Toggle
+                            checked={showRasterFiles}
+                            onChange={({ detail }) => setShowRasterFiles(detail.checked)}
+                            data-testid="map-raster-toggle"
+                        >
+                            Show raster files
+                        </Toggle>
+                    </div>
+                )}
+            </div>
 
             {/* Warning when no location data */}
-            {locationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
+            {allLocationData.length === 0 && state?.result?.hits?.total?.value > 0 && (
                 <Box variant="p" color="text-status-warning">
                     No results have valid location data. The map view recognizes the following
                     metadata field types:
@@ -493,6 +618,19 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                             Or individual <strong>latitude</strong>, <strong>longitude</strong>, and
                             optional <strong>altitude</strong> metadata fields (numeric or string
                             values).
+                        </li>
+                        <li data-testid="map-note-raster">
+                            A <strong>GeoTIFF or COG</strong> file whose header carries
+                            georeferencing. With the extraction location option (
+                            <code>EXTRACT_GEO_LOCATION</code>) on, the metadata pipeline writes its
+                            footprint box, reprojected to WGS 84, as its <code>location</code>{" "}
+                            metadata, unless the file already has a location, which is kept. There
+                            is no box for a file with no georeferencing, a user-defined or
+                            unrecognised coordinate system, or an extent that covers a pole, for a
+                            converted <code>&lt;file&gt;.cog.tif</code> whose source sits beside it
+                            (the source&apos;s box stands for both), or with the option off.{" "}
+                            <strong>Show raster</strong> on a result draws the raster from the
+                            file&apos;s own georeferencing tags, not from metadata.
                         </li>
                     </ul>
                 </Box>
@@ -808,6 +946,28 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                                             is what right-click → "Open in new tab" copies, so it
                                             must carry the path so a fresh page load lands on the
                                             correct file inside the file manager. */}
+                                        {/* Overlay the file's raster on this map (GeoTIFF / COG). Access is
+                                            decided by the download route when the raster is requested. */}
+                                        {canShowRaster(selectedItem) && (
+                                            <Button
+                                                iconName="location-pin"
+                                                fullWidth
+                                                onClick={() =>
+                                                    requestRaster(
+                                                        selectedItem,
+                                                        shownRasters.has(rasterKeyOf(selectedItem))
+                                                            ? "hide"
+                                                            : "show"
+                                                    )
+                                                }
+                                                data-testid="search-map-show-raster"
+                                            >
+                                                {shownRasters.has(rasterKeyOf(selectedItem))
+                                                    ? "Hide raster"
+                                                    : "Show raster"}
+                                            </Button>
+                                        )}
+
                                         {selectedItem.rectype === "file" ? (
                                             (() => {
                                                 const filePathQuery = selectedItem.fileKey
@@ -864,6 +1024,17 @@ function SearchPageMapView({ state, dispatch }: SearchPageViewProps) {
                         );
                     })()}
             </Map>
+
+            {rasterRequests.length > 0 && (
+                <React.Suspense fallback={null}>
+                    <SearchRasterLayers
+                        map={mapLoaded ? (mapRef.current?.getMap() as any) ?? null : null}
+                        requests={rasterRequests}
+                        onShownChange={setShownRasters}
+                        hidden={!showRasterFiles}
+                    />
+                </React.Suspense>
+            )}
 
             {/* Informational note about location requirements */}
             <Box variant="p" color="text-body-secondary">

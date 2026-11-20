@@ -138,3 +138,26 @@ class TestAPreviewObjectStartsNothing:
 
     def test_an_ordinary_image_is_not_dropped(self):
         assert wd._should_skip_key("xa1/photos/site.png") is False
+
+
+@pytest.mark.unit
+class TestACogConversionOutputGetsNoMediaPreview:
+    """The COG Conversion pipeline (#1601) writes `<file>.cog.tif` beside its input. The media preview schema
+    excludes `*.cog.tif` (pipeline, workflow and trigger), so the output is not previewed again: the source
+    `.tif` already has a preview and a COG can exceed the preview pixel budget."""
+
+    def test_the_media_schema_excludes_the_cog_output_everywhere(self):
+        bundle = BUNDLES[MEDIA]
+        pipeline = json.loads((bundle / "pipeline.json").read_text())
+        workflow = _workflow(MEDIA)
+        assert pipeline["systemConfig"]["inputFileFilters"]["exclude"] == ["*.cog.tif"]
+        assert workflow["systemConfig"]["inputFileFilters"]["exclude"] == ["*.cog.tif"]
+        assert workflow["triggers"][0]["inputFileFilters"]["exclude"] == ["*.cog.tif"]
+
+    @pytest.mark.parametrize("name", ["/maps/dem.tif.cog.tif", "/maps/dem.tiff.cog.tif"])
+    def test_a_cog_output_starts_only_the_system_genai_workflow(self, name):
+        assert _fired(name) == [SYSTEM_GENAI]
+
+    @pytest.mark.parametrize("name", ["/maps/dem.tif", "/maps/dem.tiff", "/maps/dem.cog.tiff"])
+    def test_the_source_tiff_is_still_previewed(self, name):
+        assert MEDIA in _fired(name)

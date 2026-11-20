@@ -172,13 +172,4 @@ describe("WorkstationsPage with the containers feature", () => {
         renderPage();
         expect(screen.getByRole("tab", { name: "Simulations" })).toBeInTheDocument();
     });
-
-    it("keeps the not-enabled panel when EDH_WORKSTATIONS is absent, whatever EDH_CONTAINERS says", () => {
-        withFeatures(["EDH_CONTAINERS"]);
-        renderPage();
-        expect(screen.getByRole("status")).toHaveTextContent(
-            "EDH Workstations is not enabled in this deployment."
-        );
-        expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    });
 });

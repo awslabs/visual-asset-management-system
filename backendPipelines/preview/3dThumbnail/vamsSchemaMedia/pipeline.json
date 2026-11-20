@@ -45,7 +45,7 @@
                 "*.mts",
                 "*.m2ts"
             ],
-            "exclude": []
+            "exclude": ["*.cog.tif"]
         }
     }
 }

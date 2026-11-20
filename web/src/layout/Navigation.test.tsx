@@ -141,6 +141,23 @@ describe("Navigation", () => {
         expect(screen.queryByText("Your pages are in the profile menu")).not.toBeInTheDocument();
     });
 
+    it("lists Home beside the pages the role may open, although no template grants /", async () => {
+        allowRoutes("/databases");
+        const container = await renderNavigation();
+
+        await waitFor(() => expect(findNavLink(container, "#/databases/")).toBeTruthy());
+        expect(findNavLink(container, "#/")).toBeTruthy();
+    });
+
+    it("announces the could-not-load message as a status", async () => {
+        mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
+        await renderNavigation();
+
+        await waitFor(() =>
+            expect(screen.getByRole("status")).toHaveTextContent("Navigation could not be loaded")
+        );
+    });
+
     it("shows a could-not-load message with Retry when the permission check fails", async () => {
         mockCheckWebRoutesAllowed.mockRejectedValueOnce(new Error("auth/routes failed"));
         allowRoutes("/databases");

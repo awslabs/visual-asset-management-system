@@ -13,7 +13,7 @@ import Modal from "@cloudscape-design/components/modal";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import Select, { SelectProps } from "@cloudscape-design/components/select";
 import SpaceBetween from "@cloudscape-design/components/space-between";
-import { createZipDownload } from "../../services/APIService";
+import { createZipDownload, ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE } from "../../services/APIService";
 import { fetchAllAssetVersions } from "../../services/AssetVersionService";
 import Synonyms from "../../synonyms";
 import {
@@ -350,11 +350,18 @@ export const CreateZipDownloadModal: React.FC<CreateZipDownloadModalProps> = ({
                     automatically.
                 </Alert>
 
-                {submitError && (
-                    <Alert type="error" statusIconAriaLabel="Error">
-                        {submitError}
-                    </Alert>
-                )}
+                {submitError &&
+                    // A create that got no reply may have made the job, so it is a warning, not a
+                    // failure, as an unconfirmed workflow launch is.
+                    (submitError === ZIP_CREATE_OUTCOME_UNKNOWN_MESSAGE ? (
+                        <Alert type="warning" statusIconAriaLabel="Warning">
+                            {submitError}
+                        </Alert>
+                    ) : (
+                        <Alert type="error" statusIconAriaLabel="Error">
+                            {submitError}
+                        </Alert>
+                    ))}
             </SpaceBetween>
         </Modal>
     );

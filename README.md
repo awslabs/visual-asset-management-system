@@ -43,7 +43,7 @@ _Use cases include:_
 ### Key capabilities
 
 -   **Centralized storage** — Manage 3D models, point clouds, CAD files, and media in Amazon S3 with versioning and access control
--   **Interactive visualization** — View assets in the browser with 24 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
+-   **Interactive visualization** — View assets in the browser with 25 built-in viewer plugins (Three.js, Potree, Cesium, USD, Gaussian Splat, and more)
 -   **Automated processing** — Transform assets using configurable pipelines backed by AWS Lambda, Amazon SQS, or Amazon EventBridge, including preview thumbnails for 3D files, images, TGA/TIFF and video
 -   **Intelligent search** — Full-text and metadata search powered by Amazon OpenSearch with map-based geographic views
 -   **Fine-grained permissions** — Attribute-based and role-based access control (ABAC/RBAC) at both API and data entity levels
@@ -63,7 +63,7 @@ _Use cases include:_
 
 ![Architecture](./documentation/diagrams/Commercial-GovCloud-VAMS_Architecture.png)
 
-VAMS deploys as a serverless architecture using AWS CDK with 14 nested CloudFormation stacks. Core services include Amazon API Gateway, AWS Lambda, Amazon DynamoDB, Amazon S3, Amazon OpenSearch, and Amazon Cognito.
+VAMS deploys as a serverless architecture using AWS CDK with 15 core nested CloudFormation stacks. Core services include Amazon API Gateway, AWS Lambda, Amazon DynamoDB, Amazon S3, Amazon OpenSearch, and Amazon Cognito.
 
 ## Quick start
 
@@ -140,7 +140,7 @@ Then open `http://localhost:3000/visual-asset-management-system/` in your browse
 | -------------------- | ------------------------------ | ------------------------ | ------------------------- |
 | **Best for**         | Interactive use, visualization | Automation, scripting    | Custom integrations       |
 | **Asset management** | Visual interface               | Programmatic control     | Full programmatic control |
-| **3D viewing**       | 24 interactive viewers         | N/A                      | N/A                       |
+| **3D viewing**       | 25 interactive viewers         | N/A                      | N/A                       |
 | **Automation**       | Manual                         | Full automation          | Complete control          |
 | **CI/CD**            | Not suitable                   | Designed for integration | Full flexibility          |
 

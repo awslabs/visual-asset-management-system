@@ -130,8 +130,8 @@ describe("Compliance Schemas write actions", () => {
         render(<ComplianceSchemas />);
         await screen.findByText("std");
         expect(screen.queryByRole("button", { name: "Create Schema" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "Sweep" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Edit std" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Sweep std" })).toBeNull();
     });
 
     it("opens a schema read-only from its name for that caller", async () => {
@@ -152,8 +152,8 @@ describe("Compliance Schemas write actions", () => {
         render(<ComplianceSchemas />);
         await screen.findByText("std");
         expect(screen.getByRole("button", { name: "Create Schema" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
-        expect(screen.getByRole("button", { name: "Sweep" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Edit std" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Sweep std" })).toBeInTheDocument();
     });
 
     it("offers nothing while the routes load", async () => {
@@ -169,8 +169,10 @@ describe("Quarantine write actions", () => {
     it("offers no Release or Exception to a caller with read routes only", async () => {
         render(<ComplianceQuarantine />);
         await screen.findByText("quarantined-asset");
-        expect(screen.queryByRole("button", { name: "Release" })).toBeNull();
-        expect(screen.queryByRole("button", { name: "Exception" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Release quarantined-asset" })).toBeNull();
+        expect(
+            screen.queryByRole("button", { name: "Exception for quarantined-asset" })
+        ).toBeNull();
         expect(screen.queryByText("Actions")).toBeNull();
     });
 
@@ -181,8 +183,12 @@ describe("Quarantine write actions", () => {
         ];
         render(<ComplianceQuarantine />);
         await screen.findByText("quarantined-asset");
-        expect(screen.getByRole("button", { name: "Release" })).toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Exception" })).toBeNull();
+        expect(
+            screen.getByRole("button", { name: "Release quarantined-asset" })
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByRole("button", { name: "Exception for quarantined-asset" })
+        ).toBeNull();
     });
 });
 
@@ -192,8 +198,8 @@ describe("Cascade Approvals write actions", () => {
         await screen.findByText("db1");
         // Within the table: the reject dialog (not open) carries its own Reject button.
         const table = within(screen.getByRole("table"));
-        expect(table.queryByRole("button", { name: "Approve" })).toBeNull();
-        expect(table.queryByRole("button", { name: "Reject" })).toBeNull();
+        expect(table.queryByRole("button", { name: /^Approve cascade / })).toBeNull();
+        expect(table.queryByRole("button", { name: /^Reject cascade / })).toBeNull();
     });
 
     it("offers both to a caller who may approve and reject", async () => {
@@ -205,8 +211,8 @@ describe("Cascade Approvals write actions", () => {
         render(<ComplianceCascades />);
         await screen.findByText("db1");
         const table = within(screen.getByRole("table"));
-        expect(table.getByRole("button", { name: "Approve" })).toBeInTheDocument();
-        expect(table.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+        expect(table.getByRole("button", { name: /^Approve cascade / })).toBeInTheDocument();
+        expect(table.getByRole("button", { name: /^Reject cascade / })).toBeInTheDocument();
     });
 });
 

@@ -29,6 +29,7 @@ import {
     usePrefetchPipelineTemplates,
 } from "../api/queries";
 import { resolvePipelineParams } from "./resolveTemplate";
+import { LAUNCH_OUTCOME_UNKNOWN_MESSAGE } from "../api/executions";
 import type {
     Workflow,
     WorkflowSystemConfig,
@@ -838,6 +839,11 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
             // raise a toast, so it is visible even if the user has scrolled away from the banner.
             const message = toastErrorMessage(err, "Execution failed.");
             setLaunchError(message);
+            // A launch that got no reply may have started a run, so it is not reported as failed.
+            if (message === LAUNCH_OUTCOME_UNKNOWN_MESSAGE) {
+                toast.warning("Launch not confirmed", { description: message });
+                return;
+            }
             // The toast is a single line of text, so several reasons are joined with punctuation —
             // the line breaks the inline panel renders as list items would collapse to spaces here
             // and run the reasons together. The panel carries the readable form.
@@ -1027,8 +1033,19 @@ export const ExecuteWizardBody: React.FC<ExecuteWizardBodyProps> = ({
                         <div className="min-w-0 flex-1 space-y-4">
                             {renderStage()}
                             {launchError && (
-                                <Callout tone="error" role="alert">
-                                    <strong>Execution failed:</strong>
+                                <Callout
+                                    tone={
+                                        launchError === LAUNCH_OUTCOME_UNKNOWN_MESSAGE
+                                            ? "warning"
+                                            : "error"
+                                    }
+                                    role="alert"
+                                >
+                                    <strong>
+                                        {launchError === LAUNCH_OUTCOME_UNKNOWN_MESSAGE
+                                            ? "Launch not confirmed:"
+                                            : "Execution failed:"}
+                                    </strong>
                                     {/* One entry per rejection reason — a multi-step launch is
                                         rejected per pipeline, and run together the reasons read as
                                         one sentence. */}

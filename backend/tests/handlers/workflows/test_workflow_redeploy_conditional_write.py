@@ -105,7 +105,8 @@ def _deploy_against(sfn):
     Records the existing_arn of every call."""
     calls = []
 
-    def _deploy(database_id, workflow_id, ref_records, existing_arn="", job_names=None):
+    def _deploy(database_id, workflow_id, ref_records, existing_arn="", job_names=None,
+                recorded_version_arn=""):
         calls.append(existing_arn)
         sfn.describe_state_machine(stateMachineArn=existing_arn)
         return existing_arn, job_names or ["abcde-pipe1"], f"{existing_arn}:{3 + len(calls)}"

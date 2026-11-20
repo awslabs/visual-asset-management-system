@@ -524,7 +524,7 @@ describe("one number format for every count (D165)", () => {
                 skippedNotAuthorized: 1002,
             } as any)
         ).toBe(
-            "Evaluation triggered for 100 assets; 1,100 newly registered under the database schema; 1,001 archived, not evaluated; 1,002 skipped (you may not read them); 2,400 not reached yet; choose Evaluate All again."
+            "Evaluation triggered for 100 assets; 1,100 newly registered under the database schema; 1,001 archived, not evaluated; 1,002 skipped (you may not read them); at least 2,400 not reached yet; choose Evaluate All again."
         );
     });
 
@@ -547,5 +547,36 @@ describe("one number format for every count (D165)", () => {
         expect(page).toContain("1,001");
         expect(page).toContain("(1 of 3,000)");
         expect(page).not.toMatch(/\b(3000|1800|1200|1001)\b/);
+    });
+});
+
+describe("a binding read refused while a change is applied", () => {
+    it("stops reading the binding and offers Retry", async () => {
+        mockAllowed = BINDER;
+        service()
+            .getDatabaseBindings.mockResolvedValueOnce(bindings("strict", apply()))
+            .mockResolvedValue([false, "Not Authorized", 403]);
+        await mount();
+        expect(
+            await screen.findByText(/The schema binding could not be loaded: Not Authorized/)
+        ).toBeInTheDocument();
+        const reads = service().getDatabaseBindings.mock.calls.length;
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        });
+        expect(service().getDatabaseBindings).toHaveBeenCalledTimes(reads);
+        expect(reads).toBe(2);
+        expect(button("Retry")).toBeInTheDocument();
+    });
+
+    it("keeps reading after a failure that may pass", async () => {
+        mockAllowed = BINDER;
+        service()
+            .getDatabaseBindings.mockResolvedValueOnce(bindings("strict", apply()))
+            .mockResolvedValueOnce([false, "Internal Server Error", 500])
+            .mockResolvedValue(bindings("strict", applied));
+        await mount();
+        await waitFor(() => expect(service().getDatabaseBindings).toHaveBeenCalledTimes(3));
+        expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
     });
 });

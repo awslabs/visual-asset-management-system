@@ -659,6 +659,8 @@ Documentation is deployed automatically via CI/CD when changes are pushed to `ma
 
 Both pipelines only trigger when files under `documentation/docusaurus-site/` change.
 
+The `docs-build` job in `.github/workflows/ci.yml` also builds the site, without deploying it, on every pull request and on pushes to `development` and `development-*`, so a broken link or anchor fails there before it reaches a release; pushes to `main` and `release/**` skip it, since `docs.yml` builds the site there.
+
 ---
 
 ## 🔍 **Quality Review Checklist**

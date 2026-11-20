@@ -1761,7 +1761,7 @@ Every collection in the response is bounded so a run with a very large number of
 
 A file counts once against those bounds whatever it carries. Its metadata and its attributes ride on one row rather than two, so granting a pipeline `fileAttributes` adds keys to existing rows instead of adding rows — the bounds are spent per entity, not per key. A file carrying attributes and no metadata still occupies one row, so a run whose pipelines read attributes alone reaches the same bound as one reading metadata alone.
 
-`truncatedCollections` names every collection that came back partial, and is an empty array when the view is complete. The names it can contain are `inputFiles`, `inputMetadata`, `inputDatabaseMetadata`, `outputs.files`, `outputs.metadata`, `outputs.results`, and — when the step section's configuration bodies were bounded — `pipelines` and `inputConfigurations`. A collection named there holds fewer rows than the execution produced. The three metadata collections — `inputMetadata`, `inputDatabaseMetadata`, and `outputs.metadata` — are retrievable in full from [Read a metadata collection by page](#read-a-metadata-collection-by-page), one page at a time. `inputFiles`, `outputs.files`, and `outputs.results` have no paged equivalent, which is why this view spends its budget on them first: a row trimmed from one of those three is reachable only by re-running the execution.
+`truncatedCollections` names every collection that came back partial, and is an empty array when the view is complete. The names it can contain are `inputFiles`, `inputMetadata`, `inputDatabaseMetadata`, `outputs.files`, `outputs.metadata`, `outputs.results`, and — when the step section's configuration bodies were bounded — `pipelines` and `inputConfigurations`. A collection named there holds fewer rows than the execution produced. The three metadata collections — `inputMetadata`, `inputDatabaseMetadata`, and `outputs.metadata` — are retrievable in full from [Read a metadata collection by page](#read-a-metadata-collection-by-page), one page at a time. `inputFiles` and `outputs.files` are retrievable in full from [Page execution detail files](#page-execution-detail-files). The result text of `outputs.results` pages through [Get execution results](#get-execution-results), concatenated, one page at a time.
 
 A collection is bounded two ways, and either bound names it here: a row count, and a size budget measured over the serialized rows. The size budget is what keeps the response inside the AWS Lambda synchronous-response limit, because a metadata row carries a whole entity's captured map and a row count alone says nothing about how large each row is. An execution over many files that each carry hundreds of metadata entries therefore returns a bounded, flagged view rather than failing. When a collection reports the metadata each pipeline read, the budget is spent evenly across the pipelines, so every pipeline stays represented and no step's absence is mistaken for a step that read nothing.
 
@@ -1909,8 +1909,8 @@ Three collections are addressable, matching the detail view's three metadata sec
 | `output`        | `outputs.metadata`      | The metadata each step wrote.                 |
 
 The detail view's `inputFiles` and `outputs.files` collections are paged by
-[Page execution detail files](#page-execution-detail-files), and `outputs.results` is read in full by
-[Get execution results](#get-execution-results).
+[Page execution detail files](#page-execution-detail-files). The result text of `outputs.results` pages
+through [Get execution results](#get-execution-results), concatenated, one page at a time.
 
 ### Path parameters
 

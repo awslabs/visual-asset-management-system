@@ -12,6 +12,7 @@ import {
     Select,
     SelectProps,
 } from "@cloudscape-design/components";
+import Box from "@cloudscape-design/components/box";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import { docco } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import { vs2015 } from "react-syntax-highlighter/dist/esm/styles/hljs";
@@ -24,10 +25,10 @@ import ini from "react-syntax-highlighter/dist/esm/languages/hljs/ini";
 import { downloadAsset } from "../../../services/APIService";
 import { downloadFailureMessage } from "../../core/streamFailure";
 import { ViewerPluginProps } from "../../core/types";
-import { loadTextFile } from "../../core/textContent";
+import { loadTextFile, textReadFailureMessage } from "../../core/textContent";
 
 /** Why the file is not shown as text, when it is not. */
-type TextNotice = "binary" | "encoding";
+type TextNotice = "binary" | "encoding" | "too-large";
 
 /** User-facing copy for each notice. Exported so the unit test asserts the same strings. */
 export const TEXT_NOTICE_COPY: Record<TextNotice, { header: string; body: string }> = {
@@ -39,7 +40,17 @@ export const TEXT_NOTICE_COPY: Record<TextNotice, { header: string; body: string
         header: "Unsupported text encoding",
         body: "This file uses a text encoding the Text Viewer cannot display (UTF-32 or UTF-16 without a byte-order mark).",
     },
+    "too-large": {
+        header: "File too large to display",
+        body: "The Text Viewer shows text files up to 20 MB. Download the file to open it in a text editor.",
+    },
 };
+
+/**
+ * Above this many characters the text is shown plain, without syntax highlighting: the highlighter
+ * builds an element per token on the main thread, which stalls the tab on a large file.
+ */
+export const TEXT_HIGHLIGHT_MAX_CHARS = 1024 * 1024;
 
 // Register languages with the light build
 SyntaxHighlighter.registerLanguage("json", json);
@@ -156,7 +167,12 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                             setState((prev) => ({
                                 ...prev,
                                 content: "",
-                                notice: result.kind === "binary" ? "binary" : "encoding",
+                                notice:
+                                    result.kind === "binary"
+                                        ? "binary"
+                                        : result.kind === "too-large"
+                                        ? "too-large"
+                                        : "encoding",
                                 loading: false,
                             }));
                             return;
@@ -181,7 +197,9 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                 console.error("Error loading file:", error);
                 setState((prev) => ({
                     ...prev,
-                    error: error instanceof Error ? error.message : "Failed to load file",
+                    error:
+                        textReadFailureMessage(error) ??
+                        (error instanceof Error ? error.message : "Failed to load file"),
                     loading: false,
                 }));
             }
@@ -293,6 +311,18 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
 
     const formattedContent = formatContent(state.content, state.language);
     const selectedTheme = state.theme === "light" ? docco : vs2015;
+    const highlighted = formattedContent.length <= TEXT_HIGHLIGHT_MAX_CHARS;
+    const contentStyle: React.CSSProperties = {
+        margin: 0,
+        padding: "16px",
+        backgroundColor: "transparent",
+        fontSize: "14px",
+        lineHeight: "1.5",
+        fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
+        textAlign: "left",
+        whiteSpace: state.wrapLines ? "pre-wrap" : "pre",
+        overflowX: state.wrapLines ? "hidden" : "auto",
+    };
 
     return (
         <div
@@ -381,26 +411,35 @@ const TextViewerComponent: React.FC<ViewerPluginProps> = ({
                     backgroundColor: state.theme === "light" ? "var(--vams-bg-primary)" : "#1e1e1e",
                 }}
             >
-                <SyntaxHighlighter
-                    language={state.language}
-                    style={selectedTheme}
-                    showLineNumbers={state.showLineNumbers}
-                    wrapLines={state.wrapLines}
-                    wrapLongLines={state.wrapLines}
-                    customStyle={{
-                        margin: 0,
-                        padding: "16px",
-                        backgroundColor: "transparent",
-                        fontSize: "14px",
-                        lineHeight: "1.5",
-                        fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-                        textAlign: "left",
-                        whiteSpace: state.wrapLines ? "pre-wrap" : "pre",
-                        overflowX: state.wrapLines ? "hidden" : "auto",
-                    }}
-                >
-                    {formattedContent}
-                </SyntaxHighlighter>
+                {highlighted ? (
+                    <SyntaxHighlighter
+                        language={state.language}
+                        style={selectedTheme}
+                        showLineNumbers={state.showLineNumbers}
+                        wrapLines={state.wrapLines}
+                        wrapLongLines={state.wrapLines}
+                        customStyle={contentStyle}
+                    >
+                        {formattedContent}
+                    </SyntaxHighlighter>
+                ) : (
+                    <>
+                        <div style={{ padding: "8px 16px 0" }}>
+                            <Box variant="small" color="text-body-secondary">
+                                Syntax highlighting and line numbers are off for files over 1 MB.
+                            </Box>
+                        </div>
+                        <pre
+                            data-testid="text-viewer-plain"
+                            style={{
+                                ...contentStyle,
+                                color: state.theme === "light" ? "inherit" : "#dcdcdc",
+                            }}
+                        >
+                            {formattedContent}
+                        </pre>
+                    </>
+                )}
             </div>
         </div>
     );

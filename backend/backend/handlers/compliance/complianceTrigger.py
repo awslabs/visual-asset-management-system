@@ -463,10 +463,13 @@ class TriggerBatch:
             self._targets[key] = _evaluation_target(database_id, asset_id, batch=self)
         return self._targets[key]
 
-    def file_event_target(self, asset_id):
-        if asset_id not in self._file_targets:
-            self._file_targets[asset_id] = _file_event_target(asset_id, batch=self)
-        return self._file_targets[asset_id]
+    def file_event_target(self, asset_id, bucket="", object_key="", prefix=""):
+        """`_file_event_target`, read once per asset id, bucket and bucket prefix: the same asset
+        id under another bucket or prefix may be another database's asset."""
+        key = (asset_id, bucket, prefix)
+        if key not in self._file_targets:
+            self._file_targets[key] = _file_event_target(asset_id, bucket, object_key, batch=self)
+        return self._file_targets[key]
 
 
 @audited_handler
@@ -696,9 +699,10 @@ def _register_new_asset(database_id, asset_id, batch=None, asset_name=None):
     """A new asset of a bound database whose auto-evaluation is off: register it under the
     database binding without evaluating it, so `evaluate`, the sweep and the database overview reach
     it (the binding governs every asset of the database whatever auto-evaluation says). With
-    auto-evaluation on, the evaluation that follows registers it (`check_default_schema`). A
-    database without a binding, or an asset already recorded, costs the database read only, or one
-    consistent read more."""
+    auto-evaluation on, the evaluation that follows registers it (`check_default_schema`). An asset
+    whose row is gone (an INSERT handled after the asset's permanent delete) is not registered, as
+    `check_default_schema` does not register one. A database without a binding, or an asset already
+    recorded, costs the database read only, or one consistent read more."""
     batch = batch if batch is not None else TriggerBatch()
     db_item = batch.database_item(database_id)
     if not db_item or db_item.get("complianceAutoEval") is True:
@@ -707,6 +711,9 @@ def _register_new_asset(database_id, asset_id, batch=None, asset_name=None):
     if not schema_name:
         return
     if store.get_compliance_record(database_id, asset_id, consistent_read=True):
+        return
+    if not asset_row_exists(database_id, asset_id):
+        logger.info(f"Asset {database_id}:{asset_id} no longer exists; not registering it")
         return
     store.register_under_database_binding(database_id, asset_id, schema_name,
                                           asset_name=asset_name)
@@ -1032,7 +1039,8 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
         logger.info("Could not extract an assetId from the object key")
         return
 
-    resolved = batch.file_event_target(asset_id)
+    bucket = (s3_info.get("bucket") or {}).get("name") or message.get("ASSET_BUCKET_NAME", "")
+    resolved = batch.file_event_target(asset_id, bucket, object_key, prefix)
     if resolved is None or asset_id in decided:
         return
     database_id, asset_row, target = resolved
@@ -1043,6 +1051,10 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
     if change_source == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION:
         logger.info(f"Object under asset {asset_id} was written by a workflow execution; "
                     "skipping compliance evaluation")
+        return
+    if removal_superseded_by_workflow_write(s3_record, s3_info, message):
+        logger.info(f"Object removal under asset {asset_id} was superseded by a workflow execution's "
+                    "write of the same key; skipping compliance evaluation")
         return
 
     decided.add(asset_id)
@@ -1099,6 +1111,41 @@ def upload_object_awaits_its_settling_completion(change_source, stamp_attribute,
             and upload_completion_wait_seconds(completion_time) > 0)
 
 
+def removal_superseded_by_workflow_write(s3_record, s3_info, message):
+    """Whether an S3 removal record names a key that a workflow execution has written again since:
+    the key's current version carries `vams-changesource: workflowExecution` and was written no
+    earlier than the removal's second (`LastModified` has second precision; `eventTime` has
+    milliseconds).
+
+    A removal leaves a delete marker, which carries no object metadata (a HEAD of it answers 405),
+    so `object_change_source` reports it as unknown. A key a workflow execution has written again by
+    the time the removal is read is the execution's output, and a workflow execution's write starts
+    no evaluation. A removal the key's current state does not supersede (a user archiving a file,
+    whose delete marker is the current version) is evaluated as before. Unreadable reads as not
+    superseded.
+
+    Only the decoded key is read. S3 event notifications form-encode the object key (a space as
+    '+', a literal '+' as '%2B'), so the decoded key is the removed object's own; the raw key, when
+    it differs, names another object, whose write must not stand in for this removal."""
+    if not str(s3_record.get("eventName") or "").startswith("ObjectRemoved"):
+        return False
+    bucket = (s3_info.get("bucket") or {}).get("name") or message.get("ASSET_BUCKET_NAME", "")
+    raw_key = (s3_info.get("object") or {}).get("key", "")
+    removed_at = parse_event_time(s3_record.get("eventTime"))
+    if not bucket or not raw_key or removed_at is None:
+        return False
+    try:
+        head = s3_client.head_object(Bucket=bucket, Key=urllib.parse.unquote_plus(raw_key))
+    except Exception as e:
+        logger.info(f"Could not read the current version of a removed object under {bucket}: {e}")
+        return False
+    written_at = head.get("LastModified")
+    change_source = (head.get("Metadata") or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY, "")
+    return (change_source == VAMS_CHANGE_SOURCE_WORKFLOW_EXECUTION
+            and isinstance(written_at, datetime)
+            and written_at >= removed_at.replace(microsecond=0))
+
+
 def file_event_completion_time(asset_row):
     """The recorded completion a file event's object is judged against: the LATEST user-change
     completion the asset row records, the later of its `lastUploadAt` (an upload completion) and its
@@ -1134,18 +1181,35 @@ def file_event_completion_stamp(asset_row):
     return latest_attribute, latest_instant
 
 
-def _file_event_target(asset_id, batch=None):
-    """`(database_id, asset row, evaluation target)` for an asset a file event names, or None
-    (logged) when the asset has no row, is archived, or its database or binding does not evaluate
-    it."""
+def _file_event_target(asset_id, bucket="", object_key="", batch=None):
+    """`(database_id, asset row, evaluation target)` for the asset whose files hold the object a
+    file event names (`bucket`, `object_key`), or None (logged) when the asset has no live row, no
+    single live row holds the object (`asset_row_holds_object`), or its database or binding does not
+    evaluate it. An asset id is unique within a database only, so several live rows are told apart
+    by their location first; a single row is checked after its evaluation target, so a file event
+    of a database that evaluates nothing costs no bucket read."""
     batch = batch if batch is not None else TriggerBatch()
-    asset_row = _resolve_asset_row(asset_id)
-    database_id = (asset_row or {}).get("databaseId") or None
+    rows = _resolve_asset_rows(asset_id)
+    if len(rows) > 1:
+        rows = [row for row in rows if asset_row_holds_object(row, bucket, object_key)]
+        if len(rows) != 1:
+            logger.info(f"Asset {asset_id}: {len(rows)} live rows of several databases hold the "
+                        "event's object; skipping compliance evaluation")
+            return None
+        verified = True
+    else:
+        verified = False
+    asset_row = rows[0] if rows else {}
+    database_id = asset_row.get("databaseId") or None
     if not database_id:
         logger.info(f"Could not resolve a databaseId for asset {asset_id}")
         return None
     target = batch.evaluation_target(database_id, asset_id)
     if target is None:
+        return None
+    if not verified and not asset_row_holds_object(asset_row, bucket, object_key):
+        logger.info(f"Asset {asset_id} of database {database_id} does not hold the event's object; "
+                    "skipping compliance evaluation")
         return None
     return database_id, asset_row, target
 
@@ -1190,31 +1254,48 @@ def _extract_asset_id_from_key(object_key, prefix):
     return parts[0] if parts and parts[0] else None
 
 
-def _resolve_asset_row(asset_id):
-    """The asset's row via the assetIdGSI (the first match; an asset id is unique), carrying its
+def _resolve_asset_rows(asset_id):
+    """The live rows of an asset id, read through the assetIdGSI to exhaustion, each carrying its
     `databaseId` and its change-provenance stamps (`lastUploadAt`, `lastAssetVersionAt`,
-    `lastChangeSource`, `lastChangeAt`). An asset whose row sits under an archived partition resolves
-    to None so it is not evaluated. A failed read is raised when it is an infrastructure error, so
-    the queue record is redelivered, and logged as an unresolved asset otherwise."""
+    `lastChangeSource`, `lastChangeAt`); an asset id is unique within a database only, so there may
+    be several. A row under an archived partition is left out, so an archived asset is not
+    evaluated. A failed read is raised when it is an infrastructure error, so the queue record is
+    redelivered, and logged as an unresolved asset (no rows) otherwise."""
     try:
-        response = asset_table.query(
+        items = query_all_items(
+            asset_table,
             IndexName="assetIdGSI",
             KeyConditionExpression=Key("assetId").eq(asset_id),
-            Limit=1,
         )
-        items = response.get("Items", [])
-        if not items:
-            return None
-        database_id = items[0].get("databaseId", "")
-        if database_id.endswith(ARCHIVED_DATABASE_SUFFIX):
-            logger.info(f"Asset {asset_id} is archived; skipping compliance evaluation")
-            return None
-        return items[0] if database_id else None
     except Exception as e:
         if is_infrastructure_error(e):
             raise
         logger.exception(f"Error resolving the database for asset {asset_id}: {e}")
-        return None
+        return []
+    live = [item for item in items if item.get("databaseId")
+            and not item["databaseId"].endswith(ARCHIVED_DATABASE_SUFFIX)]
+    if items and not live:
+        logger.info(f"Asset {asset_id} is archived; skipping compliance evaluation")
+    return live
+
+
+def asset_row_holds_object(asset_row, bucket, object_key):
+    """Whether an asset row's files location holds the object a file event names: the bucket its
+    `bucketId` registers is the event's bucket and the object key lies under its
+    `assetLocation.Key` (`complianceEvaluationStore.asset_s3_location`). The key is compared as the
+    event carries it (form-encoded) and decoded. A row whose location cannot be resolved, or an
+    event naming no bucket or key, does not match."""
+    if not bucket or not object_key:
+        return False
+    location = store.asset_s3_location(asset_row)
+    if location is None:
+        return False
+    row_bucket, row_prefix = location
+    if row_bucket != bucket:
+        return False
+    row_prefix = row_prefix.lstrip("/")
+    return any(key.lstrip("/").startswith(row_prefix)
+               for key in (object_key, urllib.parse.unquote_plus(object_key)))
 
 
 def _database_item(database_id):
@@ -1284,6 +1365,13 @@ def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, comp
     own queue record rather than a second time in this batch."""
     compliance_record, schema_name = target
     covered = change_covered_by_last_evaluation(compliance_record, change_time, completion_time)
+    if covered and store.claim_orphaned(compliance_record):
+        # The covering evaluation is a claim whose run stopped before it recorded anything (a
+        # timeout): it read nothing that will be applied, so the change is evaluated now.
+        logger.info(f"Asset {asset_id}: its last evaluation "
+                    f"{compliance_record.get('lastEvaluationId')} stopped before it completed; "
+                    "the change is evaluated again")
+        covered = False
     presence = EVALUATION_TARGET_LIVE
     if not covered:
         presence = automatic_evaluation_target(database_id, asset_id)

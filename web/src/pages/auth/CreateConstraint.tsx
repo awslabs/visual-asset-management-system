@@ -593,6 +593,7 @@ export default function CreateConstraint({
                             }}
                             disabled={
                                 inProgress ||
+                                objectTypeNotOffered ||
                                 !(
                                     validateName(formState.constraintId) === null &&
                                     validateDescriptionLength(formState.description) === null &&
@@ -610,6 +611,11 @@ export default function CreateConstraint({
                                     )["userError"] === null &&
                                     validateObjectType(formState.objectType) === null
                                 )
+                            }
+                            disabledReason={
+                                objectTypeNotOffered
+                                    ? "This object type is not offered on this deployment, so saving changes is refused."
+                                    : undefined
                             }
                             data-testid={`${createOrUpdate}-authcriteria-button`}
                         >

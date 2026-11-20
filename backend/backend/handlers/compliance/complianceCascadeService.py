@@ -844,7 +844,10 @@ DEFAULT_CASCADE_PAGE_SIZE = 100
 # Stored on a cascade row for the service and the executor, never returned: the listing's search
 # column, and the starting caller's reach, its evaluable databases and the descendants it may act
 # on (another caller's reach is not the reader's to learn).
-PRIVATE_CASCADE_ATTRIBUTES = ("searchText", "authorizedDatabaseIds", "authorizedAssetKeys")
+PRIVATE_CASCADE_ATTRIBUTES = ("searchText", "authorizedDatabaseIds", "authorizedAssetKeys",
+                              # The executor's results of the nodes done so far, for its next run:
+                              # `results` is the answer, once the cascade completes.
+                              "partialResults")
 
 
 def list_pending_cascades(event):
@@ -933,6 +936,11 @@ def list_pending_cascades(event):
         # it: the pending partition holds only cascades that can still be approved.
         if store.cascade_approval_timed_out(item):
             store.expire_timed_out_cascade(cascade_table, item)
+            return False
+        # An executing cascade whose run stopped is aborted here too, and leaves the executing
+        # listing.
+        if store.cascade_run_stopped(item):
+            store.expire_stopped_cascade(cascade_table, item)
             return False
         item.update(presenter.present(item, "triggeredByDatabaseId"))
         # List filtering appends only when enforce() passes, so empty tokens yield an empty list.

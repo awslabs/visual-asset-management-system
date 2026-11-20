@@ -54,10 +54,21 @@ export function connectUnavailableReason(row: WorkstationRecord): string {
     }
 }
 
+/** The connection link when it parses as an `https:` URL, else null. */
+function httpsLink(value: unknown): string | null {
+    if (typeof value !== "string") return null;
+    try {
+        return new URL(value).protocol === "https:" ? value : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * The Connect control for one row: a button styled as a link. The click opens a blank tab first —
  * inside the user gesture, so popup blockers allow it — then requests the connection URL and points
- * the tab at it; a failed request closes the tab and raises a toast. Nothing is fetched on render, so
+ * the tab at it when it is an `https:` link; a failed request, or any other link, closes the tab and
+ * raises a toast. Nothing is fetched on render, so
  * no credential-bearing URL sits in the DOM before the user asks. The URL is EDH's own DCV entry
  * point, opened as a top-level navigation, so no CSP directive is involved. A row that cannot be
  * connected to renders the control inert, with the reason under it and as its description.
@@ -107,9 +118,17 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
         tab.opener = null;
         try {
             const connection = await connect.mutateAsync(row.sessionId);
-            tab.location.replace(connection.connectionUrl);
-            // The URL is a desktop credential: drop it from the mutation state once the tab has it.
+            const link = httpsLink(connection.connectionUrl);
+            // The URL is a desktop credential: drop it from the mutation state once it is read.
             connect.reset();
+            if (!link) {
+                tab.close();
+                toast.error("Connect failed", {
+                    description: `${row.name}: the cluster returned a connection link that cannot be opened.`,
+                });
+                return;
+            }
+            tab.location.replace(link);
         } catch (err) {
             tab.close();
             toast.error("Connect failed", {

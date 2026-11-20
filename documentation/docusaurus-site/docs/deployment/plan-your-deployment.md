@@ -25,7 +25,7 @@ When deploying to AWS GovCloud or the AWS European Sovereign Cloud, the followin
 -   DynamoDB vector search is not available in the AWS European Sovereign Cloud, and configuration validation accepts `app.vectorSearch.enabled` only in the commercial and AWS GovCloud (US) partitions. Set it to `false` there. In AWS GovCloud (US) it defaults to `false` and is supported once the Amazon Bedrock models are enabled in both linked accounts.
 -   Amazon Cognito advanced security (`AdvancedSecurityMode`) is not available. VAMS does not configure it and suppresses the corresponding check automatically, so no configuration change is needed.
 
-For the authoritative per-field list, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
+Some features are refused in these partitions only when they are turned on, for example an API custom domain in the AWS European Sovereign Cloud or the GenAI CAD STEP agent's `agentcore` runtime outside the commercial partition. For the authoritative per-field list and those feature-level refusals, see [Restricted-partition constraints](configuration-reference.md#restricted-partition-constraints).
 :::
 
 ## Key decisions
@@ -86,7 +86,7 @@ Amazon OpenSearch Serverless is the recommended option for most deployments. Pro
 | **Import existing VPC** | `useGlobalVpc.enabled: true` with `optionalExternalVpcId` | Import an existing VPC by ID. Requires providing isolated subnet IDs and optionally private and public subnet IDs. See [Deploy the solution](deploy-the-solution.md) for the two-phase deployment process. |
 
 :::warning[VPC is required for some features]
-Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, a private OpenSearch Serverless collection, or any container-based pipeline (Potree viewer, 3D preview thumbnail, Coordinate Transform, Gaussian splatting, RapidPipeline, ModelOps, Isaac Lab, media previews, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, Image to 3D, Video SOP/BOM Extraction, the GenAI CAD STEP agent, and the SYSTEM GenAI metadata pipeline's Fargate renderer, `useSystemGenAiMetadata.useFargateRenderer`). The SYSTEM GenAI metadata pipeline itself and natural-language search run on AWS Lambda and need no VPC.
+Some features require a VPC and `useGlobalVpc.enabled` must be `true` when they are enabled. If any of the following are turned on while `useGlobalVpc.enabled` is `false`, deployment fails with a configuration error that lists the offending features — set `useGlobalVpc.enabled` to `true` (or disable those features): ALB deployment, OpenSearch Provisioned, a private OpenSearch Serverless collection (`allowPublic: false`), Download as Zip (`app.pipelines.useZipDownloads`), the EDH Workstations add-on, or any container-based pipeline (Potree viewer, 3D preview thumbnail, Coordinate Transform, Gaussian splatting, RapidPipeline, ModelOps, Isaac Lab, media previews, NVIDIA Cosmos, NVIDIA Cosmos 3, NVIDIA Gr00t, Image to 3D, Video SOP/BOM Extraction, the GenAI CAD STEP agent, and the SYSTEM GenAI metadata pipeline's Fargate renderer, `useSystemGenAiMetadata.useFargateRenderer`). The SYSTEM GenAI metadata pipeline itself and natural-language search run on AWS Lambda and need no VPC.
 :::
 
 **Subnet sizing guidance:**

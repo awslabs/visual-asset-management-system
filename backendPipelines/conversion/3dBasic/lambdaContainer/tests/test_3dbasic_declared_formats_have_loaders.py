@@ -8,7 +8,7 @@ trimesh keeps its XML- and COLLADA-backed formats behind optional dependencies a
 ``ExceptionWrapper`` in place of the loader when they are absent, so a declared format whose dependency
 is missing is not a startup error -- it is a run that fails at the load, after the file has been
 downloaded. ``requirements.txt`` installs neither ``pycollada`` (COLLADA) nor ``lxml`` + ``networkx``
-(3MF, XAML, 3DXML), and ``poetry.lock`` resolves this container to exactly aws-lambda-powertools,
+(3MF, XAML, 3DXML), and ``uv.lock`` resolves this container to exactly aws-lambda-powertools,
 jmespath, numpy, pillow, trimesh and typing-extensions -- lxml, networkx and pycollada appear there only
 inside trimesh's optional ``easy`` extra.
 

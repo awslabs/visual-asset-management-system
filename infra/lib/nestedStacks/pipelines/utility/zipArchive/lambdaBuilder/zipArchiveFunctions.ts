@@ -27,6 +27,7 @@ import {
     suppressCdkNagErrorsByGrantReadWrite,
     suppressCdkNagLambda,
 } from "../../../../../helper/security";
+import { grantBatchStateTimeoutCleanup } from "../../../constructs/stateTimeoutBatchSubmitJob";
 import path = require("path");
 
 const LAMBDA_PYTHON_RUNTIME = Config.LAMBDA_PYTHON_RUNTIME;
@@ -150,6 +151,7 @@ export function buildPipelineEndFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
     assetAuxiliaryBucket: s3.IBucket,
+    batchJobQueue: batch.JobQueue,
     config: Config.Config,
     vpc: ec2.IVpc,
     subnets: ec2.ISubnet[],
@@ -176,7 +178,6 @@ export function buildPipelineEndFunction(
             config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas
                 ? { subnets: subnets }
                 : undefined,
-        environment: {},
     });
 
     grantReadPermissionsToAllAssetBuckets(fun);
@@ -192,6 +193,10 @@ export function buildPipelineEndFunction(
             resources: [`arn:${ServiceHelper.Partition()}:states:${region}:${account}:*`],
         })
     );
+
+    // After the token wait times out pipelineEnd finds the run's job on this queue and ends it while
+    // it is still queued or running (BATCH_JOB_QUEUES, batch:ListJobs, batch:TerminateJob).
+    grantBatchStateTimeoutCleanup(fun, [batchJobQueue.jobQueueArn]);
 
     return fun;
 }

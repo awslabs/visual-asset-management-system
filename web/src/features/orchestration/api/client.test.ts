@@ -10,6 +10,7 @@ import {
     failureStatus,
     ServiceCallError,
 } from "./client";
+import { NETWORK_FAILURE_MESSAGE } from "../../../services/networkFailure";
 
 describe("orchestration api client helpers", () => {
     it("unwrapMessage returns .message when present", () => {
@@ -47,6 +48,16 @@ describe("orchestration api client helpers", () => {
         });
         expect(failureStatus(offline)).toBeUndefined();
         expect(failureStatus([false, "rebuilt by a service"])).toBeUndefined();
+    });
+    it("a failure with no response carries the network message, not the browser's text", async () => {
+        const offline = await toTuple(async () => {
+            throw new TypeError("Failed to fetch");
+        });
+        expect(offline).toEqual([false, NETWORK_FAILURE_MESSAGE]);
+        const warned = await toTupleWithWarnings(async () => {
+            throw new TypeError("Failed to fetch");
+        });
+        expect(warned).toEqual([false, NETWORK_FAILURE_MESSAGE]);
     });
     it("ServiceCallError keeps the plain Error text", () => {
         const e = new ServiceCallError("Not Authorized", 403);

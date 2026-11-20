@@ -16,6 +16,7 @@ a bulk request is a soft failure carrying "File not found in S3".
 
 import json
 import os
+import pathlib
 import sys
 from unittest.mock import MagicMock
 
@@ -137,6 +138,22 @@ class TestOutcomesThroughTheHandler:
 
         assert response['statusCode'] == 400
         assert json.loads(response['body'])['message'] == _msg("File not found in S3")
+
+    def test_missing_single_file_answer_is_the_web_test_data(self):
+        """The web reads this answer as a missing file (`isFileNotFoundAnswer`); its tests use the
+        body in `web/src/visualizerPlugin/core/fileNotFoundBody.testdata.json`, so the two cannot
+        drift apart."""
+        testdata = json.loads((pathlib.Path(__file__).resolve().parents[4] / "web" / "src"
+                               / "visualizerPlugin" / "core" / "fileNotFoundBody.testdata.json")
+                              .read_text(encoding="utf-8"))
+        m = _load()
+        _wire_asset_context(m)
+        m.s3.head_object.side_effect = _head_error('404')
+
+        response = m.lambda_handler(_event({'downloadType': 'assetFile', 'key': '/a.txt'}), None)
+
+        assert response['statusCode'] == testdata['statusCode']
+        assert json.loads(response['body']) == testdata['body']
 
     def test_bulk_missing_file_is_a_soft_failure_with_its_reason(self):
         m = _load()
