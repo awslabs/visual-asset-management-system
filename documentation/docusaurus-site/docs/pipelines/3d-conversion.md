@@ -219,7 +219,7 @@ The Lambda container image is built during CDK deployment from `backendPipelines
 -   **cascadio 0.1.1** -- STEP input, only in the image built with `enableStepInput`
 -   **boto3** -- AWS SDK for Amazon S3 operations, from the base image
 
-The installed versions are those in the container's `poetry.lock`, from which its `requirements.txt` is exported with the SHA-256 hash of every package. The Dockerfile installs it with `pip install --require-hashes`, so the image holds exactly the locked packages and `NOTICE.md` lists those versions.
+The installed versions are those in the container's lock file, from which its `requirements.txt` is exported with the SHA-256 hash of every package (see [Managing Python Dependencies](../developer/setup.md#managing-python-dependencies) for how the image's lock is updated). The Dockerfile installs it with `pip install --require-hashes`, so the image holds exactly the locked packages and `NOTICE.md` lists those versions.
 
 ## Infrastructure Components
 
