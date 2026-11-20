@@ -29,11 +29,10 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
 )
+from common.fileAttribution import attribute_object, binding_of
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
 from common.workflows import executionLocks as el
@@ -119,19 +118,6 @@ def _list_fileupload_triggers():
     return rows
 
 
-def _asset_bucket_name(bucket_id):
-    """The asset bucket's name for a bucketId, or '' when it cannot be resolved."""
-    if not bucket_id:
-        return ""
-    try:
-        response = s3_asset_buckets_table.query(
-            KeyConditionExpression=Key("bucketId").eq(bucket_id), Limit=1)
-        return ((response.get("Items") or [{}])[0]).get("bucketName", "") or ""
-    except Exception as e:
-        logger.info(f"Could not resolve asset bucket {bucket_id} (skipping bucket check): {e}")
-        return ""
-
-
 def _head_object_metadata(bucket_name, s3_key, version_id=""):
     """The S3 user metadata of one object version, or of the current version when version_id is
     empty."""
@@ -141,87 +127,40 @@ def _head_object_metadata(bucket_name, s3_key, version_id=""):
     return s3_client.head_object(**head_kwargs).get("Metadata", {}) or {}
 
 
-def _resolve_asset_relative_key(bucket_name, s3_key, version_id=""):
-    """Resolve (databaseId, assetId, assetRelativeKey) for an uploaded S3 object from its metadata +
-    asset record. Returns None when the object has no VAMS asset metadata, the asset is unknown, the
-    object sits in a different bucket than the asset, or the object does not sit within the resolved
-    asset's own location.
+def _resolve_asset_relative_key(bucket_name, s3_key, version_id="", binding=None):
+    """Resolve (databaseId, assetId, assetRelativeKey, changeSource, changeWorkflowId) for an uploaded
+    S3 object, or None when no asset holds it.
 
-    A file written straight to the asset bucket arrives without the asset ids, or with the ids of the
-    asset it was copied from. Bucket sync stamps the ids of the asset the key belongs to by copying
-    the object onto itself, which creates a newer version, before it forwards the event for the
-    uploaded version; so when the pinned version does not bind, the binding is retried with the
-    current version's ids, under the same checks. The provenance of the write is always read from the
-    pinned version."""
+    The asset is the one whose stored location contains the key in this bucket
+    (`common.fileAttribution`): the event's `vamsBinding` from bucket sync, accepted only when its
+    registration is in this bucket and the asset's location holds the key; then the location index;
+    and before the index is ready, the pinned version's stamp and the first folder, under the same
+    bucket and boundary checks. The stamp's ids are client-settable on a direct write and survive an
+    S3 copy, so they never bind a key outside the named asset's location. The provenance of the write
+    (who wrote it, which workflow) is always read from the pinned version."""
     try:
         metadata = _head_object_metadata(bucket_name, s3_key, version_id)
     except Exception as e:
         logger.info(f"Could not head uploaded object (skipping): {e}")
         return None
-
-    def _bind(md):
-        asset_id = md.get(ASSET_ID_METADATA_KEY)
-        database_id = md.get(DATABASE_ID_METADATA_KEY)
-        if not asset_id or not database_id:
-            logger.info(f"Uploaded object missing asset/database metadata (skipping): {s3_key}")
-            return None
-
-        asset = asset_storage_table.get_item(
-            Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
-        if not asset:
-            logger.info(f"Asset not found for uploaded object (skipping): {database_id}/{asset_id}")
-            return None
-
-        # Same-prefix assets can exist in different buckets, so the binding also requires the
-        # object to sit in the asset's own bucket. An unresolvable bucket row leaves the key check
-        # as the only gate.
-        asset_bucket_name = _asset_bucket_name(asset.get("bucketId", ""))
-        if asset_bucket_name and asset_bucket_name != bucket_name:
-            logger.info(f"Uploaded object {s3_key} is in a different bucket than asset "
-                        f"{database_id}/{asset_id} (skipping)")
-            return None
-
-        asset_location = asset.get("assetLocation") or {}
-        asset_base_key = asset_location.get("Key", "") if isinstance(asset_location, dict) else ""
-        # The metadata that named the asset is client-settable on a direct asset-bucket write, so
-        # the binding only holds when the object actually lives inside that asset's own S3 location.
-        normalized_key = s3_key.lstrip("/")
-        normalized_base = (asset_base_key or "").lstrip("/")
-        if not normalized_base:
-            logger.warning(f"Asset {database_id}/{asset_id} has no location key; fileUpload "
-                           f"triggers cannot be dispatched for {s3_key}")
-            return None
-        remainder = None
-        if normalized_key.startswith(normalized_base):
-            candidate = normalized_key[len(normalized_base):]
-            # Containment: the base key is either a prefix ending in '/', or the remainder starts
-            # at a path boundary (or is empty). A shared name prefix ("db/a1" vs "db/a10/x.glb") is
-            # not containment.
-            if normalized_base.endswith("/") or candidate == "" or candidate.startswith("/"):
-                remainder = candidate
-        if remainder is None:
-            logger.info(f"Uploaded object {s3_key} is outside the location of asset "
-                        f"{database_id}/{asset_id} (skipping)")
-            return None
-        return database_id, asset_id, "/" + remainder.lstrip("/")
-
-    binding = _bind(metadata)
-    if binding is None and version_id:
-        try:
-            current_metadata = _head_object_metadata(bucket_name, s3_key)
-        except Exception as e:
-            logger.info(f"Could not head current version of uploaded object (skipping): {e}")
-            return None
-        binding = _bind(current_metadata)
-    if binding is None:
+    attribution = attribute_object(
+        bucket_name, s3_key,
+        asset_table=asset_storage_table,
+        buckets_table=s3_asset_buckets_table,
+        binding=binding,
+        read_stamp=lambda: metadata,
+        asset_table_name=asset_storage_table_name,
+    )
+    if not attribution.attributed:
+        logger.info(f"Uploaded object {s3_key} is not in any asset's location in bucket {bucket_name} "
+                    f"({attribution.status}); no fileUpload trigger is dispatched")
         return None
-    database_id, asset_id, relative = binding
     # The provenance of the write travels with the binding: who wrote this object decides whether a
-    # workflow may re-fire on it. It comes from the pinned version's head_object above, never from
-    # the current version's, so reading it is free.
+    # workflow may re-fire on it. It comes from the pinned version's head_object above.
     change_source = metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY, "") or ""
     change_workflow_id = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY, "") or ""
-    return database_id, asset_id, relative, change_source, change_workflow_id
+    return (attribution.database_id, attribution.asset_id, attribution.relative_path,
+            change_source, change_workflow_id)
 
 
 def _workflow_row(workflow_database_id, workflow_id):
@@ -339,13 +278,14 @@ def _invoke_execute(workflow_database_id, workflow_id, body):
         return False
 
 
-def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id=""):
+def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id="", binding=None):
     """Match + launch every fileUpload trigger that fires for one uploaded object. Returns the number
     of workflows launched. version_id pins the run to the object version that was uploaded (empty on
-    an unversioned bucket, where the run reads the current object)."""
+    an unversioned bucket, where the run reads the current object); binding is the record's
+    `vamsBinding`, absent on an event published before bucket sync carried it."""
     if _should_skip_key(s3_key):
         return 0
-    resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id)
+    resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding)
     if not resolved:
         return 0
     database_id, asset_id, relative_key, change_source, change_workflow_id = resolved
@@ -373,7 +313,8 @@ def _object_version_id(object_info):
 
 
 def _iter_uploaded_objects(event):
-    """Yield (bucket_name, s3_key, versionId) for each uploaded object in the event. Handles the two
+    """Yield (bucket_name, s3_key, versionId, vamsBinding or None) for each uploaded object in the
+    event. Handles the two
     shapes the orchestration-bus -> SQS buffer delivers: an EventBridge S3 detail (detail.bucket.name
     + detail.object.key) and a legacy S3-notification Records array, each possibly wrapped in SQS
     Records / an EventBridge envelope."""
@@ -384,7 +325,7 @@ def _iter_uploaded_objects(event):
             b = (s3_info.get("bucket", {}) or {}).get("name")
             k = object_info.get("key")
             if b and k:
-                yield b, k, _object_version_id(object_info)
+                yield b, k, _object_version_id(object_info), binding_of(rec)
 
     def _from_detail(detail):
         bucket = ((detail.get("bucket") or {}).get("name")
@@ -392,7 +333,7 @@ def _iter_uploaded_objects(event):
         object_info = detail.get("object") or {}
         key = object_info.get("key") or detail.get("key") or ""
         if bucket and key:
-            yield bucket, key, _object_version_id(object_info)
+            yield bucket, key, _object_version_id(object_info), binding_of(detail)
         # A detail may itself carry an S3-notification Records array.
         yield from _from_records(detail.get("Records", []))
 
@@ -457,14 +398,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     try:
         total_launched = 0
         files_seen = 0
-        for bucket_name, raw_key, version_id in _iter_uploaded_objects(event):
+        for bucket_name, raw_key, version_id, binding in _iter_uploaded_objects(event):
             files_seen += 1
             s3_key = urllib.parse.unquote_plus(raw_key)
             # Per-file isolation: an unexpected failure resolving/dispatching one file must not drop
             # trigger dispatch for the rest of the batch (best-effort contract).
             try:
                 total_launched += _dispatch_uploaded_file(
-                    bucket_name, s3_key, trigger_rows, version_id)
+                    bucket_name, s3_key, trigger_rows, version_id, binding)
             except Exception as e:
                 logger.exception(f"Error dispatching triggers for {s3_key} (continuing): {e}")
 

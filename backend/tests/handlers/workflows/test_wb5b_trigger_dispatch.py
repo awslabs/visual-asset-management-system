@@ -21,6 +21,12 @@ from botocore.exceptions import (
 from unittest.mock import MagicMock, patch
 
 from backend.backend.common.workflows import triggerMatching as tm
+from tests.common.fileAttributionFakes import (
+    AttributionAssetTable,
+    AttributionBucketsTable,
+    asset_row,
+    registration,
+)
 
 
 @pytest.mark.unit
@@ -126,25 +132,25 @@ class TestDispatcher:
     def test_iter_uploaded_objects_eventbridge_detail_in_sqs(self):
         event = {"Records": [{"body": json.dumps({
             "detail": {"bucket": {"name": "b1"}, "object": {"key": "a1/x.glb"}}})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b1", "a1/x.glb", "")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b1", "a1/x.glb", "", None)]
 
     def test_iter_uploaded_objects_s3_records_in_sqs(self):
         event = {"Records": [{"body": json.dumps({
             "Records": [{"s3": {"bucket": {"name": "b2"}, "object": {"key": "a2/y.e57"}}}]})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b2", "a2/y.e57", "")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b2", "a2/y.e57", "", None)]
 
     def test_iter_uploaded_objects_clean_detail_records(self):
         # The producer publishes a clean EventBridge detail carrying flat S3 Records.
         event = {"Records": [{"body": json.dumps({
             "detail": {"Records": [{"s3": {"bucket": {"name": "b3"}, "object": {"key": "a3/z.glb"}}}],
                        "ASSET_BUCKET_NAME": "b3"}})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b3", "a3/z.glb", "")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b3", "a3/z.glb", "", None)]
 
     def test_iter_uploaded_objects_sns_notification_envelope(self):
         # Defensive: an SNS Notification envelope wrapping the S3 records is also unwrapped.
         inner = json.dumps({"Records": [{"s3": {"bucket": {"name": "b4"}, "object": {"key": "a4/w.obj"}}}]})
         event = {"Records": [{"body": json.dumps({"Type": "Notification", "Message": inner})}]}
-        assert list(wd._iter_uploaded_objects(event)) == [("b4", "a4/w.obj", "")]
+        assert list(wd._iter_uploaded_objects(event)) == [("b4", "a4/w.obj", "", None)]
 
     def test_iter_uploaded_objects_carries_object_version_id(self):
         # S3 notification records carry the uploaded object's versionId; it pins the run to the
@@ -153,7 +159,7 @@ class TestDispatcher:
             {"s3": {"bucket": {"name": "b"}, "object": {"key": "a/1.glb", "versionId": "v1"}}},
             {"s3": {"bucket": {"name": "b"}, "object": {"key": "a/2.glb", "versionId": "null"}}}]}})}]}
         assert list(wd._iter_uploaded_objects(event)) == [
-            ("b", "a/1.glb", "v1"), ("b", "a/2.glb", "")]
+            ("b", "a/1.glb", "v1", None), ("b", "a/2.glb", "", None)]
 
     def test_should_skip_key(self):
         assert wd._should_skip_key("folder/") is True
@@ -423,201 +429,161 @@ class TestConnectionFailureIsSentAgain:
         client.invoke.assert_called_once()
 
 
+_fa = sys.modules["common.fileAttribution"]
+_al = sys.modules["common.assetLocations"]
+REG = registration("bk1", "b1", "prefix/")
+ASSET_A1 = asset_row("db1", "a1", "bk1", "prefix/a1/", "b1", indexed=False)
+ASSET_A2 = asset_row("db1", "a2", "bk1", "prefix/a2/", "b1", indexed=False)
+CUSTOM = asset_row("db1", "x-building-a", "bk1", "prefix/projects/building-a/", "b1")
+FOREIGN = asset_row("db9", "a1", "bk9", "prefix/a1/", "other-bucket", indexed=False)
+
+
+@pytest.fixture
+def tables(monkeypatch):
+    """Wire the dispatcher to in-memory asset and registration tables; the index is not ready
+    unless a test says so."""
+    _fa.clear_registration_cache()
+    _al.clear_location_cache()
+    monkeypatch.setattr(_fa, "index_ready", lambda name: False)
+
+    def wire(rows, ready=False):
+        monkeypatch.setattr(_fa, "index_ready", lambda name: ready)
+        monkeypatch.setattr(wd, "asset_storage_table", AttributionAssetTable(rows))
+        monkeypatch.setattr(wd, "s3_asset_buckets_table", AttributionBucketsTable(
+            [REG, registration("bk9", "other-bucket", "/")]))
+    return wire
+
+
+def _binding(asset_id="a1", database_id="db1", bucket_id="bk1"):
+    return {"databaseId": database_id, "assetId": asset_id, "bucketId": bucket_id,
+            "relativePath": "/x", "resolvedBy": "fastPath"}
+
+
 @pytest.mark.unit
 class TestResolveAssetRelativeKey:
+    """Before the location index is ready and without a binding: the pinned version's stamp, then the
+    first folder, each bound only in the event's bucket and inside the asset's own location."""
+
     def _head(self, database_id="db1", asset_id="a1"):
         return {"Metadata": {"databaseid": database_id, "assetid": asset_id}}
 
-    def test_relative_key_within_asset_location(self):
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1/"}}}):
+    def test_relative_key_within_asset_location(self, tables):
+        tables([ASSET_A1])
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()):
             assert wd._resolve_asset_relative_key("b1", "prefix/a1/sub/model.glb")[:3] == (
                 "db1", "a1", "/sub/model.glb")
 
-    def test_object_in_a_different_bucket_than_the_asset_rejected(self):
+    def test_object_in_a_different_bucket_than_the_asset_rejected(self, tables):
         # Same-prefix assets can live in different buckets, so the bucket must match too.
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"bucketId": "bk1",
-                                                 "assetLocation": {"Key": "prefix/a1/"}}}), \
-             patch.object(wd, "_asset_bucket_name", return_value="other-bucket"):
+        tables([FOREIGN])
+        with patch.object(wd.s3_client, "head_object", return_value=self._head("db9", "a1")):
             assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb") is None
 
-    def test_matching_bucket_resolves(self):
+    def test_an_unreadable_registration_binds_nothing(self, tables):
+        tables([ASSET_A1])
         with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"bucketId": "bk1",
-                                                 "assetLocation": {"Key": "prefix/a1/"}}}), \
-             patch.object(wd, "_asset_bucket_name", return_value="b1"):
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb")[:3] == (
-                "db1", "a1", "/model.glb")
-
-    def test_unresolvable_bucket_row_leaves_the_key_check_as_the_gate(self):
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"bucketId": "bk1",
-                                                 "assetLocation": {"Key": "prefix/a1/"}}}), \
              patch.object(wd.s3_asset_buckets_table, "query", side_effect=RuntimeError("throttled")):
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb")[:3] == (
-                "db1", "a1", "/model.glb")
+            with pytest.raises(RuntimeError):
+                wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb")
 
-    def test_key_outside_asset_location_rejected(self):
+    def test_key_outside_asset_location_rejected(self, tables):
         # The metadata naming the asset is client-settable on a direct asset-bucket write, so an
         # object outside the named asset's own location must not bind to it.
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1/"}}}):
+        tables([ASSET_A1])
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()):
             assert wd._resolve_asset_relative_key("b1", "prefix/other/model.glb") is None
 
-    def test_shared_name_prefix_is_not_containment(self):
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1"}}}):
+    def test_shared_name_prefix_is_not_containment(self, tables):
+        single = asset_row("db1", "a1", "bk1", "prefix/a1", "b1", indexed=False)
+        tables([single])
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()):
             assert wd._resolve_asset_relative_key("b1", "prefix/a10/model.glb") is None
 
-    def test_missing_asset_location_rejected(self):
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()), \
-             patch.object(wd.asset_storage_table, "get_item", return_value={"Item": {}}):
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb") is None
-
-    def test_version_id_passed_to_head_object(self):
-        with patch.object(wd.s3_client, "head_object", return_value=self._head()) as m_head, \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"assetLocation": {"Key": "prefix/a1/"}}}):
+    def test_version_id_passed_to_head_object(self, tables):
+        tables([ASSET_A1])
+        with patch.object(wd.s3_client, "head_object", return_value=self._head()) as m_head:
             wd._resolve_asset_relative_key("b1", "prefix/a1/model.glb", "ver-3")
         assert m_head.call_args.kwargs["VersionId"] == "ver-3"
 
 
 @pytest.mark.unit
-class TestUnstampedPinnedVersion:
-    """A file written straight to the asset bucket arrives without `databaseid` / `assetid`. Bucket
-    sync stamps them by copying the object onto itself, which creates a NEWER version, and then
-    forwards the event for the ORIGINAL version — so the version the dispatcher pins carries no ids,
-    while the current version does."""
+class TestBindingFromTheEvent:
+    """Bucket sync forwards which asset holds the file (`vamsBinding`), so a direct write needs no stamp
+    on any version: the pinned version is read once, for the write's provenance only."""
 
-    PINNED_UNSTAMPED = {"Metadata": {}}
-    CURRENT_STAMPED = {"Metadata": {"databaseid": "db1", "assetid": "a1", "vams-changesource": "direct"}}
-    ASSET = {"Item": {"assetLocation": {"Key": "prefix/a1/"}}}
+    UNSTAMPED = {"Metadata": {}}
 
-    def test_binds_through_the_current_version(self):
-        with patch.object(wd.s3_client, "head_object",
-                          side_effect=[self.PINNED_UNSTAMPED, self.CURRENT_STAMPED]) as m_head, \
-             patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET):
-            resolved = wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1")
-        assert resolved is not None
+    def test_a_direct_write_binds_from_the_event_with_one_head(self, tables):
+        tables([ASSET_A1])
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED) as m_head:
+            resolved = wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1", _binding())
         assert resolved[:3] == ("db1", "a1", "/scan.e57")
-        # The pinned HEAD first, then one unpinned HEAD of the current version.
-        assert [c.kwargs.get("VersionId") for c in m_head.call_args_list] == ["ver-1", None]
+        assert m_head.called
+        assert {c.kwargs.get("VersionId") for c in m_head.call_args_list} == {"ver-1"}
 
-    def test_provenance_comes_from_the_pinned_version(self):
-        # The current version can already be a later write; who wrote the PINNED version is what the
-        # chaining guard judges, so a later workflow write must not block this direct write's trigger.
-        current = {"Metadata": {"databaseid": "db1", "assetid": "a1",
-                                "vams-changesource": "workflowExecution",
-                                "vams-changeworkflowid": "wfLater"}}
-        with patch.object(wd.s3_client, "head_object", side_effect=[self.PINNED_UNSTAMPED, current]), \
-             patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET):
-            resolved = wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1")
-        assert resolved[3:] == ("", "")
-
-    def test_stamped_pinned_version_needs_one_head(self):
-        with patch.object(wd.s3_client, "head_object",
-                          return_value={"Metadata": {"databaseid": "db1", "assetid": "a1"}}) as m_head, \
-             patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET):
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1") is not None
-        assert m_head.call_count == 1
-
-    def test_unversioned_unstamped_object_is_skipped_after_one_head(self):
-        # Without a pinned version the first HEAD already read the current object; there is nothing
-        # newer to consult.
-        with patch.object(wd.s3_client, "head_object", return_value=self.PINNED_UNSTAMPED) as m_head:
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57") is None
-        assert m_head.call_count == 1
-
-    def test_skipped_when_the_current_version_is_unstamped_too(self):
-        # Bucket sync forwards a record whose stamp failed; neither version names an asset.
-        with patch.object(wd.s3_client, "head_object",
-                          side_effect=[self.PINNED_UNSTAMPED, self.PINNED_UNSTAMPED]) as m_head:
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1") is None
-        # Skipped after reading the current version, not at the pinned one.
-        assert m_head.call_count == 2
-
-    def test_skipped_when_the_current_version_cannot_be_read(self):
-        # A delete marker as the current version answers the unpinned HEAD with 404.
-        with patch.object(wd.s3_client, "head_object",
-                          side_effect=[self.PINNED_UNSTAMPED, RuntimeError("404 Not Found")]) as m_head:
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1") is None
-        assert m_head.call_count == 2
-
-    def test_fallback_binding_still_requires_containment(self):
-        # The ids on the current version are client-settable too; the object must still sit inside
-        # the named asset's own location.
-        current = {"Metadata": {"databaseid": "db1", "assetid": "a2"}}
-        with patch.object(wd.s3_client, "head_object", side_effect=[self.PINNED_UNSTAMPED, current]), \
-             patch.object(wd.asset_storage_table, "get_item",
-                          return_value={"Item": {"assetLocation": {"Key": "prefix/a2/"}}}) as m_get:
-            assert wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1") is None
-        # Rejected by the containment check on the ids read from the current version.
-        m_get.assert_called_once_with(Key={"databaseId": "db1", "assetId": "a2"})
-
-    def test_rebinds_through_the_current_version_when_the_pinned_ids_do_not_bind(self):
-        # A server-side copy from asset a1's folder into a2's carries a1's ids on the written
-        # version; bucket sync re-stamps the newer version with a2's, which is where the object sits.
-        pinned = {"Metadata": {"databaseid": "db1", "assetid": "a1"}}
-        current = {"Metadata": {"databaseid": "db1", "assetid": "a2", "vams-changesource": "direct"}}
-        locations = {"a1": "prefix/a1/", "a2": "prefix/a2/"}
-
-        def _get_item(Key):
-            return {"Item": {"assetLocation": {"Key": locations[Key["assetId"]]}}}
-
-        with patch.object(wd.s3_client, "head_object", side_effect=[pinned, current]) as m_head, \
-             patch.object(wd.asset_storage_table, "get_item", side_effect=_get_item) as m_get:
-            resolved = wd._resolve_asset_relative_key("b1", "prefix/a2/scan.e57", "ver-1")
-        assert resolved is not None
-        assert resolved[:3] == ("db1", "a2", "/scan.e57")
-        # The provenance still comes from the pinned version, which carries none.
-        assert resolved[3:] == ("", "")
-        assert [c.kwargs.get("VersionId") for c in m_head.call_args_list] == ["ver-1", None]
-        assert [c.kwargs["Key"]["assetId"] for c in m_get.call_args_list] == ["a1", "a2"]
-
-    def test_skipped_when_neither_version_binds(self):
-        # Control for the rebind above: both versions name a1 and the object sits outside a1's
-        # location, so the retry reads the current version once and still skips.
-        stamped = {"Metadata": {"databaseid": "db1", "assetid": "a1"}}
-        with patch.object(wd.s3_client, "head_object", side_effect=[stamped, stamped]) as m_head, \
-             patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET):
-            assert wd._resolve_asset_relative_key("b1", "prefix/other/scan.e57", "ver-1") is None
-        assert m_head.call_count == 2
-
-    def test_binds_a_direct_write_under_a_bucket_existing_key_folder(self):
-        # An asset created with bucketExistingKey keeps its files under the operator's folder, which
-        # is not named after the asset ID. The ids read from the current version bind the write to
-        # that asset, and the relative key is taken from the asset's own location.
-        current = {"Metadata": {"databaseid": "db1", "assetid": "x-building-a"}}
-        asset = {"Item": {"assetLocation": {"Key": "prefix/projects/building-a/"}}}
-        with patch.object(wd.s3_client, "head_object",
-                          side_effect=[self.PINNED_UNSTAMPED, current]) as m_head, \
-             patch.object(wd.asset_storage_table, "get_item", return_value=asset) as m_get:
+    def test_a_binding_into_a_custom_root_location(self, tables):
+        tables([CUSTOM])
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED):
             resolved = wd._resolve_asset_relative_key(
-                "b1", "prefix/projects/building-a/sub/scan.e57", "ver-1")
-        assert resolved is not None
+                "b1", "prefix/projects/building-a/sub/scan.e57", "ver-1", _binding("x-building-a"))
         assert resolved[:3] == ("db1", "x-building-a", "/sub/scan.e57")
-        m_get.assert_called_once_with(Key={"databaseId": "db1", "assetId": "x-building-a"})
-        assert [c.kwargs.get("VersionId") for c in m_head.call_args_list] == ["ver-1", None]
 
-    def test_direct_write_launches_once_pinned_to_the_uploaded_version(self):
+    def test_a_binding_to_a_registration_of_another_bucket_is_not_used(self, tables):
+        tables([FOREIGN], ready=True)
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED):
+            assert wd._resolve_asset_relative_key(
+                "b1", "prefix/a1/scan.e57", "ver-1", _binding("a1", "db9", "bk9")) is None
+
+    def test_provenance_comes_from_the_pinned_version(self, tables):
+        tables([ASSET_A1])
+        pinned = {"Metadata": {"vams-changesource": "workflowExecution", "vams-changeworkflowid": "wf7"}}
+        with patch.object(wd.s3_client, "head_object", return_value=pinned):
+            resolved = wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1", _binding())
+        assert resolved[3:] == ("workflowExecution", "wf7")
+
+    def test_without_a_binding_an_unstamped_normal_file_binds_by_its_first_folder(self, tables):
+        # An event queued before bucket sync carried the binding, before the index is ready.
+        tables([ASSET_A1])
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED) as m_head:
+            resolved = wd._resolve_asset_relative_key("b1", "prefix/a1/scan.e57", "ver-1")
+        assert resolved[:3] == ("db1", "a1", "/scan.e57")
+        assert {c.kwargs.get("VersionId") for c in m_head.call_args_list} == {"ver-1"}
+
+    def test_a_copy_carrying_another_assets_stamp_binds_where_it_sits(self, tables):
+        # A server-side copy from a1's folder into a2's keeps a1's ids on the written version.
+        tables([ASSET_A1, ASSET_A2])
+        with patch.object(wd.s3_client, "head_object", return_value={"Metadata": {"databaseid": "db1",
+                                                                                 "assetid": "a1"}}):
+            resolved = wd._resolve_asset_relative_key("b1", "prefix/a2/scan.e57", "ver-1")
+        assert resolved[:3] == ("db1", "a2", "/scan.e57")
+
+    def test_without_a_binding_a_custom_root_file_binds_once_the_index_answers(self, tables):
+        tables([CUSTOM], ready=True)
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED):
+            resolved = wd._resolve_asset_relative_key("b1", "prefix/projects/building-a/x.e57", "ver-1")
+        assert resolved[:3] == ("db1", "x-building-a", "/x.e57")
+
+    def test_a_neighbour_of_a_single_file_asset_binds_nothing(self, tables):
+        single = asset_row("db1", "one", "bk1", "prefix/model.glb", "b1")
+        tables([single], ready=True)
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED):
+            assert wd._resolve_asset_relative_key("b1", "prefix/model.glb.bak", "ver-1") is None
+
+    def test_a_direct_write_with_a_binding_launches_once_pinned_to_the_uploaded_version(self, tables):
+        tables([ASSET_A1])
         trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
                    "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".e57"]},
                                                       "defaultTemplateIds": {}}}
         wd._workflow_row_cache.clear()
-        with patch.object(wd.s3_client, "head_object",
-                          side_effect=[self.PINNED_UNSTAMPED, self.CURRENT_STAMPED]), \
-             patch.object(wd.asset_storage_table, "get_item", return_value=self.ASSET), \
+        event = {"Records": [{"body": json.dumps({"detail": {"Records": [
+            {"s3": {"bucket": {"name": "b1"}, "object": {"key": "prefix/a1/scan.e57", "versionId": "ver-1"}},
+             "vamsBinding": _binding()}]}})}]}
+        [(bucket, key, version_id, binding)] = list(wd._iter_uploaded_objects(event))
+        with patch.object(wd.s3_client, "head_object", return_value=self.UNSTAMPED), \
              patch.object(wd.workflow_storage_table_v2, "get_item",
                           return_value={"Item": {"systemConfig": {"inputFileArity": "one"}}}), \
              patch(f"{DMOD}._invoke_execute", return_value=True) as m_invoke:
-            launched = wd._dispatch_uploaded_file("b1", "prefix/a1/scan.e57", [trigger], "ver-1")
+            launched = wd._dispatch_uploaded_file(bucket, key, [trigger], version_id, binding)
         assert launched == 1
         _wfdb, _wfid, body = m_invoke.call_args.args
         assert body["inputFiles"] == [{"databaseId": "db1", "assetId": "a1",
