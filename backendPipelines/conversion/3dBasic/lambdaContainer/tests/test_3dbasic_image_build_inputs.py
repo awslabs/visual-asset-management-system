@@ -25,7 +25,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The modules lambda.py imports from the build context. A runtime module the ignore file excluded would
 # fail at container RUNTIME, not at the image build.
-_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "fbx_scene.py", "vertex_normals.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
+_RUNTIME_PATHS = ("lambda.py", "referenced_files.py", "size_check.py", "conversion_worker.py", "scene_limits.py", "archive_guard.py", "xml_guard.py", "units_axes.py", "usd_io.py", "model_formats.py", "expansion_bounds.py", "reference_collectors.py", "incomplete_result.py", "step_limits.py", "fbx_scene.py", "vertex_normals.py", "common/logger.py", "requirements.txt", "requirements-step.txt")
 
 
 def _read(name):
