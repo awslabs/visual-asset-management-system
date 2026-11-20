@@ -22,7 +22,7 @@ logger = log.get_logger()
 task_token = os.getenv("TASK_TOKEN")
 
 client = boto3.client(
-    "stepfunctions", region_name=os.getenv("AWS_REGION", "us-east-1"),
+    "stepfunctions", region_name=os.environ["AWS_REGION"],
     config=retry_config
 )
 
