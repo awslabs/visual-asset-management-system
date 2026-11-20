@@ -1,18 +1,18 @@
 
 lint:
-	poetry run flake8
+	uv run flake8
 
 test:
-	poetry run ptw --runner 'py.test -vv'
+	uv run ptw --runner 'py.test -vv'
 
 typecheck:
-	poetry run mypy .
+	uv run mypy .
 
 coverage:
-	poetry run coverage run -m pytest
-	poetry run coverage report
+	uv run coverage run -m pytest
+	uv run coverage report
 
 install:
-	poetry install
+	uv sync --locked
 
 all: install lint typecheck coverage

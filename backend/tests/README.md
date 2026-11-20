@@ -69,20 +69,20 @@ To run the tests, use the following commands:
 
 ```bash
 # Run all tests
-poetry run pytest
+uv run pytest
 
 # Run tests with verbose output
-poetry run pytest -v
+uv run pytest -v
 
 # Run tests with coverage
-poetry run coverage run -m pytest
-poetry run coverage report
+uv run coverage run -m pytest
+uv run coverage report
 
 # Run tests in watch mode
-poetry run ptw
+uv run ptw
 
 # Run specific tests
-poetry run pytest tests/functions/assets/upload_asset_workflow/test_lambda_handler.py
+uv run pytest tests/functions/assets/upload_asset_workflow/test_lambda_handler.py
 ```
 
 ## Test Markers
@@ -98,16 +98,16 @@ To run tests with a specific marker:
 
 ```bash
 # Run unit tests
-poetry run pytest -m unit
+uv run pytest -m unit
 
 # Run integration tests
-poetry run pytest -m integration
+uv run pytest -m integration
 
 # Run slow tests
-poetry run pytest -m slow
+uv run pytest -m slow
 
 # Run AWS tests
-poetry run pytest -m aws
+uv run pytest -m aws
 ```
 
 ## Writing Tests

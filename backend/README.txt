@@ -1,9 +1,7 @@
-This package uses ![poetry](https://python-poetry.org/) for dependency management.
+This package uses [uv](https://docs.astral.sh/uv/) for dependency locking (uv.lock). Use the uv version named by `required-version` in pyproject.toml.
 
-Make sure you have poetry installed and your local python version is using the python 3.10.
-
-VAMS uses multiple lambda layers to store the dependencies when used on AWS. Each layer has its own poetry file and dependencies lists. 
-The top level poetry/requirements are used for local testing only and are a combined list of requirements from all layers. 
+VAMS uses multiple lambda layers to store the dependencies when used on AWS. Each layer has its own pyproject.toml, uv.lock and committed requirements.txt.
+The top level pyproject.toml, uv.lock and requirements files are used for local testing only and are a combined list of requirements from all layers.
 
 Use the below for each layer or top-level tree. 
 
@@ -16,16 +14,15 @@ More Details:
 https://github.com/aws/aws-cdk/issues/14201
 
 ### Adding New Dependencies or updating package versions
-`poetry add stepfunctions`
+`uv add stepfunctions` (or edit the dependency in pyproject.toml, then run `uv lock`)
 
 ### Removing Dependencies
-`poetry remove stepfunctions`
+`uv remove stepfunctions`
 
-### Export poetry dependecies to requirements.txt
-`poetry export -o requirements.txt --without-hashes`
+### Export uv dependencies to requirements.txt
+`uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt`
 
-### Move requirements.txt to ./lambdaLayers/<LAYERNAME>
-`cp -rf ./requirements.txt ./lambdaLayers/<LAYERNAME>/requirements.txt`
+The deploy installs the committed requirements.txt with pip; it never runs uv. See backend/CLAUDE.md, "Updating Python Dependencies".
 
 
 ### Running Tests - top level backend
