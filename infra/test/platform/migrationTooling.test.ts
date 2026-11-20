@@ -314,6 +314,8 @@ const CALL_TO_ACTION: ReadonlyArray<[RegExp, string]> = [
     [/\.scan\b/, "dynamodb:Scan"],
     [/\.invoke\(/, "lambda:InvokeFunction"],
     [/\.delete_object\(/, "s3:DeleteObject"],
+    [/\.transact_write_items\(/, "dynamodb:PutItem"],
+    [/\.list_object_versions\(/, "s3:ListBucketVersions"],
 ];
 
 describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
@@ -493,7 +495,8 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
     });
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
-        // Only assetLocationFolderKeys reads Amazon S3: one HeadObject and one single-key listing per key.
+        // Only assetLocationFolderKeys reads Amazon S3: one HeadObject, the versions of one exact key at a
+        // time, and one single-key listing under '{key}/'.
         const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
         const end = script.indexOf("# STEP: orphanedTriggers\n");
         expect(start).toBeGreaterThan(-1);
@@ -503,11 +506,38 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(rest).not.toMatch(
             /list_objects|list_object_versions|head_object|\.client\(\s*['"]s3['"]/
         );
-        expect(script).not.toMatch(/list_object_versions|get_paginator\(\s*['"]list_objects/);
+        expect(script).not.toMatch(/get_paginator\(\s*['"]list_object/);
         const listings = locationStep.match(/list_objects_v2\([^)]*\)/g) ?? [];
         expect(listings).toHaveLength(1);
         expect(listings[0]).toContain("MaxKeys=1");
+        const versionListings = locationStep.match(/\.list_object_versions\(/g) ?? [];
+        expect(versionListings).toHaveLength(1);
+        const exact = locationStep.slice(locationStep.indexOf("def exact_key_versions("));
+        expect(exact.slice(0, 900)).toContain("if entry['Key'] == key");
         expect(script).not.toMatch(/auxiliary/i);
+    });
+
+    it("moves the copy's records without overwriting, and leaves vectors and execution history", () => {
+        const move = script.slice(script.indexOf("def move_record("));
+        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_exists(#k)'");
+        const block = script.slice(script.indexOf("COPY_TABLE_KEYS = ("));
+        const tables = Array.from(
+            block.slice(0, block.indexOf("\n)\n")).matchAll(/'([A-Z0-9_]+)'/g)
+        ).map((m) => m[1]);
+        for (const name of [
+            "ASSET_FILE_METADATA_STORAGE_TABLE",
+            "FILE_ATTRIBUTE_STORAGE_TABLE",
+            "ASSET_FILE_VERSIONS_STORAGE_TABLE",
+            "ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE",
+            "ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE",
+        ]) {
+            expect(tables).toContain(name);
+        }
+        expect(tables.join(" ")).not.toMatch(/VECTOR|EXECUTION/);
+        expect(readme).toContain("#### Part (b): the copy named like the file");
+        expect(readme).toContain("assetLocationFolderKeys-moved-copies.jsonl");
+        expect(readme).toMatch(/run `vectorBackfill` after this step/);
     });
 
     it("runs assetLocationFolderKeys first, gated, with a report and a checkpoint", () => {

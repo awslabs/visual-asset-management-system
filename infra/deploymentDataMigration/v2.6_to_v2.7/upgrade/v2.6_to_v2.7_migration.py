@@ -365,13 +365,38 @@ def _paginate(read: Callable[..., Dict], **kwargs) -> Iterator[Dict]:
 # single-file asset). Before v2.7 a folder key written without the trailing '/' still listed its files,
 # and v2.7 reads such a key as a single object. This step finds the asset rows whose key has no
 # trailing '/', no object at the key and objects under '{key}/', reports them and, on a real run,
-# appends the '/'. It reads one object (HeadObject) and at most one listed key (ListObjectsV2,
-# MaxKeys=1) per such row; it never walks a bucket and never lists object versions.
+# appends the '/' (part a). It reads one object (HeadObject) and, when there is none, the newest version
+# of the key and at most one listed key under '{key}/' (MaxKeys=1) per such row; it never walks a bucket.
+#
+# Part (b): before v2.7 the companion copy '{key}/{name}' of a single-file location had the asset-relative
+# path '/{name}', and the records that describe a file are keyed by that path. v2.7 lists the object at
+# '/{name}' and the copy at '/{name}/{name}', so for each single-file location whose copy exists the copy's
+# file metadata, file attributes, version snapshot entries, metadata version snapshots and file version
+# history move to '/{name}/{name}'. A version snapshot entry moves only when its S3 version id is one of
+# the copy's; a history record stays when its version id is one of the object's. Vectors (a reindex rewrites
+# them) and execution history (what past runs read) stay as recorded. A record already at the new path is
+# never overwritten: the clash is reported and the old record stays.
 LOCATION_STEP = 'assetLocationFolderKeys'
 LOCATION_CLASSES = ('folder', 'single-file', 'folder-without-slash', 'no-objects', 'unreadable')
 LOCATION_PAGE_SIZE = 100
 LOCATION_PACE_SECONDS = 0.05
 _NOT_FOUND_CODES = ('404', 'NoSuchKey', 'NotFound')
+COPY_COUNTERS = ('copy-locations', 'copy-already-moved', 'records-moved', 'records-clash',
+                 'records-left-object', 'records-left-unknown-version', 'records-gone')
+# (config key, ResourceParamKeys name) of the tables part (b) moves records in; the legacy V1 file
+# versions table is optional and skipped when the deployment does not publish it.
+COPY_TABLE_KEYS = (
+    ('asset_file_metadata_storage_table_name', 'ASSET_FILE_METADATA_STORAGE_TABLE'),
+    ('file_attribute_storage_table_name', 'FILE_ATTRIBUTE_STORAGE_TABLE'),
+    ('asset_versions_storage_table_name', 'ASSET_VERSIONS_STORAGE_TABLE'),
+    ('asset_file_versions_storage_table_name', 'ASSET_FILE_VERSIONS_STORAGE_TABLE'),
+    ('asset_file_metadata_versions_storage_table_name', 'ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE'),
+    ('asset_file_version_history_storage_table_name', 'ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE'),
+)
+LEGACY_COPY_TABLE_KEY = ('legacy_asset_file_versions_storage_table_name', 'LEGACY_ASSET_FILE_VERSIONS_STORAGE_TABLE_V1')
+_FILE_PATH_INDEX = 'DatabaseIdAssetIdFilePathIndex'
+_VERSIONS_BY_ASSET_INDEX = 'databaseIdAssetIdIndex'
+_HISTORY_VERSION_ID_PREFIXES = ('unarchive:',)
 
 
 class LocationFinding(NamedTuple):
@@ -401,6 +426,13 @@ def classify_asset_location(s3_client, bucket: str, key: str) -> Tuple[str, str]
         code = str(e.response.get('Error', {}).get('Code', ''))
         if code not in _NOT_FOUND_CODES:
             return 'unreadable', f"HeadObject: {code or e}"
+    # An archived object answers HeadObject with 404 (its newest version is a delete marker) and is still
+    # the asset's file, so a key with any version of its own is a single file, never a folder.
+    try:
+        if exact_key_versions(s3_client, bucket, key, first_page_only=True):
+            return 'single-file', 'archived'
+    except ClientError as e:
+        return 'unreadable', f"ListObjectVersions: {e.response.get('Error', {}).get('Code', '') or e}"
     try:
         listed = s3_client.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
     except ClientError as e:
@@ -408,6 +440,21 @@ def classify_asset_location(s3_client, bucket: str, key: str) -> Tuple[str, str]
     if listed.get('KeyCount', 0) > 0 or listed.get('Contents'):
         return 'folder-without-slash', ''
     return 'no-objects', ''
+
+
+def exact_key_versions(s3_client, bucket: str, key: str, first_page_only: bool = False) -> set:
+    """The version ids, delete markers included, of exactly ``key``. The listing names ``key`` as its prefix,
+    so it starts at ``key`` (the shortest key under it) and stops at the first other key."""
+    ids = set()
+    kwargs = {'Bucket': bucket, 'Prefix': key, 'MaxKeys': 1 if first_page_only else 1000}
+    while True:
+        page = s3_client.list_object_versions(**kwargs)
+        entries = page.get('Versions', []) + page.get('DeleteMarkers', [])
+        ids.update(entry['VersionId'] for entry in entries if entry['Key'] == key)
+        if first_page_only or any(entry['Key'] != key for entry in entries) or not page.get('IsTruncated'):
+            return ids
+        kwargs['KeyMarker'] = page.get('NextKeyMarker')
+        kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
 
 
 def append_location_slash(dynamodb_client, asset_table: str, row: Dict, key: str) -> str:
@@ -455,6 +502,195 @@ def _write_checkpoint(path: str, asset_table: str, start_key: Optional[Dict], co
     os.replace(tmp, path)
 
 
+def _query_all(dynamodb_client, table: str, key_name: str, value: str, index: Optional[str] = None) -> List[Dict]:
+    kwargs = {'TableName': table, 'KeyConditionExpression': '#p = :v',
+              'ExpressionAttributeNames': {'#p': key_name}, 'ExpressionAttributeValues': {':v': {'S': value}}}
+    if index:
+        kwargs['IndexName'] = index
+    return list(_paginate(dynamodb_client.query, **kwargs))
+
+
+def _version_owner(version_id: str, copy_versions: set, object_versions: set) -> str:
+    """'copy' or 'object' when the S3 version id belongs to exactly one of the two keys, else 'unknown'."""
+    for prefix in _HISTORY_VERSION_ID_PREFIXES:
+        if version_id.startswith(prefix):
+            version_id = version_id[len(prefix):]
+    in_copy, in_object = version_id in copy_versions, version_id in object_versions
+    if in_copy and not in_object:
+        return 'copy'
+    if in_object and not in_copy:
+        return 'object'
+    return 'unknown'
+
+
+def move_record(dynamodb_client, table: str, item: Dict, key_names: Tuple[str, ...], new_item: Dict,
+                dry_run: bool) -> str:
+    """Move one record to its new key: the put is conditional on no record at the new key and the delete on
+    the old record still being there, in one transaction. Returns 'moved' (or 'would move' on a dry run),
+    'clash' when a record is already at the new key (nothing changes), or 'gone' when the old record was
+    removed meanwhile."""
+    target_key = {name: new_item[name] for name in key_names}
+    names = {'#k': key_names[0]}
+    if dry_run:
+        found = dynamodb_client.get_item(TableName=table, Key=target_key)
+        return 'clash' if 'Item' in found else 'would move'
+    try:
+        dynamodb_client.transact_write_items(TransactItems=[
+            {'Put': {'TableName': table, 'Item': new_item, 'ConditionExpression': 'attribute_not_exists(#k)',
+                     'ExpressionAttributeNames': names}},
+            {'Delete': {'TableName': table, 'Key': {name: item[name] for name in key_names},
+                        'ConditionExpression': 'attribute_exists(#k)', 'ExpressionAttributeNames': names}},
+        ])
+        return 'moved'
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'TransactionCanceledException':
+            raise
+    return 'clash' if 'Item' in dynamodb_client.get_item(TableName=table, Key=target_key) else 'gone'
+
+
+def _moved_copies_path(output_dir: str) -> str:
+    """The ledger of assets whose copy records a real run moved; both modes read it, a real run appends."""
+    return os.path.join(output_dir, f"{LOCATION_STEP}-moved-copies.jsonl")
+
+
+def _read_moved_copies(output_dir: str) -> set:
+    path = _moved_copies_path(output_dir)
+    if not os.path.exists(path):
+        return set()
+    with open(path, 'r', encoding='utf-8') as f:
+        return {json.loads(line)['asset'] for line in f if line.strip()}
+
+
+def move_companion_copy_records(dynamodb_client, s3_client, cfg: Dict, row: Dict, bucket: str, key: str,
+                                dry_run: bool, counts: Dict[str, int], report: Callable[[Dict], None],
+                                moved_copies: set) -> None:
+    """Part (b) for one single-file location: move the records of its copy '{key}/{name}' from '/{name}' to
+    '/{name}/{name}'. Nothing is read beyond the copy's own versions when the location has no copy."""
+    name = key.rsplit('/', 1)[-1]
+    copy_versions = exact_key_versions(s3_client, bucket, f"{key}/{name}")
+    if not copy_versions:
+        return
+    database_id = _attr_s(row, 'databaseId')
+    database_id = database_id[:-len('#deleted')] if database_id.endswith('#deleted') else database_id
+    asset_id = _attr_s(row, 'assetId')
+    asset = f"{database_id}:{asset_id}"
+    counts['copy-locations'] += 1
+    base = {'part': 'companion-copy', 'database_id': database_id, 'asset_id': asset_id, 'bucket': bucket,
+            'key': key}
+    if asset in moved_copies:
+        counts['copy-already-moved'] += 1
+        report(dict(base, table=None, action='skipped: moved by an earlier real run'))
+        return
+    object_versions = exact_key_versions(s3_client, bucket, key)
+    sources = (f"/{name}", name)
+    errors_before = counts['errors']
+
+    def target(path: str) -> str:
+        return f"{path}/{name}"
+
+    def move(label: str, table: str, item: Dict, key_names: Tuple[str, ...], changes: Dict[str, str],
+             source: str) -> None:
+        new_item = dict(item)
+        new_item.update({attr: {'S': value} for attr, value in changes.items()})
+        try:
+            outcome = move_record(dynamodb_client, table, item, key_names, new_item, dry_run)
+        except ClientError as e:
+            counts['errors'] += 1
+            report(dict(base, table=label, **{'from': source, 'to': target(source)}, action='failed', detail=str(e)))
+            return
+        counts[{'moved': 'records-moved', 'would move': 'records-moved', 'clash': 'records-clash',
+                'gone': 'records-gone'}[outcome]] += 1
+        report(dict(base, table=label, **{'from': source, 'to': target(source)}, action=outcome))
+
+    def leave(label: str, source: str, owner: str) -> None:
+        counts['records-left-object' if owner == 'object' else 'records-left-unknown-version'] += 1
+        report(dict(base, table=label, **{'from': source}, action=f"left: the version is the {owner}'s"
+                    if owner == 'object' else 'left: the version id matches neither file'))
+
+    def path_changes(item: Dict, composite_name: str, source: str) -> Dict[str, str]:
+        changes = {composite_name: f"{asset}:{target(source)}"}
+        if _attr_s(item, 'filePath') == source:
+            changes['filePath'] = target(source)
+        return changes
+
+    for label, table_key, item_key in (('file metadata', 'asset_file_metadata_storage_table_name', 'metadataKey'),
+                                       ('file attributes', 'file_attribute_storage_table_name', 'attributeKey')):
+        table = cfg.get(table_key)
+        if not table:
+            continue
+        for source in sources:
+            for item in _query_all(dynamodb_client, table, 'databaseId:assetId:filePath', f"{asset}:{source}",
+                                   _FILE_PATH_INDEX):
+                move(label, table, item, (item_key, 'databaseId:assetId:filePath'),
+                     path_changes(item, 'databaseId:assetId:filePath', source), source)
+
+    # Version snapshot entries move when their S3 version is the copy's; the decision per asset version
+    # also decides that version's metadata snapshot rows.
+    decisions: Dict[str, str] = {}
+    table = cfg.get('asset_file_versions_storage_table_name')
+    if table:
+        for item in _query_all(dynamodb_client, table, 'databaseId:assetId', asset, _VERSIONS_BY_ASSET_INDEX):
+            file_key = _attr_s(item, 'fileKey')
+            if file_key not in sources:
+                continue
+            version = _attr_s(item, 'databaseId:assetId:assetVersionId')[len(asset) + 1:]
+            owner = _version_owner(_attr_s(item, 'versionId'), copy_versions, object_versions)
+            decisions[version] = owner
+            if owner == 'copy':
+                move('asset version files', table, item, ('databaseId:assetId:assetVersionId', 'fileKey'),
+                     {'fileKey': target(file_key)}, file_key)
+            else:
+                leave('asset version files', file_key, owner)
+    legacy = cfg.get('legacy_asset_file_versions_storage_table_name')
+    versions_table = cfg.get('asset_versions_storage_table_name')
+    if legacy and versions_table:
+        for version_row in _query_all(dynamodb_client, versions_table, 'databaseId:assetId', asset):
+            version = _attr_s(version_row, 'assetVersionId')
+            for file_key in sources:
+                item = dynamodb_client.get_item(TableName=legacy, Key={
+                    'assetId:assetVersionId': {'S': f"{asset_id}:{version}"}, 'fileKey': {'S': file_key}}).get('Item')
+                if not item:
+                    continue
+                owner = _version_owner(_attr_s(item, 'versionId'), copy_versions, object_versions)
+                decisions.setdefault(version, owner)
+                if owner == 'copy':
+                    move('asset version files (legacy)', legacy, item, ('assetId:assetVersionId', 'fileKey'),
+                         {'fileKey': target(file_key)}, file_key)
+                else:
+                    leave('asset version files (legacy)', file_key, owner)
+    table = cfg.get('asset_file_metadata_versions_storage_table_name')
+    if table:
+        sort_name = 'type:filePath:metadataKey'
+        for item in _query_all(dynamodb_client, table, 'databaseId:assetId', asset, _VERSIONS_BY_ASSET_INDEX):
+            kind, _, rest = _attr_s(item, sort_name).partition(':')
+            source = next((path for path in sources if rest.startswith(path + ':')), None)
+            if source is None:
+                continue
+            metadata_key = rest[len(source) + 1:]
+            owner = decisions.get(_attr_s(item, 'databaseId:assetId:assetVersionId')[len(asset) + 1:], 'copy')
+            if owner == 'copy':
+                move('metadata versions', table, item, ('databaseId:assetId:assetVersionId', sort_name),
+                     {sort_name: f"{kind}:{target(source)}:{metadata_key}"}, source)
+            else:
+                leave('metadata versions', source, owner)
+    # History records describe the copy unless their version is the object's (written after the upgrade).
+    table = cfg.get('asset_file_version_history_storage_table_name')
+    if table:
+        for source in sources:
+            for item in _query_all(dynamodb_client, table, 'databaseId:assetId:filePath', f"{asset}:{source}"):
+                owner = _version_owner(_attr_s(item, 'versionId'), copy_versions, object_versions)
+                if owner == 'object':
+                    leave('file version history', source, owner)
+                    continue
+                move('file version history', table, item, ('databaseId:assetId:filePath', 'versionId'),
+                     path_changes(item, 'databaseId:assetId:filePath', source), source)
+
+    if not dry_run and counts['errors'] == errors_before:
+        moved_copies.add(asset)
+        with open(_moved_copies_path(cfg['output_dir']), 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'asset': asset, 'key': key, 'bucket': bucket}) + '\n')
+
+
 def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_run: bool,
                                    limit: Optional[int] = None, resume: bool = False,
                                    pace_seconds: float = LOCATION_PACE_SECONDS,
@@ -468,6 +704,8 @@ def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_ru
     os.makedirs(cfg['output_dir'], exist_ok=True)
     counts = {'scanned': 0, 'appended': 0, 'changed': 0, 'errors': 0}
     counts.update({c: 0 for c in LOCATION_CLASSES})
+    counts.update({c: 0 for c in COPY_COUNTERS})
+    moved_copies = _read_moved_copies(cfg['output_dir'])
 
     start_key = None
     checkpoint = _read_checkpoint(checkpoint_path, asset_table) if resume else None
@@ -486,6 +724,13 @@ def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_ru
             buckets[_attr_s(item, 'bucketId')] = _attr_s(item, 'bucketName')
 
     with open(report_path, report_mode, encoding='utf-8') as report:
+        def write_report(record: Dict) -> None:
+            report.write(json.dumps(record) + '\n')
+            report.flush()
+            if record.get('table'):
+                logger.info(f"  {'[DRY RUN] ' if dry_run else ''}{record['database_id']} / {record['asset_id']}: "
+                            f"{record['table']} {record.get('from')} -> {record.get('to', '')} ({record['action']})")
+
         while True:
             scan_kwargs = {'TableName': asset_table, 'Limit': page_size,
                            'ProjectionExpression': 'databaseId, assetId, bucketId, assetLocation'}
@@ -506,6 +751,14 @@ def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_ru
                 if pace_seconds:
                     time.sleep(pace_seconds)
                 if location_class == 'single-file':
+                    try:
+                        move_companion_copy_records(dynamodb_client, s3_client, cfg, row, bucket, key, dry_run,
+                                                    counts, write_report, moved_copies)
+                    except ClientError as e:
+                        counts['errors'] += 1
+                        write_report({'part': 'companion-copy', 'database_id': _attr_s(row, 'databaseId'),
+                                      'asset_id': _attr_s(row, 'assetId'), 'bucket': bucket, 'key': key,
+                                      'table': None, 'action': 'failed', 'detail': str(e)})
                     continue
                 action = 'report only'
                 if location_class == 'folder-without-slash':
@@ -549,9 +802,17 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
                 's3_asset_buckets_storage_table_name', ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE),
             'output_dir': config.get('asset_location_output_dir') or os.getcwd(),
         }
+        for cfg_key, param_name in COPY_TABLE_KEYS:
+            cfg[cfg_key] = resolve(cfg_key, getattr(ResourceParamKeys, param_name))
     except Exception as e:
         logger.error(f"Failed resolving table names for the {LOCATION_STEP} step: {e}")
         return 1
+    try:
+        cfg[LEGACY_COPY_TABLE_KEY[0]] = resolve(LEGACY_COPY_TABLE_KEY[0],
+                                                getattr(ResourceParamKeys, LEGACY_COPY_TABLE_KEY[1]))
+    except Exception:
+        cfg[LEGACY_COPY_TABLE_KEY[0]] = None
+        logger.info("No legacy asset file versions table is published for this deployment; part (b) skips it.")
 
     limit = args.limit if args.limit is not None else config.get('limit')
     pace = config.get('asset_location_pace_seconds')
@@ -589,7 +850,17 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
     logger.info(f"    skipped, the key changed meanwhile: {counts['changed']}")
     logger.info(f"  Keys with no objects (reported):      {counts['no-objects']}")
     logger.info(f"  Keys that could not be read:          {counts['unreadable']}")
+    logger.info(f"  Single-file keys with a copy named like the file: {counts['copy-locations']}")
+    logger.info(f"    already moved by an earlier real run: {counts['copy-already-moved']}")
+    logger.info(f"    records {'that would be ' if dry_run else ''}moved to /{{name}}/{{name}}: {counts['records-moved']}")
+    logger.info(f"    records left, a record is already at the new path: {counts['records-clash']}")
+    logger.info(f"    records left, their version is the file's own:     {counts['records-left-object']}")
+    logger.info(f"    records left, their version matches neither file:  {counts['records-left-unknown-version']}")
+    logger.info(f"    records removed meanwhile:            {counts['records-gone']}")
     logger.info(f"  Errors:                               {counts['errors']}")
+    if counts['records-moved'] and not dry_run:
+        logger.info("  Run the vectorBackfill step afterwards (it runs next under --steps all) so the moved copy's")
+        logger.info("  search vectors are rewritten for its new path.")
     logger.info("=" * 80)
 
     return 0 if counts['errors'] == 0 and counts['unreadable'] == 0 else 1
@@ -1401,7 +1672,8 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
     """What a real run changes, deletes or bills, phrased to follow "This run will"."""
     parts = []
     if fixes_locations:
-        parts.append("append '/' to asset location keys that name a folder (assetLocationFolderKeys)")
+        parts.append("append '/' to asset location keys that name a folder and move the records of a "
+                     "single-file asset's copy named like its file (assetLocationFolderKeys)")
     if deletes_triggers:
         parts.append('delete orphaned workflow-trigger rows (orphanedTriggers)')
     if clears_vectors:
