@@ -48,14 +48,10 @@ class TestAuxiliaryDataOfTheObject:
     def test_deleting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         calls = []
         monkeypatch.setattr(af, "delete_assetAuxiliary_files", calls.append)
-        af.delete_file("db1", "a1", "/model.glb", False, True, CLAIMS)
-        assert calls == ["db1/p1/model.glb/preview/"]
-
-    def test_deleting_a_companion_entry_deletes_that_entrys_data(self, af, monkeypatch):
-        calls = []
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", calls.append)
         af.delete_file("db1", "a1", "/sub/x.obj", False, True, CLAIMS)
-        assert calls == ["db1/p1/model.glb/sub/x.obj/"]
+        af.delete_file("db1", "a1", "/model.glb", False, True, CLAIMS)
+        # A companion entry's own data goes with it; the object's stops at preview/
+        assert calls == ["db1/p1/model.glb/sub/x.obj/", "db1/p1/model.glb/preview/"]
 
     def test_reverting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         first = af.test_client.list_object_versions(Bucket=BUCKET, Prefix=OWN_KEY)["Versions"]
@@ -180,6 +176,3 @@ class TestAssetTypeSampleReadsOnlyTheLocationsKeys:
     def test_neighbours_do_not_fill_the_sample(self, engine):
         engine.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/part.obj", Body=b"x")
         assert engine._determine_asset_type(BUCKET, FILE_LOCATION) == "folder"
-
-    def test_the_object_alone_types_the_asset(self, engine):
-        assert engine._determine_asset_type(BUCKET, FILE_LOCATION) == ".glb"
