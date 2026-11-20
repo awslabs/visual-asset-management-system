@@ -1386,7 +1386,7 @@ _NLP_SIZE_MAX = 100
 # id with a 400 as well; the tool refuses it before the call, with the list in the error.
 # tests/test_search_nlp_tool.py pins this copy to the backend's.
 _NLP_FILE_CLASSES = (
-    "image", "video", "audio", "document", "text", "data", "tiles3d", "mesh", "usd", "cad",
+    "image", "video", "audio", "document", "text", "data", "tiles3d", "raster", "mesh", "usd", "cad",
     "pointcloud", "splat", "ifc", "other",
 )
 
@@ -1473,7 +1473,7 @@ def search_nlp(
 
     query: 1..1000 characters. database_ids: at most 100 ids. entity_type: "file" or "asset" (each
     asset's best file). size: 1..100; no offset paging, so narrow the filters instead.
-    file_classes: image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud,
+    file_classes: image, video, audio, document, text, data, tiles3d, raster, mesh, usd, cad, pointcloud,
     splat, ifc, other. metadata_query, geo_search and tags need OpenSearch (else ignored with a
     warning). include_segments=False matches whole-file vectors only.
 
