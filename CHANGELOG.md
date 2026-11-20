@@ -80,6 +80,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Behaviour Changes
 
+-   **Backend** **Creating an asset from an existing key inside a VAMS system folder is refused.** A `bucketExistingKey` with `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads` as any path segment, with or without the bucket's base prefix, answers `400` `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.` Bucket sync no longer creates an asset for a new `vams.preparedDownloads/` folder in an asset bucket, as it already skipped the other folders. ([#1767](https://github.com/awslabs/visual-asset-management-system/pull/1767))
 -   **Backend** **Unarchiving a single-file asset restores the asset's own files.** Unarchiving a single-file asset restores only the files it holds: its file, its previews and its companion folder. A file outside the asset that an earlier archive of it also marked as archived, a key that only starts with the asset's key such as `model.glb.bak`, is unarchived one file at a time. A file that a permanent delete of such an asset removed before this release cannot be restored. ([#1767](https://github.com/awslabs/visual-asset-management-system/pull/1767))
 
 ### Features

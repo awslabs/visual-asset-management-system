@@ -107,6 +107,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Behaviour changes:**
 
+-   **Creating an asset from an existing key inside a VAMS system folder is refused.** A `bucketExistingKey` with `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads` as any path segment, with or without the bucket's base prefix, answers `400` `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.` Bucket sync no longer creates an asset for a new `vams.preparedDownloads/` folder in an asset bucket, as it already skipped the other folders. (PR #1767)
 -   **Unarchiving a single-file asset restores the asset's own files.** Unarchiving a single-file asset restores only the files it holds: its file, its previews and its companion folder. A file outside the asset that an earlier archive of it also marked as archived, a key that only starts with the asset's key such as `model.glb.bak`, is unarchived one file at a time. A file that a permanent delete of such an asset removed before this release cannot be restored. (PR #1767)
 
 **Added:**

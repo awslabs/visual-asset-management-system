@@ -29,6 +29,9 @@ from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
 from common.assetLocations import contains
+from common.s3PathPatterns import (
+    AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
+)
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -372,6 +375,19 @@ def normalize_location_key(key):
     if not key:
         return ''
     return key.lstrip('/')
+
+
+# Folder names a bucketExistingKey may not pass through: the reserved VAMS system folders bucket sync
+# skips (pipeline run I/O, previews, temporary uploads, workspaces) and the prepared-downloads folder.
+RESERVED_EXISTING_KEY_FOLDERS = RESERVED_S3_PREFIX_FOLDERS | {AUXILIARY_PREPARED_DOWNLOADS_PREFIX.strip('/')}
+RESERVED_EXISTING_KEY_MESSAGE = ("The specified bucketExistingKey is inside a folder VAMS reserves for system "
+                                 "use. Choose another location.")
+
+
+def is_reserved_existing_key(s3_key, base_prefix):
+    """Whether a resolved bucketExistingKey has a reserved VAMS system folder as any path segment, read
+    with and without the bucket's base prefix (``key_has_reserved_segment``)."""
+    return key_has_reserved_segment(s3_key, base_prefix, RESERVED_EXISTING_KEY_FOLDERS)
 
 
 def keys_conflict(existing_key, target_key):
@@ -814,6 +830,12 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
                 f"{error_msg}: resolved {s3_key} equals base prefix root "
                 f"{normalize_base_assets_prefix(s3_bucket_prefix)!r}")
             raise VAMSGeneralErrorResponse(error_msg)
+
+        # A key inside a VAMS system folder holds system data, never an asset's files. Refused before any
+        # S3 read, with a message that names no other record.
+        if is_reserved_existing_key(s3_key, s3_bucket_prefix):
+            logger.error(f"bucketExistingKey {s3_key} is inside a reserved VAMS system folder")
+            raise VAMSGeneralErrorResponse(RESERVED_EXISTING_KEY_MESSAGE)
 
         # Check if the key exists in S3 (full path: bucketPrefix/bucketExistingKey)
         if not check_s3_key_exists(s3_bucket, s3_key):
