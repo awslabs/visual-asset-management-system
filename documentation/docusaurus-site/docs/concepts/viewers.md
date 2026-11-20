@@ -105,7 +105,7 @@ This table provides a quick lookup from file extension to the viewer(s) that han
 | `.stl`           | Three.js Viewer                  | --                      |
 | `.wrl`           | Online 3D Viewer                 | --                      |
 
-The tables in this section list every built-in viewer, not only those available in every deployment: the licensed VNTANA and VEERUM viewers ship disabled, and the Needle USD, SuperSplat, ThatOpen IFC, Rhinoceros 3D and Robotics Data viewers need `ALLOWUNSAFEEVAL`. The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
+The tables in this section list every built-in viewer, not only those available in every deployment: the licensed VNTANA and VEERUM viewers ship disabled, the Needle USD, SuperSplat, ThatOpen IFC, Rhinoceros 3D and Robotics Data viewers need `ALLOWUNSAFEEVAL`, and the GeoTIFF Map Viewer needs location services (`LOCATIONSERVICES`). The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
 
 ### Point cloud and Gaussian splat extensions
 

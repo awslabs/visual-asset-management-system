@@ -8,13 +8,13 @@ A COG in EPSG:3857 is written with GDAL's `GoogleMapsCompatible` tiling scheme. 
 
 ## What It Does
 
-| Input                                                     | Result                                                                                                     |
-| :-------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------- |
-| Georeferenced TIFF that is not a COG                      | `<file name>.cog.tif` is written beside it                                                                 |
-| COG in a CRS other than EPSG:3857 (for example EPSG:4326) | Converted to a COG in EPSG:3857, same output name                                                          |
-| COG already in EPSG:3857                                  | No output. The run succeeds and writes a note, `cog-convert-skipped.json`, to the run's results            |
-| TIFF with no georeference                                 | No output, same note                                                                                       |
-| A file named `*.cog.tif`                                  | Never an input: the pipeline and its upload trigger exclude the name, so a result is never converted again |
+| Input                                                     | Result                                                                                                                                                                                                                           |
+| :-------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Georeferenced TIFF that is not a COG                      | `<file name>.cog.tif` is written beside it                                                                                                                                                                                       |
+| COG in a CRS other than EPSG:3857 (for example EPSG:4326) | Converted to a COG in EPSG:3857, same output name                                                                                                                                                                                |
+| COG already in EPSG:3857                                  | No output. The run succeeds and writes a note, `cog-convert-skipped.json`, to the run's results                                                                                                                                  |
+| TIFF with no georeference                                 | No output, same note                                                                                                                                                                                                             |
+| A file named `*.cog.tif`                                  | The upload trigger excludes the name, so a result is never converted again on upload. The pipeline itself excludes nothing: a manual run converts a `*.cog.tif` in another CRS, and one already in EPSG:3857 is skipped as above |
 
 ## Output Name and Location
 
