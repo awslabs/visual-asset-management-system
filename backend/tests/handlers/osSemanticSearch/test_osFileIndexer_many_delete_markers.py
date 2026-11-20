@@ -21,6 +21,7 @@ import pytest
 from tests.handlers.osSemanticSearch.test_osFileIndexer_location_attribution import (  # noqa: F401
     BUCKET,
     CUSTOM,
+    NORMAL,
     _record,
     _wire,
     fileIndexer,
@@ -40,10 +41,12 @@ def _load_shipped_helper():
     return namespace["list_key_versions_to_newest_version"]
 
 
-HELPERS = {
-    "shipped": _load_shipped_helper(),
-    "double": sys.modules["common.s3"].list_key_versions_to_newest_version,
-}
+def _helper(name):
+    """The walk under test, loaded when a test runs (not at collection), so the end-to-end cases below
+    also collect against code that predates the helper."""
+    if name == "shipped":
+        return _load_shipped_helper()
+    return sys.modules["common.s3"].list_key_versions_to_newest_version
 
 
 class _PagedVersions:
@@ -85,24 +88,24 @@ MARKERS_ONLY_WITH_SIBLING = _markers(KEY, 1500) + [_version(KEY + ".bak", "s1", 
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("helper", sorted(HELPERS))
+@pytest.mark.parametrize("helper", ["double", "shipped"])
 class TestTheWalkReachesTheNewestVersion:
     def test_a_version_behind_more_than_a_page_of_markers_is_found(self, helper):
         client = _PagedVersions(ARCHIVED_UNDER_MANY_MARKERS)
-        listing = HELPERS[helper]("bucket", KEY, client=client)
+        listing = _helper(helper)("bucket", KEY, client=client)
         assert [v["VersionId"] for v in listing["Versions"]] == ["v1"]
         assert listing["DeleteMarkers"] and all(m["Key"] == KEY for m in listing["DeleteMarkers"])
         assert any(m.get("IsLatest") for m in listing["DeleteMarkers"])
 
     def test_a_longer_key_ends_the_walk_and_is_never_counted_as_the_key(self, helper):
         client = _PagedVersions(MARKERS_ONLY_WITH_SIBLING)
-        listing = HELPERS[helper]("bucket", KEY, client=client)
+        listing = _helper(helper)("bucket", KEY, client=client)
         assert listing["Versions"] == []
         assert len(client.calls) >= 2
 
     def test_a_current_version_ends_the_walk_on_the_first_page(self, helper):
         client = _PagedVersions([_version(KEY, "v2", True), _version(KEY, "v1")] + _markers(KEY + ".bak", 3000))
-        listing = HELPERS[helper]("bucket", KEY, client=client)
+        listing = _helper(helper)("bucket", KEY, client=client)
         assert [v["VersionId"] for v in listing["Versions"]] == ["v2", "v1"]
         assert client.calls and client.calls[0]["KeyMarker"] is None
         assert len(client.calls) <= 1
@@ -118,4 +121,17 @@ class TestFileIndexerOverManyMarkers:
         result = fileIndexer.handle_s3_notification(_record(KEY, event="ObjectRemoved:Delete"))
         assert result.operation == "index"
         assert not fileIndexer.delete_file_document.called
+        assert fileIndexer.build_file_document.call_args.args[0].isArchived is True
+
+    def test_a_normal_assets_archived_file_behind_many_markers_stays_indexed_as_archived(
+            self, fileIndexer, monkeypatch):
+        key = "a1/x.obj"
+        _wire(fileIndexer, monkeypatch, [NORMAL])
+        fileIndexer.s3_client = _PagedVersions(_markers(key, 1500) + [_version(key, "v1")])
+        fileIndexer.s3_client.head_object = MagicMock(
+            return_value={"Metadata": {"databaseid": "db1", "assetid": "a1"}, "VersionId": "v1"})
+        fileIndexer.build_file_document = MagicMock(return_value=MagicMock())
+        result = fileIndexer.handle_s3_notification(_record(key, event="ObjectRemoved:Delete"))
+        assert not fileIndexer.delete_file_document.called
+        assert result.operation == "index"
         assert fileIndexer.build_file_document.call_args.args[0].isArchived is True
