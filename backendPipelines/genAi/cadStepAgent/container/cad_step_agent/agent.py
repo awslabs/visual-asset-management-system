@@ -21,7 +21,9 @@ OPENAI_API_KEY_SECRET_ARN_ENV = "OPENAI_API_KEY_SECRET_ARN"  # nosec B105 - envi
 OPENAI_SECRET_JSON_KEYS = ("apiKey", "OPENAI_API_KEY", "api_key", "key")
 
 MAX_TOKENS = 8192
-TEMPERATURE = 0.2
+# No temperature is sent: some models refuse the parameter (the commercial default
+# global.anthropic.claude-sonnet-5-5 answers "`temperature` is deprecated for this model"), and
+# leaving it out is valid for every model, which then uses its own default.
 
 SYSTEM_PROMPT = """You are a mechanical CAD engineer who produces STEP files by writing CadQuery (Python) scripts.
 
@@ -175,12 +177,12 @@ def build_model(provider, model_id, api_key=None, region=None, guardrail=None):
         if guardrail is None:
             raise ModelConfigurationError("The Bedrock provider requires a guardrail")
         return BedrockModel(model_id=model_id, region_name=region or os.environ.get("AWS_REGION"),
-                            temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
+                            max_tokens=MAX_TOKENS,
                             guardrail_id=guardrail.guardrail_id, guardrail_version=guardrail.version,
                             guardrail_trace="enabled")
     from strands.models.openai import OpenAIModel
     return OpenAIModel(client_args={"api_key": api_key}, model_id=model_id,
-                       params={"max_tokens": MAX_TOKENS, "temperature": TEMPERATURE})
+                       params={"max_tokens": MAX_TOKENS})
 
 
 class CancellationHook:
