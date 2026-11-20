@@ -816,6 +816,7 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
+
 class S3PrefixDeleteIncomplete(Exception):
     """A prefix delete left at least one object version or delete marker in place.
 
@@ -827,6 +828,7 @@ class S3PrefixDeleteIncomplete(Exception):
         super().__init__(f"{len(failed_keys)} key(s) not deleted, {len(deleted_keys)} deleted")
         self.deleted_keys = deleted_keys
         self.failed_keys = failed_keys
+
 
 def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
@@ -898,7 +900,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
             logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
 
     if failed_files:
-        logger.error(f"{len(failed_files)} key(s) under prefix {prefix} kept a version or delete marker; "
+        logger.error(f"{len(failed_files)} key(s) under prefix {prefix} kept a version or delete marker, "
                      f"{len(deleted_files)} deleted")
         raise S3PrefixDeleteIncomplete(deleted_files, failed_files)
 

@@ -1720,6 +1720,7 @@ def _delete_asset_links_for_permanent_deletion(databaseId: str, assetId: str, de
             logger.warning(f"Error deleting asset link {asset_link_id} for asset {assetId}: {e}")
             continue
 
+
 def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id, asset_id, deleted_items):
     """Delete every object version and delete marker in the asset's file and preview locations.
 
@@ -1769,11 +1770,12 @@ def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id
         removed_paths.append(path)
     delete_file_version_records(database_id, asset_id, removed_paths)
 
-    logger.error(f"Permanent delete of asset {asset_id} stopped: {len(removed_keys)} S3 key(s) deleted, "
-                 f"{len(kept_keys)} kept; {len(removed_paths)} file record(s) removed, the asset is kept")
+    logger.error(f"Permanent delete of asset {asset_id} stopped with the asset kept: {len(removed_keys)} S3 "
+                 f"key(s) deleted, {len(kept_keys)} kept, {len(removed_paths)} file record(s) removed")
     raise VAMSGeneralErrorResponse("Error permanently deleting asset: not every file could be deleted from "
                                    "Amazon S3. The asset and its remaining files were kept, so the delete "
                                    "can be retried.")
+
 
 def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles):
     """Permanently delete an asset from all systems
