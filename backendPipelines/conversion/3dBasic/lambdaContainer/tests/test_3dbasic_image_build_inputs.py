@@ -103,7 +103,7 @@ class TestRequirementsAreTheLockExport:
         # `pip install --require-hashes` refuses a package without a hash and any file whose hash is
         # not listed, so the image holds exactly the locked packages.
         blocks = re.split(r"(?m)^(?=[A-Za-z0-9])", _read("requirements.txt"))
-        entries = [block for block in blocks if block.strip()]
+        entries = [block for block in blocks if block.strip() and not block.lstrip().startswith("#")]
         assert entries
         for entry in entries:
             assert re.search(r"--hash=sha256:[0-9a-f]{64}", entry), entry.splitlines()[0]
