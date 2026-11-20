@@ -620,15 +620,20 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     `allowEscalation` (a deployment with the tier) or the run is on Batch, so a deployment without the tier writes
     nothing new. A failed Batch run also writes it, with `failed: true` and the error line, then fails as before; a
     failed Lambda run writes none (its error is in the workflow).
--   **Launcher.** Not in this change. The Lambdas of the callback form (`conversion/3dBasic/lambda/`:
-    `vamsExecuteConversion3dBasicPipeline`, `openPipeline`, `constructPipeline`, `selectJobSize`, `pipelineEnd`, the
-    selector `computeTier`, the vendored `manifestHelper` and `customLogging`) arrive with the infrastructure that deploys
-    them (config, VPC, Batch resources, state machine, registration override), because their `states:SendTaskFailure`
-    grant comes from that builder. The container's contract with them is fixed here: the converter never receives the
-    workflow's task token, the Batch task gets only locations in `VAMS_CONVERSION_EVENT`, and the job role has no
-    `states:` permission. The job definition must set `linuxParameters.initProcessEnabled` (the entry runs as PID 1
-    and does not reap orphaned grandchildren such as Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the
-    S3 clients read the Region at import).
+-   **Launcher.** `conversion/3dBasic/lambda/` holds the callback form's Lambdas, deployed only with
+    `useConversion3dBasic.batchTier.enabled`: `vamsExecuteConversion3dBasicPipeline` (what the workflow calls, in
+    place of the converter), `openPipeline` (starts the state machine, registers the converter and Batch container
+    log sources), `selectJobSize` and `constructPipeline` (the tier selector and the job's `VAMS_CONVERSION_EVENT`),
+    `pipelineEnd` (the only function that answers the workflow's task token), the selector module `computeTier`, and the
+    vendored `manifestHelper` and `customLogging`. The builders are in
+    `infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/conversion3dBasicLauncherFunctions.ts`, each with
+    its own `states:SendTaskFailure` grant (`infra/test/pipelines/taskTokenFailureGrants.test.ts`). The container's
+    contract with them: the converter never receives the workflow's task token, the Batch task gets only locations in
+    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets
+    `linuxParameters.initProcessEnabled` (the entry runs as PID 1 and does not reap orphaned grandchildren such as
+    Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
+    ladder (4/30, 8/60, 16/120) is one list in `size_check.BATCH_TASK_SIZES`, `computeTier.JOB_SIZES` and
+    `CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES` in `infra/config/config.ts`; tests compare them.
 -   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
     (Lambda) and `GOLDEN_TARGET=batch tests/golden/run_golden.sh` (the same 176 cells, one container run each, plus
     `tests/test_3dbasic_hostile_inputs_golden.py` on both).

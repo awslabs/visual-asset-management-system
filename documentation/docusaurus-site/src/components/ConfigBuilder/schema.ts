@@ -1150,6 +1150,27 @@ const CORE_FIELDS: FieldMeta[] = [
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
     },
     {
+        path: "app.pipelines.useConversion3dBasic.batchTier.enabled",
+        label: "3D basic conversion — AWS Batch tier",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Continue a model the Lambda function cannot convert (too large, or out of memory or time) on an AWS Batch Fargate job of 4 vCPU / 30 GiB, 8 / 60 or 16 / 120, instead of refusing it. Requires the global VPC (app.useGlobalVpc.enabled). Off by default; the tier costs nothing while no model needs it.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB",
+        label: "3D basic conversion — largest Batch job (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 30,
+        help: "Memory of the largest job the tier may start: 30, 60 or 120 GiB (default 120). A model above that size's limit fails before any job starts. Fargate bills the job's vCPU and memory by the second.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled") &&
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.batchTier.enabled"),
+    },
+    {
         path: "app.pipelines.useConversionCoordinateTransform.enabled",
         label: "Coordinate transform conversion",
         input: "boolean",
