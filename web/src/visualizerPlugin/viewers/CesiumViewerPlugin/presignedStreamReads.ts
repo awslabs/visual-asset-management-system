@@ -77,6 +77,12 @@ function parseStreamUrl(url: unknown, scopes: Set<PresignedStreamScope>): Stream
                 .map((segment) => decodeURIComponent(segment))
                 .join("/");
             const assetVersionId = new URLSearchParams(query).get("assetVersionId") || undefined;
+            // A decoded `.` or `..` segment (for example from `%2e%2e` or `%2F`) is never a key the
+            // viewer asks for: Cesium resolves ordinary relative segments before the hook sees the
+            // URL. Leave such a URL to the stream route, where the API validates the key.
+            if (key.split("/").some((segment) => segment === "." || segment === "..")) {
+                return null;
+            }
             return { scope, key, assetVersionId };
         } catch {
             return null;
@@ -204,6 +210,13 @@ function wrapCreateImage(install: Installation) {
         const target = parseStreamUrl(request?.url, install.scopes);
         if (!target) return install.originalCreateImage.apply(this, args);
 
+        // Cesium cancels an image request through `request.cancelFunction`. Until the presign call
+        // returns there is no read to abort, so the cancel stops the presign and keeps the original
+        // function from starting a read nobody waits for. The original sets its own cancel function
+        // when it starts one.
+        const controller = new AbortController();
+        request.cancelFunction = () => controller.abort();
+
         (async () => {
             try {
                 const signed = await getPresignedFileUrl(
@@ -212,9 +225,11 @@ function wrapCreateImage(install: Installation) {
                         assetId: target.scope.assetId,
                         key: target.key,
                         assetVersionId: target.assetVersionId,
+                        signal: controller.signal,
                     },
                     `the tileset image "${target.key}"`
                 );
+                if (controller.signal.aborted) return;
                 // The original reads `request.url` when called; the request keeps its own URL after.
                 const streamUrl = request.url;
                 request.url = signed;
@@ -225,6 +240,7 @@ function wrapCreateImage(install: Installation) {
                     request.url = streamUrl;
                 }
             } catch (error) {
+                if (controller.signal.aborted || isAbort(error)) return;
                 deferred.reject(presignFailureEvent(install.Cesium, error));
             }
         })();

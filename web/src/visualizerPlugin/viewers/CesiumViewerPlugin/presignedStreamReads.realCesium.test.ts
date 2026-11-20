@@ -8,8 +8,8 @@
  * (`public/viewers/cesium/Cesium.js`, built by `customInstalls/cesium/cesiumInstall.js`). Only the
  * network transport is replaced (a fake XMLHttpRequest); Cesium's own request path (Resource,
  * RequestScheduler, tileset loading, retries) runs unchanged, so these tests show which Cesium
- * request paths the hook covers. The suite skips when the bundle was not installed, so a clone
- * without the viewer installed does not fail.
+ * request paths the hook covers. The suite skips with a warning when the bundle is not installed
+ * and fails when REQUIRE_CESIUM_BUNDLE=1.
  */
 import fs from "fs";
 import path from "path";
@@ -22,7 +22,28 @@ jest.mock("../../../services/APIService", () => ({
 }));
 
 const BUNDLE = path.resolve(__dirname, "../../../../public/viewers/cesium/Cesium.js");
-const describeIfBundle = fs.existsSync(BUNDLE) ? describe : describe.skip;
+// CI installs web dependencies with `npm ci --ignore-scripts` for the unit tests, so the bundle (built
+// by the Cesium postinstall) is absent there and this suite is skipped; the Cesium stand-in suite
+// `presignedStreamReads.test.ts` runs instead. Set REQUIRE_CESIUM_BUNDLE=1 to make a missing bundle
+// a failure (any run that installs with scripts, for example `npm ci && npx jest`).
+const bundleInstalled = fs.existsSync(BUNDLE);
+const bundleRequired = process.env.REQUIRE_CESIUM_BUNDLE === "1";
+const describeIfBundle = bundleInstalled ? describe : describe.skip;
+
+if (!bundleInstalled) {
+    if (bundleRequired) {
+        it("has the Cesium bundle installed (REQUIRE_CESIUM_BUNDLE=1)", () => {
+            throw new Error(
+                `Cesium bundle not found at ${BUNDLE}; run npm ci with install scripts`
+            );
+        });
+    } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+            `SKIPPED: real-Cesium hook tests, no bundle at ${BUNDLE} (set REQUIRE_CESIUM_BUNDLE=1 to fail)`
+        );
+    }
+}
 
 const API = "https://api.example/api/";
 const PREFIX = `${API}database/db1/assets/a1/download/stream/`;
@@ -265,6 +286,17 @@ describeIfBundle("installPresignedStreamReads with the real Cesium build", () =>
         expect(sent[0].headers.Authorization).toBe("Bearer t");
         expect(sent[1].url).toContain("/assets/OTHER/");
         expect(sent[2].method).toBe("HEAD");
+    });
+
+    it("leaves a key with an encoded dot segment to the stream route", async () => {
+        const uninstall = installPresignedStreamReads(Cesium, scope);
+        serve = () => ({ body: "{}" });
+        await resourceFor(`${PREFIX}a1/%2e%2e/other/x.json`)
+            .fetchJson()
+            .catch(() => undefined);
+        uninstall();
+        expect(mockDownloadAsset).not.toHaveBeenCalled();
+        expect(sent[0].url).toContain("/download/stream/");
     });
 
     it("restores the original functions on unmount and is reference counted", async () => {
