@@ -2,7 +2,9 @@
 # Based on the official NVIDIA Cosmos-Transfer2.5 pattern
 # https://github.com/nvidia-cosmos/cosmos-transfer2.5
 
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+# Base pinned by digest: the tag records which release the digest resolves to, and a re-pointed tag
+# cannot change what a rebuild of this commit pulls. Move the tag and the digest together.
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:24c8e3581ea6330038b0d374920721983312627f8adbfcf390bdb4b399d280ed
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -31,7 +33,7 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION
     rm -rf aws awscliv2.zip
 
 # Install uv package manager
-COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:f64ad69940b634e75d2e4d799eb5238066c5eeda49f76e782d4873c3d014ea33 /uv /uvx /usr/local/bin/
 
 # Create the non-root runtime user up front (issue #327) so HOME is fixed BEFORE the uv steps
 # below, but stay root for the build: /opt is root-owned, so cloning into /opt/cosmos-transfer2.5,
@@ -70,8 +72,13 @@ RUN uv sync --locked --extra=cu128 --python 3.10
 
 # Upgrade NCCL to a CUDA 12.8 compatible version.
 # The uv sync installs NCCL 2.26.2+cuda12.2 which is incompatible with CUDA 12.8 compat driver.
-# This must match the CUDA version provided by the compat libraries.
-RUN uv pip install --python .venv/bin/python "nvidia-nccl-cu12>=2.26"
+# This must match the CUDA version provided by the compat libraries. The version and its hashes come from
+# requirements-nccl.lock, generated from requirements-nccl.txt (its header holds the command).
+COPY requirements-nccl.lock /tmp/requirements-nccl.lock
+# --no-config: the project's [tool.uv] override-dependencies (numpy>=2.0.0) are for its own sync; under
+# --require-hashes uv would refuse them as unpinned requirements of this install.
+RUN uv pip install --no-config --python .venv/bin/python --require-hashes --only-binary :all: \
+    -r /tmp/requirements-nccl.lock
 
 # Install python3-dev for Python.h headers (needed by Triton JIT compilation of cuda_utils.c)
 # Must be installed AFTER uv sync to avoid conflicts with uv's standalone Python
