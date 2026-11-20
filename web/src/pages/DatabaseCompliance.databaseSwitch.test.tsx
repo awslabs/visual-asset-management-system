@@ -78,7 +78,7 @@ describe("DatabaseCompliance on another database", () => {
         const { rerender } = render(<DatabaseCompliancePage />);
         await screen.findByText("db1-asset");
         await userEvent.click(screen.getByRole("button", { name: /Evaluate All/ }));
-        expect(await screen.findByText(/50 not reached yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/at least 50 not reached yet/)).toBeInTheDocument();
 
         mockDatabaseId = "db2";
         rerender(<DatabaseCompliancePage />);

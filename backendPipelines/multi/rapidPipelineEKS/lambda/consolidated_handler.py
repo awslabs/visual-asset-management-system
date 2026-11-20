@@ -62,6 +62,9 @@ JOB_BACKOFF_LIMIT = int(os.environ.get('EKS_JOB_BACKOFF_LIMIT') or 2)
 JOB_TTL_SECONDS_AFTER_FINISHED = int(
     os.environ.get('EKS_JOB_TTL_SECONDS_AFTER_FINISHED') or 600)
 CONTAINER_IMAGE_URI = os.environ.get('CONTAINER_IMAGE_URI')
+# Labels naming the pipeline (vams/pipeline) for the Job and its pods, as a JSON object set by the CDK
+# construct, as the other pipelines tag their AWS Batch jobs and ECS tasks.
+PIPELINE_JOB_LABELS = json.loads(os.environ.get('PIPELINE_JOB_LABELS') or '{}')
 NAMESPACE = os.environ.get('KUBERNETES_NAMESPACE', 'default')
 REGION = os.environ.get('AWS_REGION', 'us-west-2')
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get('ALLOWED_INPUT_FILEEXTENSIONS',
@@ -863,7 +866,8 @@ def handle_construct_pipeline(event):
                     "jobName": job_name or "unknown",
                     "createdBy": "vams",
                     "pipeline-type": "rapidPipelineEKS",
-                    "job-id": job_id
+                    "job-id": job_id,
+                    **PIPELINE_JOB_LABELS,
                 },
                 "annotations": {
                     "vams.aws.amazon.com/pipeline-type": "rapidPipelineEKS",
@@ -882,7 +886,8 @@ def handle_construct_pipeline(event):
                     "metadata": {
                         "labels": {
                             "app": "rapid-pipeline",
-                            "job-id": job_id
+                            "job-id": job_id,
+                            **PIPELINE_JOB_LABELS,
                         }
                     },
                     "spec": {

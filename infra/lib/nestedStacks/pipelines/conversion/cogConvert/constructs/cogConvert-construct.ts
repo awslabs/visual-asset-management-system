@@ -23,6 +23,11 @@ import { Service } from "../../../../../helper/service-helper";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
 import { grantBatchStateTimeoutCleanup } from "../../../constructs/stateTimeoutBatchSubmitJob";
 import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
+import {
     NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
     generateUniqueNameHash,
     grantExternalAssetBucketKmsKeys,
@@ -274,6 +279,10 @@ export class CogConvertConstruct extends Construct {
             props.vpc,
             props.pipelineSubnets,
             props.kmsKey
+        );
+        configureLambdaBatchJobTagging(
+            executeBatchJobFunction,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.cogConvert)
         );
 
         // Step Functions state machine

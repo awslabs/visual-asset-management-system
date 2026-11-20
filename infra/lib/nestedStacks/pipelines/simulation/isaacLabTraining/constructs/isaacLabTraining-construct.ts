@@ -27,6 +27,11 @@ import {
 } from "../../../../../helper/security";
 import * as ServiceHelper from "../../../../../helper/service-helper";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    configureLambdaBatchJobTagging,
+    pipelineJobTags,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import { NagSuppressions } from "cdk-nag";
 import {
     GPU_CONTAINER_UID,
@@ -115,7 +120,9 @@ export class IsaacLabTrainingConstruct extends Construct {
         // without permission errors. The path is "/checkpoints" (not "/"): EFS applies createAcl only
         // when the access-point root directory does not already exist, and "/" always exists as
         // root:root 0755, so with "/" the ACL is never applied and the squashed uid 10000 cannot
-        // makedirs under it. "/checkpoints" is created and owned by this uid/gid on first mount. The
+        // makedirs under it. "/checkpoints" is created and owned by this uid/gid on first mount. Where it
+        // already exists (a deployment that trained before the container ran as this uid), the instance
+        // start-up script below hands it over instead. The
         // access point is mounted at containerPath /mnt/efs/checkpoints, so the container sees this
         // owned directory directly at the path __main__.py writes ("/mnt/efs/checkpoints/<job>").
         const trainingEfsAccessPoint = new efs.AccessPoint(this, "TrainingEfsAccessPoint", {
@@ -139,6 +146,32 @@ export class IsaacLabTrainingConstruct extends Construct {
             "Allow NFS for EFS access"
         );
 
+        // Instance start-up script: hands the checkpoint folder on the file system to the container
+        // user before a job runs. EFS applies the access point's createAcl only when /checkpoints
+        // does not exist yet, and a deployment that trained before the container ran as this uid
+        // already has it, owned by root with mode 0755, so the container could not create its run
+        // folder there. The host mounts the file system ROOT (the access point squashes every caller
+        // to the container uid, which cannot chown), creates the folder if it is missing, gives it and
+        // everything under it to the container uid/gid -- earlier runs' folders too, because
+        // evaluation writes beside a checkpoint -- and unmounts. find changes only entries not yet
+        // owned, so after the first boot a large checkpoint tree costs one walk and no writes. One
+        // command per line, and the outcome goes to the serial console, which outlives the instance
+        // ("Instance User Data on a Batch Compute Environment" in ../../CLAUDE.md).
+        const efsRootMount = "/mnt/vams-isaaclab-efs";
+        const userData = `MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==MYBOUNDARY=="
+
+--==MYBOUNDARY==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+yum install -y amazon-efs-utils
+mkdir -p ${efsRootMount}
+if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoint -q ${efsRootMount}; then mkdir -p ${efsRootMount}/checkpoints; handed=$(find ${efsRootMount}/checkpoints \\( ! -uid ${GPU_CONTAINER_UID} -o ! -gid ${GPU_CONTAINER_GID} \\) -print -exec chown -h ${GPU_CONTAINER_UID}:${GPU_CONTAINER_GID} {} + | wc -l); echo "vams-isaaclab-checkpoints: gave $handed entries under /checkpoints to ${GPU_CONTAINER_UID}:${GPU_CONTAINER_GID}" | tee /dev/console; umount ${efsRootMount}; else echo "vams-isaaclab-checkpoints: could not mount the checkpoint file system; /checkpoints ownership unchanged" | tee /dev/console; fi
+
+--==MYBOUNDARY==--
+`;
+
         // Launch template with larger EBS volume for Isaac Lab container (10GB+)
         const launchTemplate = new ec2.LaunchTemplate(this, "IsaacLabLaunchTemplate", {
             blockDevices: [
@@ -150,6 +183,8 @@ export class IsaacLabTrainingConstruct extends Construct {
                     }),
                 },
             ],
+            // The L2 template renders this as Fn::Base64, after token resolution.
+            userData: ec2.UserData.custom(userData),
         });
 
         const isaacLabConfig = props.config.app.pipelines.useIsaacLabTraining;
@@ -187,6 +222,17 @@ export class IsaacLabTrainingConstruct extends Construct {
                     },
                 ],
             }
+        );
+
+        // Pin the environment to the launch template version that carries the start-up script. The
+        // L2 environment renders only the template id, and AWS Batch merges the template into its own
+        // copy only when the environment is created or updated, so without a version a new template
+        // version (this script, arriving on an upgrade) would reach no instance. The version change
+        // is an in-place update: the environment names no serviceRole (Batch uses its service-linked
+        // role), uses BEST_FIT_PROGRESSIVE and sets replaceComputeEnvironment false.
+        (computeEnvironment.node.defaultChild as batch.CfnComputeEnvironment).addPropertyOverride(
+            "ComputeResources.LaunchTemplate.Version",
+            launchTemplate.latestVersionNumber
         );
 
         // Enable Container Insights on the ECS cluster created by Batch
@@ -380,6 +426,10 @@ export class IsaacLabTrainingConstruct extends Construct {
             batchJobQueue: jobQueue,
             batchJobDefinition: jobDefinition,
         });
+        configureLambdaBatchJobTagging(
+            lambdaFunctions.executeBatchJobFunction,
+            pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.isaacLabTraining)
+        );
 
         // Step Functions state machine
         const openPipelineState = new tasks.LambdaInvoke(this, "OpenPipelineState", {

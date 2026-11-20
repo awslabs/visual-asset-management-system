@@ -86,6 +86,7 @@ describe("StateTimeoutBatchSubmitJob", () => {
             (scope) =>
                 new StateTimeoutBatchSubmitJob(scope, "Job", {
                     ...submitJobProps,
+                    jobTags: { "vams:stackname": "vams-core-test", "vams:pipeline": "test" },
                     stateTimeout: cdk.Duration.minutes(90),
                 })
         );
@@ -112,6 +113,7 @@ describe("StateTimeoutBatchSubmitJob", () => {
                 (scope) =>
                     new StateTimeoutBatchSubmitJob(scope, "Job", {
                         ...submitJobProps,
+                        jobTags: { "vams:stackname": "vams-core-test", "vams:pipeline": "test" },
                         stateTimeout: cdk.Duration.seconds(0),
                     })
             )

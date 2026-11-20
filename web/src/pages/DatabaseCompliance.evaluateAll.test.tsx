@@ -14,6 +14,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DatabaseCompliancePage, { evaluateAllMessage } from "./DatabaseCompliance";
+import Synonyms from "../synonyms";
 
 jest.mock("react-router-dom", () => ({
     ...jest.requireActual("react-router-dom"),
@@ -109,7 +110,7 @@ describe("DatabaseCompliance Evaluate All", () => {
         await screen.findByText("override-asset");
         const evaluateAll = () => screen.getByRole("button", { name: /Evaluate All/ });
         await userEvent.click(evaluateAll());
-        expect(await screen.findByText(/113 not reached yet/)).toBeInTheDocument();
+        expect(await screen.findByText(/at least 113 not reached yet/)).toBeInTheDocument();
         await waitFor(() => expect(evaluateAll()).toBeEnabled());
         await userEvent.click(evaluateAll());
         await waitFor(() => expect(service().evaluateDatabaseCompliance).toHaveBeenCalledTimes(2));
@@ -138,7 +139,7 @@ describe("DatabaseCompliance Evaluate All", () => {
                 assetsRemaining: 35,
                 registered: 4,
             })
-        ).toMatch(/200 assets; 4 newly registered.*; 35 not reached yet/);
+        ).toMatch(/200 assets; 4 newly registered.*; at least 35 not reached yet/);
     });
 
     it("says how many archived assets were not evaluated", () => {
@@ -182,5 +183,32 @@ describe("DatabaseCompliance Evaluate All", () => {
                 skippedArchived: 0,
             })
         ).toBe("Evaluation triggered for 3 assets.");
+    });
+
+    it("says more remain while a token is returned, also with no count", () => {
+        // The request can end before it has read every asset: none counted, more remain.
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 3 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: 0,
+                NextToken: "tok-2",
+            })
+        ).toBe(
+            `Evaluation triggered for 3 assets; more ${Synonyms.assets} remain; choose Evaluate All again.`
+        );
+        // A count, when there is one, is given instead.
+        expect(
+            evaluateAllMessage({
+                message: "Evaluation triggered for 3 assets",
+                databaseId: "db1",
+                assetsTriggered: [],
+                assetsRemaining: 7,
+                NextToken: "tok-2",
+            })
+        ).toBe(
+            "Evaluation triggered for 3 assets; at least 7 not reached yet; choose Evaluate All again."
+        );
     });
 });

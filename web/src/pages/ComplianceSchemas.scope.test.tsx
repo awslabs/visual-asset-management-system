@@ -13,7 +13,7 @@ import React from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
-import ComplianceSchemas from "./ComplianceSchemas";
+import ComplianceSchemas, { SCOPE_NARROWING_WARNING } from "./ComplianceSchemas";
 
 jest.mock("@monaco-editor/react", () => ({
     __esModule: true,
@@ -129,4 +129,76 @@ it("creates a GLOBAL schema by default", async () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(service().createComplianceSchema).toHaveBeenCalledTimes(1));
     expect(service().createComplianceSchema.mock.calls[0][0].databaseId).toBe("GLOBAL");
+});
+
+describe("moving an existing schema to another database", () => {
+    const warning = () => screen.queryByText(SCOPE_NARROWING_WARNING);
+    const databasePicker = (dialog: HTMLElement) =>
+        createWrapper(dialog)
+            .findAllSelects()
+            .find((candidate) => /Choose a|db-/.test(candidate.getElement().textContent || ""));
+    const openEdit = async (name: string) => {
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: `Edit ${name}` }));
+        return screen.findByRole("dialog");
+    };
+    const chooseDatabase = (dialog: HTMLElement, databaseId: string) => {
+        const select = databasePicker(dialog);
+        if (!select) throw new Error("The database picker is not shown");
+        act(() => select.openDropdown());
+        act(() => select.selectOptionByValue(databaseId));
+    };
+
+    it("warns when a GLOBAL schema is made available to one database", async () => {
+        const dialog = await openEdit("everywhere");
+        expect(warning()).not.toBeInTheDocument();
+        await userEvent.click(within(dialog).getByLabelText(/One/));
+        // No database chosen yet: nothing to warn about.
+        expect(warning()).not.toBeInTheDocument();
+        await waitFor(() => expect(databasePicker(dialog)).toBeTruthy());
+        chooseDatabase(dialog, "db-a");
+        expect(await within(dialog).findByText(SCOPE_NARROWING_WARNING)).toBeInTheDocument();
+    });
+
+    it("warns when a schema moves to another database, and shows the API's refusal", async () => {
+        const refusal =
+            "The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).";
+        service().updateComplianceSchema.mockResolvedValue([false, refusal]);
+        const dialog = await openEdit("only-db-a");
+        await waitFor(() => expect(databasePicker(dialog)).toBeTruthy());
+        chooseDatabase(dialog, "db-b");
+        expect(await within(dialog).findByText(SCOPE_NARROWING_WARNING)).toBeInTheDocument();
+
+        await userEvent.click(within(dialog).getByRole("button", { name: "Update" }));
+        const alert = await within(dialog).findByRole("alert");
+        expect(alert).toHaveTextContent(refusal);
+        expect(service().updateComplianceSchema).toHaveBeenCalledWith(
+            "only-db-a",
+            expect.objectContaining({ databaseId: "db-b" })
+        );
+    });
+
+    it("does not warn while the scope is unchanged", async () => {
+        const dialog = await openEdit("only-db-a");
+        expect(within(dialog).getByLabelText(/One/)).toBeChecked();
+        expect(warning()).not.toBeInTheDocument();
+    });
+
+    it("does not warn when the schema is made available to every database", async () => {
+        const dialog = await openEdit("only-db-a");
+        await userEvent.click(within(dialog).getByLabelText("All databases (GLOBAL)"));
+        expect(within(dialog).getByLabelText("All databases (GLOBAL)")).toBeChecked();
+        expect(warning()).not.toBeInTheDocument();
+    });
+
+    it("does not warn when a new schema is made available to one database", async () => {
+        render(<ComplianceSchemas />);
+        await userEvent.click(await screen.findByRole("button", { name: "Create Schema" }));
+        const dialog = await screen.findByRole("dialog");
+        await userEvent.click(within(dialog).getByLabelText(/One/));
+        await waitFor(() => expect(databasePicker(dialog)).toBeTruthy());
+        chooseDatabase(dialog, "db-b");
+        expect(databasePicker(dialog)?.getElement()).toHaveTextContent("db-b");
+        expect(warning()).not.toBeInTheDocument();
+    });
 });

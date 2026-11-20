@@ -56,23 +56,27 @@ class TestRouteDispatch:
     """Each of the five method+path pairs reaches its operation; anything else is refused."""
 
     def test_get_collection_lists_schemas_with_null_rest_params(self):
+        """The listing reads the latest-version index, never the table's earlier versions; a
+        second marked row of a name (a backfill racing a save) gives way to the higher version."""
         response, tables = _run(rest_event("GET", "/compliance/schemas"),
                                 schema_rows=[schema_row(version=1), schema_row(version=2)])
         assert response["statusCode"] == 200
         schemas = body_of(response)["schemas"]
         assert [s["schemaName"] for s in schemas] == [SCHEMA]
         assert schemas[0]["version"] == 2
-        tables["schema"].scan.assert_called()
+        assert {c.kwargs["IndexName"] for c in tables["schema"].query.call_args_list} == {
+            "LatestVersionIndex"}
+        tables["schema"].scan.assert_not_called()
 
-    def test_get_collection_with_database_filter_reads_the_gsi(self):
+    def test_get_collection_with_database_filter_lists_global_and_that_databases_schemas(self):
         response, tables = _run(
             rest_event("GET", "/compliance/schemas", query_params={"databaseId": "db1"}),
-            schema_rows=[schema_row()])
+            schema_rows=[schema_row("global-one"), schema_row("db1-one", database_id="db1"),
+                         schema_row("db2-one", database_id="db2")])
         assert response["statusCode"] == 200
-        partitions = [c.kwargs["KeyConditionExpression"]._values[1]
-                      for c in tables["schema"].query.call_args_list]
-        assert partitions == ["GLOBAL", "db1"]
-        assert {c.kwargs["IndexName"] for c in tables["schema"].query.call_args_list} == {"DatabaseIdIndex"}
+        assert [s["schemaName"] for s in body_of(response)["schemas"]] == ["global-one", "db1-one"]
+        assert {c.kwargs["IndexName"] for c in tables["schema"].query.call_args_list} == {
+            "LatestVersionIndex"}
 
     def test_post_collection_registers_a_schema(self):
         response, tables = _run(

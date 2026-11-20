@@ -67,3 +67,25 @@ class TestBatchAttempt:
 
     def test_a_submission_without_a_limit_leaves_the_job_definition_value(self):
         assert "timeout" not in self._submit()
+
+
+@pytest.mark.unit
+class TestTagsAndAttemptDurationTogether:
+    """#1703's job tags and this change's per-mode attempt duration are both on one submission."""
+
+    TAGS = {"vams:stackname": "vams-core-test", "vams:pipeline": "isaacLabTraining"}
+
+    def test_the_job_carries_the_tags_and_the_mode_attempt_duration(self):
+        with patch.dict(os.environ, {"PIPELINE_JOB_TAGS": json.dumps(self.TAGS)}):
+            module = _load_execute_batch_job()
+        module.lambda_handler({
+            "jobName": "isaac-1",
+            "definition": json.dumps({"trainingConfig": {"mode": "train"}}),
+            "taskToken": "t",
+            "outputS3AssetFilesPath": "s3://b/a/",
+            "inputS3AssetFilePath": "s3://b/a/in.usd",
+            "taskTimeoutSeconds": 28800,
+        }, None)
+        kwargs = module.batch.submit_job.call_args.kwargs
+        assert kwargs["tags"] == self.TAGS
+        assert kwargs["timeout"] == {"attemptDurationSeconds": 28800}

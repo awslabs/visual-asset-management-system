@@ -191,11 +191,16 @@ def format_schema(schema: Dict[str, Any], include_body: bool = False) -> str:
 def format_schema_list(result: Dict[str, Any]) -> str:
     schemas = result.get('schemas', [])
     if not schemas:
+        # Rows the caller may not read are left out of a page, so an empty page can still carry a
+        # token.
+        if result.get('NextToken'):
+            return '\n'.join(["No compliance schemas on this page."] + _next_page_lines(result))
         return "No compliance schemas found."
     out = [f"Found {len(schemas)} compliance schema(s):", "-" * 80]
     for schema in schemas:
         out.append(format_schema(schema))
         out.append("-" * 80)
+    out.extend(_next_page_lines(result))
     return '\n'.join(out)
 
 
@@ -515,10 +520,15 @@ def not_completed_reason(message: Any) -> str:
 
 
 def format_evaluation(result: Dict[str, Any]) -> str:
-    lines = [
-        f"Evaluation ID: {result.get('evaluationId', 'N/A')}",
-        f"Schema: {result.get('schemaName', 'N/A')}",
-    ]
+    dry_run = result.get('dryRun') is True
+    lines = []
+    if dry_run:
+        lines.append("Dry Run: yes (nothing was recorded; the asset's compliance state was "
+                     "not changed)")
+    # A dry run carries no evaluation id: nothing was recorded.
+    if result.get('evaluationId') or not dry_run:
+        lines.append(f"Evaluation ID: {result.get('evaluationId', 'N/A')}")
+    lines.append(f"Schema: {result.get('schemaName', 'N/A')}")
     if result.get('schemaVersion') is not None:
         lines.append(f"Schema Version: {result['schemaVersion']}")
     # An evaluation closed without a verdict (a newer evaluation replaced it while a rule waited,
@@ -530,20 +540,25 @@ def format_evaluation(result: Dict[str, Any]) -> str:
     elif result.get('verdict'):
         lines.append(f"Verdict: {result['verdict']}")
     if result.get('complianceState'):
-        lines.append(f"Compliance State: {result['complianceState']}")
+        unchanged = " (unchanged)" if dry_run else ""
+        lines.append(f"Compliance State: {result['complianceState']}{unchanged}")
     if result.get('status') and not closed:
         lines.append(f"Status: {result['status']}")
     if result.get('evaluatedAt'):
         lines.append(f"Evaluated: {result['evaluatedAt']}")
     if result.get('executionId'):
         lines.append(f"Execution ID: {result['executionId']}")
+    if result.get('pipelineRulesNotRun'):
+        lines.append(f"Pipeline Rules Not Run: {result['pipelineRulesNotRun']} "
+                     "(pipeline rules do not run in a dry run)")
     if result.get('exceptionApplied'):
         lines.append("Exception Applied: yes (violations recorded; the asset stays released)")
     if result.get('notApplied'):
-        # A release or exception grant made after the evaluation began outranked its outcome: the
-        # verdict is recorded, the asset's state is the decision's (D159).
+        # The verdict is recorded but did not change the asset's state: a release or exception
+        # grant made after the evaluation began outranked it (D159), the binding changed, or the
+        # outcome could not be written (`notApplied` names which; the message says it in words).
         lines.append(result.get('notAppliedMessage')
-                     or "Not applied: a decision made after this evaluation began outranks it")
+                     or "Not applied: this evaluation's outcome did not change the asset")
     if result.get('hasRuleErrors'):
         errored = result.get('errorRules') or []
         names = f": {', '.join(errored)}" if errored else ""
@@ -838,14 +853,65 @@ def schema():
     pass
 
 
+# The most pages `compliance schema list --auto-paginate` reads (at 200 a page, 200,000 schemas).
+MAX_SCHEMA_LISTING_PAGES = 1000
+
+
+def _read_every_schema_page(api_client, database_id: Optional[str], page_size: Optional[int],
+                            json_output: bool) -> Dict[str, Any]:
+    """Every page of the schema listing, joined: `schemas` from every page and `createScopes` from
+    the first. A page can be short, or empty, while a NextToken is present (schemas the caller may
+    not read are left out), so only an absent token ends the walk. A token handed back unchanged,
+    or MAX_SCHEMA_LISTING_PAGES pages, stop it with the token kept (`NextToken`, `truncated`)."""
+    schemas: List[Dict[str, Any]] = []
+    first: Optional[Dict[str, Any]] = None
+    token: Optional[str] = None
+    pages = 0
+    while True:
+        page = api_client.list_compliance_schemas(
+            database_id=database_id, max_items=page_size, starting_token=token)
+        pages += 1
+        first = first if first is not None else page
+        schemas.extend(page.get('schemas') or [])
+        output_status(f"Fetched {len(schemas)} compliance schema(s) (page {pages})...", json_output)
+        next_token = page.get('NextToken')
+        if not next_token:
+            token = None
+            break
+        if next_token == token or pages >= MAX_SCHEMA_LISTING_PAGES:
+            token = next_token
+            break
+        token = next_token
+    result: Dict[str, Any] = {'schemas': schemas, 'totalItems': len(schemas),
+                              'autoPaginated': True, 'pageCount': pages}
+    if 'createScopes' in first:
+        result['createScopes'] = first['createScopes']
+    if token:
+        result.update(NextToken=token, truncated=True)
+    return result
+
+
 @schema.command('list')
 @click.option('-d', '--database-id', default=None,
               help='Only schemas scoped to this database, plus GLOBAL schemas')
+@click.option('--max-items', type=click.IntRange(1, MAX_COMPLIANCE_LISTING_PAGE_SIZE), default=None,
+              help=f'Schemas per page (the API applies {DEFAULT_COMPLIANCE_LIST_PAGE_SIZE} when '
+                   f'omitted; at most {MAX_COMPLIANCE_LISTING_PAGE_SIZE}); with --auto-paginate, '
+                   'the size of each page read')
+@click.option('--starting-token', default=None, help='Token for pagination (the previous page\'s NextToken)')
+@click.option('--auto-paginate', is_flag=True,
+              help='Follow NextToken until every schema has been read, and list them together')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
-def list_schemas(ctx: click.Context, database_id: Optional[str], json_output: bool):
-    """List compliance schemas (the latest version of each).
+def list_schemas(ctx: click.Context, database_id: Optional[str], max_items: Optional[int],
+                 starting_token: Optional[str], auto_paginate: bool, json_output: bool):
+    """List compliance schemas (the latest version of each), in name order.
+
+    Without --auto-paginate the command reads one page: the response carries a NextToken when more
+    schemas exist; pass it back as --starting-token. A page can hold fewer schemas than
+    --max-items, even none, while a NextToken is present (schemas you may not read are left out):
+    keep paging until no token is returned. --auto-paginate does that and lists every schema.
 
     Each record carries schemaFormat: vams-rules-v1, or legacy for a row whose body is not a
     vams-rules-v1 document. A legacy schema cannot be bound, updated or evaluated; it is listed so
@@ -853,14 +919,25 @@ def list_schemas(ctx: click.Context, database_id: Optional[str], json_output: bo
 
     Examples:
         vamscli compliance schema list
+        vamscli compliance schema list --auto-paginate
         vamscli compliance schema list -d my-database
-        vamscli compliance schema list --json-output
+        vamscli compliance schema list --max-items 50 --starting-token "token123"
+        vamscli compliance schema list --auto-paginate --json-output
     """
+    if auto_paginate and starting_token:
+        raise click.ClickException(
+            "Cannot use --auto-paginate with --starting-token. "
+            "Use --auto-paginate for automatic pagination, or --starting-token for manual pagination."
+        )
     # Setup/auth already validated by decorator
     api_client = _api(ctx)
     output_status("Retrieving compliance schemas...", json_output)
     try:
-        result = api_client.list_compliance_schemas(database_id=database_id)
+        if auto_paginate:
+            result = _read_every_schema_page(api_client, database_id, max_items, json_output)
+        else:
+            result = api_client.list_compliance_schemas(
+                database_id=database_id, max_items=max_items, starting_token=starting_token)
         output_result(result, json_output, cli_formatter=format_schema_list)
         return result
     except _COMPLIANCE_ERRORS as e:
@@ -951,7 +1028,9 @@ def create_schema(ctx: click.Context, schema_name: str, schema_file: str,
     compliance-output.json is checked on the derived execution_success and
     processing_duration_seconds measurements only.
 
-    Registering a name that already exists writes a new version of that schema.
+    Registering a name that already exists writes a new version of that schema. Registering it
+    under another database (-d) is refused while the schema is bound (a database binding or an
+    asset override) in any other database; omitting -d (GLOBAL) is not refused for this reason.
 
     Examples:
         vamscli compliance schema create -n cad-quality --schema-file cad-quality.json
@@ -999,6 +1078,10 @@ def update_schema(ctx: click.Context, schema_name: str, schema_file: Optional[st
     inputFiles, its metadata rules their scope through scope). Assets bound to the schema keep
     their state until the next evaluation or a 'compliance sweep'; an exception granted against
     the previous version is superseded by that evaluation.
+
+    Moving the schema to a database with -d is refused while it is bound (a database binding or an
+    asset override) in any other database: remove those bindings first, or make the schema
+    GLOBAL (-d GLOBAL), which is not refused for this reason.
 
     Examples:
         vamscli compliance schema update -n cad-quality --schema-file cad-quality-v2.json
@@ -1235,7 +1318,8 @@ def bindings(ctx: click.Context, database_id: str, max_items: Optional[int],
 @click.option('-d', '--database-id', required=True, help='[REQUIRED] Database ID')
 @click.option('-a', '--asset-id', required=True, help='[REQUIRED] Asset ID')
 @click.option('-n', '--schema-name', default=None,
-              help='Schema to evaluate against (defaults to the asset\'s bound schema)')
+              help='Schema to evaluate against (defaults to the asset\'s bound schema); a schema '
+                   'other than the bound one runs a dry run')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -1246,10 +1330,17 @@ def evaluate(ctx: click.Context, database_id: str, asset_id: str, schema_name: O
     Metadata, relationship, fileStructure, versionCoverage and assetAttributes rules are evaluated
     within the request and their results returned.
     Pipeline rules start a workflow execution and complete asynchronously; the result reports how
-    many are pending, and 'compliance state' shows the final verdict once they finish. Naming a
-    schema with -n evaluates against it without changing the asset's binding. While the asset
-    holds an active exception against the schema evaluated, a failing verdict is recorded on the
-    evaluation and the asset stays released in the 'exception' state.
+    many are pending, and 'compliance state' shows the final verdict once they finish. While the
+    asset holds an active exception against the schema evaluated, a failing verdict is recorded on
+    the evaluation and the asset stays released in the 'exception' state.
+
+    Naming a schema with -n other than the asset's bound schema runs a dry run: the rule results
+    and the verdict are returned, and nothing is recorded (no evaluation record, no change to the
+    asset's compliance state, no audit entry, no workflow launched, no cascade). Pipeline rules do
+    not run in a dry run; each is reported as an error rule result and counted as
+    pipelineRulesNotRun. The output carries a 'Dry Run: yes' line and no evaluation id, and the
+    response has dryRun true and no evaluationId. The named schema must be one you may read, and
+    GLOBAL or available to the asset's database. Naming the bound schema is a normal evaluation.
 
     The response carries schemaVersion (the schema version evaluated), exceptionApplied and
     hasRuleErrors. A rule whose tooling failed — an input selection that did not resolve to the
@@ -1297,9 +1388,11 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
     evaluate are counted as skipped and never listed. With -d, every asset of that database with a
     compliance record is evaluated against the schema it is bound to (the database binding or its
     own override) and no other database is touched: the web overview's Evaluate All. Assets
-    awaiting evaluation are evaluated first. One API call evaluates a bounded number of assets;
-    the command calls again with the response's NextToken until every asset has been evaluated
-    once (--no-follow makes one call and prints the token; --starting-token continues from one).
+    awaiting evaluation are evaluated first. One API call reads the assets a page at a time under
+    a time budget and may end before it has read them all; the command calls again with the
+    response's NextToken while one is present (--no-follow makes one call and prints the token;
+    --starting-token continues from one). assetsRemaining counts only the assets the last call read
+    and did not reach, so it can be 0 while a NextToken is present.
     An asset whose evaluation found a newer one of it already started is listed as superseded and
     counted: its state is that newer evaluation's.
 
@@ -1351,10 +1444,12 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
                 lines.append(f"  Records of deleted assets removed (not evaluated): "
                              f"{r['removedOrphans']}")
             if r.get('assetsRemaining'):
-                lines.append(f"  Remaining (not evaluated yet): {r['assetsRemaining']}")
+                lines.append(f"  Remaining (read by the last call, not reached): "
+                             f"{r['assetsRemaining']}")
             if r.get('NextToken'):
                 lines.append(f"  Next token: {r['NextToken']}")
-                lines.append("  Continue with --starting-token (the token continues this sweep).")
+                lines.append("  More assets remain: continue with --starting-token "
+                             "(the token continues this sweep).")
             return '\n'.join(lines)
 
         output_result(result, json_output, success_message=f"✓ {result.get('message', 'Sweep triggered.')}",
@@ -1364,38 +1459,44 @@ def sweep(ctx: click.Context, schema_name: Optional[str], database_id: Optional[
         _handle_compliance_error(e, json_output)
 
 
+# The counts each sweep call makes over the rows it read; the merged result adds them up.
+_SWEEP_SUMMED_COUNTS = ('superseded', 'registered', 'removedOrphans', 'skipped',
+                        'skippedNotAuthorized', 'skippedArchived', 'withoutSchema')
+
+
 def _follow_sweep(call, starting_token: Optional[str], follow: bool,
                   json_output: bool) -> Dict[str, Any]:
-    """Call a sweep route, following its NextToken until the sweep is done (no token), and merge
-    the calls into one result: every call's `assetsTriggered`, the summed `superseded`,
-    `registered` and `removedOrphans`, the last call's `skipped`, `skippedNotAuthorized`, `skippedArchived`,
-    `withoutSchema` and `assetsRemaining` (each call counts
-    those across the whole sweep), and `calls`. Stops early, keeping the last `NextToken`, when
-    `follow` is off or a call evaluated nothing (no progress: continue later with the token)."""
+    """Call a sweep route, following its NextToken while one is present, and merge the calls into
+    one result: every call's `assetsTriggered`, the counts of `_SWEEP_SUMMED_COUNTS` added up (each
+    call counts the rows it read), the last call's `assetsRemaining` (the assets that call read and
+    did not reach), and `calls`.
+
+    A call can read rows without evaluating any (they were skipped, or its time budget ran out),
+    so the walk continues on the token alone, not on `assetsRemaining` or `assetsTriggered`. It
+    stops early, keeping the last `NextToken`, when `follow` is off or a call hands back the token
+    it was given (no progress: continue later with the token)."""
     result = call(starting_token)
     triggered = list(result.get('assetsTriggered') or [])
-    superseded = result.get('superseded') or 0
-    registered = result.get('registered') or 0
-    removed = result.get('removedOrphans') or 0
+    totals = {key: result.get(key) or 0 for key in _SWEEP_SUMMED_COUNTS}
+    present = {key for key in _SWEEP_SUMMED_COUNTS if key in result}
     calls = 1
-    while follow and result.get('NextToken') and result.get('assetsTriggered'):
-        output_status(f"  {len(triggered)} evaluated, {result.get('assetsRemaining', 0)} "
-                      f"remaining; continuing...", json_output)
-        result = call(result['NextToken'])
+    sent = starting_token
+    while follow and result.get('NextToken') and result['NextToken'] != sent:
+        output_status(f"  {len(triggered)} evaluated so far; continuing...", json_output)
+        sent = result['NextToken']
+        result = call(sent)
         calls += 1
         triggered.extend(result.get('assetsTriggered') or [])
-        superseded += result.get('superseded') or 0
-        registered += result.get('registered') or 0
-        removed += result.get('removedOrphans') or 0
+        for key in _SWEEP_SUMMED_COUNTS:
+            totals[key] += result.get(key) or 0
+            if key in result:
+                present.add(key)
     if calls == 1:
         return result
     merged = dict(result, assetsTriggered=triggered, calls=calls)
-    if 'superseded' in result or superseded:
-        merged['superseded'] = superseded
-    if 'registered' in result or registered:
-        merged['registered'] = registered
-    if 'removedOrphans' in result or removed:
-        merged['removedOrphans'] = removed
+    for key in _SWEEP_SUMMED_COUNTS:
+        if key in present or totals[key]:
+            merged[key] = totals[key]
     merged['message'] = f"Sweep triggered for {len(triggered)} assets in {calls} calls"
     return merged
 

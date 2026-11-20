@@ -179,7 +179,7 @@ creates no Amazon S3 model cache bucket of its own. See
 Any Isaac Lab feature that reaches the NVIDIA Omniverse content server needs outbound internet access, so those features do not operate in an air-gapped deployment. Amazon VPC endpoints cover the AWS services the pipeline calls but not the NVIDIA content server. A task that reads its files from VAMS instead (see [Asset files staged before the run](#asset-files-staged-before-the-run)) does not need that access. Evaluate the tasks you intend to run before enabling `app.pipelines.useIsaacLabTraining` on an isolated network; configuration validation does not check for egress.
 :::
 
--   **Amazon EFS** -- An Amazon EFS file system is automatically created in isolated subnets for training checkpoint persistence.
+-   **Amazon EFS** -- An Amazon EFS file system is automatically created in isolated subnets for training checkpoint persistence. The training container runs as a non-root user (uid and gid `10000`) and reaches the file system's `/checkpoints` folder through an access point. When each GPU instance starts, it gives `/checkpoints` and everything under it to that user, so every run can write beside the checkpoints already there. The instance's serial console records how many entries it changed (`vams-isaaclab-checkpoints:`).
 -   **Large EBS volume** -- A 100 GB GP3 EBS volume is configured via launch template to accommodate the Isaac Lab container image (10+ GB).
 
 ## Physics engine

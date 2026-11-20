@@ -434,6 +434,25 @@ export function buildComplianceCascadeExecutorFunction(
         },
     });
     executeWorkflowFunction.grantInvoke(fun);
+    // Lambda does not retry a run: a retry would start the cascade again from its first node. A run
+    // hands the cascade to the next run itself before its deadline, and a reader aborts a cascade
+    // whose run stopped without a terminal state (complianceEvaluationStore.cascade_run_stopped).
+    fun.configureAsyncInvoke({
+        retryAttempts: 0,
+        maxEventAge: Duration.hours(1),
+    });
+    // The next run is an asynchronous invocation of this function. A policy of its own rather than
+    // a statement on the role's default policy: the function depends on that default policy, so a
+    // statement there naming the function's own ARN would be a circular dependency.
+    const selfInvoke = new iam.Policy(scope, `${name}ContinueRun`, {
+        statements: [
+            new iam.PolicyStatement({
+                actions: ["lambda:InvokeFunction"],
+                resources: [fun.functionArn],
+            }),
+        ],
+    });
+    fun.role?.attachInlinePolicy(selfInvoke);
     storageResources.dynamo.complianceCascadeStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceAssetStateStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.complianceEvaluationStorageTable.grantReadWriteData(fun);
