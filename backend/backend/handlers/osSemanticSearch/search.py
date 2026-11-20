@@ -2787,13 +2787,20 @@ def _search_with_authz_fallback(search_manager: "DualIndexSearchManager", query_
 def _seconds_since_api_received(event: Any) -> Optional[float]:
     """How long ago API Gateway received the request, read from ``requestContext.requestTimeEpoch`` (epoch
     milliseconds), or None when the event carries no such time or one no live request can carry: not a
-    number, more than REQUEST_TIME_SKEW_TOLERANCE_SECONDS ahead of this function's clock, or older than
-    API_GATEWAY_TIMEOUT_FLOOR_SECONDS."""
+    finite number, an integer too large for a float, more than REQUEST_TIME_SKEW_TOLERANCE_SECONDS ahead of
+    this function's clock, or older than API_GATEWAY_TIMEOUT_FLOOR_SECONDS."""
     request_context = event.get("requestContext") if isinstance(event, dict) else None
     received_ms = request_context.get("requestTimeEpoch") if isinstance(request_context, dict) else None
-    if isinstance(received_ms, bool) or not isinstance(received_ms, (int, float)) or not math.isfinite(received_ms):
+    if isinstance(received_ms, bool) or not isinstance(received_ms, (int, float)):
         return None
-    waited = time.time() - received_ms / 1000.0
+    try:
+        received_seconds = float(received_ms) / 1000.0
+    except OverflowError:
+        # JSON integers have no length limit, so a direct invoke can send one no float can hold.
+        return None
+    if not math.isfinite(received_seconds):
+        return None
+    waited = time.time() - received_seconds
     if waited < -REQUEST_TIME_SKEW_TOLERANCE_SECONDS or waited > API_GATEWAY_TIMEOUT_FLOOR_SECONDS:
         return None
     return max(waited, 0.0)

@@ -178,11 +178,14 @@ class TestTheBudgetRunsFromWhenTheApiReceivedTheRequest:
         lambda clock: {"requestContext": {"requestTimeEpoch": True}},
         lambda clock: {"requestContext": {"requestTimeEpoch": float("nan")}},
         lambda clock: {"requestContext": {"requestTimeEpoch": float("inf")}},
+        lambda clock: {"requestContext": {"requestTimeEpoch": 10 ** 400}},  # too large for a float
+        lambda clock: {"requestContext": {"requestTimeEpoch": -(10 ** 400)}},
         lambda clock: {"requestContext": {"requestTimeEpoch": clock.epoch_ms(seconds_ago=-5.0)}},  # ahead
         lambda clock: {"requestContext": {"requestTimeEpoch": clock.epoch_ms(seconds_ago=40.0)}},  # stale
         lambda clock: "not an event",
     ], ids=["no-context", "context-none", "context-list", "no-time", "time-none", "time-string", "time-bool",
-            "time-nan", "time-inf", "time-ahead", "time-stale", "event-string"])
+            "time-nan", "time-inf", "time-int-overflow", "time-negative-int-overflow", "time-ahead", "time-stale",
+            "event-string"])
     def test_without_a_usable_receipt_time_the_deadline_runs_from_now(self, search_module, fake_clock,
                                                                       make_event):
         assert search_module._api_check_deadline(make_event(fake_clock)) == pytest.approx(
