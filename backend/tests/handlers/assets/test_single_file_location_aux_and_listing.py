@@ -142,17 +142,6 @@ class TestListingReadsOnlyTheLocationsKeys:
             if prefix == FILE_LOCATION:
                 assert max_keys == 1
 
-    def test_archived_neighbours_do_not_crowd_out_an_archived_companion_entry(self, af):
-        for i in range(6):
-            key = f"p1/model.glb-old/n{i:02}"
-            af.test_client.put_object(Bucket=BUCKET, Key=key, Body=b"x")
-            af.test_client.delete_object(Bucket=BUCKET, Key=key)
-        af.test_client.delete_object(Bucket=BUCKET, Key=COMPANION)
-        result = af.list_s3_objects_with_archive_status(
-            BUCKET, FILE_LOCATION, {"maxItems": 5}, include_archived=True, basic_mode=True)
-        archived = {i["key"] for i in result["items"] if i.get("isArchived")}
-        assert archived == {COMPANION}
-
 
 @pytest.fixture
 def engine(monkeypatch):

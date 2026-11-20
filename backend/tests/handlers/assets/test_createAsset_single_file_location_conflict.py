@@ -42,13 +42,11 @@ def _ordered(pairs):
 
 @pytest.mark.unit
 class TestKeysConflict:
-    @pytest.mark.parametrize("existing,target", _ordered(CONFLICTS))
-    def test_locations_that_share_a_key_conflict(self, existing, target):
-        assert _load(fresh=True).keys_conflict(existing, target) is True
-
-    @pytest.mark.parametrize("existing,target", _ordered(NO_CONFLICT))
-    def test_locations_that_share_no_key_do_not_conflict(self, existing, target):
-        assert _load(fresh=True).keys_conflict(existing, target) is False
+    @pytest.mark.parametrize("existing,target,expected",
+                             [(a, b, True) for a, b in _ordered(CONFLICTS)]
+                             + [(a, b, False) for a, b in _ordered(NO_CONFLICT)])
+    def test_locations_conflict_when_they_share_a_key_in_either_order(self, existing, target, expected):
+        assert _load(fresh=True).keys_conflict(existing, target) is expected
 
 
 @pytest.mark.unit
@@ -66,9 +64,8 @@ class TestBucketExistingKeyOwnership:
         ("p/model.glb.previewFile.png", "p/model.glb"),
     ])
     def test_an_import_onto_a_single_file_asset_or_its_preview_is_refused(self, existing, target):
+        # A key that only shares the characters is accepted
+        self._check(existing, existing + ".bak")
         with pytest.raises(Exception) as e:
             self._check(existing, target)
         assert "already in use by another asset" in str(e.value)
-
-    def test_control_a_key_that_only_shares_the_characters_is_accepted(self):
-        self._check("p/model.glb", "p/model.glb.bak")

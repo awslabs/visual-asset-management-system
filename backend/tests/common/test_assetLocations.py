@@ -140,19 +140,14 @@ class TestKeysNamedLikeTheFile:
         # A real key one level further down shifts with the chain, so every path names one key
         ("projects/model.glb/model.glb/model.glb", "/model.glb/model.glb/model.glb"),
         ("projects/model.glb/model.glb/model.glb.previewFile.gif", "/model.glb/model.glb/model.glb.previewFile.gif"),
-    ])
-    def test_chain_keys_and_their_previews_are_one_level_deeper(self, key, path):
-        assert al.contains(FILE_LOCATION, key) is True
-        assert al.relative_path_in(FILE_LOCATION, key) == path
-        assert al.object_key_for(FILE_LOCATION, path) == key
-
-    @pytest.mark.parametrize("key,path", [
+        # Every other key keeps the path after the file key
         ("projects/model.glb/model.glb/sub.txt", "/model.glb/sub.txt"),
         ("projects/model.glb/model.glb/", "/model.glb/"),
         ("projects/model.glb/model.glb.bak", "/model.glb.bak"),
         ("projects/model.glb/sub/model.glb", "/sub/model.glb"),
     ])
-    def test_every_other_key_keeps_the_path_after_the_file_key(self, key, path):
+    def test_chain_keys_and_their_previews_are_one_level_deeper(self, key, path):
+        assert al.contains(FILE_LOCATION, key) is True
         assert al.relative_path_in(FILE_LOCATION, key) == path
         assert al.object_key_for(FILE_LOCATION, path) == key
 
@@ -162,8 +157,7 @@ class TestKeysNamedLikeTheFile:
                 "projects/model.glb/model.glb/sub.txt", "projects/model.glb/sub.txt"]
         paths = [al.relative_path_in(FILE_LOCATION, key) for key in keys]
         assert len(set(paths)) == len(keys)
-
-    def test_a_folder_location_has_no_chain(self):
+        # A folder location has no chain
         assert al.relative_path_in(FOLDER_LOCATION, "projects/building-a/building-a") == "/building-a"
 
 
