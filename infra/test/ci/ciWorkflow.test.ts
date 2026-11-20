@@ -287,6 +287,22 @@ describe("CI workflow", () => {
             // A cached advisory response must not stand in for the live service.
             expect(script).toContain('tempfile.mkdtemp(prefix="pip-audit-cache-")');
         });
+
+        test("a requirements file beside a lock that is not a uv export fails the audit", () => {
+            expect(script).toContain(
+                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.txt$")'
+            );
+            expect(script).toContain("is not a uv export");
+        });
+
+        test("annotations escape %, CR and LF, and package names compare PEP 503-normalised", () => {
+            expect(script).toContain(
+                '.replace("%", "%25").replace("\\r", "%0D").replace("\\n", "%0A")'
+            );
+            expect(script).toContain('re.sub(r"[-_.]+", "-", str(name)).lower()');
+            // One helper writes every annotation, so none bypasses the escaping.
+            expect(script.match(/::error/g) ?? []).toHaveLength(1);
+        });
     });
 
     describe("pipeline and VamsMCP suites", () => {
