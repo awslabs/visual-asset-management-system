@@ -280,11 +280,14 @@ def _from_first_folder(asset_table, buckets_table, bucket_name: str, object_key:
                                                 RESOLVED_BY_FIRST_FOLDER)
             if attribution is not None:
                 (archived if is_archived else live).append(attribution)
-        chosen = live or (archived if include_archived else [])
-        if len({(a.database_id, a.asset_id) for a in chosen}) > 1:
+        # As before the location index: with archived rows counted, an asset id held by a live and an
+        # archived asset of the registration is as ambiguous as one held by two live ones.
+        counted = live + archived if include_archived else live
+        if len({a.database_id for a in counted}) > 1:
             logger.error(f"Key {object_key} in bucket {bucket_name}: asset id {first_folder} is held in "
-                         f"{len(chosen)} databases; nothing is attributed")
+                         f"{len({a.database_id for a in counted})} databases; nothing is attributed")
             return AMBIGUOUS_RESULT
+        chosen = live or (archived if include_archived else [])
         if chosen:
             return chosen[0]
         return NOT_ATTRIBUTED_RESULT

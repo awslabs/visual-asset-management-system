@@ -200,6 +200,14 @@ class TestBeforeTheIndexIsReady:
         result, _, _ = _attribute([NORMAL, twin], 'a1/m.glb', monkeypatch=monkeypatch)
         assert result.status == fa.AMBIGUOUS
 
+    def test_a_live_and_an_archived_asset_with_one_id_are_ambiguous_only_with_archived_rows(self, monkeypatch):
+        archived_twin = asset_row('db2', 'a1', 'reg-root', 'a1/', BUCKET, archived=True, indexed=False)
+        live_only, _, _ = _attribute([NORMAL, archived_twin], 'a1/m.glb', monkeypatch=monkeypatch)
+        assert (live_only.database_id, live_only.asset_id) == ('db1', 'a1')
+        with_archived, _, _ = _attribute([NORMAL, archived_twin], 'a1/m.glb', monkeypatch=monkeypatch,
+                                         include_archived=True)
+        assert with_archived.status == fa.AMBIGUOUS
+
     def test_a_registration_prefix_comes_off_before_the_first_folder(self, monkeypatch):
         prefixed = asset_row('db9', 'z9', 'reg-other', 'assets/z9/', OTHER_BUCKET, indexed=False)
         result, _, _ = _attribute([prefixed], 'assets/z9/m.glb', monkeypatch=monkeypatch, bucket=OTHER_BUCKET)
