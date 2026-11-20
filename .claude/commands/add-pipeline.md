@@ -115,9 +115,13 @@ backendPipelines/
         pipelineEnd.py                    # Cleanup + task token callback
       container/
         Dockerfile
-        requirements.txt
+        pyproject.toml                    # uv project: the container's direct Python dependencies
+        uv.lock                           # `uv lock`; audited in CI with no workflow edit
+        requirements.txt                  # `uv export` of uv.lock; the Dockerfile pip-installs this file
         ...                               # Processing code + utils (copy utils/ from an existing pipeline)
 ```
+
+**Python dependencies use uv.** Every directory the build pip-installs from (the container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) gets a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export, following `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)". The `python-dependency-audit` CI job must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a new requirements file or pyproject without a `uv.lock`; a reasoned entry in `.github/python-lock-exemptions.json` is the only alternative, and reviewers decide it.
 
 **Copy the lambda files from a recent, similar pipeline** (e.g., `backendPipelines/conversion/coordinateTransform/` for Batch Fargate, `backendPipelines/3dRecon/splatToolbox/` for Batch GPU) and adapt them, rather than writing from scratch. When adapting, verify:
 

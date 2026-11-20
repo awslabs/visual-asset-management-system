@@ -174,7 +174,7 @@ def bedrock_runtime_endpoint(region: str) -> str:
         from botocore.config import Config
 
         retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
-        return boto3.client("bedrock-runtime", region_name=region, config=retry_config).meta.endpoint_url
+        return str(boto3.client("bedrock-runtime", region_name=region, config=retry_config).meta.endpoint_url)
     except Exception as e:  # pragma: no cover - only without boto3 or a region
         logger.warning(f"Could not resolve the bedrock-runtime endpoint: {e}")
         return f"https://bedrock-runtime.{region}.amazonaws.com"
@@ -186,7 +186,9 @@ def litellm_config(model_id: str, region: str) -> dict:
     ``bedrock/converse/`` forces the Converse route whatever LiteLLM's model map knows about the id, which
     matters for a model newer than the installed LiteLLM. ``drop_params`` discards request fields the
     provider does not take rather than failing the call; Codex sends several that only OpenAI's own
-    endpoint understands.
+    endpoint understands. The bedrock-runtime endpoint is given explicitly, as botocore resolves it for
+    the Region's partition: LiteLLM picks the DNS suffix from a Region-prefix table that does not cover
+    every partition (the AWS European Sovereign Cloud's is ``amazonaws.eu``).
     """
     return {
         "model_list": [{
@@ -194,6 +196,7 @@ def litellm_config(model_id: str, region: str) -> dict:
             "litellm_params": {
                 "model": f"bedrock/converse/{model_id}",
                 "aws_region_name": region,
+                "aws_bedrock_runtime_endpoint": bedrock_runtime_endpoint(region),
             },
         }],
         "litellm_settings": {

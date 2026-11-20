@@ -4,9 +4,10 @@
 # document's only parameter, publicKey (base64 characters only, by its allowedPattern).
 #
 # It prints the EDH root key encrypted to that public key, never the key itself: RSAES-OAEP with SHA-256
-# as both the OAEP digest and the MGF1 digest, the algorithm AWS KMS names RSAES_OAEP_SHA_256, so only
-# a kms:Decrypt by the sync function recovers it. The public key and the ciphertext are written to a
-# private directory (mode 0700, files 0600) that is removed on exit; the output is the base64 ciphertext.
+# as both the OAEP digest and the MGF1 digest. The public key is the half of an RSA key pair the sync
+# function generates for each run and holds only in that invocation's memory, so only that run's private
+# key recovers the ciphertext. The public key and the ciphertext are written to a private directory (mode
+# 0700, files 0600) that is removed on exit; the output is the base64 ciphertext.
 set -eu
 umask 077
 workdir="$(mktemp -d)"

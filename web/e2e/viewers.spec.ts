@@ -542,7 +542,15 @@ type RenderKind =
     | "not-offered"
     | "refused"
     | "supersplat"
-    | "potree";
+    | "potree"
+    /**
+     * The GeoTIFF Map Viewer drew the raster: its layer row names the file with the sample's mode
+     * (`expect.mode` "tile" for a Web Mercator COG, "placed" otherwise, `expect.approximate` for the
+     * approximate-placement label), no notice is shown, and the map canvas has content (#1599).
+     */
+    | "raster-map"
+    /** The GeoTIFF Map Viewer refused the raster with a notice matching `expect.notice` (#1599). */
+    | "raster-refused";
 
 interface RenderCase {
     /** Manifest id of the sample (`e2e/fixtures/viewer-samples.json`). */
@@ -792,6 +800,31 @@ const renderCases: RenderCase[] = [
     { sample: "ifc-haus", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
     { sample: "ifc-haus-zip", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
     { sample: "ifc-school-structural", viewer: "ThatOpen IFC BIM Viewer", kind: "canvas" },
+    // GeoTIFF Map Viewer (#1599): Web Mercator COGs on the tile path, small rasters in other bundled
+    // coordinate systems placed approximately, a Web Mercator file that is not a COG placed exactly,
+    // and a custom (non-EPSG) coordinate system refused. Offered only with LOCATIONSERVICES; the
+    // TIFF image viewer may also be offered for the file, so the case picks this viewer by name.
+    ...[
+        "geotiff-cog-3857-uint16",
+        "geotiff-nad83-utm13-jpeg",
+        "geotiff-wgs84-striped",
+        "geotiff-3857-striped",
+    ].map(
+        (sample): RenderCase => ({
+            sample,
+            viewer: "GeoTIFF Map Viewer",
+            kind: "raster-map",
+            select: /GeoTIFF Map Viewer/,
+            requiresFeature: "LOCATIONSERVICES",
+        })
+    ),
+    {
+        sample: "geotiff-custom-albers",
+        viewer: "GeoTIFF Map Viewer",
+        kind: "raster-refused",
+        select: /GeoTIFF Map Viewer/,
+        requiresFeature: "LOCATIONSERVICES",
+    },
     // SuperSplat Editor (iframe, WebGPU): splat count > 0 and a canvas that differs from the empty
     // editor's, inside the frame (expectSuperSplatRendered). One case per single-file format it is
     // offered for, SPZ v3 and v4 separately: PR-3 sends users with SPZ v4 here on ALLOWUNSAFEEVAL
@@ -854,9 +887,9 @@ test.describe("viewer render proof (seeded samples)", () => {
             : c.blockDecodeWorker
             ? `${c.sample} with the decode worker blocked`
             : c.sample;
-        test(`${c.viewer} ${c.kind === "refused" ? "refuses" : "renders"} ${label}`, async ({
-            page,
-        }) => {
+        test(`${c.viewer} ${
+            c.kind === "refused" || c.kind === "raster-refused" ? "refuses" : "renders"
+        } ${label}`, async ({ page }) => {
             test.skip(
                 !seeded,
                 "E2E_VIEWER_SAMPLES is not set (or unreadable): run " +
@@ -1106,6 +1139,31 @@ test.describe("viewer render proof (seeded samples)", () => {
                     await expect(alert).toContainText("does not support");
                     await expect(alert).not.toContainText("SuperSplat");
                 }
+            } else if (c.kind === "raster-map") {
+                const viewer = page.getByTestId("cog-map-viewer");
+                const row = viewer.getByTestId("raster-layer-row").filter({ hasText: fileName });
+                await expect(row).toHaveCount(1, { timeout: 90_000 });
+                await expect(viewer.getByTestId("raster-notice")).toHaveCount(0);
+                if (sample.expect?.mode === "tile") {
+                    await expect(row.getByText("COG tiles")).toBeVisible();
+                }
+                await expect(row.getByTestId("raster-approximate-badge")).toHaveCount(
+                    sample.expect?.approximate ? 1 : 0
+                );
+                const stats = await expectCanvasRendered(
+                    page,
+                    viewer.locator("canvas").first(),
+                    `${c.viewer} (${fileName})`,
+                    caseThresholds(c, sample)
+                );
+                console.log(`[viewers] ${c.sample} map canvas ${JSON.stringify(stats)}`);
+            } else if (c.kind === "raster-refused") {
+                const viewer = page.getByTestId("cog-map-viewer");
+                await expect(viewer.getByTestId("raster-notice")).toContainText(
+                    sample.expect?.notice ?? "",
+                    { timeout: 90_000 }
+                );
+                await expect(viewer.getByTestId("raster-layer-row")).toHaveCount(0);
             } else if (c.kind === "text") {
                 // The highlighter's own controls prove the text rendered, even for an empty file.
                 await expect(page.getByText("Line numbers", { exact: true })).toBeVisible({

@@ -6,7 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as workstationService from "./workstations";
 import * as catalogService from "./catalog";
-import { type EdhRequestError, mayHaveTakenEffect } from "./outcome";
+import { callService, mayHaveTakenEffect } from "./outcome";
 import { isStartStalled } from "../labels";
 import type {
     CapacityReservationView,
@@ -38,8 +38,9 @@ export const WORKSTATION_POLL_STABLE_MS = 20000;
  * (`activity`), a launch EDH has not reported back on, or an active desktop EDH does not yet report
  * connectable. A start the sweep found stalled (`isStartStalled`) is CREATING but not moving: nothing
  * changes until the user stops it or EDH finishes, so it does not hold the list at the fast cadence.
- * Nor does a running workstation whose remote display session has ended (`connectionUnavailableReason`):
- * it is not starting, and stays as it is until the user stops it.
+ * Nor does a running workstation whose remote display session has ended, or a workstation EDH reports
+ * in error (`connectionUnavailableReason`): it is not starting, and stays as it is until the user stops
+ * it or EDH recovers it, which the stable cadence still picks up.
  */
 export function isTransitionalWorkstation(
     row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity" | "lastError"> &
@@ -47,7 +48,7 @@ export function isTransitionalWorkstation(
 ): boolean {
     return (
         !!row.activity ||
-        (row.state === "CREATING" && !isStartStalled(row)) ||
+        (row.state === "CREATING" && !isStartStalled(row) && !row.connectionUnavailableReason) ||
         (row.state === "ACTIVE" && !row.connectionAvailable && !row.connectionUnavailableReason)
     );
 }
@@ -60,19 +61,6 @@ export function computeWorkstationRefetchInterval(
     return rows.some(isTransitionalWorkstation)
         ? WORKSTATION_POLL_TRANSITIONAL_MS
         : WORKSTATION_POLL_STABLE_MS;
-}
-
-// Helper to throw on service [false, msg] tuple for query error state
-async function callService<T>(
-    serviceFn: () => Promise<[boolean, T | string | EdhRequestError]>
-): Promise<T> {
-    const [ok, data] = await serviceFn();
-    if (!ok) {
-        // An EdhRequestError is thrown as it is: its status and body say whether EDH confirmed it.
-        if (data instanceof Error) throw data;
-        throw new Error(typeof data === "string" ? data : "Service call failed");
-    }
-    return data as T;
 }
 
 export function useWorkstations() {

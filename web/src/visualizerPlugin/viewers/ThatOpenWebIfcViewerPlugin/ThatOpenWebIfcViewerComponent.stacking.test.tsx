@@ -14,6 +14,8 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import ThatOpenWebIfcViewerComponent from "./ThatOpenWebIfcViewerComponent";
+import { downloadAsset } from "../../../services/APIService";
+import { clearPresignedUrlCache } from "../../core/presignedFetch";
 
 const token = (name: string) => ({ token: name });
 const OBC_TOKENS = {
@@ -102,6 +104,7 @@ jest.mock("./components/Tools", () => () => "Tools tab");
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: () => ({ api: "https://api.test/" }) },
 }));
+jest.mock("../../../services/APIService", () => ({ downloadAsset: jest.fn() }));
 jest.mock("../../../utils/authTokenUtils", () => ({
     getDualAuthorizationHeader: () => Promise.resolve("Bearer test"),
 }));
@@ -167,6 +170,13 @@ describe("ThatOpenWebIfcViewerComponent stacking", () => {
 
     beforeEach(() => {
         bundle = makeBundle();
+        // The authorized download route presigns the file (#1630).
+        clearPresignedUrlCache();
+        (downloadAsset as jest.Mock).mockReset();
+        (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+        ]);
         (globalThis as any).fetch = jest.fn().mockResolvedValue({
             ok: true,
             headers: { get: () => "2048" },

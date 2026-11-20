@@ -154,7 +154,7 @@ class TestFailuresAreReported:
 
     def test_a_refused_single_file_download_reaches_the_caller(self, tmp_path):
         """Download Only says how to recover from a refusal only if it sees the refusal."""
-        refusal = VamsAccessDeniedError("Permission Denied: Access forbidden.")
+        refusal = VamsAccessDeniedError("Authentication Error: Authentication failed.")
         with pytest.raises(VamsAccessDeniedError):
             _connector(_FakeCli(single_error=refusal)).download_file("db", "a1", "/m/a.glb",
                                                                      str(tmp_path))
@@ -995,10 +995,10 @@ class TestTheExportAction:
         monkeypatch.setenv("HOME", str(tmp_path))
         extension._profile = "edh-i-0123456789abcdef0"
         extension._session_adopted = True
-        refusal = VamsAccessDeniedError("Permission Denied: Access forbidden.")
+        refusal = VamsAccessDeniedError("Authentication Error: Authentication failed.")
         assert export(_Exporter(list_error=refusal)) == (
             "Uploaded export.usd to Asset One, but the file list did not refresh: "
-            f"Permission Denied: Access forbidden. - {_SIGN_IN_PENDING}")
+            f"Authentication Error: Authentication failed. - {_SIGN_IN_PENDING}")
 
 
 # The fields of Isaac Sim 6.2's importer configs, from the API reference of

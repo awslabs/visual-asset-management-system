@@ -107,6 +107,32 @@ describe("ConnectLink", () => {
         expect(openSpy.mock.calls.length).toBeLessThanOrEqual(1);
     });
 
+    it("opens only an https connection link, and closes the tab with a toast for any other", async () => {
+        const user = userEvent.setup();
+        for (const link of ["http://dcv.example.internal/?authToken=x", "not a url"]) {
+            const tab = fakeTab();
+            openSpy.mockReturnValue(tab as unknown as Window);
+            connect.mutateAsync.mockResolvedValue({
+                sessionId: "s-1",
+                connectionUrl: link,
+                osFamily: "linux",
+            });
+            mockToast.error.mockClear();
+            const { unmount } = render(<ConnectLink row={row({})} />);
+
+            await user.click(screen.getByRole("button", { name: "Connect to Dev box" }));
+
+            await waitFor(() => expect(tab.close).toHaveBeenCalled());
+            expect(tab.location.replace).not.toHaveBeenCalled();
+            expect(connect.reset).toHaveBeenCalled();
+            expect(mockToast.error).toHaveBeenCalledWith("Connect failed", {
+                description:
+                    "Dev box: the cluster returned a connection link that cannot be opened.",
+            });
+            unmount();
+        }
+    });
+
     it("closes the tab and raises a toast when the connection request fails", async () => {
         const user = userEvent.setup();
         const tab = fakeTab();
@@ -257,6 +283,41 @@ describe("ConnectLink", () => {
         expect(tab.location.replace).not.toHaveBeenCalled();
         expect(
             connectUnavailableReason(row({ connectionUnavailableReason: "DISPLAY_SESSION_ENDED" }))
+        ).toBe(sentence);
+    });
+
+    it("keeps Connect clickable on a workstation EDH reports in error and says its disk is kept", async () => {
+        const user = userEvent.setup();
+        const sentence =
+            "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.";
+        render(
+            <ConnectLink
+                row={row({
+                    edhState: "error",
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                })}
+            />
+        );
+
+        const control = screen.getByRole("button", { name: "Connect to Dev box" });
+        expect(control).not.toHaveAttribute("aria-disabled");
+        expect(control).toHaveAccessibleDescription(sentence);
+        const tab = fakeTab();
+        openSpy.mockReturnValue(tab as unknown as Window);
+        connect.mutateAsync.mockRejectedValue(new Error(sentence));
+        await user.click(control);
+        expect(connect.mutateAsync).toHaveBeenCalledWith("s-1");
+        await waitFor(() => expect(tab.close).toHaveBeenCalled());
+        // A stopped workstation EDH reports in error gives the same reason under an inert Connect.
+        expect(
+            connectUnavailableReason(
+                row({
+                    state: "STOPPED",
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                })
+            )
         ).toBe(sentence);
     });
 

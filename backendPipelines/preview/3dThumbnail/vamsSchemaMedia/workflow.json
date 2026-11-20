@@ -39,7 +39,7 @@
                 "*.mts",
                 "*.m2ts"
             ],
-            "exclude": []
+            "exclude": ["*.cog.tif"]
         },
         "concurrencyRestriction": "none",
         "outputTarget": {
@@ -74,7 +74,7 @@
                     "*.mts",
                     "*.m2ts"
                 ],
-                "exclude": []
+                "exclude": ["*.cog.tif"]
             },
             "defaultTemplateIds": {
                 "GLOBAL:preview-media-thumbnail": "preview-media-thumbnail-default"

@@ -1,0 +1,30 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 128,
+  "blockWidth": 128,
+  "compression": "deflate",
+  "crs": "EPSG:4326",
+  "dataType": "uint8",
+  "file": "global_0to360_4326.tif",
+  "footprint": "MultiPolygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 180,
+  "isCog": true,
+  "layout": "tiled",
+  "nativeBounds": [
+    0.0,
+    -90.0,
+    360.0,
+    90.0
+  ],
+  "nodata": null,
+  "overviewCount": 2,
+  "pixelIsPoint": false,
+  "pixelSizeX": 1.0,
+  "pixelSizeY": 1.0,
+  "rotated": false,
+  "wgs84Bounds": null,
+  "width": 360
+}

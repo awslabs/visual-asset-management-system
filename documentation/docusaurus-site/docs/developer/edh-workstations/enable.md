@@ -222,6 +222,7 @@ The add-on depends on the following EDH settings. Several of them are satisfied 
 | [Project and virtual desktop profile](#project-and-virtual-desktop-profile) | Project `default` and profile `1`                                          | None                                                                                                                                         |
 | [Feature-flag allow lists](#feature-flag-allow-lists)                       | Empty, which admits every caller                                           | None while they stay empty                                                                                                                   |
 | [Desktop schedule updates](#desktop-schedule-updates)                       | `DCV_ALLOW_DEFAULT_SCHEDULE_UPDATE` is `True`                              | None; keep the default                                                                                                                       |
+| [Stopped desktop termination](#stopped-desktop-termination)                 | `DCV_LINUX_TERMINATE_STOPPED_SESSION` and `..._WINDOWS_...` are `0` (off)  | None; keep both at `0`                                                                                                                       |
 | [Capacity reservations](#capacity-reservations)                             | `FeatureFlags/AsyncPlacement` on                                           | Capacity reservations only: keep it on; a private subnet in each reservation's zone                                                          |
 | [Load balancer security group](#load-balancer-security-group)               | Admits the cluster VPC and the addresses of EDH's NAT gateways             | None in the shared-VPC and in-VAMS-VPC layouts; ingress rules for a connected VPC or a public cluster                                        |
 | [Browser access to Amazon DCV](#browser-access-to-amazon-dcv)               | The `--client-ip` ranges                                                   | Admit every range your users connect from                                                                                                    |
@@ -320,6 +321,10 @@ When you set an allow list on one of these flags, include in it the uids of the 
 ### Desktop schedule updates
 
 VAMS sets every desktop it launches to a schedule under which EDH never starts it (see [Desktop schedule](overview.md#desktop-schedule)), sending EDH's schedule update under the owner's uid. EDH accepts that update only while its `DCV_ALLOW_DEFAULT_SCHEDULE_UPDATE` setting keeps its default, `True`. With the setting `False`, EDH refuses every update and the desktops keep EDH's default schedule, under which EDH starts a stopped desktop again on weekdays between 08:00 and 19:00 in EDH's configured time zone (its `TIMEZONE` setting, UTC by default). Both settings are constants in `/opt/edh/<cluster name>/cluster_manager/web_interface/config.py` on the controller, not Parameter Store entries.
+
+### Stopped desktop termination
+
+EDH can terminate a desktop that has stayed stopped for a number of hours: `DCV_LINUX_TERMINATE_STOPPED_SESSION` for Linux desktops and `DCV_WINDOWS_TERMINATE_STOPPED_SESSION` for Windows desktops, in hours, with the default `0` turning it off. Keep both at `0`. With either set, EDH terminates every stopped desktop of that operating system once the time has passed, its root disk and the data on it included, whether or not its last start was refused for capacity, and VAMS then records the workstation **Deleted** (see [Session states](./overview.md#session-states)). To end idle workstations from VAMS instead, use the VAMS lease policy, which stops a workstation whose lease has run out and deletes it only after its grace period (see [Leases](./overview.md#leases)). Both settings are constants in the same `config.py` on the controller, not Parameter Store entries.
 
 ### Resume capacity fallback
 
@@ -662,6 +667,8 @@ Each registered reservation carries `fallbackToOnDemand` (on by default), which 
 ## Disable or remove the add-on
 
 Setting `app.addons.useEdhWorkstations.enabled` and `amiBuilds.enabled` to `false` and redeploying removes the add-on's nested stack; configuration validation rejects AMI builds without the add-on, and turns `containers.enabled` off with a warning. `cdk destroy` removes the nested stack with the rest of VAMS. Before either, while the add-on is still deployed, complete the [pre-uninstall steps](uninstall.md#pre-uninstall-steps): delete the desktops, retire the AMI builds and delete the administrator recipes, delete the registered images, and revoke any load balancer ingress rule that names the add-on's Lambda security group.
+
+To turn off only the containers, deregister the job definitions VAMS registered first ([Deregister EDH job definitions](uninstall.md#deregister-edh-job-definitions)), then set `containers.enabled` to `false` and redeploy. The redeploy deletes the VAMS-owned Amazon ECR repositories and their images, while a job definition left registered stays listed in EDH and points at an image that no longer exists.
 
 A constraint an administrator created or imported on an `edh*` object type stays stored after the add-on is turned off. The access control constraint editor no longer offers the type and shows it on such a constraint as not offered on this deployment; the constraint can be deleted, or kept for when the add-on is enabled again, and saving changes to it is refused until then.
 

@@ -36,6 +36,7 @@ import ConfirmActionDialog, {
 } from "../admin/ConfirmActionDialog";
 import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
+import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import {
     controlNamed,
     useReturnFocus,
@@ -603,6 +604,10 @@ const SimulationsTab: React.FC = () => {
                 </div>
             )}
 
+            {!loading && listEnabled && jobsQuery.error && jobsQuery.data && (
+                <RefreshFailedNotice error={jobsQuery.error} />
+            )}
+
             {backend === "eks" && !scope ? (
                 <div role="status" className="p-8 text-center text-text-secondary">
                     Choose a cluster to list its jobs.
@@ -611,7 +616,7 @@ const SimulationsTab: React.FC = () => {
                 <div role="status" className="p-8 text-center text-text-secondary">
                     Loading container jobs...
                 </div>
-            ) : jobsQuery.error ? (
+            ) : jobsQuery.error && !jobsQuery.data ? (
                 <div role="alert" className="p-4 text-vams-error">
                     Error loading container jobs: {toastErrorMessage(jobsQuery.error)}
                 </div>

@@ -19,7 +19,7 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 logger = safeLogger(service="ConstructPipeline-VideoSopBom")
 
 s3 = boto3.client('s3', config=retry_config)
-sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
+sfn = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'], config=retry_config)
 
 # Deployment caps and static values, embedded in the definition document as the container's one
 # source of truth. Read without defaults so a builder that omits one fails at import.
