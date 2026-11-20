@@ -207,3 +207,15 @@ def test_a_redirect_is_not_followed(method, url, call):
             call(client)
     assert len(responses.calls) == 1
     assert sleeps == []
+
+
+@responses.activate
+def test_a_refused_request_raises_with_the_status_code_and_never_the_response_body():
+    responses.add(responses.POST, f"{BASE}/v1/asset", status=400, body="upstream detail: s3://secret-bucket/key")
+    client, _ = _client()
+
+    with pytest.raises(MirisError) as raised:
+        _start(client)
+
+    assert "[400]" in str(raised.value)
+    assert "secret-bucket" not in str(raised.value) and "upstream detail" not in str(raised.value)

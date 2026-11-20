@@ -104,7 +104,8 @@ class MirisClient:
     @staticmethod
     def _raise_for_status(r: requests.Response, label: str) -> None:
         if r.status_code >= 300:
-            raise MirisError(f"{label} failed [{r.status_code}]: {r.text[:500]}")
+            # The status code only: a response body can echo request details or account data.
+            raise MirisError(f"{label} failed [{r.status_code}]")
 
     # 1. POST /v1/asset
     def start_upload(
