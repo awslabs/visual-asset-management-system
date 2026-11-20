@@ -324,9 +324,11 @@ therefore checks `TaskToken` before it logs anything and never logs the event
 and does all Amazon S3 traffic; the parsing runs elsewhere:
 
 -   `requirements.txt` is the export of the image's lock **with hashes**, and the Dockerfile installs it with
-    `pip install --require-hashes`. The image is one of the two projects not yet on uv: re-lock and re-export it
-    as the developer guide's "Projects not yet on uv" section says (Managing Python Dependencies in
-    `developer/setup.md`), and bump the base image digest as the Dockerfile comment says.
+    `pip install --require-hashes`. The image is a uv project (`pyproject.toml`, `uv.lock`; the optional STEP
+    input is the `step` group, exported to `requirements-step.txt`): re-lock and re-export it as the developer
+    guide's "Add or change a dependency" section says (Managing Python Dependencies in `developer/setup.md`),
+    and bump the base image digest as the Dockerfile comment says. The lock covers Linux and macOS and CPython
+    3.12 to 3.14, so the hashed export installs on a developer machine too.
     `tests/test_3dbasic_image_build_inputs.py` holds the two files, the hashes and the install flag together.
 -   `size_check.py` refuses an input before it is downloaded. The handler reads the size with `HeadObject` at
     the launch version and compares it with a limit derived from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and the
