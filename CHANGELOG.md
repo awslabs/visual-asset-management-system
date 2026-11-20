@@ -15,6 +15,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Bug Fixes
 
+-   **Web** Natural-language search results on a deployment without OpenSearch list a file's path in the first column after Relevance, before the asset name and database. ([#1737](https://github.com/awslabs/visual-asset-management-system/issues/1737))
+-   **Web** On the Search page's Map view, when footprints overlap the popup opens the footprint with the smallest drawn area under the click. Area is measured on the flat map, so a rotated footprint no longer loses to a larger one that shares its box, and latitude no longer skews the comparison. ([#1729](https://github.com/awslabs/visual-asset-management-system/issues/1729))
 -   **Web** On the Search page's Map view, clicking a file's footprint opens its popup at the click instead of at the centre of the footprint's box, which for a large or L-shaped footprint was away from the click and for a footprint split at longitude 180 was on the other side of the world. When footprints overlap, the smallest one under the click opens, so a small footprint under a large one can be opened. (issue #1683)
 -   **Pipelines** The Isaac Lab compute environment launches only GPU instance types that can run its job: one RT-core GPU, at least 8 vCPUs and more registered memory than the 32 GiB the job asks for. The default list is wider, with 11 single-GPU G5, G6, GR6 and G6E types. CPU-only instance classes are no longer added, and `keepWarmInstance` keeps one instance the job can run on. ([#1308](https://github.com/awslabs/visual-asset-management-system/issues/1308))
     -   Note: the new `app.pipelines.useIsaacLabTraining.instanceTypes` option sets the list, and deployment fails at synthesis for a type that cannot run the job. Deployments that enable the pipeline update their compute environment on the next deploy.
@@ -26,6 +28,8 @@ All notable changes to this project will be documented in this file. See [standa
 ### Chores
 
 -   **Backend tests** The Physna add-on tests' `handlers.auth` stub carries `AUTH_METHOD_JWT` and `AUTH_METHOD_API_KEY`, so a backend test run that collects the Physna tests before another test imports `customLogging.auditLogging` (for example `tests/handlers` alone) no longer fails at collection. ([#1451](https://github.com/awslabs/visual-asset-management-system/issues/1451))
+-   **Python dependencies** The backend and the base, authorizer and EDH root key sync Lambda layers lock their Python dependencies with uv, and the layer build installs each layer's committed `requirements.txt` with pip without resolving anything. Installed package versions are unchanged. ([#1742](https://github.com/awslabs/visual-asset-management-system/issues/1742))
+    -   Note: after changing a layer's `pyproject.toml`, run `uv lock` and `uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt` in that layer's directory and commit both files. A layer directory without a `requirements.txt` now fails the build with a message instead of locking dependencies during the build. See the developer setup guide.
 
 ### Known Outstanding Issues
 

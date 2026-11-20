@@ -149,7 +149,7 @@ describe("root, backend, and documentation steering", () => {
 
     test("backend/CLAUDE.md's boto3 pin equals backend/pyproject.toml's", () => {
         const pyproject = readRepo(path.join("backend", "pyproject.toml"));
-        const pin = pyproject.match(/^boto3\s*=\s*"[^\d"]*(\d+\.\d+\.\d+)"/m);
+        const pin = pyproject.match(/^\s*"boto3==(\d+\.\d+\.\d+)",/m);
         expect(pin).not.toBeNull();
         const steering = readRepo(path.join("backend", "CLAUDE.md"));
         expect(steering).toContain("`boto3` " + pin![1]);
