@@ -1,0 +1,29 @@
+{
+    "pipelineName": "COG Conversion",
+    "category": "Conversion",
+    "description": "COG Conversion Pipeline - Converts a georeferenced TIFF into a Cloud Optimized GeoTIFF in EPSG:3857 (Web Mercator) so it can be drawn on the Search map",
+    "executionConfig": {
+        "executionType": "Lambda",
+        "waitForCallback": "Enabled",
+        "taskTimeout": "14400",
+        "taskHeartbeatTimeout": "",
+        "lambda": {}
+    },
+    "systemConfig": {
+        "inputFileArity": "one",
+        "assetScope": {
+            "wholeAsset": false
+        },
+        "metadataInputs": {
+            "assetMetadata": false,
+            "fileMetadata": false,
+            "fileAttributes": false
+        },
+        "requireTemplate": true,
+        "allowCustomTemplateOverride": true,
+        "inputFileFilters": {
+            "allow": ["*.tif", "*.tiff"],
+            "exclude": []
+        }
+    }
+}

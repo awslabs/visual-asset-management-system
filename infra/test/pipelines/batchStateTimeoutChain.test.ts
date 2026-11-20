@@ -38,6 +38,11 @@ import {
     COORDINATE_TRANSFORM_BATCH_TIMEOUT,
     COORDINATE_TRANSFORM_STATE_MACHINE_TIMEOUT,
 } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
+import {
+    CogConvertConstruct,
+    COG_CONVERT_BATCH_TIMEOUT,
+    COG_CONVERT_STATE_MACHINE_TIMEOUT,
+} from "../../lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct";
 import { makePipelineHarness, ACCOUNT, REGION } from "../support/pipelineConstructHarness";
 import { parseAsl, singleStateMachine } from "../support/asl";
 import { expectBatchStateTimeoutCleanup } from "../support/batchStateTimeoutCleanup";
@@ -325,6 +330,62 @@ describe("Coordinate transform timeout chain", () => {
         const state = definition.States.CoordTransformBatchJob;
         expect(state.Retry).toBeUndefined();
         expect(state.Catch.some((c: any) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
+    });
+
+    test("pipelineEnd can end the job executeBatchJob submitted after the token wait times out", () => {
+        expectBatchStateTimeoutCleanup(template);
+    });
+});
+
+describe("COG conversion timeout chain", () => {
+    let template: Template;
+    let definition: any;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("CogConvertStateTimeoutStack", (c) => {
+            c.app.pipelines.useCogConversion.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useCogConversion.useCodeBuild = true;
+            c.app.pipelines.useCogConversion.autoRegisterWithVAMS = false;
+        });
+        new CogConvertConstruct(h.stack, "CogConvertPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+        definition = parseAsl(singleStateMachine(template));
+    });
+
+    test("the token wait sits inside the state machine, and the attempt is no longer than the wait", () => {
+        const wait = definition.States.CogConvertBatchJob.TimeoutSeconds;
+        expect(wait).toBe(COG_CONVERT_BATCH_TIMEOUT.toSeconds());
+        expect(wait).toBe(12600);
+        expect(definition.TimeoutSeconds).toBe(COG_CONVERT_STATE_MACHINE_TIMEOUT.toSeconds());
+        expect(definition.TimeoutSeconds - wait).toBeGreaterThanOrEqual(600);
+        expect(maxAttemptSeconds(template)).toBeLessThanOrEqual(wait);
+    });
+
+    test("the bundle taskTimeout envelopes the state machine", () => {
+        // A 5-hour state machine behind the 4-hour bundle wait would let the run's wait end first.
+        expect(bundleTaskTimeoutSeconds("conversion/cogConvert")).toBeGreaterThan(
+            definition.TimeoutSeconds
+        );
+    });
+
+    test("the submitting token state does not retry, so one run submits one Batch job", () => {
+        // executeBatchJob submits on every call; CDK's default Retry on Lambda service exceptions
+        // would start a second container on the same task token.
+        const state = definition.States.CogConvertBatchJob;
+        expect(state.Retry).toBeUndefined();
+        expect(state.Catch.some((c: any) => c.ErrorEquals.includes("States.ALL"))).toBe(true);
+        expect(definition.States[state.Catch[0].Next].Next).toBe("PipelineEndTask");
     });
 
     test("pipelineEnd can end the job executeBatchJob submitted after the token wait times out", () => {
