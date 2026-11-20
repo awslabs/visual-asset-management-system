@@ -1359,6 +1359,56 @@ export function resolveConversion3dBasicStepInput(config: { app: any }): void {
     }
 }
 
+/** The jobs of the 3D Basic Conversion Batch tier: 4 vCPU / 30 GiB, 8 / 60, 16 / 120 (Fargate-valid pairs). */
+export const CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES: ReadonlyArray<{
+    vcpu: number;
+    memoryGiB: number;
+}> = [
+    { vcpu: 4, memoryGiB: 30 },
+    { vcpu: 8, memoryGiB: 60 },
+    { vcpu: 16, memoryGiB: 120 },
+];
+
+/**
+ * app.pipelines.useConversion3dBasic.batchTier: absent or null is `{ enabled: false, maxMemoryGiB: 120 }`,
+ * so a config.json written before the key deploys exactly what it did. `enabled` must be a JSON boolean and
+ * `maxMemoryGiB` one of the job sizes (30, 60, 120); no vCPU/memory pair is user-supplied. The VPC
+ * requirement is checked with the other VPC-requiring features.
+ */
+export function resolveConversion3dBasicBatchTier(config: { app: any }): void {
+    const block = config.app.pipelines.useConversion3dBasic;
+    if (block.batchTier === undefined || block.batchTier === null) {
+        block.batchTier = { enabled: false, maxMemoryGiB: 120 };
+        return;
+    }
+    const tier = block.batchTier;
+    if (typeof tier !== "object" || Array.isArray(tier)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier must be an object with enabled and maxMemoryGiB."
+        );
+    }
+    if (tier.enabled === undefined || tier.enabled === null) {
+        tier.enabled = false;
+    } else if (typeof tier.enabled !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier.enabled must be true or false (a JSON boolean). Leave it out to keep the Batch tier off."
+        );
+    }
+    if (tier.maxMemoryGiB === undefined || tier.maxMemoryGiB === null) {
+        tier.maxMemoryGiB = 120;
+    }
+    const sizes = CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES.map((size) => size.memoryGiB);
+    if (!sizes.includes(tier.maxMemoryGiB)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB must be one of " +
+                sizes.join(", ") +
+                " (the memory in GiB of the largest job the tier may start); got " +
+                JSON.stringify(tier.maxMemoryGiB) +
+                "."
+        );
+    }
+}
+
 /** Reject an app.pipelines.useZipDownloads value outside its type or bounds, and an invalid Fargate size. */
 export function validateZipDownloadsConfig(config: ConfigPublic): void {
     const block = config.app.pipelines.useZipDownloads;
@@ -2589,6 +2639,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
     resolveConversion3dBasicStepInput(config);
+    resolveConversion3dBasicBatchTier(config);
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
         config.app.pipelines.useConversionCoordinateTransform = {
@@ -3324,6 +3375,13 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
     if (config.app.pipelines.useMediaPreviews.enabled)
         vpcRequiringFeatures.push("pipelines.useMediaPreviews");
+    //The Batch tier runs in the isolated pipeline subnets and exists only in an enabled pipeline (the VPC
+    //builder keys its endpoints the same way), so the sub-flag on a disabled pipeline demands nothing.
+    if (
+        config.app.pipelines.useConversion3dBasic.enabled &&
+        config.app.pipelines.useConversion3dBasic.batchTier.enabled
+    )
+        vpcRequiringFeatures.push("pipelines.useConversion3dBasic.batchTier");
     //The Fargate render branch exists only in an enabled pipeline (the VPC builder keys its endpoints
     //the same way), so the sub-flag on a disabled pipeline demands nothing.
     if (
@@ -6443,6 +6501,13 @@ export interface ConfigPublic {
                  *  CASCADE, LGPL-2.1 with the OCCT exception); without it a STEP run is refused before
                  *  download. Absent = false. */
                 enableStepInput: boolean;
+                /** AWS Batch Fargate tier for models the Lambda function cannot convert (off by default;
+                 *  needs app.useGlobalVpc.enabled). Absent = off, largest job 120 GiB. */
+                batchTier: {
+                    enabled: boolean;
+                    /** Memory in GiB of the largest job the tier may start: 30, 60 or 120. */
+                    maxMemoryGiB: number;
+                };
             };
             useConversionCoordinateTransform: {
                 enabled: boolean;
