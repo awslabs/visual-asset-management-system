@@ -10,6 +10,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import type { WorkstationRecord } from "../types";
+import { isLaunchStalled } from "../labels";
 import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 
@@ -21,10 +22,33 @@ interface ConnectLinkProps {
 export const DISPLAY_SESSION_ENDED_MESSAGE =
     "The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.";
 
-/** Why Connect is inert for a row that cannot be connected to yet, or any more. */
-export function connectUnavailableReason(row: WorkstationRecord): string {
+/** What a workstation EDH reports in error shows under its Connect. */
+export const DESKTOP_ERROR_MESSAGE =
+    "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.";
+
+/**
+ * The sentence the service's `connectionUnavailableReason` stands for, or null for none or an unknown
+ * one. A launch the sweep found stalled (`isLaunchStalled`) never ran, so its own sentence and Delete
+ * apply rather than a desktop error's.
+ */
+export function connectionUnavailableMessage(row: WorkstationRecord): string | null {
+    if (isLaunchStalled(row)) {
+        return null;
+    }
     if (row.connectionUnavailableReason === "DISPLAY_SESSION_ENDED") {
         return DISPLAY_SESSION_ENDED_MESSAGE;
+    }
+    if (row.connectionUnavailableReason === "DESKTOP_ERROR") {
+        return DESKTOP_ERROR_MESSAGE;
+    }
+    return null;
+}
+
+/** Why Connect is inert for a row that cannot be connected to yet, or any more. */
+export function connectUnavailableReason(row: WorkstationRecord): string {
+    const reason = connectionUnavailableMessage(row);
+    if (reason) {
+        return reason;
     }
     switch (row.state) {
         case "ORPHANED":
@@ -62,11 +86,12 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
     const connect = useWorkstationConnect();
     const { claim, release } = useInFlight();
     const descriptionId = useId();
-    // A running row whose display session looked ended stays clickable: the click asks EDH again, so a
-    // brief broker gap clears itself, and a session that really ended answers with the same reason.
-    const displayEnded = row.connectionUnavailableReason === "DISPLAY_SESSION_ENDED";
+    // A running row whose display session looked ended, or that EDH reported in error, stays clickable:
+    // the click asks EDH again, so a brief broker gap or a recovered desktop clears itself, and a desktop
+    // still in that state answers with the same reason.
+    const reasonMessage = row.state === "ACTIVE" ? connectionUnavailableMessage(row) : null;
     const ready =
-        row.state === "ACTIVE" && !!row.sessionId && (row.connectionAvailable || displayEnded);
+        row.state === "ACTIVE" && !!row.sessionId && (row.connectionAvailable || !!reasonMessage);
 
     if (!ready) {
         return (
@@ -138,9 +163,9 @@ const ConnectLink: React.FC<ConnectLinkProps> = ({ row }) => {
             >
                 Connect
             </BusyButton>
-            {displayEnded ? (
+            {reasonMessage ? (
                 <span id={descriptionId} className="block text-xs text-text-secondary">
-                    {DISPLAY_SESSION_ENDED_MESSAGE}
+                    {reasonMessage}
                 </span>
             ) : (
                 <span id={descriptionId} className="sr-only">

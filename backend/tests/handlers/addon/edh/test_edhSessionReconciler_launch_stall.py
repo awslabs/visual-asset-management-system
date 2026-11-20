@@ -89,3 +89,37 @@ class TestTheSweepRecordsNoLaunchStallOtherwise:
         assert written["state"] == rec.STATE_ORPHANED
         assert written["lastError"] == "LAUNCH_ERROR"
         assert written["startFailure"] is None
+
+
+@pytest.mark.unit
+class TestTheSweepPrefersEdhsErrorToTheBound:
+    """EDH's ``error`` on a launch that never ran orphans it: a stalled launch is not kept stalled, a launch past the
+    bound is not recorded stalled, and neither gets ``DESKTOP_ERROR``, which a started desktop does."""
+
+    def test_a_stalled_launch_edh_lists_in_error_is_orphaned_without_a_desktop_error(self):
+        row = _launch_row("a", LAUNCH_STALL_SECONDS + 600, lastError="LAUNCH_STALLED",
+                          startFailure={"observedAt": (NOW - timedelta(minutes=10)).isoformat()})
+        _summary_, _revoke, persist, *_ = _run([row], [_desktop("sess-a", "error")])
+        written = _written_for(persist, "a")
+        assert written["state"] == rec.STATE_ORPHANED
+        assert written["lastError"] == "LAUNCH_ERROR"
+        assert written["startFailure"] is None
+        assert written.get("connectionUnavailableReason") is None
+
+    def test_a_launch_past_the_bound_edh_lists_in_error_is_orphaned_not_recorded_stalled(self):
+        _summary_, _revoke, persist, *_ = _run([_launch_row("a", LAUNCH_STALL_SECONDS * 2)],
+                                               [_desktop("sess-a", "error")])
+        written = _written_for(persist, "a")
+        assert written["state"] == rec.STATE_ORPHANED
+        assert written["lastError"] == "LAUNCH_ERROR"
+        assert written.get("connectionUnavailableReason") is None
+
+    def test_a_started_desktop_edh_lists_in_error_keeps_creating_with_a_desktop_error_and_no_stall(self):
+        accepted = (NOW - timedelta(hours=4)).isoformat(timespec='microseconds')
+        row = _launch_row("a", LAUNCH_STALL_SECONDS * 4, startAcceptedAt=accepted)
+        _summary_, revoke_fn, persist, *_ = _run([row], [_desktop("sess-a", "error")])
+        written = _written_for(persist, "a")
+        assert written.get("state", rec.STATE_CREATING) == rec.STATE_CREATING
+        assert written["connectionUnavailableReason"] == "DESKTOP_ERROR"
+        assert "lastError" not in written
+        revoke_fn.assert_not_called()

@@ -20,6 +20,8 @@
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import NeedleUSDViewerComponent from "./NeedleUSDViewerComponent";
+import { downloadAsset } from "../../../services/APIService";
+import { clearPresignedUrlCache } from "../../core/presignedFetch";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -235,6 +237,13 @@ describe("NeedleUSDViewerComponent stacking", () => {
 
     beforeEach(() => {
         jest.useFakeTimers();
+        // The authorized download route presigns every file (#1630).
+        clearPresignedUrlCache();
+        (downloadAsset as jest.Mock).mockReset();
+        (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+        ]);
         (global as any).__fakeUsdBundle = {
             THREE: fakeThree,
             ThreeRenderDelegateInterface: class {},

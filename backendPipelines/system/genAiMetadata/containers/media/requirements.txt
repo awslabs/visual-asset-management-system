@@ -9,9 +9,12 @@ botocore==1.43.89
 charset-normalizer==3.5.1
 defusedxml==0.7.1
 imageio-ffmpeg==0.6.0
+numpy==2.5.5
 openpyxl==3.1.5
 Pillow==13.0.0
+pyproj==3.8.0
 pypdfium2==5.13.0
 python-docx==1.2.0
 python-pptx==1.0.2
+tifffile==2026.11.16
 tinytag==2.3.2

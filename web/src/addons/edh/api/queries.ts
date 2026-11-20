@@ -39,8 +39,9 @@ export const WORKSTATION_POLL_STABLE_MS = 20000;
  * connectable. A start or a launch the sweep found stalled (`isStartStalled`, `isLaunchStalled`) is
  * CREATING but not moving: nothing changes until the user stops or deletes it or EDH moves on, so it
  * does not hold the list at the fast cadence.
- * Nor does a running workstation whose remote display session has ended (`connectionUnavailableReason`):
- * it is not starting, and stays as it is until the user stops it.
+ * Nor does a running workstation whose remote display session has ended, or a workstation EDH reports
+ * in error (`connectionUnavailableReason`): it is not starting, and stays as it is until the user stops
+ * it or EDH recovers it, which the stable cadence still picks up.
  */
 export function isTransitionalWorkstation(
     row: Pick<WorkstationRecord, "state" | "connectionAvailable" | "activity" | "lastError"> &
@@ -48,7 +49,10 @@ export function isTransitionalWorkstation(
 ): boolean {
     return (
         !!row.activity ||
-        (row.state === "CREATING" && !isStartStalled(row) && !isLaunchStalled(row)) ||
+        (row.state === "CREATING" &&
+            !isStartStalled(row) &&
+            !isLaunchStalled(row) &&
+            !row.connectionUnavailableReason) ||
         (row.state === "ACTIVE" && !row.connectionAvailable && !row.connectionUnavailableReason)
     );
 }

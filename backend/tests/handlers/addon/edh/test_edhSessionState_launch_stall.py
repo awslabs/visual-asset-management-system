@@ -139,3 +139,46 @@ class TestTheClears:
     ])
     def test_an_orphaned_row_keeps_a_launch_code_but_not_a_stall(self, stored, kept):
         assert state.orphaned_last_error(stored) == kept
+
+
+@pytest.mark.unit
+class TestPrecedenceOverADesktopError:
+    """EDH's own report wins over the 3-hour bound: a stalled launch EDH lists in ``error`` never ran, so it is
+    ORPHANED with LAUNCH_ERROR and never ``DESKTOP_ERROR``, which only a desktop that has run gets; a desktop that
+    has run is never a stalled launch."""
+
+    def test_a_stalled_launch_edh_reports_in_error_is_orphaned_without_a_desktop_error(self):
+        row = _stalled()
+        changed = observed_row_attributes(row, _listed("error"), NOW)
+        assert changed["state"] == "ORPHANED"
+        assert changed["lastError"] == "LAUNCH_ERROR"
+        assert changed["startFailure"] is None
+        assert changed.get("connectionUnavailableReason") is None
+        merged = {**row, **changed}
+        assert state.connection_unavailable_reason(merged) is None
+        assert workstation_activity(merged, NOW) is None
+
+    def test_a_launch_past_the_bound_edh_reports_in_error_is_orphaned_not_stalled(self):
+        row = _launch(LAUNCH_STALL_SECONDS * 2)
+        merged = {**row, **observed_row_attributes(row, _listed("error"), NOW)}
+        assert merged["state"] == "ORPHANED" and merged["lastError"] == "LAUNCH_ERROR"
+        assert not state.launch_stall_due(merged, NOW)
+
+    def test_a_started_desktop_in_error_keeps_creating_with_a_desktop_error_and_is_never_launch_stalled(self):
+        # Control for the rule's other side: a desktop that has run carries the accepted start's stamp.
+        row = _launch(LAUNCH_STALL_SECONDS * 4, startAcceptedAt=start_stamp(NOW - timedelta(hours=4)))
+        merged = {**row, **observed_row_attributes(row, _listed("error"), NOW)}
+        assert merged["state"] == "CREATING"
+        assert state.connection_unavailable_reason(merged) == "DESKTOP_ERROR"
+        assert not state.launch_stall_due(merged, NOW)
+
+    def test_a_start_from_edhs_own_console_is_stamped_so_it_never_reads_as_a_stalled_launch(self):
+        stopped = {"bootstrapId": "b", "sessionId": SESSION, "state": "STOPPED", "edhState": "stopped",
+                   "connectionAvailable": False, "createdAt": _made(LAUNCH_STALL_SECONDS * 10)}
+        merged = {**stopped, **observed_row_attributes(stopped, _listed("pending"), NOW)}
+        assert merged["state"] == "CREATING" and merged.get("startAcceptedAt")
+        assert not state.launch_stall_due(merged, NOW + timedelta(hours=4))
+
+    def test_a_record_carrying_both_codes_reports_no_activity(self):
+        both = _stalled(edhState="error", connectionUnavailableReason="DESKTOP_ERROR")
+        assert workstation_activity(both, NOW) is None

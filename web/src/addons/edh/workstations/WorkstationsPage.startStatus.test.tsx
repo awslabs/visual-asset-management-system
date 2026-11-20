@@ -517,6 +517,35 @@ describe("WorkstationsPage stalled launch", () => {
         expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
     });
 
+    it("keeps the launch stall's badge, sentence and Delete, and offers no Stop, on a row also carrying DESKTOP_ERROR", async () => {
+        // The service never writes both (EDH's error on a launch that never ran orphans it); the
+        // launch stall applies to a record that carries both anyway.
+        (queries.useWorkstations as jest.Mock).mockReturnValue(
+            list([
+                {
+                    ...launchStalledRow,
+                    edhState: "error",
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                },
+            ])
+        );
+        const user = userEvent.setup();
+        renderPage();
+
+        const cell = statusCell("Render box");
+        expect(cell.getByText("Launch stalled")).toBeInTheDocument();
+        expect(cell.getByText(LAUNCH_STALLED_SENTENCE)).toBeInTheDocument();
+        expect(cell.queryByText(/remote display is not responding/)).not.toBeInTheDocument();
+        await openActionsFor(user, "Render box");
+        expect(screen.getByRole("menuitem", { name: "Delete" })).not.toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+    });
+
     it("deletes the stalled launch once the deletion is confirmed", async () => {
         const m = mutations();
         (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);

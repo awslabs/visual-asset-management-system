@@ -113,8 +113,10 @@ export interface WorkstationRecord {
     updatedAt: string;
     connectionAvailable: boolean;
     /**
-     * Why a workstation EDH reports running cannot be connected to: `DISPLAY_SESSION_ENDED`, its
-     * remote display session has ended (stop and start it to reconnect). Null or absent otherwise.
+     * Why a workstation cannot be connected to: `DISPLAY_SESSION_ENDED`, EDH reports it running but
+     * its remote display session has ended (stop and start it to reconnect); `DESKTOP_ERROR`, EDH
+     * reports a workstation that has run in its error state (its remote display stopped responding;
+     * its disk and data are kept). Null or absent otherwise.
      */
     connectionUnavailableReason?: ConnectionUnavailableReason | null;
     /** When the lease runs out; null or absent on a row no lease covers. */
@@ -165,8 +167,8 @@ export interface CreateWorkstationRequest {
 /** Why a workstation that asked for a capacity reservation runs on-demand. */
 export type CapacityReservationFallbackReason = "full" | "ended";
 
-/** Why a workstation EDH reports running cannot be connected to. */
-export type ConnectionUnavailableReason = "DISPLAY_SESSION_ENDED";
+/** Why a workstation cannot be connected to. */
+export type ConnectionUnavailableReason = "DISPLAY_SESSION_ENDED" | "DESKTOP_ERROR";
 
 /** EC2's reservation state, `notFound` when EC2 no longer knows the id, `unknown` when the read failed. */
 export type CapacityReservationState =

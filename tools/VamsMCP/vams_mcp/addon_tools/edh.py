@@ -66,12 +66,13 @@ def register(
     @tool_result
     def list_edh_workstations() -> Dict[str, Any]:
         """Use to see the signed-in user's EDH GPU workstations and follow a launch or start. Returns `Items`
-        (complete, not paginated; another user's workstations are never included). Each row carries
+        (complete, not paginated; only the user's own). Each row carries
         `bootstrapId` (always present; every session tool takes it, or `sessionId`, as `session_id`),
         `sessionId` (null until EDH assigns it), `name`, `state` (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED),
         `activity` (`starting` from a start until the desktop is connectable, `stopping`, or null),
         `instanceType`, `osFamily`, `connectionAvailable`, `connectionUnavailableReason`
-        (`DISPLAY_SESSION_ENDED`: stop, then start, to reconnect), the lease fields and the capacity
+        (`DISPLAY_SESSION_ENDED`: stop, then start, to reconnect; `DESKTOP_ERROR`: in error in EDH, disk
+        kept: wait, or stop, then start), the lease fields and the capacity
         reservation fields (`capacityReservationFallbackReason` `full` or `ended`).
 
         `lastError` says why a launch ended ORPHANED (e.g. CAPACITY_UNAVAILABLE, QUOTA_EXCEEDED) or why a
@@ -79,11 +80,11 @@ def register(
         START_FAILED), with `startFailure` (`errorCode`, `availabilityZone`, `observedAt`). START_STALLED
         on a CREATING row with `activity` null: EDH has not finished a start after 30 minutes; stop it with
         stop_edh_workstation, then start it again. LAUNCH_STALLED there: EDH has not placed a new launch
-        after 3 hours; delete it with delete_edh_workstation, or wait. `edhFailure` is the failure
-        captured from EDH: `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`,
+        after 3 hours; delete it with delete_edh_workstation, or wait. `edhFailure`, captured from
+        EDH: `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`,
         `checkpoint`, `observedAt`.
 
-        Each row names its image in the image fields `imageName`, `recipeId`, `recipeDisplayName`,
+        Image fields: `imageName`, `recipeId`, `recipeDisplayName`,
         `recipeVersion`, `latestRecipeVersion` and `imageLatest` (`recipeId` null for a baseline image;
         `imageLatest`
         false only when a newer AVAILABLE build exists). To use the newest AVAILABLE build, launch a new
@@ -98,10 +99,12 @@ def register(
         `bootstrapId`, which works at any time; follow a launch by it). Another user's workstation is not
         found. Carries the fields of a list_edh_workstations row: `activity`, `lastError` (START_STALLED
         and LAUNCH_STALLED among its codes; delete a LAUNCH_STALLED one with delete_edh_workstation, or
-        wait), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
+        wait; once EDH reports such a launch in error it reads ORPHANED with LAUNCH_ERROR, never
+        `DESKTOP_ERROR`, and a row carrying both is the launch stall), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
         checkpoint, VAMS captured from EDH for a failed launch; null when none was captured),
         `connectionAvailable`,
-        `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended), and
+        `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended,
+        `DESKTOP_ERROR` when EDH reports the workstation in error), and
         the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
         `latestRecipeVersion` and `imageLatest` as a list_edh_workstations row does. Reading it makes
         EDH issue no connection
@@ -337,7 +340,8 @@ def register(
             connectionUrl, osFamily}`. A workstation that is not connectable is refused (409); one whose
             display session has ended with `error_type` `EdhDisplaySessionEndedError`, `code`
             `DISPLAY_SESSION_ENDED`: stop it, then start it again (stop_edh_workstation, then
-            start_edh_workstation). Each call makes EDH issue at most one connection token per request EDH
+            start_edh_workstation); one EDH reports in error with `error_type` `EdhDesktopErrorError`, `code`
+            `DESKTOP_ERROR`: its disk is kept, so wait a few minutes or stop it, then start it again. Each call makes EDH issue at most one connection token per request EDH
             answers, for this desktop.
 
             `connectionUrl` is a CREDENTIAL (a DCV session auth token): anyone holding it can open the desktop
@@ -409,8 +413,10 @@ def register(
             start keeps the
             launch image). Follow it with list_edh_workstations until ACTIVE. A refused start leaves the row
             STOPPED with `lastError` CAPACITY_UNAVAILABLE (start again later), RESERVATION_FULL,
-            RESERVATION_ENDED or START_FAILED and `startFailure`; the desktop is never deleted for a refused
+            RESERVATION_ENDED or START_FAILED and `startFailure`, as does one EC2 took and then stopped; the
+            desktop is never deleted for a refused
             start. START_STALLED on a CREATING row: stop it with stop_edh_workstation, then start it again.
+            `EdhDesktopErrorError` (409): EDH reports it in error; stop it, then start it.
             `EdhOutcomeUnknownError`: the start may still be under way; list before retrying.
             `EdhStartInProgressError` (409): another start is being processed; list again, and start again
             if it still shows stopped after 5 minutes."""

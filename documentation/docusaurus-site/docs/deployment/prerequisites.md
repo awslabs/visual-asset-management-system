@@ -67,10 +67,10 @@ While Finch and Podman are supported by AWS CDK, Docker remains the primary test
 
 ### Optional software
 
-| Software    | Purpose                                          |
-| ----------- | ------------------------------------------------ |
-| Poetry      | Managing Python dependencies in the VAMS backend |
-| Conda-forge | Local development environment isolation          |
+| Software    | Purpose                                                                                                                                                                                                              |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| uv          | Changing or auditing VAMS Python dependencies (development only; deploys install the committed requirements files with pip). See [Managing Python Dependencies](../developer/setup.md#managing-python-dependencies). |
+| Conda-forge | Local development environment isolation                                                                                                                                                                              |
 
 ## AWS account requirements
 

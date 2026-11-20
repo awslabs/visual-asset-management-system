@@ -1,0 +1,35 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 32,
+  "blockWidth": 256,
+  "compression": "zstd",
+  "crs": "EPSG:4326",
+  "dataType": "uint8",
+  "file": "compress_zstd.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": false,
+  "layout": "striped",
+  "nativeBounds": [
+    52.0,
+    12.744,
+    52.256,
+    13.0
+  ],
+  "nodata": null,
+  "overviewCount": 0,
+  "pixelIsPoint": false,
+  "pixelSizeX": 0.001,
+  "pixelSizeY": 0.001,
+  "rotated": false,
+  "wgs84Bounds": [
+    52.0,
+    12.744,
+    52.256,
+    13.0
+  ],
+  "width": 256
+}

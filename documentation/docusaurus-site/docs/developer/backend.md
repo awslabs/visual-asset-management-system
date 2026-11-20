@@ -14,7 +14,17 @@ This guide covers development patterns for the VAMS Python Lambda backend, inclu
 | Logging       | AWS Lambda Powertools Logger with custom redaction   |
 | Testing       | pytest, moto                                         |
 
-Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are generated from `poetry.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
+Exact versions are pinned in `backend/requirements.txt` and `backend/requirements-dev.txt`, which are exported from `backend/uv.lock`. Install with `pip install -r requirements.txt` rather than pinning packages by hand.
+
+### Python Library Requirements
+
+Backend library requirements follow the uv rules in [Managing Python Dependencies](setup.md#managing-python-dependencies):
+
+-   Declare a library in the `pyproject.toml` of the project that ships it: `backend/lambdaLayers/base/` for packages every handler imports, the authorizer layer for the authorizer, or a pipeline's own layer or container. A handler never installs a package of its own.
+-   Pin direct dependencies exactly where the Lambda runtime must not move (the AWS SDK, Pydantic v1, Casbin, Powertools), and keep `requires-python` at the runtime's Python (3.12 for layers; the backend test project uses 3.13).
+-   After any change run `uv lock` and the export command in the requirements file's header, and commit `pyproject.toml`, `uv.lock` and the export together. A package shared by `backend/` and the base layer moves in both in the same change.
+-   Prefer a release that is at least seven days old (`exclude-newer`), and list every version change in the pull request.
+-   The `python-dependency-audit` CI job must pass: fix an advisory by moving the package, and allowlist it only with a reason and a review date.
 
 :::warning[Pydantic v1 Only]
 VAMS uses Pydantic **v1** (1.10.x). Never use Pydantic v2 syntax (`model_validator`, `model_dump`, `ConfigDict`). Import `BaseModel` from `aws_lambda_powertools.utilities.parser`, not from `pydantic` directly. Violations cause import failures in Lambda.

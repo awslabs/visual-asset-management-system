@@ -151,13 +151,15 @@ class TestObservedRowAttributes:
 
         assert changed["connectionAvailable"] is False
 
-    def test_a_desktop_in_error_orphans_the_row_and_a_recovery_clears_the_code(self):
-        orphaned = state.observed_row_attributes(_active_row(), _desktop("error", connection_string=""))
+    def test_a_new_launch_in_error_is_orphaned_and_a_recovery_clears_the_code(self):
+        launch = _active_row(state="CREATING", edhState="placing", connectionAvailable=False)
+        orphaned = state.observed_row_attributes(launch, _desktop("error", connection_string=""))
 
         assert orphaned["state"] == state.STATE_ORPHANED
         assert orphaned["edhState"] == "error"
         assert orphaned["lastError"] == state.LAST_ERROR_LAUNCH_ERROR
-        assert orphaned["connectionAvailable"] is False
+        assert "connectionAvailable" not in orphaned
+        assert orphaned.get("connectionUnavailableReason") is None
 
         recovered = state.observed_row_attributes(
             _active_row(state="ORPHANED", edhState="error", connectionAvailable=False,
@@ -167,6 +169,15 @@ class TestObservedRowAttributes:
         assert recovered["state"] == "ACTIVE"
         assert recovered["lastError"] is None
         assert recovered["connectionAvailable"] is True
+
+    def test_a_running_desktop_in_error_stays_active_and_records_why_it_is_not_connectable(self):
+        changed = state.observed_row_attributes(_active_row(), _desktop("error", connection_string=""))
+
+        assert changed.get("state", "ACTIVE") == "ACTIVE"
+        assert changed["edhState"] == "error"
+        assert "lastError" not in changed
+        assert changed["connectionAvailable"] is False
+        assert changed["connectionUnavailableReason"] == state.CONNECTION_UNAVAILABLE_DESKTOP_ERROR
 
     def test_a_row_that_matches_its_desktop_changes_nothing(self):
         assert state.observed_row_attributes(_active_row(), _desktop("running")) == {}

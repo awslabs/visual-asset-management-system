@@ -180,6 +180,13 @@ def test_the_way_out_of_a_stalled_launch_is_the_delete_tool(tools, tool):
     assert "with delete_edh_workstation, or wait" in doc, tool
 
 
+def test_the_get_description_says_a_stalled_launch_in_error_is_orphaned_not_a_desktop_error(tools):
+    """The precedence the service applies: EDH's error on a launch that never ran orphans it."""
+    doc = _doc(tools, "get_edh_workstation")
+    assert "once EDH reports such a launch in error it reads ORPHANED with LAUNCH_ERROR, never `DESKTOP_ERROR`" in doc
+    assert "a row carrying both is the launch stall" in doc
+
+
 @pytest.mark.parametrize("tool,method,args", [
     ("list_edh_workstations", "list_edh_workstations", ()),
     ("get_edh_workstation", "get_edh_workstation", ("s-1",)),

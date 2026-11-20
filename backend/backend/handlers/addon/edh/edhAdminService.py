@@ -75,12 +75,13 @@ from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, EDH_SESSION_STATE_FIELD,
+    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, CONNECTION_UNAVAILABLE_REASON_FIELD,
+    EDH_SESSION_STATE_FIELD,
     EXPIRES_AT_FIELD, IMAGE_NAME_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
     STATE_STOPPED, STOP_REQUESTED_FIELD, capacity_reservation_fallback_reason, capacity_reservation_named,
     connection_verdict, deleted_row_expiry,
     start_accepted_cleared, start_stall_cleared,
-    start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
+    start_stamp_cleared, state_for_edh_desktop, workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -790,15 +791,17 @@ def _instance_item(record, row):
 
     edh_state = record_str(EDH_FIELD_SESSION_STATE)
     image_id = row.get('imageId') or _stack_id_from_label(record.get(EDH_FIELD_SESSION_SOFTWARE_STACK))
-    state = state_for_edh_session_state(edh_state, row.get('state'))
+    state = state_for_edh_desktop(row, edh_state)
     connectable = row.get('connectionAvailable')
+    reason = row.get(CONNECTION_UNAVAILABLE_REASON_FIELD)
     if edh_state is not None:
         # Connectable as the session sweep records it from the same record (``connection_verdict``): running with a
         # link that signs a user in, or with no link field at all unless the row records the desktop's display
-        # session ended.
-        connectable = connection_verdict(row, record)[0]
+        # session ended; a desktop that has run and that EDH reports in error is not, and records why.
+        connectable, reason = connection_verdict(row, record)
     activity = workstation_activity({**row, 'state': state, 'edhState': edh_state if edh_state is not None
                                      else row.get('edhState'), 'connectionAvailable': connectable,
+                                     CONNECTION_UNAVAILABLE_REASON_FIELD: reason,
                                      'sessionId': record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId')})
     image_id = str(image_id) if image_id is not None else None
     stored_image = {**row, IMAGE_NAME_FIELD: row.get(IMAGE_NAME_FIELD)

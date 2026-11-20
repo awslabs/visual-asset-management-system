@@ -145,6 +145,63 @@ def _inject_execution_resources(execution_config, resource_overrides):
     return config
 
 
+# The execution-config fields a deployment may override at registration, and the values each takes.
+# `lambdaName` is the Lambda invoke target (executionConfig.lambda.resourceId); the rest are the
+# scalar executionConfig fields the generated state machine encodes.
+_EXECUTION_CONFIG_OVERRIDE_KEYS = frozenset(
+    {"waitForCallback", "taskTimeout", "taskHeartbeatTimeout", "lambdaName"})
+_WAIT_FOR_CALLBACK_OVERRIDE_VALUES = ("Enabled", "Disabled")
+
+
+def apply_execution_config_overrides(execution_config, execution_config_overrides):
+    """Apply a deployment's registration-time executionConfig overrides on top of the bundle's own
+    (and the injected resource values), so one shipped bundle can register with a different execution
+    config per deployment. Returns a NEW dict; inputs are not mutated. An absent or empty override map
+    returns the config unchanged, so a registration that declares none sends exactly the request it
+    always did.
+
+    ``execution_config_overrides`` keys: waitForCallback ("Enabled"|"Disabled"), taskTimeout,
+    taskHeartbeatTimeout (seconds, as a string or a number; "" clears the heartbeat), lambdaName (the
+    Lambda invoke target; Lambda execution type only). A key outside that set, a wrong type or an
+    unknown waitForCallback value raises VamsSchemaError before any cross-call. A value of None is
+    treated as absent. The pipeline service validates the resulting config again when it saves it."""
+    if not execution_config_overrides:
+        return execution_config
+    if not isinstance(execution_config_overrides, dict):
+        raise VamsSchemaError("executionConfigOverrides must be a JSON object")
+    unknown = sorted(set(execution_config_overrides) - _EXECUTION_CONFIG_OVERRIDE_KEYS)
+    if unknown:
+        raise VamsSchemaError(
+            f"executionConfigOverrides has unknown key(s) {unknown}; "
+            f"allowed: {sorted(_EXECUTION_CONFIG_OVERRIDE_KEYS)}")
+
+    config = dict(execution_config or {})
+    for key, value in execution_config_overrides.items():
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise VamsSchemaError(f"executionConfigOverrides.{key} must be a string or a number")
+        value = str(value)
+        if key == "waitForCallback":
+            if value not in _WAIT_FOR_CALLBACK_OVERRIDE_VALUES:
+                raise VamsSchemaError(
+                    "executionConfigOverrides.waitForCallback must be one of: "
+                    f"{', '.join(_WAIT_FOR_CALLBACK_OVERRIDE_VALUES)}")
+            config["waitForCallback"] = value
+        elif key == "lambdaName":
+            if config.get("executionType", "Lambda") != "Lambda":
+                raise VamsSchemaError(
+                    "executionConfigOverrides.lambdaName applies to the Lambda execution type only")
+            if not value:
+                raise VamsSchemaError("executionConfigOverrides.lambdaName must not be empty")
+            lam = dict(config.get("lambda") or {})
+            lam["resourceId"] = value
+            config["lambda"] = lam
+        else:  # taskTimeout / taskHeartbeatTimeout
+            config[key] = value
+    return config
+
+
 def _fill_system_config_defaults(declared, defaults):
     """A bundle's partial systemConfig, completed with the builder defaults for every field it omits.
 
@@ -349,7 +406,7 @@ def resolve_ids(bundle, id_overrides=None):
 
 
 def build_import_requests(bundle, resource_overrides=None, id_overrides=None,
-                          trigger_enabled_override=None):
+                          trigger_enabled_override=None, execution_config_overrides=None):
     """Turn a parsed vamsSchema bundle into the ordered list of cross-call request descriptors.
 
     Order matters: pipeline first (create/update), then its templates (a template references its
@@ -363,6 +420,11 @@ def build_import_requests(bundle, resource_overrides=None, id_overrides=None,
     ``trigger_enabled_override`` (deploy-time) forces every trigger's ``enabled`` flag when not None,
     so a built-in ships its trigger definition but only auto-fires when the deployment opts in (the
     pipeline's autoRegisterAutoTriggerOnFileUpload config). None leaves the schema value intact.
+
+    ``execution_config_overrides`` (deploy-time, optional) overrides waitForCallback, taskTimeout,
+    taskHeartbeatTimeout and the Lambda name in the pipeline executionConfig, so a deployment can
+    register an existing bundle with a different execution config (see
+    ``apply_execution_config_overrides``). None or empty leaves the request exactly as without it.
 
     Only ``pipeline`` is required. ``workflow``/``templates`` are optional (minimal-required
     ingestion). Raises VamsSchemaError on a structurally invalid bundle. A key no body reads is
@@ -382,6 +444,7 @@ def build_import_requests(bundle, resource_overrides=None, id_overrides=None,
     pdb, pid, wdb, wid = resolve_ids(bundle, id_overrides)
     execution_config = _inject_execution_resources(
         pipeline.get("executionConfig", {}), resource_overrides)
+    execution_config = apply_execution_config_overrides(execution_config, execution_config_overrides)
 
     requests = []
 

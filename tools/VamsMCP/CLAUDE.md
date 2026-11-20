@@ -694,9 +694,9 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     rest `FEATURE_EDH_WORKSTATIONS`. The add-on's list routes return every row in one
     `{"Items": [...]}` page and no `message` envelope, so the tools return the body as it comes,
     without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError`,
-    `EdhStartInProgressError`, `EdhReservationFullError`, `EdhReservationNotPermittedError` and
-    `EdhDisplaySessionEndedError` carry `outcomeUnknown` / `startInProgress` / `code`
-    (`RESERVATION_FULL`, `RESERVATION_NOT_PERMITTED`, `DISPLAY_SESSION_ENDED`) in their `json_fields`, which `@tool_result` passes through
+    `EdhStartInProgressError`, `EdhReservationFullError`, `EdhReservationNotPermittedError`,
+    `EdhDisplaySessionEndedError` and `EdhDesktopErrorError` carry `outcomeUnknown` / `startInProgress` / `code`
+    (`RESERVATION_FULL`, `RESERVATION_NOT_PERMITTED`, `DISPLAY_SESSION_ENDED`, `DESKTOP_ERROR`) in their `json_fields`, which `@tool_result` passes through
     (Mandatory Rule 5).
 -   Capacity reservations: the catalog items carry `launchAllowed` (false: the role may see the
     reservation but not launch into it; create answers 403 `RESERVATION_NOT_PERMITTED`) and both
@@ -717,6 +717,8 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     `lastError` `LAUNCH_STALLED` is a new launch EDH has not placed after 3 hours; the list, get,
     stop and delete descriptions name it and its way out, `delete_edh_workstation` (or waiting), and
     stop's says the API refuses its stop (`EdhOperationError`, 409, naming Delete).
+    The get description adds that such a launch EDH then reports in error reads `ORPHANED` with
+    `LAUNCH_ERROR`, never `DESKTOP_ERROR`, and that a row carrying both is the launch stall.
 -   Image name: every workstation record and admin instance item also carries `imageName`,
     `recipeId`, `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest`
     (`false` only when a newer AVAILABLE build of the recipe exists; each null when not known). The
