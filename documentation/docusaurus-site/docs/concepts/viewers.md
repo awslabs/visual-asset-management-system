@@ -103,7 +103,7 @@ This table provides a quick lookup from file extension to the viewer(s) that han
 | `.stl`           | Three.js Viewer                  | --                      |
 | `.wrl`           | Online 3D Viewer                 | --                      |
 
-The tables in this section list the viewers available in every deployment. The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
+The tables in this section list every built-in viewer, not only those available in every deployment: the licensed VNTANA and VEERUM viewers ship disabled, and the Needle USD, SuperSplat, ThatOpen IFC, Rhinoceros 3D and Robotics Data viewers need `ALLOWUNSAFEEVAL`. The Physna Viewer adds a further set of proprietary CAD formats -- `.asm`, `.catpart`, `.catproduct`, `.iam`, `.ipt`, `.jt`, `.par`, `.prt`, `.sldasm`, `.sldprt`, `.x_b`, `.x_t` -- and becomes an additional choice for several of the formats above, but only on a deployment with the Physna Sync add-on enabled. See [Add-on viewers](#add-on-viewers).
 
 ### Point cloud and Gaussian splat extensions
 
@@ -201,7 +201,7 @@ The Video Player plays a file through the browser's built-in `<video>` element, 
 | `.json`          | Text Viewer          | Cesium 3D Tileset Viewer, VEERUM 3D Viewer |
 | `.log`           | Text Viewer          | --                                         |
 | `.md`            | Text Viewer          | --                                         |
-| `.mdl`           | Text Viewer          | Text Diff Viewer (compare)                 |
+| `.mdl`           | Text Viewer          | --                                         |
 | `.pdf`           | PDF Viewer           | --                                         |
 | `.ps1`           | Text Viewer          | --                                         |
 | `.py`            | Text Viewer          | --                                         |
@@ -214,7 +214,7 @@ The Video Player plays a file through the browser's built-in `<video>` element, 
 | `.yaml` / `.yml` | Text Viewer          | --                                         |
 | (no extension)   | Text Viewer          | --                                         |
 
-A file with no extension opens in the Text Viewer, and two versions of it, or the file and a text file such as `LICENSE` and `LICENSE.txt`, can be compared in the Text Diff Viewer. A selection that mixes a file with no extension and a file no text viewer reads, such as `README` and `model.glb`, has no viewer.
+The Text Diff Viewer compares files of every extension in this table that the Text Viewer opens; it is offered only to compare, not in the Visualize picker. A file with no extension opens in the Text Viewer, and two versions of it, or the file and a text file such as `LICENSE` and `LICENSE.txt`, can be compared in the Text Diff Viewer. A selection that mixes a file with no extension and a file no text viewer reads, such as `README` and `model.glb`, has no viewer.
 
 ### Robotics log extensions
 

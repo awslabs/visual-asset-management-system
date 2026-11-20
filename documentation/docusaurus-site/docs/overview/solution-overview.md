@@ -14,12 +14,15 @@ VAMS can store, manage, and version **any file type** — it is not limited to a
 
 | Category                        | Formats with Built-in Viewer/Pipeline Support                         |
 | ------------------------------- | --------------------------------------------------------------------- |
-| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF                          |
-| **CAD Models**                  | STEP, STP, IGES, BREP                                                 |
-| **Point Clouds**                | E57, LAS, LAZ                                                         |
+| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF, AMF, OFF, WRL, 3DM      |
+| **CAD Models**                  | STEP, STP, IGES, IGS, BREP                                            |
+| **BIM**                         | IFC, IFCZIP                                                           |
+| **Point Clouds**                | E57, LAS, LAZ, PLY                                                    |
+| **Geospatial**                  | 3D Tiles tilesets (JSON)                                              |
 | **Universal Scene Description** | USD, USDA, USDC, USDZ                                                 |
 | **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                 |
-| **Documents and Media**         | PDF, images, video, audio, CSV, HTML, text                            |
+| **Robotics Data**               | MCAP, ROS 1 and ROS 2 bags (BAG, DB3), PX4 ULog (ULG, ULOG)           |
+| **Documents and Media**         | PDF, images, video, audio, CSV, FCS, HTML, text                       |
 | **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins |
 
 For the complete viewer-to-extension mapping, see [File Viewers](../concepts/viewers.md).
@@ -58,7 +61,7 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
 | --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 25 command groups | Full programmatic control via REST |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 28 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
 | **3D Viewing**        | 24 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
@@ -73,7 +76,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 25 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 28 command groups (27 core groups and the EDH Workstations add-on group) covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 

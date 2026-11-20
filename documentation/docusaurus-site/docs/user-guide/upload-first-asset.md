@@ -243,7 +243,7 @@ If you uploaded a file in a supported format (such as `.gltf`, `.obj`, `.e57`, `
 | `.mdl`                                          | Text Viewer           | NVIDIA MDL material files as text                |
 | `.mp4`, `.webm`, `.mov`                         | Video Player          | Video playback with controls                     |
 | `.pdf`                                          | PDF Viewer            | Multi-page document viewing                      |
-| `.csv`                                          | Columnar Data Viewer  | Tabular data browsing                            |
+| `.csv`                                          | Text Viewer           | Tabular data; Columnar Data Viewer also opens it |
 
 :::tip
 If a file has a preview image, the file page offers a **Preview** option that shows the image, including for a file that has no dedicated viewer. When you view an older version of the file, a notice on **Preview** says the preview belongs to the latest version.

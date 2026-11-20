@@ -105,7 +105,7 @@ tools/VamsCLI/
     addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py, test_edh_workstation_image.py)
 ```
 
-### Command Groups (26 core + add-on groups)
+### Command Groups (27 core + add-on groups)
 
 The core groups are registered in `main.py` via `cli.add_command()`:
 
