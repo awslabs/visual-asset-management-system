@@ -121,7 +121,8 @@ class TestEvaluationWrites:
         assert record["quarantinedAt"] > w.evaluation(body["evaluationId"])["evaluatedAt"]
 
     def test_an_evaluation_that_cannot_run(self, held):
-        w = held("none")
+        # The record is bound to a schema that no longer exists.
+        w = held("none", marker={"schemaName": "no-such-schema"})
         recording, seen = _recording(w)
         with patch.object(store, "now_iso", side_effect=_ticking_clock()), recording:
             result = store.run_evaluation(DB, ASSET, "no-such-schema")

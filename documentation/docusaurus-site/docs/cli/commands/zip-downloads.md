@@ -105,7 +105,7 @@ vamscli zip-download download -d my-db -a my-asset -r <requestId> --wait --timeo
 | `--timeout`         | Seconds to wait with `--wait` (default 3600)                       |
 | `--overwrite`       | Replace an existing local file                                     |
 
-A job that has not succeeded fails with `The archive is not ready for download`. A job past its `expiresAt` fails with `Zip download not found`; `This zip download has expired` means the job's archive was removed before the job expired.
+A job that has not succeeded fails with `The archive is not ready for download`. A job whose archive holds a file that has since been archived, deleted, or blocked fails with `A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.`, for your own job and another user's alike. A job past its `expiresAt` fails with `Zip download not found`; `This zip download has expired` means the job's archive was removed before the job expired.
 
 Another user's finished job, listed by `zip-download list --all-users` with `canDownload: true`, downloads with the same command. `--wait` follows only your own jobs: for another user's job the command requests the archive directly, which is refused with `The archive is not ready for download` until that job has succeeded.
 

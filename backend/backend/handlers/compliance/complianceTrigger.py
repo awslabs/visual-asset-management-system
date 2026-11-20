@@ -1365,6 +1365,13 @@ def _evaluate_if_uncovered(database_id, asset_id, target, change_time=None, comp
     own queue record rather than a second time in this batch."""
     compliance_record, schema_name = target
     covered = change_covered_by_last_evaluation(compliance_record, change_time, completion_time)
+    if covered and store.claim_orphaned(compliance_record):
+        # The covering evaluation is a claim whose run stopped before it recorded anything (a
+        # timeout): it read nothing that will be applied, so the change is evaluated now.
+        logger.info(f"Asset {asset_id}: its last evaluation "
+                    f"{compliance_record.get('lastEvaluationId')} stopped before it completed; "
+                    "the change is evaluated again")
+        covered = False
     presence = EVALUATION_TARGET_LIVE
     if not covered:
         presence = automatic_evaluation_target(database_id, asset_id)

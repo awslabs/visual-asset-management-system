@@ -2377,7 +2377,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
         post:
             summary: "Issue a short-lived download URL for a finished zip download."
-            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, and the archive object exists. For the caller's own job that is all. Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route) and every file in the archive is still present, not archived and not a blocked type at the time of the request; otherwise it answers 404 (not permitted) or 400 (a file is no longer downloadable, the same message as a refused create). Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, 'A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.'). Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "A download URL for the archive."
@@ -2386,7 +2386,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or (another user's job) a file in the archive is no longer downloadable ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.')."
+                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or a file in the archive is no longer downloadable ('A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.')."
                     content:
                         application/json:
                             schema:
@@ -11631,11 +11631,25 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/schemas:
         get:
             summary: "List compliance schemas."
-            description: "Returns the latest version of every registered compliance schema the caller may read. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
+            description: "Returns one page of the latest version of each registered compliance schema the caller may read, ordered by name; only each schema's latest version is read. `NextToken` is present while more schemas remain; a page can be short, or empty, while a `NextToken` is present, because the schemas the caller may not read are left out. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
             parameters:
                 - name: databaseId
                   in: query
                   description: "Restrict the listing to GLOBAL schemas plus the schemas scoped to this database; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
+                  required: false
+                  schema:
+                      type: string
+                - name: maxItems
+                  in: query
+                  description: "Schemas per page (default 100, at most 200)."
+                  required: false
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 200
+                - name: startingToken
+                  in: query
+                  description: "The previous page's `NextToken`."
                   required: false
                   schema:
                       type: string
@@ -11647,7 +11661,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listComplianceSchemasResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters: an invalid `databaseId`, `maxItems must be an integer`, or `Invalid pagination token` (a malformed token, or one of another listing)."
                     content:
                         application/json:
                             schema:
@@ -11683,7 +11697,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A caller who may not run that rule's workflow gets the 403 instead."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, the name exists, the request moves it to a database scope and it is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`), or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A caller who may not run that rule's workflow gets the 403 instead."
                     content:
                         application/json:
                             schema:
@@ -11770,7 +11784,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
+                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, the new `databaseId` is a database and the schema is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`) (a move to GLOBAL is always allowed), or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
                     content:
                         application/json:
                             schema:
@@ -12084,7 +12098,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Evaluates an asset against its bound schema. When the body names a schema the caller needs `GET` on it in its scope (a name no scope uses is checked as GLOBAL) and it must be GLOBAL or scoped to the asset's database, both decided before the asset is read; a named schema other than the bound one is a dry run: the response carries `dryRun: true`, the rule results and the verdict, `pipelineRulesNotRun` (pipeline rules do not run in a dry run), and no `evaluationId`, and nothing is recorded (no evaluation record, state change, audit entry or cascade). A schema with a rule that cannot be read, or whose `extends` parent is not found, gives verdict `error` and launches no pipeline rule. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -12112,13 +12126,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/evaluateAssetResponse"
                 "400":
-                    description: Invalid parameters, the asset does not exist, no schema is named or bound, or the evaluation could not run.
+                    description: "Invalid parameters, the asset does not exist, no schema is named or bound, the named schema does not exist (`Evaluation could not run: Schema not found`) or is not available to the asset's database (`The schema is not available to the asset's database`), the asset's binding changed after the request read it, or the evaluation could not run."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: Not authorized.
+                    description: Not authorized, or the caller may not read the named schema.
                     content:
                         application/json:
                             schema:
@@ -12140,7 +12154,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}:
         post:
             summary: "Evaluate every tracked asset of a database."
-            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds. While assets remain the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate: send the token as `startingToken` and the call evaluates only the assets not evaluated since the evaluation started, until no token is returned. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
+            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). The records are read a page at a time (within a page, assets in `pending_evaluation` first, then the least recently evaluated), at most 200 evaluations per call, and a call stops reading and launching after about 20 seconds. While anything is left to read the response carries `NextToken`: send it as `startingToken` and the call goes on from there, evaluating only the assets not evaluated since the evaluation started, until no token is returned. `assetsRemaining` counts the assets of the pages the call read and did not reach, so it can be 0 while a `NextToken` is present. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
             parameters:
                 - name: databaseId
                   in: path
@@ -12190,7 +12204,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. While assets remain the response carries `NextToken`; a call with it as `startingToken` evaluates only the assets not evaluated since the sweep started, so repeated calls finish. `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets still to evaluate."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate, reading a page at a time (the bound databases' asset rows to register unrecorded assets, then the schema's records; within a page, assets in `pending_evaluation` first, then the least recently evaluated), at most 200 evaluations per call, and a call stops reading and launching after about 20 seconds so that it returns within the API Gateway integration window. While anything is left to read the response carries `NextToken`; a call with it as `startingToken` goes on from there and evaluates only the assets not evaluated since the sweep started, so repeated calls finish. A token from a sweep of another schema is refused (`Invalid pagination token`). `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets of the pages the call read and did not reach (it can be 0 while a `NextToken` is present)."
             parameters:
                 - name: schemaName
                   in: path
@@ -12715,7 +12729,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}:
         get:
             summary: "Get a cascade."
-            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a long cascade runs in more than one executor run and stays `executing` meanwhile, and one whose run stopped before it finished (no progress for 20 minutes) is aborted by the next read (`abortReason` `The cascade stopped before it finished; start it again`); a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: cascadeId
                   in: path
@@ -22206,7 +22220,10 @@ components:
                     type: array
                     items:
                         type: string
-                    description: "Without `databaseId` only: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
+                    description: "Without `databaseId` only, on every page: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
+                NextToken:
+                    type: string
+                    description: "Present while more schemas remain: pass it back as `startingToken`."
             required:
                 - schemas
 
@@ -22283,7 +22300,7 @@ components:
 
         complianceSchemaSaveWarning:
             type: object
-            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and a missing or non-vams-rules-v1 parent leaves the schema evaluated with its own rules only."
+            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and an evaluation under a schema whose parent is missing or not vams-rules-v1 reaches no verdict."
             properties:
                 code:
                     type: string
@@ -22666,9 +22683,16 @@ components:
             properties:
                 message:
                     type: string
+                dryRun:
+                    type: boolean
+                    description: "`true` for an evaluation against a named schema other than the bound one: nothing was recorded and there is no `evaluationId`."
+                pipelineRulesNotRun:
+                    type: integer
+                    description: "Dry run only: the pipeline rules that did not run (each is a rule result with `status` `error`)."
                 evaluationId:
                     type: string
                     format: uuid
+                    description: "Absent from a dry run."
                 schemaName:
                     type: string
                 schemaVersion:
@@ -22698,11 +22722,11 @@ components:
                     description: "`true` when an active quarantine exception held the asset released while the verdict was computed."
                 notApplied:
                     type: string
-                    enum: [released, exceptionGranted]
-                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                    enum: [released, exceptionGranted, bindingChanged]
+                    description: "Present when something made after the evaluation began outranked its outcome: a release (`released`) or an exception grant (`exceptionGranted`), recorded but not changing the asset's state, quarantine fields or exception fields; or a change of the asset's schema binding (`bindingChanged`), which leaves the record as the binding change left it."
                 notAppliedMessage:
                     type: string
-                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, `Not applied: an exception was granted after this evaluation began`, `Not applied: the asset's compliance schema binding changed after this evaluation began`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`; the verdict was computed from the remaining rules and an `evaluation_error` audit entry names the errored rules."
@@ -22744,7 +22768,7 @@ components:
                                 type: boolean
                 assetsRemaining:
                     type: integer
-                    description: "Tracked assets still to evaluate after this call (not evaluated since the evaluation started); above 0, `NextToken` is present."
+                    description: "Assets of the pages this call read that it did not reach. A lower bound: it can be 0 while a `NextToken` is present, which is what says that more remain."
                 NextToken:
                     type: string
                     description: "Present while assets remain: send it as `startingToken` to continue this evaluation."
@@ -22810,7 +22834,7 @@ components:
                                 description: "Present and `true` on a `superseded` entry."
                 assetsRemaining:
                     type: integer
-                    description: "Bound assets still to evaluate after this call (not evaluated since the sweep started); above 0, `NextToken` is present."
+                    description: "Bound assets of the pages this call read that it did not reach. A lower bound: it can be 0 while a `NextToken` is present, which is what says that more remain."
                 NextToken:
                     type: string
                     description: "Present while assets remain: send it as `startingToken` to continue this sweep."
@@ -22872,11 +22896,11 @@ components:
                     description: "`true` when the evaluation ran while a quarantine exception against this schema version was active: the violations are recorded as computed, but the asset state stayed released (`exception` on a failing verdict, never `quarantined`)."
                 notApplied:
                     type: string
-                    enum: [released, exceptionGranted]
-                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                    enum: [released, exceptionGranted, bindingChanged, notRecorded]
+                    description: "Present when something made after the evaluation began outranked its outcome: a release (`released`) or an exception grant (`exceptionGranted`), recorded but not changing the asset's state, quarantine fields or exception fields; or a change of the asset's schema binding (`bindingChanged`), which leaves the record as the binding change left it. `notRecorded`: the outcome could not be written to the asset (an AWS error before any pipeline rule started); the next evaluation decides the asset, the automatic one after a change included."
                 notAppliedMessage:
                     type: string
-                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, `Not applied: an exception was granted after this evaluation began`, `Not applied: the asset's compliance schema binding changed after this evaluation began`, or `Not applied: the outcome could not be written to the asset`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`. The verdict was computed from the remaining rules; when every rule errored the evaluation's `status` is `error` and the asset's state was left unchanged."

@@ -493,7 +493,9 @@ class TestTheClaimMarksAQuarantinedAsset:
         assert w.launched() == []
 
     def test_an_evaluation_that_cannot_run_removes_the_claims_marker(self, held):
-        w = held("none")
+        # The record is bound to a schema that no longer exists (a claim for a schema the record
+        # does not name is refused before anything is written, CLAIM_REBOUND).
+        w = held("none", marker={"schemaName": "no-such-schema"})
         claim, seen = _claim_snapshots(w)
         with claim:
             result = store.run_evaluation(DB, ASSET, "no-such-schema")

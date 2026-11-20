@@ -78,10 +78,11 @@ def _begun(tables):
 
 def _apply_run(record, database_item, state_rows=(), asset_pages=None, records=None):
     """Run a recorded apply to its end against table mocks: `asset_pages` are the asset table's
-    query answers in order, `records` the asset-state records by asset id. Returns what it wrote,
-    audited and ended with."""
+    query answers for the live assets in order (the archived assets' partition, read after them
+    by a bind or a change, answers none), `records` the asset-state records by asset id. Returns
+    what it wrote, audited and ended with."""
     asset_table = MagicMock(name="asset_table")
-    asset_table.query.side_effect = list(asset_pages or [{"Items": []}])
+    asset_table.query.side_effect = list(asset_pages or [{"Items": []}]) + [{"Items": []}]
     state_table = MagicMock(name="asset_state_table")
     state_table.query.return_value = {"Items": list(state_rows)}
     database_table = MagicMock(name="database_table")
@@ -627,8 +628,9 @@ class TestDatabaseBinding:
                              {"Items": [{"assetId": "b"}]}])
         assert ran["counts"]["assetsPendingEvaluation"] == 2
         assert ran["asset"].query.call_args_list[1].kwargs["ExclusiveStartKey"] == {"assetId": "a"}
-        # The cursor is saved after the first page.
-        assert ran["save"].call_args.args[1] == {"assetId": "a"}
+        # The cursor is saved after the first page, then names the archived assets' partition.
+        assert [c.args[1] for c in ran["save"].call_args_list][:2] == [
+            {"assetId": "a"}, {"databaseId": f"{DB}#deleted"}]
 
     def test_binding_a_missing_schema_is_refused(self):
         response, tables = _run(rest_event("PUT", DB_PATH, DB_PARAMS, body=BIND_BODY),
