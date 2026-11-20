@@ -82,6 +82,44 @@ jobs:
             - name: eslint
               run: npm run lint
 
+    # Lock check and vulnerability audit of every Python project that has a uv.lock. The script finds
+    # the projects with `git ls-files`, so a new uv.lock is audited without editing this job, and
+    # infra/test/ci/pythonDependencyLocks.test.ts fails a new Python dependency set that has neither a
+    # uv.lock nor an exemption. Per project: `uv lock --check`, regeneration of each committed export
+    # (requirements.txt) with a diff, and pip-audit of the exports. Any advisory not on
+    # .github/python-audit-allowlist.json fails the job, as does an allowlist entry with no reason, a
+    # past review date or no matching finding, and an advisory service that cannot be reached. One job
+    # loops over the projects (no matrix): each check takes seconds, and one job writes one summary.
+    python-dependency-audit:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python Version
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.13
+
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the audit resolves nothing new.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            - name: Check and audit every uv.lock
+              env:
+                  PIP_AUDIT_VERSION: "2.10.1"
+              run: python .github/scripts/python_dependency_audit.py
+
     # Security scan of the source tree. Findings are report-only; a scan that does not run fails the
     # job. It runs before any dependency install, so it scans the checked-out source only.
     ash:
