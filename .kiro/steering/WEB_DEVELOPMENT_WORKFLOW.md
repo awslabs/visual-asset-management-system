@@ -974,7 +974,9 @@ against any sandbox. The core spec for a page outside the orchestration module i
     dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
     as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
 -   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
-    the API's message, and the switches and the query band stay.
+    the API's message, and the switches and the query band stay. With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
 -   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
     opened by click, Enter or Space; an exact count has none.
 -   **A database route locks the Database filter and names it**: the disabled multiselect reads the

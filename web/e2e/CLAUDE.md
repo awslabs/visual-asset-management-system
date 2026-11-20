@@ -256,7 +256,9 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
     changes, so poll it.
 -   **A failed search is a toast, not a missing feature.** A `503` from either search route shows a
     **Search failed** toast with the API's message, and the view switch, the mode switch and the
-    query band stay; do not read a failure as "search is off".
+    query band stay; do not read a failure as "search is off". With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
 -   **The count's explanation is a named button.** Beside a minimum count the table header has a
     `button` named "About this count" (`getByRole("button", { name: "About this count" })`) that
     opens its popover on click, Enter or Space; an exact count has none.
