@@ -573,6 +573,8 @@ CORE_AUDIT_SYSTEM_ACTIONS: Tuple[SystemAction, ...] = (
     SystemAction("handlers.indexing.sqsBucketSync", spec("assetSync", "asset")),
     SystemAction("handlers.indexing.sqsBucketSync", spec("fileSync", "file")),
     SystemAction("handlers.indexing.crReindexer", spec("searchReindex", "system")),
+    # The deploy-time readiness marker of the asset location index on a new deployment.
+    SystemAction("handlers.indexing.crAssetLocationIndexMarker", spec("assetLocationIndexMark", "system")),
     SystemAction("handlers.osVectorSearch.vectorReindexer", spec("searchReindex", "system")),
     SystemAction("handlers.workflows.sfn.processWorkflowExecutionOutput", spec("workflowOutputIngest", "execution")),
     SystemAction("handlers.workflows.sfn.processWorkflowExecutionOutput", spec("workflowExecutionEnd", "execution")),

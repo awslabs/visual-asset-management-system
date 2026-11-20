@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from customLogging.auditLogging import audited_handler, log_action
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="CrAssetLocationIndexMarker")
@@ -100,8 +101,12 @@ def write_marker_if_new_deployment(asset_table_name: str, parameter_name: str, w
     return True
 
 
+@audited_handler
 def lambda_handler(event, context):
-    """cr.Provider onEvent handler. Only a Create acts; the deployment never fails because of it."""
+    """cr.Provider onEvent handler. Only a Create acts; the deployment never fails because of it.
+
+    A Create is recorded as the system action `assetLocationIndexMark`, with `details.written` saying
+    whether the marker was written."""
     request_type = event.get('RequestType')
     physical_id = event.get('PhysicalResourceId') or PHYSICAL_RESOURCE_ID
     if request_type != 'Create':
@@ -117,7 +122,11 @@ def lambda_handler(event, context):
         logger.error("The asset table name or the marker parameter name is missing; no marker is written")
         return {'PhysicalResourceId': physical_id}
     try:
-        write_marker_if_new_deployment(asset_table_name, parameter_name, window_seconds)
+        written = write_marker_if_new_deployment(asset_table_name, parameter_name, window_seconds)
     except Exception as e:
         logger.exception(f"Could not decide or write the location index marker; run the index backfill: {e}")
+        log_action(event, "assetLocationIndexMark", outcome="failed", reason="internal",
+                   details={'written': False})
+        return {'PhysicalResourceId': physical_id}
+    log_action(event, "assetLocationIndexMark", details={'written': written})
     return {'PhysicalResourceId': physical_id}

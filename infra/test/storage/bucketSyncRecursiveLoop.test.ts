@@ -262,6 +262,9 @@ describe.each(TEMPLATES)("%s: bucket-sync and indexer DLQ alarms", (templateName
         const others = synth
             .ofType("AWS::SQS::Queue")
             .filter((q) => !alarmedIds.has(q.logicalId))
+            // The bucket-sync rejected-record queue's alarm is pinned in
+            // bucketSyncRejectedQueueAndIndexMarker.test.ts.
+            .filter((q) => !q.logicalId.startsWith("bucketSyncRejectedQueue"))
             .filter((q) => alarmsFor(q).length > 0)
             .map((q) => q.logicalId);
         expect(others).toEqual([]);
