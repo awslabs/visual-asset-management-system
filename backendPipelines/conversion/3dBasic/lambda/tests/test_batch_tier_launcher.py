@@ -86,7 +86,7 @@ class TestJobSizeChoice:
         message = str(excinfo.value)
         assert message == (
             "model.step is 1,500.0 MB, over the 1,011.0 MB limit for converting .step to .usdc on the largest "
-            "job size this deployment allows (16 vCPU and 120 GiB). The limit is set by the function memory. "
+            "job size this deployment allows (16 vCPU and 120 GiB). The limit is set by the job memory. "
             "Reduce the model's size and run the conversion again.")
 
     def test_a_capped_deployment_says_so_and_names_the_key_and_the_largest_available(self):
@@ -338,6 +338,75 @@ class TestPipelineEnd:
     def test_the_cause_is_cut_to_what_step_functions_accepts(self):
         mod = _load("pipelineEnd")
         assert len(mod.failure_cause({"Cause": "x" * 1000})) == 256
+
+    # --- D1: a failed Batch job reports the container's own message, not Step Functions' raw text -----------
+    JOB_CAUSE = json.dumps({
+        "JobId": "j-1", "JobName": "PipelineJob_x", "StatusReason": "Essential container in task exited",
+        "Attempts": [{"Container": {"ExitCode": 1, "Reason": "OutOfMemoryError: Container killed due to memory usage",
+                                    "LogStreamName": "Conversion3dBasicJob/default/abc"},
+                      "StatusReason": "Essential container in task exited"}]})
+
+    def _run_with_document(self, document, error=None, results="s3://abkt/pipelines/p/J/output/E1/results/"):
+        mod = _load("pipelineEnd")
+        sfn = MagicMock()
+        s3 = MagicMock()
+        if document is None:
+            s3.get_object.side_effect = RuntimeError("NoSuchKey")
+        else:
+            s3.get_object.return_value = {"Body": MagicMock(read=lambda n=None: json.dumps(document).encode())}
+        event = {"externalSfnTaskToken": TOKEN, "outputS3AssetResultsPath": results, "outputBucketRegion": "us-east-1",
+                 "error": error or {"Error": "States.TaskFailed", "Cause": self.JOB_CAUSE}}
+        with patch.object(mod, "sfn", sfn), patch.object(mod.boto3, "client", return_value=s3):
+            mod.lambda_handler(event, MagicMock())
+        return sfn, s3
+
+    def test_a_failed_job_reports_the_message_the_container_wrote(self):
+        sfn, s3 = self._run_with_document({"failed": True, "message": "XMLSyntaxError: Comment too big"})
+        arguments = sfn.send_task_failure.call_args.kwargs
+        assert arguments["cause"] == "XMLSyntaxError: Comment too big"
+        assert arguments["error"] == "Pipeline Failure: States.TaskFailed"
+        assert s3.get_object.call_args.kwargs == {"Bucket": "abkt",
+                                                  "Key": "pipelines/p/J/output/E1/results/conversion-run.json"}
+
+    @pytest.mark.parametrize("name", ["ValueError", "RuntimeError", "InputTooLargeError", "WorkerKilledForMemory",
+                                      "WorkerOutOfTime"])
+    def test_the_type_name_of_a_user_facing_error_is_dropped(self, name):
+        sfn, _ = self._run_with_document({"failed": True, "message": f"{name}: m.stl needs more memory."})
+        assert sfn.send_task_failure.call_args.kwargs["cause"] == "m.stl needs more memory."
+
+    def test_without_the_document_the_job_status_is_summarised_briefly(self):
+        sfn, _ = self._run_with_document(None)
+        cause = sfn.send_task_failure.call_args.kwargs["cause"]
+        assert cause.startswith("The conversion job failed (OutOfMemoryError: Container killed due to memory usage, "
+                                "exit code 1).")
+        assert "container log" in cause
+        assert "Attempts" not in cause and "LogStreamName" not in cause and "{" not in cause
+
+    @pytest.mark.parametrize("document", [{"failed": False, "message": "ok"}, {"failed": True}, {"message": "x"}, []])
+    def test_a_document_that_does_not_describe_a_failure_is_not_used(self, document):
+        sfn, _ = self._run_with_document(document)
+        assert sfn.send_task_failure.call_args.kwargs["cause"].startswith("The conversion job failed")
+
+    def test_a_long_container_message_is_cut(self):
+        sfn, _ = self._run_with_document({"failed": True, "message": "x" * 5000})
+        assert len(sfn.send_task_failure.call_args.kwargs["cause"]) == 512
+
+    def test_a_lambda_failure_does_not_read_the_document(self):
+        cause = json.dumps({"errorMessage": "model.step is 1,500.0 MB, over the limit"})
+        sfn, s3 = self._run_with_document({"failed": True, "message": "other"},
+                                          error={"Error": "RuntimeError", "Cause": cause})
+        s3.get_object.assert_not_called()
+        assert sfn.send_task_failure.call_args.kwargs["cause"].startswith("model.step is 1,500.0 MB")
+
+    def test_a_state_timeout_has_a_plain_message(self):
+        mod = _load("pipelineEnd")
+        assert "did not finish within the time allowed" in mod.failure_cause({"Error": "States.Timeout"})
+
+    def test_the_summary_without_an_exit_code_or_reason_still_points_to_the_log(self):
+        mod = _load("pipelineEnd")
+        text = mod.failure_cause({"Error": "States.TaskFailed", "Cause": json.dumps({"JobId": "j"})})
+        assert text == ("The conversion job failed. See the conversion job container log of this execution for "
+                        "the cause.")
 
     def test_no_token_means_no_callback(self):
         sfn = self._run({"error": {"Error": "x"}})
