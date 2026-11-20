@@ -6,16 +6,17 @@ This guide covers how to set up a local development environment for all VAMS com
 
 Before starting, ensure you have the following installed on your development machine.
 
-| Tool        | Minimum Version                | Purpose                                                   |
-| ----------- | ------------------------------ | --------------------------------------------------------- |
-| Python      | 3.13+                          | Backend Lambda handlers, CLI tool                         |
-| Node.js     | 22.22.3+                       | Frontend build, CDK infrastructure                        |
-| npm         | Included with Node             | Package management (never use yarn)                       |
-| Docker      | Latest                         | CDK deployment, container pipelines                       |
-| AWS CLI     | v2                             | AWS account access                                        |
-| AWS CDK CLI | Pinned in `infra/package.json` | Infrastructure deployment; run as `npx cdk` from `infra/` |
-| Git         | Latest                         | Version control                                           |
-| nvm         | Latest                         | Node version management                                   |
+| Tool        | Minimum Version                 | Purpose                                                         |
+| ----------- | ------------------------------- | --------------------------------------------------------------- |
+| Python      | 3.13+                           | Backend Lambda handlers, CLI tool                               |
+| uv          | Pinned in each `pyproject.toml` | Locking and auditing Python dependencies (not needed to deploy) |
+| Node.js     | 22.22.3+                        | Frontend build, CDK infrastructure                              |
+| npm         | Included with Node              | Package management (never use yarn)                             |
+| Docker      | Latest                          | CDK deployment, container pipelines                             |
+| AWS CLI     | v2                              | AWS account access                                              |
+| AWS CDK CLI | Pinned in `infra/package.json`  | Infrastructure deployment; run as `npx cdk` from `infra/`       |
+| Git         | Latest                          | Version control                                                 |
+| nvm         | Latest                          | Node version management                                         |
 
 :::info[Python Version Note]
 While AWS Lambda functions run on Python 3.12, local development and testing use Python 3.13+. The `backend/requirements.txt` file targets Python 3.13+ for development dependencies.
@@ -128,29 +129,103 @@ VAMS uses Pydantic **v1** (1.10.x). Never install or use Pydantic v2 APIs such a
 
 ### Managing Python Dependencies
 
-The backend and Lambda layer projects lock their Python dependencies with [uv](https://docs.astral.sh/uv/). Wherever a `pyproject.toml` sits next to a `requirements*.txt`, the requirements file is a generated artifact exported from `uv.lock`, so it must always match the lock. The backend test environment installs `backend/requirements-dev.txt` directly. uv is a developer and CI tool only: the Lambda layer bundling process installs the layer directory's committed `requirements.txt` with pip inside the build container and never resolves dependencies, so a layer ships exactly what its committed export names. A layer directory without a `requirements.txt` fails the build with a message. The uv-locked projects are `backend/`, `backend/lambdaLayers/base/` and `backend/lambdaLayers/authorizer/`; an add-on's own layer project follows the same rule. `backendPipelines/multi/rapidPipelineEKS/lambdaLayer/` still uses a Poetry lock and a committed Poetry export.
+VAMS manages its Python dependencies with [uv](https://docs.astral.sh/uv/). Each project (the backend, a Lambda layer, a pipeline container, a package) keeps three files together in one directory:
 
-Each `pyproject.toml` names the uv version it was locked with (`required-version`); run that version, for example `uvx --from uv==<version> uv lock`. Each also sets `exclude-newer = "7 days"`, so a re-lock only takes releases that are at least seven days old.
+| File               | What it is                                                                                     | Edited by        |
+| ------------------ | ---------------------------------------------------------------------------------------------- | ---------------- |
+| `pyproject.toml`   | The direct dependencies and their version constraints, plus the project's uv settings          | You              |
+| `uv.lock`          | Every package the constraints resolve to, direct and transitive, at an exact version           | `uv lock` only   |
+| `requirements.txt` | The pinned export of `uv.lock` that pip installs at build time (the backend also has a `-dev`) | `uv export` only |
 
-To change a dependency version, edit the constraint in `pyproject.toml` (only needed when the existing constraint excludes the target version), re-resolve the lock, and re-export the requirements file:
+uv is a developer and CI tool only. Deploys never run it: Lambda layer bundling and the pipeline Dockerfiles install the committed `requirements.txt` with pip, so customer pip settings (a corporate index, certificates in `infra/config/docker/Dockerfile-customDependencyBuildConfig`) keep working, and a layer ships exactly what its committed export names. A layer directory without a `requirements.txt` fails the build with a message. The uv-locked projects today are `backend/`, `backend/lambdaLayers/base/` and `backend/lambdaLayers/authorizer/`, and an add-on's own layer project follows the same rule; `.github/python-lock-exemptions.json` lists the dependency files that do not have a lock yet.
+
+#### Project settings
+
+Every uv project sets these in `pyproject.toml`:
+
+```toml
+[project]
+requires-python = ">=3.12,<3.13"   # the Python the code runs on: 3.12 for Lambda layers and lambda/python:3.12 images, the base image's Python for a container; the backend test project uses ">=3.13,<4"
+dependencies = [
+    "boto3==1.43.126",              # pin direct dependencies exactly where the runtime must not move
+]
+
+[tool.uv]
+package = false                     # a dependency set, not an installable package (Lambda layers, containers)
+required-version = "==0.13.8"       # the uv version the lock was made with; the CI audit installs the same version
+exclude-newer = "7 days"            # only resolve releases at least seven days old, like npm's min-release-age
+environments = ["sys_platform == 'linux'"]   # deploy-path projects: lock only the Linux resolution
+```
+
+Run the uv version the project requires, for example `uvx --from uv==0.13.8 uv lock`; another version stops with an error instead of rewriting the lock.
+
+#### Add or change a dependency
+
+1. Edit the dependency in `pyproject.toml`. To move a package within an existing constraint, skip this step.
+2. Re-resolve the lock: `uv lock` after an edit, or `uv lock --upgrade-package <package>` to move one package (one `--upgrade-package` per package). Do not run a bare `uv lock --upgrade`, which moves every package.
+3. Re-export the requirements file with the command in its header:
 
 ```bash
-# Re-resolve the lock
-uv lock --upgrade-package <package>
-
-# Lambda layers (single requirements.txt)
+# Lambda layers and containers (one requirements.txt)
 uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 
-# backend/ exports two files (main vs. dev)
+# backend/ exports two files (main and dev)
 uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
 ```
 
-Commit `pyproject.toml`, `uv.lock`, and the exported requirements file(s) together. Do not edit an exported requirements file directly — the next export silently overwrites manual changes. Requirements files without a side-by-side `pyproject.toml` (for example, `backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt`) are hand-maintained pip files and are edited directly.
+4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
+
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
+
+#### Shared packages across layers
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version, because the handler Lambdas load their packages from the base layer while the backend tests install `backend/requirements-dev.txt`. Update a shared package in both projects together; `backend/tests/test_base_layer_dependency_parity.py` fails when the two locks differ.
 
-The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into `/opt/python`, so a package both layers carry at different versions ends up mixed from two releases. That layer therefore declares no AWS SDK package (`boto3`, `botocore` and `s3transfer` come from the base layer) and locks every other package it shares with the base layer at the base layer's version; re-lock it in the same change that moves a shared package in the base layer. `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails on either, and on a function that attaches the Kubernetes layer without the base layer.
+The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) is attached to the pipeline Lambda together with the base layer, and both extract into `/opt/python`, so a package both layers carry at different versions ends up mixed from two releases. That layer therefore declares no AWS SDK package (`boto3`, `botocore` and `s3transfer` come from the base layer) and locks every other package it shares with the base layer at the base layer's version; re-lock it in the same change that moves a shared package in the base layer. `infra/test/pipelines/eksKubernetesLayerPackages.test.ts` fails on either, and on a function that attaches the Kubernetes layer without the base layer. The same rule applies to any new layer that is attached beside the base layer.
+
+#### New layer, pipeline or package
+
+A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails a `pyproject.toml` that declares dependencies, or a requirements file with requirement lines, that has no `uv.lock` beside it. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
+
+#### The CI dependency audit
+
+The `python-dependency-audit` job in `.github/workflows/ci.yml` runs `.github/scripts/python_dependency_audit.py`. For every directory with a tracked `uv.lock` it:
+
+1. runs `uv lock --check`, which fails when `pyproject.toml` changed without a re-lock;
+2. regenerates every committed export from its header command and fails when the result differs from the committed file;
+3. audits the exports with [pip-audit](https://pypi.org/project/pip-audit/) against the PyPI advisory database, and fails on every advisory not on the allowlist. A run that cannot reach the advisory service fails as well.
+
+Run the same checks locally from the repository root, with the pinned uv on `PATH` (for example installed with `uv self update 0.13.8`, or the standalone installer for that version):
+
+```bash
+PIP_AUDIT_VERSION=2.10.1 python3 .github/scripts/python_dependency_audit.py
+```
+
+The script regenerates stale exports in place, so `git diff` afterwards shows the fix to commit. `PIP_AUDIT_VERSION` is the version the workflow sets.
+
+#### Allowlisting an advisory
+
+Fix an advisory by moving the package to a fixed version (steps above). When the fix is younger than seven days, `exclude-newer` hides it; take it with `uv lock --upgrade-package <package> --exclude-newer-package <package>=<date>` after checking the release. Allowlist it only when no fixed release is usable yet, for example when the fix is younger than the seven-day release-age rule or the package has no fixed release. Add an entry to `.github/python-audit-allowlist.json`:
+
+```json
+{
+    "entries": [
+        {
+            "id": "PYSEC-2026-0000",
+            "package": "examplepkg",
+            "reason": "No fixed release yet; the affected function is not called by VAMS.",
+            "reviewBy": "2027-01-31"
+        }
+    ]
+}
+```
+
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
+
+#### Projects not yet on uv
+
+Two projects still use Poetry until they move to uv: the RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS/lambdaLayer/`) and the 3D Basic Conversion image (`backendPipelines/conversion/3dBasic/lambdaContainer/`). This is a transitional state and the only place Poetry applies. Until they move, re-lock them with `poetry lock` and re-export the committed requirements file with `poetry export` (the 3D Basic image exports with hashes, and its `requirements-step.txt` is the `step` group); do not start new projects on Poetry.
 
 ## Infrastructure Setup
 

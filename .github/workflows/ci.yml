@@ -302,7 +302,7 @@ jobs:
                   path: ash-output/
                   retention-days: 7
 
-    # The VamsCLI suite. Its build backend is setuptools, so no Poetry install is needed.
+    # The VamsCLI suite. Its build backend is setuptools, so pip installs it directly.
     vamscli-test:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest
