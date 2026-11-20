@@ -586,11 +586,11 @@ jobs:
     #
     # `backendPipelines` runs in the pipelines-test job below, not here.
     #
-    # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4"),
-    # and EVERY line of requirements-dev.txt carries a `; python_version >= "3.13"` marker
-    # because it is exported from a lock resolved under that constraint. Under an older interpreter
-    # every marker evaluates FALSE, so `pip install -r requirements-dev.txt` installs nothing,
-    # exits 0, and pytest then fails at collection.
+    # The backend requires Python >= 3.13 (backend/pyproject.toml: requires-python = ">=3.13,<4").
+    # requirements-dev.txt is the pinned export of backend/uv.lock (dev group included), and pip
+    # installs that file so the suite runs on exactly the versions backend/tests/
+    # test_base_layer_dependency_parity.py compares with the base layer. The lock is resolved for
+    # Python 3.13 and newer, so keep setup-python on 3.13.
     backend-test:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest

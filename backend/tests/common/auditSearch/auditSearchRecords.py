@@ -6,8 +6,8 @@
 Every record a parser test reads is the output of ``customLogging.auditLogging`` (``log_action``,
 ``log_authorization`` and the other writing functions) as the writer handed it to the CloudWatch Logs
 client, so a change to the formatter breaks the parser tests instead of leaving fixtures behind. The
-frozen legacy records (``LEGACY_*``) are written out by hand in the v2.6.x (``main``) format, which the
-writer no longer produces.
+frozen legacy records (``LEGACY_*``) are written out by hand in the format before the record contract, which the
+writer does not produce.
 """
 
 import importlib
@@ -44,7 +44,7 @@ def with_request(event: Dict[str, Any], **context: Any) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------------------------------
-# Frozen legacy records: the v2.6.x (main) format, written by hand
+# Frozen legacy records: the format before the record contract, written by hand
 # ---------------------------------------------------------------------------------------------------
 
 _ECHO = ('--- [event: {"version": "2.0", "routeKey": "PUT /database/{databaseId}/assets/{assetId}", '
