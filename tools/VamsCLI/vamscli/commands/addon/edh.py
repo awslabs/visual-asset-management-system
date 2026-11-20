@@ -23,8 +23,9 @@ from ...utils.addon.edh_exceptions import (
     EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError, EdhReservationFullError,
     EdhReservationNotPermittedError, EdhCapacityReservationNotFoundError, EdhStartFailedError, EdhStartStalledError,
     EdhStartWaitTimeoutError,
-    EdhUnavailableError,
+    EdhUnavailableError, EdhOutcomeUnknownError, EdhOperationError,
 )
+from ...utils.exceptions import APIError, InvalidRequestPathError, RouteNotDeployedError
 from ...utils.addon.edh_api_client import EDH_CAPACITY_RESERVATION_ID, EDH_CAPACITY_RESERVATION_ID_MESSAGE
 
 # ROOT_SIZE_GB_MAX bounds every root volume, in GiB; ROOT_SIZE_GB_MIN is the workstation model's floor
@@ -75,6 +76,17 @@ RESERVATION_NOT_PERMITTED_LAUNCH_HINT = (
     "LAUNCH column reads yes in 'vamscli edh catalog capacity-reservations', or ask an administrator to "
     "grant your role launching into this one.")
 
+
+def launch_retry_hint(bootstrap_id: str) -> str:
+    """The remedy printed with a launch whose answer was lost: it may have been accepted."""
+    return (f"The launch may have been accepted. Look for bootstrap id {bootstrap_id} with "
+            f"'vamscli edh workstation get {bootstrap_id}'; only if it is not found, run the same create "
+            f"again with --bootstrap-id {bootstrap_id}, which cannot launch a second workstation.")
+
+
+# The status a build keeps when its EDH registration failed (the AMI recipe service's store).
+AMI_BUILD_REGISTER_FAILED = 'REGISTER_FAILED'
+
 # The catalog's LAUNCH column: whether the role may launch into the reservation, not only see it.
 LAUNCH_ALLOWED_TEXT = 'yes'
 LAUNCH_VIEW_ONLY_TEXT = 'view only'
@@ -120,6 +132,18 @@ DISPLAY_SESSION_ENDED_CODE = 'DISPLAY_SESSION_ENDED'
 DISPLAY_SESSION_ENDED_MESSAGE = (
     "The workstation is running but its remote display session has ended. Stop it, then start it again, "
     "to reconnect.")
+# A workstation that has run which EDH reports in its error state (its remote display stopped responding): the
+# record keeps its state and carries connectionUnavailableReason DESKTOP_ERROR, `get` prints the web's sentence, and
+# `connect`, the desktop sign-in and `start` are refused (409) with it.
+DESKTOP_ERROR_CODE = 'DESKTOP_ERROR'
+DESKTOP_ERROR_MESSAGE = (
+    "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or "
+    "stop it, then start it again, to reconnect.")
+# The sentence `get` prints as Connection for each reason a record carries.
+CONNECTION_UNAVAILABLE_MESSAGES = {
+    DISPLAY_SESSION_ENDED_CODE: DISPLAY_SESSION_ENDED_MESSAGE,
+    DESKTOP_ERROR_CODE: DESKTOP_ERROR_MESSAGE,
+}
 
 # The `get` record's label column: a continuation line of a value starts under the value.
 RECORD_VALUE_INDENT = ' ' * 19
@@ -134,12 +158,16 @@ def is_start_stalled(record: Dict[str, Any]) -> bool:
 
 def state_label(record: Dict[str, Any]) -> str:
     """What the State column prints for a workstation: STARTING or STOPPING while the record's
-    `activity` says so, STALLED for a start the sweep found stalled, otherwise its state."""
+    `activity` says so, STALLED for a start the sweep found stalled, STARTING for a workstation that
+    has run held in CREATING while EDH reports it in error (DESKTOP_ERROR: a restart, not a launch),
+    otherwise its state."""
     activity = record.get('activity')
     if activity in ACTIVITY_LABELS:
         return ACTIVITY_LABELS[activity]
     if is_start_stalled(record):
         return STALLED_LABEL
+    if record.get('state') == 'CREATING' and record.get('connectionUnavailableReason') == DESKTOP_ERROR_CODE:
+        return ACTIVITY_LABELS['starting']
     return str(record.get('state') or 'N/A')
 
 
@@ -513,8 +541,9 @@ def format_workstation(result: Dict[str, Any]) -> str:
     lines.append(f"  Created At:      {result.get('createdAt', 'N/A')}")
     lines.append(f"  Updated At:      {result.get('updatedAt', 'N/A')}")
     lines.append(f"  Connectable:     {result.get('connectionAvailable', 'N/A')}")
-    if result.get('connectionUnavailableReason') == DISPLAY_SESSION_ENDED_CODE:
-        lines.append(f"  Connection:      {DISPLAY_SESSION_ENDED_MESSAGE}")
+    reason_message = CONNECTION_UNAVAILABLE_MESSAGES.get(result.get('connectionUnavailableReason'))
+    if reason_message:
+        lines.append(f"  Connection:      {reason_message}")
     lines.append(f"  Lease Expires:   {result.get('leaseExpiresAt') or 'none'}")
     lines.append(f"  Lease Stopped:   {result.get('leaseStoppedAt') or 'none'}")
     lines.append(f"  Lease Hours:     {result.get('leaseHoursAtLaunch') or 'N/A'}")
@@ -659,8 +688,9 @@ def workstation_list(ctx: click.Context, json_output: bool):
                    'lease`). Honoured only when the admin lease policy is enabled and not forced; '
                    'overridden when forced; rejected when disabled or above leaseHours.')
 @click.option('--bootstrap-id', default=None, type=click.UUID,
-              help='Idempotency key (UUID); generated when omitted. Re-send it only when the create '
-                   'response was lost: a repeat returns the existing record and launches nothing')
+              help='Idempotency key (UUID); generated when omitted, and printed before the request and '
+                   'in any error. Re-send it only when the create response was lost: a repeat returns '
+                   'the existing record and launches nothing')
 @click.option('--capacity-reservation-id', default=None, callback=_capacity_reservation_id,
               help='Optional registered capacity reservation to launch into (see `edh catalog '
                    'capacity-reservations`); its instance type and platform must match the launch. '
@@ -694,8 +724,9 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     # Setup/auth already validated by decorator
     api_client = _api_client(ctx)
 
+    launch_id = str(bootstrap_id) if bootstrap_id else str(uuid.uuid4())
     data: Dict[str, Any] = {
-        'bootstrapId': str(bootstrap_id) if bootstrap_id else str(uuid.uuid4()),
+        'bootstrapId': launch_id,
         'imageId': image_id,
         'instanceType': instance_type,
         'name': name,
@@ -708,7 +739,7 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
     if capacity_reservation_id is not None:
         data['capacityReservationId'] = capacity_reservation_id
 
-    output_status(f"Launching workstation '{name}'...", json_output)
+    output_status(f"Launching workstation '{name}' (bootstrap id {launch_id})...", json_output)
 
     try:
         result = api_client.create_edh_workstation(data)
@@ -726,8 +757,19 @@ def create(ctx: click.Context, image_id: str, instance_type: str, name: str, roo
         output_error(e, json_output, error_type="Capacity Reservation Not Permitted",
                      helpful_message=RESERVATION_NOT_PERMITTED_LAUNCH_HINT)
         raise click.ClickException(str(e))
+    except EdhOutcomeUnknownError as e:
+        output_error(e, json_output, error_type="EDH Error", helpful_message=launch_retry_hint(launch_id))
+        raise click.ClickException(str(e))
     except EdhError as e:
         output_error(e, json_output, error_type="EDH Error")
+        raise click.ClickException(str(e))
+    except (RouteNotDeployedError, InvalidRequestPathError) as e:
+        # Refused before any launch could be accepted.
+        output_error(e, json_output, error_type="API Error")
+        raise click.ClickException(str(e))
+    except APIError as e:
+        # A request that failed on the way (a timeout, a dropped connection) may have reached VAMS.
+        output_error(e, json_output, error_type="API Error", helpful_message=launch_retry_hint(launch_id))
         raise click.ClickException(str(e))
 
 
@@ -955,7 +997,9 @@ def connect(ctx: click.Context, session_id: str, show_sign_in: bool, json_output
     The response is sessionId, connectionUrl and osFamily. A workstation that is not connectable yet
     (still CREATING, STOPPED, or without an EDH session) is refused with HTTP 409. So is a running
     workstation whose remote display session has ended (code DISPLAY_SESSION_ENDED; `get` shows it as
-    Connection): stop it, then start it again, to reconnect.
+    Connection): stop it, then start it again, to reconnect. A workstation EDH reports in error (code
+    DESKTOP_ERROR, also shown by `get` as Connection) keeps its disk: wait a few minutes, or stop it,
+    then start it again.
 
     The connection URL carries a session credential, so in CLI mode only the DCV host is printed.
     Use --json-output to receive the full connectionUrl; it is written to stdout, so it lands in your
@@ -2407,9 +2451,10 @@ def ami_recipe_builds(ctx: click.Context, recipe_id: str, json_output: bool):
 def ami_recipe_register(ctx: click.Context, recipe_id: str, version: int, json_output: bool):
     """Retry the EDH registration of a REGISTER_FAILED build and reset its automatic attempt count.
 
-    A build registers automatically when its image completes. Read `status` in the returned build:
-    AVAILABLE when the retry registered it (the recipe's other AVAILABLE builds are then retired), or
-    REGISTER_FAILED with the reason in `error`.
+    A build registers automatically when its image completes. The command succeeds when the retry
+    registered the build (status AVAILABLE; the recipe's other AVAILABLE builds are then retired). When
+    the build is still REGISTER_FAILED, it reports the reason from `error` and exits 1; with
+    --json-output the error carries `status` and the reason as `registrationError`.
 
     Examples:
         vamscli edh admin ami-recipe register al2023-desktop 1
@@ -2421,6 +2466,13 @@ def ami_recipe_register(ctx: click.Context, recipe_id: str, version: int, json_o
     output_status(f"Registering AMI recipe '{recipe_id}' build v{version} in EDH...", json_output)
     try:
         result = api_client.register_edh_ami_recipe_build(recipe_id, version)
+        if isinstance(result, dict) and result.get('status') == AMI_BUILD_REGISTER_FAILED:
+            # The route answers 200 with the build row whether or not the retry registered it.
+            failed = EdhOperationError(f"Registration failed again: {result.get('error') or 'no reason given'}")
+            # `error` is the JSON document's own message field, so the build's reason goes under
+            # `registrationError`.
+            failed.json_fields = {'status': result.get('status'), 'registrationError': result.get('error')}
+            raise failed
         output_result(result, json_output, success_message="Build registered in EDH", cli_formatter=format_json)
     except EdhAmiRecipeNotFoundError as e:
         output_error(e, json_output, error_type="Recipe Not Found",

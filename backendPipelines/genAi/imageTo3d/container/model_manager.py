@@ -15,6 +15,7 @@ Every decision the cache logic takes is logged: a slow run is almost always a ca
 log is the only place that distinguishes a miss from a failed restore.
 """
 
+import fcntl
 import logging
 import os
 import shutil
@@ -49,16 +50,51 @@ FETCH_ATTEMPTS = 3
 FETCH_RETRY_BACKOFF_SECONDS = 5
 
 
+def _partial_lock_path(hub_dir: Path, repo_dir: Path, partial: Path) -> Path:
+    """The lock huggingface_hub holds while it writes ``partial``: ``.locks/<repo dir>/<blob>.lock``."""
+    return hub_dir / ".locks" / repo_dir.name / (partial.name[: -len(".incomplete")] + ".lock")
+
+
+def _unlink_unless_locked(path: Path, lock_path: Path) -> bool:
+    """Unlink ``path`` while holding ``lock_path``; False, leaving it, when another holder has the lock.
+
+    The lock is the flock huggingface_hub's file lock takes on the same file, so a download writing
+    ``path`` on any instance sharing the cache keeps it. No lock directory means no download has
+    started for the repository."""
+    if not lock_path.parent.is_dir():
+        path.unlink()
+        return True
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o664)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        try:
+            path.unlink()
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return True
+    finally:
+        os.close(fd)
+
+
 def _discard_partial_downloads(cache_dir: str, repo: str) -> int:
-    """Remove any partial blob left by an interrupted download of ``repo``."""
+    """Remove the partial blobs of ``repo`` that no download is writing.
+
+    The cache is shared by every instance, so another job may be downloading other blobs of the same
+    repository right now; its partial files are held by their locks and left alone."""
     removed = 0
-    repo_dir = _repo_cache_dir(Path(cache_dir), repo)
+    hub_dir = Path(cache_dir)
+    repo_dir = _repo_cache_dir(hub_dir, repo)
     if not repo_dir.is_dir():
         return removed
     for partial in repo_dir.rglob("*.incomplete"):
         try:
-            partial.unlink()
-            removed += 1
+            if _unlink_unless_locked(partial, _partial_lock_path(hub_dir, repo_dir, partial)):
+                removed += 1
+            else:
+                logger.info(f"Left the partial download {partial.name}: another download holds it")
         except OSError as e:
             logger.warning(f"Could not remove the partial download {partial}: {e}")
     return removed

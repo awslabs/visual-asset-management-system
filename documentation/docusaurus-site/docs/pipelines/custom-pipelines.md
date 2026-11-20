@@ -1546,6 +1546,17 @@ override name — `lambdaName`, `sqsQueueUrl`, `eventBridgeBusArn` / `eventBridg
 importer reads only these flat keys; a nested object is ignored and the pipeline registers with an
 empty resource identifier, so every execution of it fails at the invoke state.
 
+A deployment can register a bundle with a different execution config than the one in its
+`pipeline.json` by passing `executionConfigOverrides` to `VamsSchemaRegistration`. It takes any of
+`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout`, `taskHeartbeatTimeout` (seconds; `""`
+clears the heartbeat) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
+value replaces the bundle's own. Leave the property out and the registration is exactly what it was.
+A malformed value, such as an unknown key or a `waitForCallback` other than `Enabled` or `Disabled`,
+fails the registration before anything is written. When a value changes the state machines a pipeline
+produces (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`), VAMS redeploys every
+workflow that uses the pipeline, including custom workflows. Executions already running finish on the
+definition they started with.
+
 Set `autoRegisterWithVAMS` to `true` in the pipeline's configuration to enable registration. To also
 create a file-upload trigger on the registered workflow, a pipeline uses one of two configuration
 fields, depending on which the pipeline's construct reads:

@@ -970,6 +970,15 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expands entities without bound or an external entity that reads local files or URLs. Parse it as `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/xml_mesh_handler.py` does (ARCC BSC12, secure XML parsing): an `xml.parsers.expat` parser whose `StartDoctypeDeclHandler`, `EntityDeclHandler`, `UnparsedEntityDeclHandler` and `ExternalEntityRefHandler` raise, with `SetParamEntityParsing(XML_PARAM_ENTITY_PARSING_NEVER)`, feeding an `ElementTree.TreeBuilder`. Never call `ElementTree.parse`/`fromstring` or `lxml` on input. The C-accelerated `ElementTree.XMLParser` does not expose its expat parser, so the handlers cannot be set on it. Check a zip-based input's central directory (total uncompressed size against free disk, compression ratio per member) before decompressing it (`utils/archive.py`). A format whose elements reference one another (3MF components, COLLADA `instance_node`) also bounds its expansion; see "Sizing a Container's Work to Its Task" below. The SYSTEM GenAI media image, which has no `xml_mesh_handler`, parses the XML parts of Office files and of the generic zip probe with `defusedxml` and reads every zip member through `backendPipelines/system/genAiMetadata/containers/media/media_extractors/common.read_zip_member`, which refuses, without decompressing it, a member whose central-directory size is above `ZIP_MEMBER_READ_MAX_BYTES` (4 MiB).
 
+### **Reading a File's Header, Not the File**
+
+A pipeline whose facts all live in a file's header (a TIFF's directories) reads that header by ranged GETs of the S3 object at the run's version, never the whole file and never a pixel. `media_extractors/raster.py` is the worked example, over `media_extractors/s3_ranged.RangedS3Reader` (a seekable file object that serves a read from the bytes a previous GET returned and refuses a read past its byte or request bound):
+
+-   Walk the structure with `struct` under limits before a library decodes anything: a directory count, the entries in one directory, the bytes of any single array the library loads whole (tifffile loads the strip and tile offset arrays, strings and `SubIFDs` eagerly), and a total for all of them. Compare every declared count and offset with the object's size before reading or allocating, so a tag that claims gigabytes is refused by arithmetic and not by running out of memory.
+-   A header past a limit is described from what the walk read and flagged (`offsetsTruncated: true`), not failed; a file that is not the format falls back to the `other` class with a warning that names the reason.
+-   Decode the first image with the library only when the walk passed, and hand the library the reader positioned at 0 (tifffile takes a file object's current position as the start of the file). A library's convenience default can invent a value (tifffile reports `nodata` 0 for a file with no `GDAL_NODATA` tag): read the tag itself.
+-   A footprint comes from one shared helper (`media_extractors/geo_reproject.py`): longitude-first axis order, edges densified, an antimeridian crossing cut into a `MultiPolygon`, no footprint for an extent containing a pole, and no footprint (never an assumed WGS84) for a CRS that does not resolve.
+
 ### **Decoding Untrusted Images and Video**
 
 Mirrors `backendPipelines/CLAUDE.md` "Decoding Untrusted Images and Video". The 3D thumbnail container also writes previews for images, TGA/TIFF and video (`backendPipelines/preview/3dThumbnail/container/preview_pipeline/media_preview.py`, handlers `format_handlers/image_handler.py` and `video_handler.py`), registered as a second pipeline and workflow, **Media Preview Thumbnail**, from `preview/3dThumbnail/vamsSchemaMedia/` behind `app.pipelines.useMediaPreviews` (a missing block is off; the container deploys for it or for `usePreview3dThumbnail`). The rules a media decoder follows:
@@ -1284,6 +1293,16 @@ not read). Two rules follow:
     placeholder for token values -- the resolved value still reaches CloudFormation via the
     `resourceOverrides` / `idOverrides` properties, which detect a real retarget themselves. Test:
     `infra/test/pipelines/vamsSchemaRegistrationHash.test.ts`.
+-   **`executionConfigOverrides` is optional and additive.** A deployment registers an existing bundle
+    with a different `executionConfig` through `VamsSchemaRegistration`'s `executionConfigOverrides`
+    (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`). It reaches the import
+    lambda as one JSON property, and `vsi.apply_execution_config_overrides` applies it after the
+    resource injection (`lambdaName` here wins over `resourceOverrides.lambdaName`). Absent emits no
+    property and leaves `schemaHash` unchanged; set, it is mixed into the hash, so a change re-runs the
+    registration. The import's update goes through `pipelineService.update_pipeline`, so a change to a
+    state-machine-relevant value redeploys every referencing workflow (bundle and custom). Tests:
+    `infra/test/pipelines/vamsSchemaRegistrationExecutionConfigOverrides.test.ts`,
+    `backend/tests/handlers/workflows/test_importGlobalPipelineWorkflow_execution_config_overrides.py`.
 -   **Bundles share the artefacts bucket with `infra/lib/artefacts/`.** The root `DeployArtefacts`
     deployment prunes (`s3 sync --delete`) over the bucket root, so it must keep excluding
     `vamsSchema/*` -- otherwise refreshing an unrelated artefact deletes every bundle while the
@@ -1458,10 +1477,21 @@ record the API holds read-only except for `enabled` and template content (`backe
 
 -   **Two modes, decided from the run manifest.** `vamsExecuteZipArchivePipeline.py` reads the manifest's server-only `systemExecutionContext` (written only for a run VAMS launched as a system run, under the zip's `System-ZipDownload` trigger). With it, the run is a **zip download**: the context names the job and its request manifest under `vams.preparedDownloads/` in the auxiliary bucket, which is the authority for what is archived; the archive goes to the job's key and the container writes the job row's status and progress (conditional on the row being non-terminal and on this run's execution id, parsed from the orchestration event prefix). Without it, the run is an **zipArchive run**: the inputs are archived into the run's outputs files prefix and the output step ingests the archive as a new file version (outputs over 1 GiB go through the large object copy engine, so there is no size cap). Its configBody keys are `format`, `compression`, `outputFileName`, `includePatterns`, `excludePatterns`, `assetVersionId`; any other key is refused in `constructPipeline.py`.
 -   **The job command carries locations, not lists.** AWS Batch bounds the size of a job's command override, so `constructPipeline.py` passes the request manifest's or the run manifest's location and the container reads the selection itself. The cross-pipeline input-version guard lists this pipeline under `CONTAINER_MANIFEST_PIPELINES` and checks the container source for the per-entry version read.
--   **Refuse the whole archive.** Before writing a byte the container head-checks every member on its pinned version (`zip_archive_pipeline/resolve.py`, `rules.py`): a delete marker, a missing version, `GLACIER` / `DEEP_ARCHIVE`, `vams-status` archived or deleted, or a blocked extension or media type refuses the archive with a user-safe reason (`ZIPDOWNLOAD:`-prefixed in the task failure cause). A zip download carries the deployment's merged blocklists in its request manifest; a zipArchive run uses the core lists in `rules.py`, which `container/tests/test_runner.py` pins to backend `CORE_UNALLOWED_*`.
+-   **Refuse the whole archive.** Before writing a byte the container checks every entry name (`resolve.check_names` with `engine/zipstream.check_member_name`: a name the archive writers refuse, such as one with a `.` or `..` segment, or two entries with the same name, refuses the archive) and head-checks every member on its pinned version (`zip_archive_pipeline/resolve.py`, `rules.py`): a delete marker, a missing version, `GLACIER` / `DEEP_ARCHIVE`, `vams-status` archived or deleted, or a blocked extension or media type refuses the archive with a user-safe reason (`ZIPDOWNLOAD:`-prefixed in the task failure cause). A zip download carries the deployment's merged blocklists in its request manifest; a zipArchive run uses the core lists in `rules.py`, which `container/tests/test_runner.py` pins to backend `CORE_UNALLOWED_*`.
 -   **Preview companions (#1622).** `resolve.expand_selection` leaves `{file}.previewFile.{ext}` keys out of the members (explicit, pinned, folder and whole-asset) unless `includePreviewFiles` is true: a zipArchive run reads it from its configBody (`constructPipeline.archive_config` accepts only a JSON boolean; the shipped `zip-archive-store` template sets `false`), a zip download from its request manifest. A missing key is false and a non-boolean refuses the archive (`rules.include_preview_files`). `rules.PREVIEW_FILE_PATTERN` mirrors backend `common/s3PathPatterns.PREVIEW_FILE_PATTERN`; `tests/test_preview_companions.py` pins the mirror and the manifest key.
 -   **Streaming engine, never on disk.** `zip_archive_pipeline/engine/`: `reader.py` (ordered, byte-bounded ranged GETs of pinned versions across members, retried, length-checked), `zipstream.py` (ZIP64 local headers and 8-byte data descriptors for members that can reach 4 GiB, ZIP64 central records for any overflowing size or offset, ZIP64 end records past 65,535 entries or 4 GiB of directory, UTF-8 names, directory entries for empty folders, STORE or DEFLATE), `tarstream.py` (pax tar and tar.gz in plain write mode over a forward-only sink; the `w|` stream mode is quadratic per write and is not used), `sink.py` (multipart upload, part size `max(16 MiB, ceil(estimate / 9500))` rounded to 1 MiB and capped at 5 GiB, at most four parts in flight, aborted on any error and on SIGTERM). `container/tests/test_zip64_streaming.py` streams a member over 4 GiB and 70,000 entries and validates both with Python `zipfile` and `unzip -t` (set `ARCHIVE_TEST_TMPDIR` to put the file on disk).
 -   **Container environment:** `ZIP_DOWNLOAD_REQUESTS_STORAGE_TABLE_NAME`, `ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME` (zipArchive-run asset-version pins), `TASK_TOKEN`; the VAMS task token is heartbeated every `HEARTBEAT_SECONDS` (120 s). `taskTimeout` is 12 hours.
+
+#### **Zip Download Mode: Stops, Landed Archives and Recorded Uploads**
+
+Mirrors the rest of the "Two modes" rule in `backendPipelines/CLAUDE.md` (the zip download mode, mode 1, unless a bullet says otherwise).
+
+-   **A landed archive wins with one outcome (`runner.Job`).** Once the upload completed no path writes FAILED: a transient error or SIGTERM after it leaves the job to the API's read-time reconcile, which finds the archive. A SIGTERM never finalizes the job: `Job.stop()` aborts the upload and records only `stopReason` (`StatusWriter.stopped`), and every later failure of that run does the same, so the reconcile decides from the run's own status (#1125 D24). A failure that cannot tell whether the upload completed HEADs the archive and counts it only when the current object is this upload's own (its version id from CompleteMultipartUpload, else the `archiveUploadToken` it recorded on the row and stamped as `x-amz-meta-vams-copyuploadtoken`; `runner.ARCHIVE_UPLOAD_TOKEN_METADATA` mirrors `backend/backend/common/s3MetadataKeys.VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY`, pinned by `tests/test_terminal_races.py`), never by presence or size. An archive that lands after another writer finalized the job without it is deleted (this upload's version only; the job role's only `s3:Delete*`, on `vams.preparedDownloads/*`).
+-   **A stop outside VAMS (#1125 D26).** When no VAMS stopper recorded the stop (`Job.stop_recorded_by_vams`, i.e. `StatusWriter.must_stop` is false; always in mode 2), the SIGTERM handler answers the zipArchive state machine's own token with `STOPPED_ERROR` `ZipArchiveContainerStopped` (`runner.answer_stop`), so a Batch terminate outside VAMS ends the run instead of waiting 11 hours. `Heartbeat` beats both the VAMS workflow token and that own token every `HEARTBEAT_SECONDS` (120), and `ZipArchiveBatchJob` has `ZIP_ARCHIVE_BATCH_HEARTBEAT` (30 minutes), so a kill without a SIGTERM ends the wait within 30 minutes. Step Functions records the expiry as `States.Timeout`, the same error as the 11-hour bound; `lambda/pipelineEnd.py` looks the run's job up and reports `ZipArchiveHeartbeatLost`, `ZipArchiveJobQueued` or `ZipArchiveJobNotStarted`, or keeps `States.Timeout` at the bound, and ends a job still queued or running (`tests/test_stop_outside_vams.py`).
+-   **A SIGTERM during the Complete.** While the archive's CompleteMultipartUpload is in flight (`MultipartSink.completing`) a SIGTERM neither aborts nor writes FAILED: S3 answers 204 to an abort sent then and lets the Complete land (#1123 D1), so `Job.stop()` returns False and `sigterm_handler` lets the Complete return and its own path decide (`tests/test_abort_204.py`).
+-   **No part is left behind after a stop (#1125 D16).** S3 keeps a part whose UploadPart was in flight during an abort, so each part reads the job first (`MultipartSink(should_stop=...)`; mode 1 `StatusWriter.must_stop`: the row ended, belongs to another run, or carries the stopper's `stopRequestedAt`, which backend `common/zipDownloads.request_stop` writes before its abort) and uploads nothing further. A stop the job did not make itself (`StopRequested`) aborts and returns `stopped` without a status write, since the stopper decides. `MultipartSink.abort()` cancels the queued parts, aborts, waits at most `IN_FLIGHT_WAIT_SECONDS` for the parts in flight and aborts until ListParts answers NoSuchUpload (`ABORT_SWEEP_ATTEMPTS`); a part that ends after an abort aborts again itself (`tests/test_late_parts.py`, S3 double `LateS3`).
+-   **Recorded uploads.** The archive's upload id is recorded on the job row right after CreateMultipartUpload and before any part (`MultipartSink(on_created=StatusWriter.record_upload)`, `ADD archiveUploadIds`, written whatever the status, this run's row only; an upload that cannot be recorded is aborted at once), so the backend's delayed sweep (`common/zipDownloads.sweep_recorded_uploads`, about 5 and 15 minutes after a stop) aborts exactly that upload (#1125 D16 round 2; `tests/test_recorded_upload.py`).
+-   **One openPipeline invoke (both modes).** `vamsExecuteZipArchivePipeline.invoke_open_pipeline` sends the synchronous openPipeline invoke once (no botocore retry, 310 s read timeout above openPipeline's 300 s timeout; only a `TooManyRequestsException` is retried), because each call starts a new archive run on the same task token (the #1205 rule; `lambda/tests/test_zip_archive_lambdas.py`).
 
 ### **Registering Sub-Processes and Logs (Abort, Stage Status, Log Sources)**
 
@@ -1806,11 +1836,13 @@ export class NewPipelineNestedStack extends NestedStack {
 backendPipelines/newPipeline/
 ├── lambda/
 │   ├── lambda_function.py      # Pipeline orchestration Lambda
-│   └── requirements.txt        # Lambda dependencies
+│   └── requirements.txt        # Only if the Lambda ships its own packages; then also pyproject.toml + uv.lock
 ├── container/
 │   ├── Dockerfile              # Container definition
 │   ├── app.py                  # Container application
-│   ├── requirements.txt        # Container dependencies
+│   ├── pyproject.toml          # uv project: direct Python dependencies
+│   ├── uv.lock                 # uv lock; audited by the python-dependency-audit CI job
+│   ├── requirements.txt        # uv export of uv.lock; the Dockerfile pip-installs it
 │   └── scripts/                # Processing scripts
 └── README.md                   # Pipeline documentation
 ```
@@ -1895,17 +1927,18 @@ Install a container's dependencies so that two builds of one commit ship the sam
 One job definition, one Batch state per tier. The 3D thumbnail pipeline is the worked example
 (`infra/lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct.ts`).
 One `BatchFargatePipelineConstruct` job definition is registered at the standard tier's size with
-`attemptDuration` = the longest tier's bound; each tier is its own `tasks.BatchSubmitJob` with fixed
+`attemptDuration` = the longest tier's bound; each tier is its own `StateTimeoutBatchSubmitJob` with fixed
 `containerOverrides.vcpus` / `memory` (aws-cdk-lib renders them as `ResourceRequirements` `VCPU` /
 `MEMORY` in MiB, the form AWS Batch accepts for Fargate — never the deprecated top-level
 `Vcpus`/`Memory`), `VAMS_COMPUTE_TIER` and `VAMS_TASK_MEMORY_MIB` (the memory override in MiB, since a
-Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout`,
+Fargate container cannot read its task's memory from its cgroup) env values and its own `taskTimeout` (the attempt override),
 behind a `sfn.Choice` on the tier the lambdas carry in the state. Ephemeral storage is a job-definition property and cannot be
 overridden per job, so size it for the largest tier. AWS Batch checks a vCPU/memory override against
 the Fargate task sizes only at submit, so every configurable tier size is validated in `getConfig()`
 with `isFargateCpuMemory` (`infra/config/config.ts`, mirrored in the ConfigBuilder
-`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). The state machine
-timeout covers the longest tier and the `vamsSchema` `taskTimeout` covers the state machine. Each
+`documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`). Both tier states share
+one state bound (queue wait plus attempt) above the longest tier, the state machine timeout covers
+that bound, and the `vamsSchema` `taskTimeout` covers the state machine. Each
 tier's Batch construct id is a module-level `*_STATE_NAME` literal in the registering lambda, which
 registers the container log source of the state its tier routes to. Tests:
 `infra/test/pipelines/preview3dThumbnailComputeTiers.test.ts`,
@@ -1914,6 +1947,31 @@ registers the container log source of the state its tier routes to. Tests:
 #### **Multi-Job State Machines Submit by the Revision-less Job Definition ARN**
 
 Mirrors `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Multi-Job State Machines Submit by the Revision-less Job Definition ARN". A deploy that changes a container image replaces its job definition: Batch registers a new revision and the old one is deregistered. `batchJobDefinition.jobDefinitionArn` is the `Ref`, the REVISIONED ARN, so a state machine that submits a second Batch job after a first one finishes (the Potree viewer's PDAL then Potree) fails that submit for every run spanning such a deploy. Such a state machine passes `arn:${ServiceHelper.Partition()}:batch:${region}:${account}:job-definition/${pipeline.batchJobDefinitionPhysicalName}` instead (`BatchFargatePipelineConstruct.batchJobDefinitionPhysicalName` is the literal base-plus-hash name); Batch runs the latest ACTIVE revision, and `BatchSubmitJob`'s own `batch:SubmitJob` grant on `job-definition/*` already covers it. A single-job state machine has submitted before any deploy can replace its definition and keeps the `Ref`. Test: `infra/test/pipelines/pcPotreeViewerJobDefinitionRevision.test.ts`.
+
+#### **A Batch State Bounds Its Own Queue Wait (`StateTimeoutBatchSubmitJob`)**
+
+An attempt's clock starts when the job leaves the queue, and `tasks.BatchSubmitJob` renders
+`taskTimeout` as the SubmitJob attempt-duration override while forcing the state's `TimeoutSeconds` to
+undefined. A Batch state built with it is bounded only by the state machine timeout, and an
+execution-level `States.Timeout` skips every Catch, so `pipelineEnd` never reports and the run waits out
+the parent's `taskTimeout`. A `.sync` Batch state therefore uses `StateTimeoutBatchSubmitJob`
+(`infra/lib/nestedStacks/pipelines/constructs/stateTimeoutBatchSubmitJob.ts`), whose `stateTimeout`
+renders as the state's `TimeoutSeconds` and is caught like any other error (`taskTimeout` there is still
+the attempt override). Nest the chain: attempt duration ≤ the state bound; the state bound plus 15
+minutes (the two 5-minute Lambda states around it) ≤ the state machine timeout; the state machine
+timeout < the `vamsSchema` `taskTimeout`, which starts before the execution does. A
+`WAIT_FOR_TASK_TOKEN` Lambda state that submits the job itself (coordinate transform, COG conversion)
+bounds the wait with `taskTimeout`, which renders as the state's `TimeoutSeconds` there. Step Functions ends a `.sync` job
+when the state's own bound fires (on a deployed stack, a job still queued at the bound gets `TerminateJob` from
+the state machine role in the same second), so for a `.sync` state the pipelineEnd terminate is a backup; a
+job a Lambda submitted under a token wait has no owner after the wait times out, so there the pipelineEnd is
+what ends it. Either way the state's pipelineEnd ends the run's job itself:
+`grantBatchStateTimeoutCleanup` gives it `BATCH_JOB_QUEUES` (every queue the state submits to),
+`batch:ListJobs` and `batch:TerminateJob` on `job/*`, and its handler's `end_batch_job_after_state_timeout`
+terminates the unfinished job with the run's job name on `States.Timeout`. Image to 3D, Video SOP/BOM, the
+3D thumbnail tiers and Potree use it; the NVIDIA, splat toolbox and metadata labeling constructs predate
+it. Tests: `infra/test/pipelines/batchStateTimeoutChain.test.ts`,
+`backendPipelines/tests/test_pipeline_end_ends_timed_out_batch_job.py`.
 
 #### **Read Bits on COPY'd Source in a Non-Root Container**
 
@@ -2114,7 +2172,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
     Which flags belong where is read from the source, and the two lists below are asserted against it by `infra/test/platform/steeringVectorSearchRelease.test.ts` (the block anchors are shared with `infra/test/security/vpcEndpointsAndAuthGrants.test.ts`):
 
-    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
+    Isolated-subnet flags (block 2 only): `useConversionCoordinateTransform`, `useCogConversion`, `useGenAiVideoSopBom`, `useMediaPreviews`, `usePreview3dThumbnail`, `usePreviewPcPotreeViewer`, `useSystemGenAiMetadata.useFargateRenderer`, `useZipDownloads`.
 
     Private-subnet flags (all three blocks): `useGenAiCadStepAgent.runtime`, `useImageTo3d`, `useModelOps`, `useNvidiaCosmos`, `useNvidiaCosmos3`, `useNvidiaGr00t`, `useRapidPipeline.useEcs`, `useRapidPipeline.useEks`, `useSplatToolbox`.
 
@@ -2157,6 +2215,7 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 16. **CodeBuild Build Triggers Use the Shared Handler**: every `*CodeBuild-construct.ts` gives its build-trigger function `code: codeBuildTriggerCode()` (`infra/lib/nestedStacks/pipelines/constructs/codeBuildTrigger.ts`), which inlines the single handler `constructs/codeBuildTrigger/index.py`. The handler returns its data, retries `start_build` on throttling and transient errors, and raises otherwise so `cr.Provider` reports `FAILED`; a Delete never raises. Never paste a handler that calls `cfnresponse.send(...)` — behind the provider framework that reports to nothing, and a caught exception then deploys as a success. A construct whose consumer validates the image at create (the CAD STEP agent's AgentCore Runtime) keeps the shared handler as its provider's `onEventHandler` and adds an `isCompleteHandler` that waits on the returned `Data.BuildId`. Coverage: `infra/test/pipelines/codeBuildTriggerHandler.test.ts`, `backendPipelines/tests/test_codebuild_build_trigger_handler.py`.
 
 17. **A Feature Tracks Its Own Workflow Runs; Core Never Names a Pipeline** (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" and `infra/CLAUDE.md`): A feature that runs a workflow tracks it by storing the `workflowExecutionId` on its own record and reading the run status from the existing execution tracking (execution rows, read-time reconcile, the status-change rule) when its own record is read; it does not register a callback with the workflow core. Core workflow code never names or calls a specific pipeline. Clean up a feature's leftover artefacts with S3 lifecycle rules (e.g. abort incomplete multipart uploads) rather than a terminal hook. A system run's trigger value is the feature's own `System-<Identifier>` string (format checked by `systemPipelines.is_system_trigger`), never a value added to a core list; `backend/tests/handlers/workflows/test_system_pipeline_hooks.py` fails when `lambdaBuilder/workflowFunctions.ts` or the backend workflow core names a feature-specific trigger.
+18. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`. (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" item 22)
 
 #### **Pipeline Configuration Rules**
 

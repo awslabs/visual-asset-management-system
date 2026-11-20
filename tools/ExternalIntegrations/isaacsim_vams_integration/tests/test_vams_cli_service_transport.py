@@ -302,6 +302,20 @@ class TestProfileLookupFailureIsNamed:
         assert transport.service.web_deployed_url == "https://vams.example.invalid"
 
 
+# `vamscli auth status --json-output` for a Cognito sign-in whose access token has expired.
+_COGNITO_STATUS = {"success": True, "authenticated": True, "authentication_type": "cognito_token",
+                   "user_id": "u", "has_expiration": True, "is_expired": True,
+                   "refresh_supported": True}
+
+
+def _subcommand(argv):
+    """The command words of a recorded argv, without the executable, the root options and flags."""
+    words = [word for word in argv[1:] if not word.startswith("--")]
+    if "--profile" in argv:
+        words.remove(argv[argv.index("--profile") + 1])
+    return words
+
+
 class TestAuthGateFailureModes:
     """`check_authentication` and `logout` deliberately absorb a failure; `ensure_authenticated`
     must not."""
@@ -316,6 +330,35 @@ class TestAuthGateFailureModes:
         transport.results = [_CompletedProcess(stdout=json.dumps({
             "authenticated": True, "user_id": "u", "authentication_type": "token_override"}))]
         assert transport.service.is_authenticated() is True
+
+    def test_an_expired_cognito_sign_in_is_renewed_with_its_refresh_token(self, transport):
+        # A session taken over from the CLI profile has no cached password, so the CLI's refresh
+        # token is the only way it outlives its access token.
+        service = module.VamsCliService()
+        transport.results = [
+            _CompletedProcess(stdout=json.dumps(_COGNITO_STATUS)),
+            _CompletedProcess(stdout=json.dumps({"success": True})),
+            _CompletedProcess(stdout=json.dumps(dict(_COGNITO_STATUS, is_expired=False))),
+        ]
+        service.ensure_authenticated()
+        assert [_subcommand(argv) for argv in transport.argvs] == [
+            ["auth", "status"], ["auth", "refresh"], ["auth", "status"]]
+
+    def test_a_failed_renewal_leaves_the_sign_in_expired(self, transport):
+        service = module.VamsCliService()
+        transport.results = [
+            _CompletedProcess(stdout=json.dumps(_COGNITO_STATUS)),
+            _CompletedProcess(returncode=1, stdout=json.dumps({"error": "Refresh token expired"})),
+        ]
+        status = service.check_authentication()
+        assert (status.authenticated, status.is_expired) == (True, True)
+        assert transport.calls == 2
+
+    def test_a_token_with_no_refresh_is_not_renewed(self, transport):
+        transport.results = [_CompletedProcess(stdout=json.dumps(
+            dict(_COGNITO_STATUS, authentication_type="override_token", refresh_supported=False)))]
+        assert transport.service.is_authenticated() is False
+        assert transport.calls == 1
 
     def test_ensure_authenticated_raises_without_cached_credentials(self, transport):
         # A second service off the same stubs: the fixture's service has the auth gate stubbed out,

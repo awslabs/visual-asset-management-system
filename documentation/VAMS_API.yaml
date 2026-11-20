@@ -9944,7 +9944,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhWorkstationRecord"
                 "400":
-                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
+                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`; for a role with `GET` or `POST` on the id, any other role receives `403`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
                     content:
                         application/json:
                             schema:
@@ -10157,7 +10157,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and nothing is handed over), or another start of it may still happen -- one handed over less than 7 minutes earlier -- or the reconciler revokes the stopped desktop's key, or a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted or handed over)."
+                    description: "The launch has not received a session id, the workstation is deleted (`A deleted workstation cannot be started`, also for a record deleted or removed after the start read it, which is answered after EDH's state read), its lease has expired and has not been renewed (`The lease on this workstation has expired; renew it before starting`), it is already running, it is not stopped, EDH still reports the stopped workstation in a state other than stopped, such as `stopping` or `interrupted` (`The workstation is still <state> in EDH; start it again once it has stopped.`, answered after EDH's state read; nothing is minted or claimed and nothing is handed over), EDH reports the stopped workstation in its `error` state (`code` `DESKTOP_ERROR`, as connect answers it; stop it, then start it again), or another start of it may still happen -- one handed over less than 7 minutes earlier -- or the reconciler revokes the stopped desktop's key, or a lease renewal re-issues the desktop's key, for up to 5 minutes (`A start of this workstation is already in progress`, with `startInProgress` true, answered after EDH's state read; nothing is minted or handed over)."
                     content:
                         application/json:
                             schema:
@@ -10214,7 +10214,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id, the record is not ACTIVE, or EDH does not report the desktop running with a URL; or EDH reports the desktop running with a link that signs no user in, whose body carries `\"code\": \"DISPLAY_SESSION_ENDED\"` and the message `The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.` (the record then carries `connectionUnavailableReason`)."
+                    description: "The launch has no session id, the record is not ACTIVE, or EDH does not report the desktop running with a URL; or EDH reports the desktop running with a link that signs no user in, whose body carries `\"code\": \"DISPLAY_SESSION_ENDED\"` and the message `The workstation is running but its remote display session has ended. Stop it, then start it again, to reconnect.` (the record then carries `connectionUnavailableReason`); or EDH reports the workstation in its `error` state, whose body carries `\"code\": \"DESKTOP_ERROR\"` and the message `The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.`."
                     content:
                         application/json:
                             schema:
@@ -10265,7 +10265,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or the desktop is not connectable (`Workstation is not ready for connection`), the desktop is running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), or EDH lists no password for a Windows desktop (`Windows password is not available yet`). For Windows, EDH's listing decides connectability; for Linux, the stored record does (`connectionAvailable` and `connectionUnavailableReason`)."
+                    description: "The launch has no session id (`Workstation has no EDH session`), the record is not ACTIVE or the desktop is not connectable (`Workstation is not ready for connection`), the desktop is running with a link that signs no user in (`code` `DISPLAY_SESSION_ENDED`, as connect answers it), EDH reports the workstation in its `error` state (`code` `DESKTOP_ERROR`, as connect answers it), or EDH lists no password for a Windows desktop (`Windows password is not available yet`). For Windows, EDH's listing decides connectability; for Linux, the stored record does (`connectionAvailable` and `connectionUnavailableReason`)."
                     content:
                         application/json:
                             schema:
@@ -10670,10 +10670,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - name: idleMinutes
                   in: query
                   required: false
-                  description: "Idle threshold in minutes; 120 when omitted, at least 1."
+                  description: "Idle threshold in minutes; 120 when omitted, from 1 to 525600 (a year)."
                   schema:
                       type: integer
                       minimum: 1
+                      maximum: 525600
                       default: 120
             responses:
                 "200":
@@ -10683,7 +10684,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhStaleInstanceList"
                 "400":
-                    description: "`idleMinutes` is not an integer or is below 1."
+                    description: "`idleMinutes` is not an integer, is below 1 or is above 525600."
                     content:
                         application/json:
                             schema:
@@ -10734,7 +10735,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "The session does not exist."
+                    description: "The session does not exist (answered only to a caller allowed on a session of every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -10785,7 +10786,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "The session does not exist."
+                    description: "The session does not exist (answered only to a caller allowed on a session of every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11102,7 +11103,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`unresolved placeholder(s) in component document: <placeholders>`, `deployment value(s) not in the expected form for: <placeholders>`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
+                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`; answered only to a caller allowed to read a recipe with that id for every OS family, any other caller receives `403`), another recipe uses the `stackName` (`stackName is already used by another recipe`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
                     content:
                         application/json:
                             schema:
@@ -11142,7 +11143,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11178,13 +11179,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The recipe has `source: config` (`a config recipe is edited in the repository, not here`), the body carries `assets` for a recipe that holds none (`assets are only supported on shipped recipes`) or `assets` other than the ones the recipe holds (`the assets of a duplicated recipe cannot be changed`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), or a component document cannot be materialized (`unresolved placeholder(s) in component document: <placeholders>`, `deployment value(s) not in the expected form for: <placeholders>`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`), the recipe was deleted after the request read it (`the recipe no longer exists`), or other writes to the recipe kept landing between the request's read and its write (`the recipe changed while it was saved; try again`)."
+                    description: "The recipe has `source: config` (`a config recipe is edited in the repository, not here`), the body carries `assets` for a recipe that holds none (`assets are only supported on shipped recipes`) or `assets` other than the ones the recipe holds (`the assets of a duplicated recipe cannot be changed`), another recipe uses the `stackName` (`stackName is already used by another recipe`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`), the recipe was deleted after the request read it (`the recipe no longer exists`), or other writes to the recipe kept landing between the request's read and its write (`the recipe changed while it was saved; try again`)."
                     content:
                         application/json:
                             schema:
@@ -11214,7 +11215,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11260,7 +11261,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11296,13 +11297,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "`the recipe is disabled`, `the recipe is being deleted`, `the recipe no longer exists` (deleted after the request read it), or `the recipe's builds changed while the request was placed; try again` (other requests kept taking the version this one claimed); or, on a build that starts at once, the parent image cannot be resolved (`SSM parameter <name> could not be read (<code>)`, `EDH lists no <kind> stack named '<name>'`), Amazon EC2 does not find the AMI it resolves to (`the parent image could not be found`), Amazon EC2 reports that AMI or a build instance type as running another architecture family than the recipe's `architecture` (`the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`), or a component document cannot be materialized (`recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`, `unresolved placeholder(s) in component document: <placeholders>`, `deployment value(s) not in the expected form for: <placeholders>`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`). A refusal creates no EC2 Image Builder resource. A refused new version is not recorded; a queued build the request started goes back to QUEUED with `not started: <reason>` in its `error`."
+                    description: "`the recipe is disabled`, `the recipe is being deleted`, `the recipe no longer exists` (deleted after the request read it), or `the recipe's builds changed while the request was placed; try again` (other requests kept taking the version this one claimed); or, on a build that starts at once, the parent image cannot be resolved (`the parent image's SSM parameter could not be read`, `EDH lists no stack of the recipe's kind with the parent image's name`), Amazon EC2 does not find the AMI it resolves to (`the parent image could not be found`), Amazon EC2 reports that AMI or a build instance type as running another architecture family than the recipe's `architecture` (`the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`), or a component document cannot be materialized (`recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`, `a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`). A refusal creates no EC2 Image Builder resource. A refused new version is not recorded; a queued build the request started goes back to QUEUED with `not started: <reason>` in its `error`."
                     content:
                         application/json:
                             schema:
@@ -11356,7 +11357,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "`Recipe not found` or `Build not found`."
+                    description: "`Recipe not found` (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`) or `Build not found`."
                     content:
                         application/json:
                             schema:
@@ -11416,7 +11417,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "`Recipe not found` or `Build not found`."
+                    description: "`Recipe not found` (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`) or `Build not found`."
                     content:
                         application/json:
                             schema:
@@ -14136,9 +14137,10 @@ components:
                 connectionUnavailableReason:
                     type: string
                     nullable: true
-                    description: "Why an ACTIVE workstation EDH reports `running` cannot be connected to: `DISPLAY_SESSION_ENDED` when EDH lists the desktop with a connection link that signs no user in (no `authToken` or `username`), which it does when its Amazon DCV broker holds no session for the desktop. Recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. `connectionAvailable` is then false and `activity` null. Stop the workstation, then start it again, to reconnect. Null otherwise."
+                    description: "Why the workstation cannot be connected to. `DISPLAY_SESSION_ENDED`: an ACTIVE workstation EDH reports `running` whose connection link signs no user in (no `authToken` or `username`), which EDH lists when its Amazon DCV broker holds no session for the desktop; recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. Stop the workstation, then start it again, to reconnect. `DESKTOP_ERROR`: EDH reports a workstation that has run (ACTIVE, STOPPED, or CREATING after a start EDH accepted) in its `error` state, which EDH sets when the desktop's Amazon DCV health check fails; the workstation keeps its state, disk and credential, and EDH moves it on once the check passes, which clears the reason. Wait a few minutes, or stop it, then start it again. Only a new launch that never ran becomes ORPHANED for `error`. Either way `connectionAvailable` is false and `activity` null. Null otherwise."
                     enum:
                         - DISPLAY_SESSION_ENDED
+                        - DESKTOP_ERROR
                         - null
                 lastError:
                     type: string
@@ -15449,7 +15451,7 @@ components:
                     minLength: 1
                     maxLength: 200
                     pattern: '^[a-zA-Z0-9\-._ ]{1,256}$'
-                    description: "Base name of the EDH software stack each build registers, as `<stackName> v<version>`. A create or update refuses a name another recipe uses, compared with surrounding spaces removed and without regard to case (409 `stackName is already used by recipe '<id>'`)."
+                    description: "Base name of the EDH software stack each build registers, as `<stackName> v<version>`. A create or update refuses a name another recipe uses, compared with surrounding spaces removed and without regard to case (409 `stackName is already used by another recipe`)."
                 profileId:
                     type: integer
                     minimum: 0
@@ -15531,7 +15533,7 @@ components:
                     minLength: 2
                     maxLength: 40
                     pattern: "^[a-z0-9][a-z0-9-]{1,39}$"
-                    description: "POST only: the recipeId of the recipe to duplicate, shipped or administrator-defined. The new recipe takes that recipe's `assets` and `assetPrefix` and records its id as `duplicatedFrom`; a source that does not exist answers 409 (`the recipe to duplicate does not exist`), and the caller needs object-tier GET on the source. Ignored on PUT."
+                    description: "POST only: the recipeId of the recipe to duplicate, shipped or administrator-defined. The new recipe takes that recipe's `assets` and `assetPrefix` and records its id as `duplicatedFrom`; a source that does not exist answers 409 (`the recipe to duplicate does not exist`) to a caller allowed to read a recipe with that id for every OS family and 403 to any other caller, and the caller needs object-tier GET on the source. Ignored on PUT."
         edhAmiRecipe:
             type: object
             description: "An AMI recipe view: the recipe fields plus latestBuild. `baseOs` is present on vdi recipes only; `description` and `parameters` when set; `assets` and `assetPrefix` on a seeded recipe that declares assets and on a recipe duplicated from any recipe that holds them; `duplicatedFrom` on a duplicated recipe; `latestVersion` once a build has been started or queued; `imageBuilder` once a build has started; `deletingAt` while a delete runs."
@@ -20962,7 +20964,7 @@ components:
                     maxItems: 14
                     items:
                         type: string
-                        enum: [image, video, audio, document, text, data, tiles3d, mesh, usd, cad, pointcloud, splat, ifc, other]
+                        enum: [image, video, audio, document, text, data, tiles3d, raster, mesh, usd, cad, pointcloud, splat, ifc, other]
                     default: []
                     description: "fileClass ids to keep (case-insensitive, de-duplicated); any other value is refused with 400. 3D models are mesh, usd or cad. One value is pushed into the index filter; several are applied after the merge."
                 fileExtensions:

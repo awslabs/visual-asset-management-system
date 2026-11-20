@@ -10,7 +10,7 @@ out unless the run or the request sets ``includePreviewFiles``. Every member is 
 exact version:
 a delete marker, a missing version, an archive storage class, a ``vams-status`` of archived or deleted,
 or a blocked extension or media type refuses the WHOLE archive (owner rule: no partial archives), as
-do the file and size limits.
+do an entry name the archive writers would refuse and the file and size limits.
 """
 
 import fnmatch
@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from botocore.exceptions import ClientError
 
+from .engine.zipstream import check_member_name
 from .rules import ARCHIVED_IN_SELECTION, Refusal, is_archived, is_blocked, is_preview_companion
 
 
@@ -141,9 +142,28 @@ def _head(s3_client, member):
         raise
 
 
-def check_members(get_client, members, blocked_extensions, blocked_content_types, workers=64):
-    """Head-check every member on its exact version and fill in size, version and mtime. The first
-    refusal refuses the archive."""
+def check_names(members, empty_dirs):
+    """Refuse a selection holding an entry name the archive writers would refuse: a name that breaks
+    their member-name rule, or two entries that would carry the same name."""
+    seen = {}
+    entries = [(m["relativePath"], m["relativePath"].lstrip("/")) for m in members]
+    entries += [(d, d.strip("/") + "/") for d in empty_dirs]
+    for rel, name in entries:
+        try:
+            check_member_name(name)
+        except ValueError:
+            raise Refusal(f"{rel!r} cannot be a name in the archive") from None
+        if name in seen:
+            raise Refusal(f"{seen[name]!r} and {rel!r} would have the same name in the archive")
+        seen[name] = rel
+
+
+def check_members(get_client, members, blocked_extensions, blocked_content_types, empty_dirs=(),
+                  workers=64):
+    """Check every entry name, then head-check every member on its exact version and fill in size,
+    version and mtime. The first refusal refuses the archive."""
+    check_names(members, empty_dirs)
+
     def check(member):
         head = _head(get_client(member["bucket"]), member)
         if is_archived(head):

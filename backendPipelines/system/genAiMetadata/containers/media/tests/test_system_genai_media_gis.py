@@ -1,8 +1,9 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 """The GIS extractor: a GeoPackage read through sqlite3 and an ArcGIS Pro layer file read as a CIM document, both
-written to the GeoJSON extractor's `sys_geo` shape plus `layers[]` and `crs`. A footprint is written for EPSG:4326
-only; another spatial reference keeps its native extent and the catalog gets no `location`.
+written to the GeoJSON extractor's `sys_geo` shape plus `layers[]` and `crs`. A GeoPackage layer in another registered
+EPSG reference keeps its native extent and is reprojected into the WGS84 footprint (and its own `wgs84Extent`) by the
+shared helper; an ArcGIS Pro layer file in another reference still gets no footprint and the catalog no `location`.
 
 The GeoPackage read is bounded whatever the file holds: the metadata tables are read for the listed layers only, a
 listed table gets a `PRAGMA table_info` and a LIMIT-bounded count, a listed view is described but not run, and a
@@ -95,17 +96,79 @@ class TestGeoPackage:
         geo = gis.extract_geopackage(path, ctx).attributes["sys_geo"]
         assert geo["footprint"] == {"type": "Point", "coordinates": [151.2, -33.85]}
 
-    def test_a_projected_layer_keeps_its_extent_and_writes_no_footprint(self, tmp_path):
+    def test_a_projected_layer_keeps_its_extent_and_gets_a_reprojected_footprint(self, tmp_path):
+        """Before the shared helper a layer in another reference wrote no footprint; EPSG:3857 now does."""
         path, ctx = _gpkg(tmp_path, [{"name": "roads", "geometry": "MULTILINESTRING", "srs_id": 3857,
                                       "extent": _MERCATOR, "rows": 2}])
         result = gis.extract_geopackage(path, ctx)
         geo = result.attributes["sys_geo"]
-        assert geo["footprint"] is None and "footprint" not in result.facts
+        assert geo["footprint"]["type"] == "Polygon" and result.facts["footprint"] == "Polygon bounding box"
+        west, south, east, north = geo["layers"][0]["wgs84Extent"]
+        # 16.8e6 m east, -4.02e6 m north in Web Mercator is about 150.9 degrees east, 33.9 degrees south.
+        assert west == pytest.approx(150.9, abs=0.05) and south == pytest.approx(-33.9, abs=0.05)
+        assert east > west and north > south
+        assert geo["footprint"]["coordinates"][0][0] == [west, south]
         assert geo["layers"][0]["crs"] == "EPSG:3857" and geo["layers"][0]["nativeExtent"] == list(_MERCATOR)
         assert geo["layers"][0]["geometryType"] == "MultiLineString" and geo["crs"] == "EPSG:3857"
-        assert any("EPSG:4326" in warning and "no footprint" in warning for warning in result.warnings)
+        assert result.warnings == []
 
-    def test_mixed_spatial_references_footprint_the_wgs84_layers_only(self, tmp_path):
+    def test_a_layer_in_an_unplaceable_reference_is_named_and_left_out(self, tmp_path):
+        # A south polar stereographic extent that contains the pole has no WGS84 box.
+        path, ctx = _gpkg(tmp_path, [{"name": "ice", "geometry": "POLYGON", "srs_id": 3031,
+                                      "extent": (-100000.0, -100000.0, 100000.0, 100000.0), "rows": 1}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('Antarctic Polar Stereographic', 3031, 'EPSG', 3031, "
+                    "'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        geo = result.attributes["sys_geo"]
+        assert geo["footprint"] is None and "wgs84Extent" not in geo["layers"][0]
+        assert geo["layers"][0]["nativeExtent"] == [-100000.0, -100000.0, 100000.0, 100000.0]
+        assert any("'ice'" in warning and "contains-pole" in warning for warning in result.warnings)
+        assert any("no GeoPackage layer extent could be placed in WGS84" in warning for warning in result.warnings)
+
+    def test_a_layer_pyproj_cannot_transform_does_not_fail_the_file(self, tmp_path):
+        """EPSG:3145 (ETRS89 / Faroe Lambert) has no transformation in the bundled data. The #325 base recorded the
+        native extent and a warning for any non-WGS84 layer; the file must still do that, not raise."""
+        path, ctx = _gpkg(tmp_path, [{"name": "faroe", "geometry": "POINT", "srs_id": 3145,
+                                      "extent": (100000.0, 100000.0, 200000.0, 200000.0), "rows": 2}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('ETRS89 / Faroe Lambert', 3145, 'EPSG', 3145, 'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        geo = result.attributes["sys_geo"]
+        assert result.file_class == CLASS_DATA
+        assert geo["footprint"] is None and "wgs84Extent" not in geo["layers"][0]
+        assert geo["layers"][0]["nativeExtent"] == [100000.0, 100000.0, 200000.0, 200000.0]
+        assert geo["layers"][0]["crs"] == "EPSG:3145" and geo["featureCount"] == 2
+        assert any("'faroe'" in warning and "unknown-crs" in warning for warning in result.warnings)
+        assert any("no footprint is written" in warning for warning in result.warnings)
+
+    def test_a_mixed_file_keeps_the_footprint_of_the_layers_that_can_be_placed(self, tmp_path):
+        path, ctx = _gpkg(tmp_path, [
+            {"name": "sites", "geometry": "POINT", "srs_id": 4326, "extent": _SYDNEY, "rows": 1},
+            {"name": "faroe", "geometry": "POINT", "srs_id": 3145, "extent": (100000.0, 100000.0, 200000.0, 200000.0),
+             "rows": 1}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('ETRS89 / Faroe Lambert', 3145, 'EPSG', 3145, 'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        geo = result.attributes["sys_geo"]
+        assert geo["footprint"]["coordinates"][0][0] == [151.1, -33.9]
+        assert any("'faroe'" in warning for warning in result.warnings)
+
+    def test_a_layer_across_the_antimeridian_is_left_out_of_the_box_footprint(self, tmp_path):
+        path, ctx = _gpkg(tmp_path, [{"name": "pacific", "geometry": "POINT", "srs_id": 3832,
+                                      "extent": (3200000.0, 744000.0, 3456000.0, 1000000.0), "rows": 1}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('PDC Mercator', 3832, 'EPSG', 3832, 'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        assert result.attributes["sys_geo"]["footprint"] is None
+        assert any("'pacific'" in warning and "crosses-antimeridian" in warning for warning in result.warnings)
+
+    def test_a_non_epsg_reference_keeps_its_extent_and_writes_no_footprint(self, tmp_path):
+        path, ctx = _gpkg(tmp_path, [{"name": "local", "geometry": "POINT", "srs_id": 77, "extent": _MERCATOR,
+                                      "rows": 1}])
+        _edit(path, "INSERT INTO gpkg_spatial_ref_sys VALUES ('Site grid', 77, 'LOCAL', 1, 'x', NULL)")
+        result = gis.extract_geopackage(path, ctx)
+        geo = result.attributes["sys_geo"]
+        assert geo["layers"][0]["crs"] == "LOCAL:1" and geo["footprint"] is None
+        assert "wgs84Extent" not in geo["layers"][0]
+
+    def test_mixed_spatial_references_union_into_one_wgs84_footprint(self, tmp_path):
         path, ctx = _gpkg(tmp_path, [
             {"name": "sites", "geometry": "POINT", "srs_id": 4326, "extent": _SYDNEY, "rows": 3},
             {"name": "roads", "geometry": "LINESTRING", "srs_id": 3857, "extent": _MERCATOR, "rows": 2},
@@ -116,7 +179,11 @@ class TestGeoPackage:
         geo = result.attributes["sys_geo"]
         assert geo["layerCount"] == 3
         assert [layer["type"] for layer in geo["layers"]] == ["attributes", "features", "features"]
-        assert geo["footprint"]["type"] == "Polygon" and geo["footprint"]["coordinates"][0][0] == [151.1, -33.9]
+        # Sydney's own extent and the reprojected Mercator layer (about 150.9 E, 33.9 S): the union starts west of
+        # Sydney's 151.1 and reaches its east edge.
+        ring = geo["footprint"]["coordinates"][0]
+        assert geo["footprint"]["type"] == "Polygon" and ring[0][0] == pytest.approx(150.9, abs=0.05)
+        assert ring[0][1] == pytest.approx(-33.9, abs=0.05) and ring[1][0] == pytest.approx(151.3)
         assert geo["geometryTypes"] == ["LineString", "Point"] and geo["crs"] == ["EPSG:3857", "EPSG:4326"]
         # Feature counts sum the feature layers; the attributes table is counted on its own row and not in the total.
         assert geo["featureCount"] == 5
@@ -138,7 +205,9 @@ class TestGeoPackage:
         _edit(other, "UPDATE gpkg_spatial_ref_sys SET organization_coordsys_id = 32756 WHERE srs_id = 4326")
         result = gis.extract_geopackage(other, ctx)
         assert result.attributes["sys_geo"]["layers"][0]["crs"] == "EPSG:32756"
-        assert result.attributes["sys_geo"]["footprint"] is None
+        # UTM 56S: the Sydney degrees read as metres sit at the zone's false origin, a far-away place, but the
+        # layer is placed from its registered reference, not from its numbers.
+        assert result.attributes["sys_geo"]["layers"][0]["wgs84Extent"] is not None
 
     def test_an_out_of_range_wgs84_extent_writes_no_footprint_and_says_so(self, tmp_path):
         path, ctx = _gpkg(tmp_path, [{"name": "sites", "geometry": "POINT", "srs_id": 4326,

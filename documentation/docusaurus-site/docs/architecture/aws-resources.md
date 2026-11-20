@@ -464,6 +464,7 @@ Each enabled pipeline's Step Functions state machine logs to `/aws/vendedlogs/VA
 | Log Group                                                   | Container                                                          | Created When                                       | Removal Policy | Custom Name |
 | ----------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- | -------------- | ----------- |
 | `/aws/vendedlogs/Pipelines/CoordTransform<hash>`            | Coordinate transform (AWS Fargate)                                 | `useConversionCoordinateTransform`                 | DESTROY        | Yes         |
+| `/aws/vendedlogs/Pipelines/CogConvert<hash>`                | COG conversion (AWS Fargate)                                       | `useCogConversion`                                 | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/SystemGenAiMetadataRender<hash>` | 3D render for oversized files and over-budget scenes (AWS Fargate) | `useSystemGenAiMetadata` with `useFargateRenderer` | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/Preview3dThumbnail<hash>`        | 3D thumbnail renderer and media previews (AWS Fargate)             | `usePreview3dThumbnail` or `useMediaPreviews`      | DESTROY        | Yes         |
 | `/aws/vendedlogs/Pipelines/PcPotreeViewerPDAL<hash>`        | PDAL point cloud conversion (AWS Fargate)                          | `usePreviewPcPotreeViewer`                         | DESTROY        | Yes         |
@@ -733,7 +734,7 @@ Deployed conditionally for each enabled pipeline:
 | **Job Definition**      | Container definitions with pipeline-specific configuration |
 | **Security Groups**     | Pipeline-specific security groups within VPC               |
 
-Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>-<region>`, `Preview3dThumbnailJob<config.name>_<baseStackName>-<region>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>-<region>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>-<region>`, `SystemGenAiMetadataRenderJob<config.name>_<baseStackName>-<region>` for the SYSTEM GenAI metadata renderer, `VideoSopBomJob_<config.name>_<baseStackName>-<region>` for Video SOP/BOM Extraction, and `CadStepAgentJob_<config.name>_<baseStackName>-<region>` for the GenAI CAD STEP agent on its `fargate` runtime) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group. The SYSTEM GenAI metadata render job definition retries an attempt whose task fails to start, up to three attempts in all: AWS Batch reports `Timeout waiting for EphemeralStorage` or `Timeout waiting for network interface provisioning` as the status reason, or `CannotPullContainerError` as the container reason. A render that ran and failed, or an attempt past its four-hour limit, ends the job. The other AWS Fargate job definitions run one attempt.
+Every AWS Fargate job definition carries an explicit name: each construct chooses its own prefix (`CoordinateTransformJob_<config.name>_<baseStackName>-<region>`, `CogConvertJob_<config.name>_<baseStackName>-<region>` for COG conversion, `Preview3dThumbnailJob<config.name>_<baseStackName>-<region>`, `PcPotreeViewerJob_PDAL<config.name>_<baseStackName>-<region>` and `PcPotreeViewerJob_Potree<config.name>_<baseStackName>-<region>`, `SystemGenAiMetadataRenderJob<config.name>_<baseStackName>-<region>` for the SYSTEM GenAI metadata renderer, `VideoSopBomJob_<config.name>_<baseStackName>-<region>` for Video SOP/BOM Extraction, and `CadStepAgentJob_<config.name>_<baseStackName>-<region>` for the GenAI CAD STEP agent on its `fargate` runtime) and the shared construct appends a 10-character hash. AWS Batch keeps a job definition as a versioned family under that name, so a revision left behind by a failed teardown does not block a redeploy; the stack deregisters its own revisions on deletion. The Video SOP/BOM Extraction job definition sets its own size (4 vCPU, 16 GiB, 100 GiB ephemeral storage) and sends container logs to its KMS-encrypted `/aws/vendedlogs/Pipelines/VideoSopBom<hash>` group instead of the AWS Batch default `aws/batch/job` group. The SYSTEM GenAI metadata render job definition retries an attempt whose task fails to start, up to three attempts in all: AWS Batch reports `Timeout waiting for EphemeralStorage` or `Timeout waiting for network interface provisioning` as the status reason, or `CannotPullContainerError` as the container reason. A render that ran and failed, or an attempt past its four-hour limit, ends the job. The other AWS Fargate job definitions run one attempt.
 
 ## Amazon Bedrock
 
@@ -748,14 +749,23 @@ Amazon Bedrock requires a guardrail name and rejects a duplicate in the same acc
 
 ## AWS CodeArtifact
 
-Deployed with the Image to 3D pipeline, which builds one container image per enabled model. Each build
-installs its Python dependencies from source, so a build is only as reliable as the public package index
-is reachable from the build subnet. Fetching through a pull-through cache makes a rebuild reproducible.
+Deployed with the Image to 3D pipeline when it builds with AWS CodeBuild (`useCodeBuild: true`) in a
+Region that offers AWS CodeArtifact (some commercial Regions, see the
+[AWS CodeArtifact endpoints page](https://docs.aws.amazon.com/general/latest/gr/codeartifact.html); not AWS
+GovCloud (US) or the AWS European Sovereign Cloud). Each build installs its Python dependencies from source, so a build is only as
+reliable as the public package index is reachable from the build subnet. Fetching through a
+pull-through cache makes a rebuild reproducible. In a Region without CodeArtifact no domain is created
+and the builds install from the public index (`pypi.org`, `files.pythonhosted.org`), which the build
+subnet must then reach.
 
-| Resource       | Name                                               | Removal on teardown | Custom name        |
-| -------------- | -------------------------------------------------- | ------------------- | ------------------ |
-| **Domain**     | `<config.name>-<baseStackName>-<region>-imageto3d` | Deleted with stack  | Yes -- can collide |
-| **Repository** | `pypi-store` (external connection `public:pypi`)   | Deleted with stack  | Yes -- can collide |
+| Resource       | Name                                                                                     | Removal on teardown | Custom name        |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------- | ------------------ |
+| **Domain**     | `<config.name>-<baseStackName>-imageto3d`, with `-kms` appended when the CMK encrypts it | Deleted with stack  | Yes -- can collide |
+| **Repository** | `pypi-store` (external connection `public:pypi`)                                         | Deleted with stack  | Yes -- can collide |
+
+The domain is encrypted with the VAMS customer managed key when `app.useKmsCmkEncryption` is enabled.
+A domain's key cannot change after it is created, so turning the CMK on or off replaces the domain under
+the other name, and the cache fills again on the next build.
 
 The domain name includes `baseStackName` because CodeArtifact domain names are unique per account and
 Region: without it, two VAMS deployments in one account would contend for the same domain. An orphan
@@ -795,6 +805,7 @@ carry an explicit name and are redeploy-collision relevant. Each name is lower-c
 | Pipeline                 | Repository name, CMK off                                    | Repository name, CMK on                                         |
 | ------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
 | Coordinate Transform     | `{config.name}-{app.baseStackName}-{region}-coordtransform` | `{config.name}-{app.baseStackName}-{region}-coordtransform-kms` |
+| COG Conversion           | `{config.name}-{app.baseStackName}-{region}-cogconvert`     | `{config.name}-{app.baseStackName}-{region}-cogconvert-kms`     |
 | Video SOP/BOM Extraction | `{config.name}-{app.baseStackName}-{region}-videosopbom`    | `{config.name}-{app.baseStackName}-{region}-videosopbom-kms`    |
 | GenAI CAD STEP agent     | `{config.name}-{app.baseStackName}-{region}-cadstepagent`   | `{config.name}-{app.baseStackName}-{region}-cadstepagent-kms`   |
 | Zip Archive              | `{config.name}-{app.baseStackName}-{region}-ziparchive`     | `{config.name}-{app.baseStackName}-{region}-ziparchive-kms`     |

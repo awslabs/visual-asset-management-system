@@ -1,0 +1,35 @@
+{
+  "bandCount": 1,
+  "bigTiff": false,
+  "blockHeight": 32,
+  "blockWidth": 256,
+  "compression": "none",
+  "crs": "EPSG:4326",
+  "dataType": "uint8",
+  "file": "striped_4326.tif",
+  "footprint": "Polygon",
+  "footprintNote": null,
+  "georeferenced": true,
+  "height": 256,
+  "isCog": false,
+  "layout": "striped",
+  "nativeBounds": [
+    5.0,
+    51.744,
+    5.256,
+    52.0
+  ],
+  "nodata": null,
+  "overviewCount": 0,
+  "pixelIsPoint": false,
+  "pixelSizeX": 0.001,
+  "pixelSizeY": 0.001,
+  "rotated": false,
+  "wgs84Bounds": [
+    5.0,
+    51.744,
+    5.256,
+    52.0
+  ],
+  "width": 256
+}

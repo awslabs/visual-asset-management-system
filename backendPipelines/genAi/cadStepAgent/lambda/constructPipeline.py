@@ -25,7 +25,7 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ConstructPipeline-CadStepAgent")
 s3 = boto3.client('s3', config=retry_config)
-sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
+sfn = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'], config=retry_config)
 
 # Deployment-level settings the CDK passes through; per-run values narrow them, never widen them.
 MAX_RUN_SECONDS = int(os.environ.get("MAX_RUN_SECONDS", "3600"))

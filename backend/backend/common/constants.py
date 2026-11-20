@@ -390,7 +390,7 @@ CORE_CONSTRAINT_OBJECT_TYPE_FIELDS = {
         {"label": "Cascade ID", "value": "cascadeId"}]},
     "complianceBinding": {"label": "Compliance Binding", "fields": [
         {"label": "Database ID", "value": "databaseId"}]},
-    # auditLogGroup is the audit log group key (a token such as "authorization"). Additive: a later
+    # auditLogGroup is the audit log group key (a token such as "authorization"). Additive: a
     # databaseId field can be added without changing a stored auditLog constraint.
     "auditLog": {"label": "Audit Log", "fields": [
         {"label": "Audit Log Group", "value": "auditLogGroup"}]},

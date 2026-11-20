@@ -30,12 +30,11 @@ export interface ApiBuilder3NestedStackProps {
  *
  * Third backend API nested stack. It holds the audit log search service and its five `/audit`
  * routes. With `useGlobalVpc.useForAllLambdas` on, every function carries a VpcConfig block and a
- * security group and ApiBuilder2 sat at 986,768 bytes of the 1,000,000 byte CloudFormation
- * template-body limit; adding the audit log search made it 1,009,044 and a deploy stopped at
- * change-set creation with "Template may not exceed 1000000 bytes". Resource count is not the
- * constraint; the body is, and only a new template adds body budget. The shared IAM suppressions
- * have since moved to `addIamNagSuppressions` (#1647), which brought ApiBuilder2 down to about
- * 0.65 MB in that cell, so this stack now adds headroom and no longer prevents a failing deploy.
+ * security group, so a template body grows fast, and CloudFormation refuses a change set for a body
+ * over 1,000,000 bytes ("Template may not exceed 1000000 bytes"). Resource count is not the
+ * constraint; the body is, and only a new template adds body budget. This stack holds the audit
+ * search resources apart from ApiBuilder2, and the shared IAM suppressions are written once by
+ * `addIamNagSuppressions` (#1647), which keeps ApiBuilder2 at about 0.65 MB in that cell.
  * `test/api/nestedTemplateSizeGuard.test.ts` fails the build when a template nears the limit in the
  * shipped cells, so the next stack to fill up is caught before a deploy.
  *

@@ -1158,6 +1158,11 @@ A running workstation whose remote display session has ended is refused with a
 `DISPLAY_SESSION_ENDED`: stop it, then start it again, to reconnect. Its record
 then carries `connectionUnavailableReason` `DISPLAY_SESSION_ENDED` (null
 otherwise), and its `activity` is null: it is running, not starting.
+A workstation that has run which EDH reports in its error state (its remote
+display stopped responding) keeps its state, disk and data; its record carries
+`connectionUnavailableReason` `DESKTOP_ERROR` and its connect (and a start of it)
+is refused with a 409 returned as `error_type` `EdhDesktopErrorError`, `code`
+`DESKTOP_ERROR`: wait a few minutes, or stop it, then start it again.
 Each call makes EDH issue at most one connection token per request EDH answers,
 for that desktop; VAMS repeats a read once after a transport failure or a gateway
 error, which can make a second. `list_edh_workstations` and `get_edh_workstation`
@@ -1182,8 +1187,11 @@ row that ended ORPHANED. A repeat with the same `bootstrap_id` by the same user
 returns the stored record (HTTP 200) and launches nothing, while one that another
 user's launch holds is refused (409).
 Its `os_family` (`linux` or `windows`) is the chosen catalog image's `osFamily`
-and is required; its `bootstrap_id` is the idempotency key — re-send the one from
-a call that timed out rather than launching again. Its optional `lease_hours` (1 up to the
+and is required; its `bootstrap_id` is the idempotency key, and an error carries
+the `bootstrapId` that was sent (generated when the call gave none). When the
+answer was lost (`outcomeUnknown`, a timeout), look that id up with
+`get_edh_workstation` and re-send it only if it is not found, rather than
+launching again. Its optional `lease_hours` (1 up to the
 policy's `leaseHours`, see `get_edh_catalog_lease`) stamps a lease on the launch; it is
 refused (400) when leases are disabled and ignored when the policy is `forced`. An
 `instance_type` the image's profile lists only under architectures of another family
@@ -1253,7 +1261,10 @@ until it finishes or is killed; like the workstation tools it stays out of
 cluster for the experimental `eks` backend), its `command` is a token list and
 `environment` a name→value map, sent under the request model's `command` /
 `environment` keys, and `memory` is in MiB (at least 512). It answers 202 with
-the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes.
+the job's `jobId` and `backend`, the pair `kill_edh_container_job` takes. When
+EDH's quota is used up it answers `error_type` `EdhQuotaExceededError` (HTTP 429,
+`The EDH quota for this operation has been reached.`): the client does not resend
+it, and submitting again fails until a job ends (`list_edh_container_jobs`).
 `start_edh_ami_recipe_build` starts an EC2 Image Builder build instance that is
 billed until the image completes; like the other compute tools it stays out of
 `autoApprove`.

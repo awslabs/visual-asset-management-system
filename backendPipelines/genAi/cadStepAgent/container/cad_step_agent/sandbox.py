@@ -300,6 +300,34 @@ def kill_active_scripts():
     return len(procs)
 
 
+def _pid1_argv():
+    """PID 1's command line as a list of byte strings, or an empty list where it cannot be read."""
+    try:
+        with open("/proc/1/cmdline", "rb") as handle:
+            return handle.read().split(b"\0")
+    except OSError:
+        return []
+
+
+def end_leftover_processes():
+    """SIGKILL every process of this uid except PID 1 and the calling process.
+
+    ``kill(2)`` with pid -1 reaches every process the caller may signal -- for the image's
+    unprivileged account, the processes of its own uid -- except PID 1 and the caller, in one step that
+    a process forking at the same time cannot outrun. It runs only where the caller is the direct
+    child of this image's init at PID 1 (``python3 -m cad_step_agent.init``), the container layout,
+    and returns False without signalling anything elsewhere (a developer's machine, a test runner).
+    Returns True once the signal has been sent, whether or not any process was left.
+    """
+    if os.getppid() != 1 or _pid1_argv()[1:3] != [b"-m", b"cad_step_agent.init"]:
+        return False
+    try:
+        os.kill(-1, signal.SIGKILL)
+    except ProcessLookupError:  # no other process of the uid
+        pass
+    return True
+
+
 def _track(proc):
     with _active_lock:
         _active_scripts.append(proc)
