@@ -21,6 +21,7 @@ import {
     fetchQuarantinedAssets,
     fetchDatabaseComplianceOverview,
     fetchComplianceSchemas,
+    fetchComplianceSchemaListing,
     fetchComplianceState,
     evaluateAssetCompliance,
     getDatabaseBindings,
@@ -29,7 +30,10 @@ import {
     erroredRuleNames,
     liveDatabaseId,
     ComplianceSchema,
+    ComplianceSchemaListing,
     EvaluationRecord,
+    SCHEMA_LISTING_MAX_PAGES,
+    SCHEMA_LISTING_PAGE_SIZE,
 } from "./ComplianceService";
 
 const post = apiClient.post as jest.Mock;
@@ -76,6 +80,91 @@ describe("schema format", () => {
             "vams-rules-v1",
             "legacy",
         ]);
+    });
+});
+
+describe("schema listing paging", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        jest.spyOn(console, "log").mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        get.mockReset();
+        jest.restoreAllMocks();
+    });
+
+    const named = (...names: string[]) =>
+        names.map((schemaName) => ({ schemaName, schemaBody: {} }));
+    const queryOf = (call: number) => get.mock.calls[call][1].queryStringParameters;
+
+    it("joins every page and continues each request from the previous page's NextToken", async () => {
+        get.mockResolvedValueOnce({
+            schemas: named("a", "b"),
+            NextToken: "tok-2",
+            createScopes: ["GLOBAL", "db1"],
+        }).mockResolvedValueOnce({ schemas: named("c"), createScopes: ["other"] });
+
+        const result = await fetchComplianceSchemaListing();
+
+        expect(result[0]).toBe(true);
+        const listing = result[1] as ComplianceSchemaListing;
+        expect(listing.schemas.map((s) => s.schemaName)).toEqual(["a", "b", "c"]);
+        // The scopes come from the first page.
+        expect(listing.createScopes).toEqual(["GLOBAL", "db1"]);
+        expect(get).toHaveBeenCalledTimes(2);
+        expect(queryOf(0)).toEqual({ maxItems: `${SCHEMA_LISTING_PAGE_SIZE}` });
+        expect(queryOf(1)).toEqual({
+            maxItems: `${SCHEMA_LISTING_PAGE_SIZE}`,
+            startingToken: "tok-2",
+        });
+    });
+
+    it("keeps the database filter on every page and reads past an empty page", async () => {
+        get.mockResolvedValueOnce({ schemas: [], NextToken: "tok-2" }).mockResolvedValueOnce({
+            schemas: named("only-db1"),
+        });
+
+        const result = await fetchComplianceSchemas("db1");
+
+        expect(result).toEqual([true, named("only-db1")]);
+        expect(queryOf(0).databaseId).toBe("db1");
+        expect(queryOf(1)).toEqual(
+            expect.objectContaining({ databaseId: "db1", startingToken: "tok-2" })
+        );
+    });
+
+    it("answers with the failure of a later page", async () => {
+        get.mockResolvedValueOnce({
+            schemas: named("a"),
+            NextToken: "tok-2",
+        }).mockRejectedValueOnce(new ApiError("Invalid pagination token", 400));
+        expect(await fetchComplianceSchemas()).toEqual([false, "Invalid pagination token"]);
+    });
+
+    it("stops when a page repeats a token it already returned", async () => {
+        get.mockResolvedValueOnce({ schemas: named("a"), NextToken: "tok-2" })
+            .mockResolvedValueOnce({ schemas: named("b"), NextToken: "tok-3" })
+            .mockResolvedValueOnce({ schemas: named("c"), NextToken: "tok-2" });
+
+        const result = await fetchComplianceSchemas();
+
+        expect(get).toHaveBeenCalledTimes(3);
+        expect((result[1] as ComplianceSchema[]).map((s) => s.schemaName)).toEqual(["a", "b", "c"]);
+    });
+
+    it("stops at the page bound", async () => {
+        let page = 0;
+        get.mockImplementation(async () => {
+            page += 1;
+            return { schemas: named(`s${page}`), NextToken: `tok-${page}` };
+        });
+
+        const result = await fetchComplianceSchemas();
+
+        expect(get).toHaveBeenCalledTimes(SCHEMA_LISTING_MAX_PAGES);
+        expect(result[0]).toBe(true);
+        expect(result[1]).toHaveLength(SCHEMA_LISTING_MAX_PAGES);
     });
 });
 

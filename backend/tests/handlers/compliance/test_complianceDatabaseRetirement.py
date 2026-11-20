@@ -258,8 +258,9 @@ class World:
                             if r["databaseId"] == database_id),
             "cascades": sorted(r["cascadeId"] for r in t["complianceCascadeStorage"].scan()["Items"]
                                if r.get("triggeredByDatabaseId") == database_id),
+            # `.get`: the schema listing's latest-version backfill row carries no database id.
             "schemas": sorted(r["schemaName"] for r in t["complianceSchemaStorage"].scan()["Items"]
-                              if r["databaseId"] == database_id),
+                              if r.get("databaseId") == database_id),
         }
 
 

@@ -72,7 +72,7 @@ def _call(evaluations, event):
             patch.object(evaluate_svc, "CasbinEnforcer", return_value=enforcer()), \
             patch.object(evaluate_svc, "check_and_trigger_cascade", MagicMock()), \
             patch.object(store, "run_evaluation", evaluations), \
-            patch.object(store, "register_unrecorded_assets", return_value=0):
+            patch.object(store, "register_unrecorded_assets_page", return_value=(0, None)):
         response = evaluate_svc.lambda_handler(event, MagicMock())
     assert response["statusCode"] == 200, response
     return body_of(response)

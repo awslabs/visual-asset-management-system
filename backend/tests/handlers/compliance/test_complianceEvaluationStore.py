@@ -381,13 +381,13 @@ class TestSynchronousEvaluation:
         assert "parent-schema" not in json.dumps(result["ruleResults"])
 
     def test_the_evaluation_never_rewrites_the_binding(self):
-        """An ad-hoc evaluation against another schema records that schema on the evaluation row
-        only; the asset-state row keeps the schema it is bound to."""
+        """The evaluation of the bound schema writes the state and the evaluation pointers only;
+        the asset-state row keeps the binding as it is."""
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_row={
-            "complianceState": "compliant", "schemaName": "bound-schema", "schemaSource": "asset"})
-        tables.run(store.run_evaluation, DB, ASSET, "adhoc-schema", USER)
+            "complianceState": "compliant", "schemaName": SCHEMA, "schemaSource": "asset"})
+        tables.run(store.run_evaluation, DB, ASSET, SCHEMA, USER)
         parents, _ = tables.evaluation_records()
-        assert parents[0]["schemaName"] == "adhoc-schema"
+        assert parents[0]["schemaName"] == SCHEMA
         state = tables.outcome_state()
         assert "schemaName" not in state
         assert "schemaSource" not in state
@@ -397,7 +397,21 @@ class TestSynchronousEvaluation:
                               "quarantineExecutionFailures", "quarantinedAt"}
         assert state["quarantinedAt"] is None
         assert state["lastEvaluationStatus"] == "completed"
-        assert put_items(tables.audit)[0]["schemaName"] == "adhoc-schema"
+        assert put_items(tables.audit)[0]["schemaName"] == SCHEMA
+
+    def test_an_evaluation_asked_for_a_schema_the_record_is_not_bound_to_does_not_run(self):
+        """The record names another schema than the one the evaluation was asked for (its binding
+        changed after the caller read it, or the caller named another schema): nothing is claimed,
+        evaluated or written, and the result says why. Evaluating a schema other than the bound
+        one is the evaluate route's dry run, which writes nothing either."""
+        tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY, previous_row={
+            "complianceState": "compliant", "schemaName": "bound-schema", "schemaSource": "asset"})
+        result = tables.run(store.run_evaluation, DB, ASSET, "adhoc-schema", USER)
+        assert result["superseded"] is True
+        assert result["error"] == store.BINDING_CHANGED_MESSAGE
+        assert tables.evaluation_records() == ([], [])
+        tables.state.update_item.assert_not_called()
+        tables.audit.put_item.assert_not_called()
 
     def test_a_failed_audit_write_does_not_fail_the_evaluation(self):
         tables = Tables(schema_body=SYNC_RULES_SCHEMA_BODY)
@@ -2118,7 +2132,7 @@ class TestStartClaim:
         assert write["Key"] == {"databaseId": DB, "assetId": ASSET}
         # Ownership, and the record's revision as read (D159): the row carries none, so still none.
         assert write["ConditionExpression"] == (
-            f"({store.evaluation_ownership_condition(record['evaluationId'], record['evaluatedAt'])[0]})"
+            f"({store.evaluation_ownership_condition(record['evaluationId'], record['evaluatedAt'], record_must_exist=False)[0]})"
             " AND (attribute_not_exists(#recordRevision))")
         assert write["ExpressionAttributeValues"][":ownedEvaluationId"] == record["evaluationId"]
         assert write["ExpressionAttributeValues"][":ownedEvaluatedAt"] == record["evaluatedAt"]
@@ -2179,8 +2193,10 @@ class TestOwnedStateWrite:
         condition = write["ConditionExpression"]
         names, values = write["ExpressionAttributeNames"], write["ExpressionAttributeValues"]
         assert "attribute_not_exists(" in condition and " < " in condition and " = " in condition
+        # The last evaluation's time and id, the binding change it may not write past, and the
+        # record's existence (a write after the claim never creates the record again).
         assert {names[n] for n in names if n.startswith("#owned")} == {
-            "lastEvaluatedAt", "lastEvaluationId"}
+            "lastEvaluatedAt", "lastEvaluationId", "bindingChangedAt", "databaseId"}
         evaluation_id = tables.evaluation_records()[0][0]["evaluationId"]
         assert values[":ownedEvaluationId"] == evaluation_id
         assert values[":ownedEvaluatedAt"] == tables.evaluation_records()[0][0]["evaluatedAt"]

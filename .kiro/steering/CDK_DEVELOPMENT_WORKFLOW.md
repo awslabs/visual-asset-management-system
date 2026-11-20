@@ -227,7 +227,7 @@ interface storageResources {
         zipDownloadRequestsStorageTable: dynamodb.Table; // PK userId, SK requestId; TTL expiresAt; GSIs UserAssetIndex (PK userAssetKey, SK requestId, ALL) and AssetIndex (PK assetKey = databaseId#assetId, SK requestId, ALL); Download as Zip jobs, always deployed
 
         // Compliance tables
-        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSI DatabaseIdIndex
+        complianceSchemaStorageTable: dynamodb.Table; // PK schemaName, SK internalVersion; GSIs DatabaseIdIndex, LatestVersionIndex (sparse PK latestVersion, SK schemaName — latest version of each schema, paged listing)
         complianceAssetStateStorageTable: dynamodb.Table; // PK databaseId, SK assetId; GSIs SchemaNameIndex, ComplianceStateIndex (PK complianceState, SK databaseId — paged quarantine list, overview state filter/counts), DatabaseAssetNameIndex (PK databaseId, SK assetNameSort — overview sort by name)
         complianceEvaluationStorageTable: dynamodb.Table; // PK evaluationId; GSIs AssetIndex, ExecutionIdIndex (PK executionId — pipeline-rule workflow callback), PipelineRuleWaitIndex (PK waitingWorkflowKey, SK waitingSince; sparse — pipeline rules waiting for a running execution of their workflow)
         complianceCascadeStorageTable: dynamodb.Table; // PK cascadeId (also per-parent pendingCascadeMarker:<db>:<asset> rows, no state); GSI StateIndex

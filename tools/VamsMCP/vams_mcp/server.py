@@ -782,25 +782,6 @@ def _paginate_with_page_metadata(
     return result
 
 
-def _single_response_list(page: Any, items_key: str) -> Dict[str, Any]:
-    """Shape a route that returns its whole list in ONE response, under its own field name.
-
-    The compliance schema listing carries no ``message`` envelope and no continuation token, so
-    ``paginate()`` has nothing to follow and a bare ``Items`` read finds nothing. The list is lifted
-    onto ``Items`` with a ``count`` so the tool matches every other list tool, and every other
-    top-level field is carried through.
-    """
-    items = page.get(items_key) if isinstance(page, dict) else None
-    if not isinstance(items, list):
-        items = []
-    result: Dict[str, Any] = {
-        key: value for key, value in (page.items() if isinstance(page, dict) else ()) if key != items_key
-    }
-    result["Items"] = items
-    result["count"] = len(items)
-    return result
-
-
 # list_tags marks the tag type of a required type with this suffix (tagService), and an agent copies it
 # back. The write routes reject it (a name cannot contain brackets), so it is removed as the CLI's
 # `tag update` does.
@@ -2385,18 +2366,36 @@ def get_zip_download(database_id: str, asset_id: str, request_id: str) -> result
 
 @mcp.tool(title="List compliance schemas", annotations=READ)
 @tool_result
-def list_compliance_schemas(database_id: Optional[str] = None) -> Dict[str, Any]:
+def list_compliance_schemas(
+    database_id: Optional[str] = None,
+    max_items: Optional[int] = None,
+    starting_token: Optional[str] = None,
+) -> Dict[str, Any]:
     """Use to find the compliance schemas (rule sets) a database can bind, or every schema you may read.
 
-    `database_id` limits the list to that database's schemas plus GLOBAL ones. The whole list comes in
-    one response as `Items` with `count` (no paging, never `truncated`). Each item has schemaName,
-    databaseId (its scope, or GLOBAL), description, schemaBody (rules of type pipeline, metadata,
-    relationship, fileStructure, versionCoverage or assetAttributes), `schemaFormat`, version and
-    createdAt.
-    `schemaFormat` is `vams-rules-v1`, or `legacy` for a body that is not such a document: a legacy
-    schema cannot be bound, updated or evaluated and is listed only so it can be removed with
-    delete_compliance_schema()."""
-    return _single_response_list(CLIENT.api.list_compliance_schemas(database_id=database_id), "schemas")
+    `database_id` limits the list to that database's schemas plus GLOBAL ones. Items, by name: schemaName,
+    databaseId (scope or GLOBAL), schemaBody (rules of type pipeline, metadata, relationship,
+    fileStructure, versionCoverage or assetAttributes), `schemaFormat`. A `legacy` `schemaFormat` (not
+    `vams-rules-v1`) cannot be bound, updated or evaluated: remove it with delete_compliance_schema().
+    Pages omit schemas you may not read. `truncated`: rows were not seen; pass `NextToken` back as
+    `starting_token`."""
+    scopes: Dict[str, Any] = {}
+
+    def _page(params: Dict[str, Any]) -> Dict[str, Any]:
+        page = CLIENT.api.list_compliance_schemas(
+            database_id=database_id,
+            # The route reads its page size from `maxItems` and refuses one past its cap.
+            max_items=min(params["pageSize"], MAX_COMPLIANCE_LISTING_PAGE_SIZE),
+            starting_token=params.get("startingToken"),
+        )
+        # Every page carries the same `createScopes`; an empty list is an answer (no scope).
+        if isinstance(page, dict) and "createScopes" in page:
+            scopes.setdefault("createScopes", page["createScopes"])
+        return page
+
+    result = CLIENT.paginate(_page, max_items=max_items, items_key="schemas", starting_token=starting_token)
+    result.update(scopes)
+    return result
 
 
 @mcp.tool(title="Get compliance schema", annotations=READ)
@@ -2513,14 +2512,15 @@ def list_compliance_evaluations(
 
     Rows have evaluationId, schemaName, evaluatedAt, verdict, ruleResults and the pipeline rules'
     `executionId`. `exceptionApplied`: violations recorded, asset kept in `exception`. `notApplied`
-    with `notAppliedMessage` ("Not applied: the asset was released after this evaluation began"):
-    report it so, never as the asset's current state. A rule result with `status` `error` is NOT a
-    verdict (its tooling failed); the row has `hasRuleErrors` and `errorRules`: report the rule as not
-    evaluated. A `pending_pipeline` row lists `pipelineExecutions`; `waiting` means the rule waits for
-    a running execution of its workflow: report it as waiting, not as failed. `closedReason`
-    (superseded, assetArchived, assetDeleted, databaseDeleted): closed without a verdict, `errorMessage`
-    says why: report it as not completed, never as compliant. The walk is bounded: `truncated` means
-    rows were not seen; pass `NextToken` back as `starting_token`."""
+    (released, exceptionGranted, bindingChanged, notRecorded) with `notAppliedMessage`
+    ("Not applied: the asset was released after this evaluation began"): report it so, never as
+    the asset's current state. A rule result with `status` `error` is NOT a verdict (its tooling
+    failed; see `hasRuleErrors`, `errorRules`): report the rule as not evaluated. A
+    `pipelineExecutions` entry `waiting` waits for a running execution of its workflow: report it
+    so, not as failed. `closedReason` (superseded, assetArchived, assetDeleted, databaseDeleted):
+    closed without a verdict, `errorMessage` says why: report it as not completed, never as
+    compliant. The walk is bounded: `truncated` means rows were not seen; pass `NextToken` back as
+    `starting_token`."""
     return CLIENT.paginate(
         lambda params: CLIENT.api.list_compliance_evaluations(
             database_id,
@@ -3445,13 +3445,13 @@ if CONFIG.enable_writes:
         vams-rules-v1 document`. A pipeline rule's `inputFiles` is `{"mode": "matching", "filter":
         ["*.glb"]}` (default), `{"mode": "wholeAsset"}` or `{"mode": "explicit", "keys": [...]}`; a
         workflow that takes exactly one file needs exactly one file selected, else the rule records an
-        `error` result. A pipeline writing no `compliance-output.json` is checked on `execution_success`
-        and `processing_duration_seconds` only. Saving a pipeline rule needs the right to run its workflow,
-        else 403 "Not authorized to run the workflow of pipeline rule rules[<n>]" (the rule's position
-        in `rules`, from 0). `database_id` scopes the schema (omitted: GLOBAL). Response `warnings`:
-        `pipelineRulesShareWorkflow` (rules that share a workflow run one after another);
-        `extendsSchemaNotFound` (the `extends` parent was not found, or you
-        may not read it: do not tell the user the parent does not exist; relay the message)."""
+        `error`. A pipeline writing no `compliance-output.json` is checked on `execution_success` and
+        `processing_duration_seconds` only. Saving a pipeline rule needs the right to run its workflow, else
+        403 "Not authorized to run the workflow of pipeline rule rules[<n>]" (its index in `rules`).
+        `database_id` scopes it (omitted: GLOBAL); a database scope is refused while the name is bound in
+        another database. `warnings`: `pipelineRulesShareWorkflow` (they run in turn);
+        `extendsSchemaNotFound` (the `extends` parent was not found, or you may not read it: do not tell the
+        user the parent does not exist; relay the message)."""
         payload: Dict[str, Any] = {"schemaName": schema_name, "schemaBody": schema_body}
         if database_id:
             payload["databaseId"] = database_id
@@ -3471,10 +3471,11 @@ if CONFIG.enable_writes:
 
         `schema_body` REPLACES the whole rule document: read it with get_compliance_schema() and send the
         complete set, a vams-rules-v1 document as create_compliance_schema() takes (pipeline rules select
-        files with `inputFiles`). `database_id` re-scopes it. The deployment's default schema cannot be
-        modified. Bound assets keep their state until re-evaluated (sweep_compliance_schema()), and that
-        evaluation supersedes exceptions granted against the previous version. Response `warnings` are as
-        for create_compliance_schema() (`pipelineRulesShareWorkflow`, `extendsSchemaNotFound`)."""
+        files with `inputFiles`). `database_id` re-scopes it; a database is refused while the schema is
+        bound in another. The default schema cannot be modified. Bound assets keep their state until
+        re-evaluated (sweep_compliance_schema()), which supersedes exceptions granted against the previous
+        version. `warnings` as for create_compliance_schema() (`pipelineRulesShareWorkflow`,
+        `extendsSchemaNotFound`)."""
         payload: Dict[str, Any] = {}
         if schema_body is not None:
             payload["schemaBody"] = schema_body
@@ -3538,20 +3539,20 @@ if CONFIG.enable_writes:
     def evaluate_asset_compliance(
         database_id: str, asset_id: str, schema_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Use to evaluate one asset now against its bound schema, or against `schema_name` without changing
-        the binding.
+        """Use to evaluate one asset now against its bound schema, or to dry-run another schema on it.
 
-        The response has `verdict`, `complianceState`, `schemaName`, `schemaVersion`, `ruleResults`,
-        `exceptionApplied` and `hasRuleErrors`. A pipeline rule starts a workflow execution (real compute)
-        and finishes later (`pipelineRulesPending`): read the verdict with get_asset_compliance_state(). A
-        rule whose workflow is busy on the asset WAITS (`pipelineRulesWaiting`) and launches when that run
-        ends. While rules are pending, an asset that was quarantined stays `quarantined`. A
-        quarantine-level failure quarantines the asset unless an exception covers that schema version.
-        `notApplied`: a release or exception during the run; the verdict was not applied. A rule result
-        with `status` `error` (its tooling failed) is not a verdict: its enforcement does not apply. If
-        every rule errored, `verdict` is `error`, the state is left unchanged, the record shows
-        `lastEvaluationStatus` `error` and an `evaluation_error` audit entry is written. Keep this tool out
-        of `autoApprove`."""
+        Returns `verdict`, `complianceState`, `schemaVersion`, `ruleResults`, `exceptionApplied`,
+        `hasRuleErrors`, `dryRun`. A pipeline rule starts a workflow execution (real compute) and ends later
+        (`pipelineRulesPending`): read the verdict with get_asset_compliance_state(); one whose workflow is
+        busy WAITS (`pipelineRulesWaiting`). While rules are pending, an asset that was quarantined stays
+        `quarantined`. A quarantine-level failure quarantines unless an exception covers that schema version.
+        `notApplied`: a release, exception or binding change outranked the verdict. A rule result with
+        `status` `error` is not a verdict: its enforcement does not apply. All rules errored: `verdict`
+        `error`, the state is left unchanged, `lastEvaluationStatus` `error`, an `evaluation_error` audit
+        entry. A `schema_name` other than the bound one is a DRY RUN (`dryRun` true, no `evaluationId`):
+        nothing recorded, no workflow launched; pipeline rules are `error` results (`pipelineRulesNotRun`).
+        Needs read access to that schema, GLOBAL or the asset's database's. Keep this tool out of
+        `autoApprove`."""
         return CLIENT.api.evaluate_asset_compliance(database_id, asset_id, schema_name=schema_name)
 
     @mcp.tool(title="Sweep compliance schema", annotations=COMPUTE)
@@ -3562,10 +3563,10 @@ if CONFIG.enable_writes:
 
         Returns `assetsTriggered`, `skipped` (`skippedNotAuthorized`: assets you are not authorized to
         evaluate or read, counted, never listed; `skippedArchived`), `superseded` (a newer evaluation of
-        the asset had started: not a failure) and `assetsRemaining`. One call evaluates a bounded number:
-        while `assetsRemaining` is above 0, call again with `NextToken` as `starting_token`. Each asset is
-        evaluated as by evaluate_asset_compliance(), so pipeline rules start one workflow execution per
-        bound asset, real compute: check get_compliance_bindings() first and keep this tool out of
+        the asset had started: not a failure) and `assetsRemaining` (read by this call, not reached; can be
+        0 while more remain). While `NextToken` is present, call again with it as `starting_token`. Each
+        asset is evaluated as by evaluate_asset_compliance(), so pipeline rules start one workflow execution
+        per bound asset, real compute: check get_compliance_bindings() first and keep this tool out of
         `autoApprove`."""
         return CLIENT.api.sweep_compliance_schema(schema_name, starting_token=starting_token)
 
@@ -3576,12 +3577,13 @@ if CONFIG.enable_writes:
         """Use to re-evaluate every tracked asset of one database (the web overview's Evaluate All), each
         against the schema it is bound to.
 
-        Returns `assetsTriggered`, `superseded`, `registered` (assets of a bound database given their first
-        record), `withoutSchema`, `skippedArchived`, `skippedNotAuthorized` (not evaluated, never listed),
-        `skipped` and `assetsRemaining`. While `assetsRemaining` is above 0, call again with `NextToken` as
-        `starting_token`. Refused while a binding change of the database is still being applied. Pipeline
-        rules start one workflow execution per asset, real compute: check
-        get_database_compliance_overview() for the count first and keep this tool out of `autoApprove`."""
+        Returns `assetsTriggered`, `superseded`, `registered` (assets given their first record),
+        `withoutSchema`, `skippedArchived`, `skippedNotAuthorized` (not evaluated, never listed),
+        `skipped` and `assetsRemaining` (read by this call, not reached; can be 0 while more remain). While
+        `NextToken` is present, call again with it as `starting_token`. Refused while a binding change is
+        being applied. Pipeline rules start one workflow execution per asset, real compute:
+        check get_database_compliance_overview() for the count first and keep this tool out of
+        `autoApprove`."""
         return CLIENT.api.evaluate_database_compliance(database_id, starting_token=starting_token)
 
     @mcp.tool(title="Release quarantine", annotations=WRITE)
