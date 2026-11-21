@@ -35,6 +35,8 @@ def rn(monkeypatch):
     resourceNames._cache_fetched_at = 0.0
     resourceNames._ssm_client = None
     resourceNames._missing_keys = {}
+    resourceNames._failed_sweeps = 0
+    resourceNames._sweep_retry_after = 0.0
     return resourceNames
 
 

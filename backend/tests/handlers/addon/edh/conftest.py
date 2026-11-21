@@ -125,6 +125,8 @@ def _fresh_edh_module_state(monkeypatch):
             resource_names._missing_keys.clear()
             resource_names._cache_fetched_at = 0.0
             resource_names._ssm_client = None
+            resource_names._failed_sweeps = 0
+            resource_names._sweep_retry_after = 0.0
 
     reset()
     yield
