@@ -244,7 +244,7 @@ An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expand
 A pipeline whose facts all live in a file's header (a TIFF's directories) reads that header by ranged GETs of the S3 object at the run's version, never the whole file and never a pixel. `media_extractors/raster.py` is the worked example, over `media_extractors/s3_ranged.RangedS3Reader` (a seekable file object that serves a read from the bytes a previous GET returned and refuses a read past its byte or request bound):
 
 -   Walk the structure with `struct` under limits before a library decodes anything: a directory count, the entries in one directory, the bytes of any single array the library loads whole (tifffile loads the strip and tile offset arrays, strings and `SubIFDs` eagerly), and a total for all of them. Compare every declared count and offset with the object's size before reading or allocating, so a tag that claims gigabytes is refused by arithmetic and not by running out of memory.
--   A header past a limit is described from what the walk read and flagged (`offsetsTruncated: true`), not failed; a file that is not the format falls back to the `other` class with a warning that names the reason.
+-   A header past a limit, or bytes that are not the format, end the header read without failing the run. For a TIFF neither result is georeferenced, so the handler gives the `.tif` or `.tiff` the `image` path and keeps no `sys_raster` (`handler.py`: only a result `raster.is_georeferenced` accepts keeps the `raster` class); `offsetsTruncated` stays internal to `extract_raster`.
 -   Decode the first image with the library only when the walk passed, and hand the library the reader positioned at 0 (tifffile takes a file object's current position as the start of the file). A library's convenience default can invent a value (tifffile reports `nodata` 0 for a file with no `GDAL_NODATA` tag): read the tag itself.
 -   A footprint comes from one shared helper (`media_extractors/geo_reproject.py`): longitude-first axis order, edges densified, an antimeridian crossing cut into a `MultiPolygon`, no footprint for an extent containing a pole, and no footprint (never an assumed WGS84) for a CRS that does not resolve.
 
@@ -628,16 +628,20 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     failed Lambda run writes none (its error is in the workflow).
 -   **Launcher.** `conversion/3dBasic/lambda/` holds the callback form's Lambdas, deployed only with
     `useConversion3dBasic.batchTier.enabled`: `vamsExecuteConversion3dBasicPipeline` (what the workflow calls, in
-    place of the converter), `openPipeline` (starts the state machine, registers the converter and Batch container
-    log sources), `selectJobSize` and `constructPipeline` (the tier selector and the job's `VAMS_CONVERSION_EVENT`),
+    place of the converter), `openPipeline` (starts the state machine, registers its log and the converter's, and passes the
+    pipeline execution id to the converter, which logs it beside the workflow execution id), `selectJobSize`
+    and `constructPipeline` (the tier selector, and the job's `VAMS_CONVERSION_EVENT` and the container log
+    source, registered under the Batch state the run is routed to),
     `pipelineEnd` (the only function that answers the workflow's task token), the selector module `computeTier`, and the
     vendored `manifestHelper` and `customLogging`. The builders are in
     `infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/conversion3dBasicLauncherFunctions.ts`, each with
     its own `states:SendTaskFailure` grant (`infra/test/pipelines/taskTokenFailureGrants.test.ts`). The container's
     contract with them: the converter never receives the workflow's task token, the Batch task gets only locations in
-    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets
-    `linuxParameters.initProcessEnabled` (the entry runs as PID 1 and does not reap orphaned grandchildren such as
-    Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
+    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets no ECS init
+    process: `batch_entry.py` is the task's PID 1, so the descendants reparented to it are reaped (`reap_orphans`),
+    and it makes itself non-dumpable before the worker starts (`harden_process`), so a worker child of the same user
+    cannot read its environment -- the task's credential endpoint -- through `/proc/1/environ`. It sets
+    `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
     ladder (4/30, 8/60, 16/120) is one list in `size_check.BATCH_TASK_SIZES`, `computeTier.JOB_SIZES` and
     `CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES` in `infra/config/config.ts`; tests compare them.
 -   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
@@ -1486,9 +1490,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
-    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
+    Which group that is depends on the compute family. The ten **Fargate** job definitions (coordinate
+    transform, COG conversion, the 3D Basic Conversion Batch tier, Blender renderer, 3D thumbnail, PDAL,
+    Potree, video SOP/BOM extraction, zip archive, and the GenAI CAD STEP agent on its `fargate` runtime)
+    write through the `awslogs` driver to a VAMS-owned,
     KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,

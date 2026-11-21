@@ -141,3 +141,37 @@ class TestRealLogFile:
 
         CliRunner().invoke(demo, ["--needle", TERM])
         assert TERM in _log_text()
+
+
+ROW_USER = "zqxrowuser1537"
+
+
+@pytest.mark.no_mock_logging
+class TestReturnedResultsReachTheLogFileOnlyAsASummary:
+    """Every audit command returns its result (Rule 16), and `@requires_setup_and_auth` logs a
+    returned result at DEBUG. The rows a read returned must reach that line only as a count."""
+
+    def _page(self):
+        row = {"recordId": "rec-1", "timestamp": "2026-11-17T01:00:00.000Z",
+               "groupKey": "auditActions", "action": "assetUpdate", "outcome": "success",
+               "user": ROW_USER, "entity": {"type": "asset", "id": ENTITY}}
+        return {"queryId": QID, "status": "Complete", "statistics": {"rowCount": 1},
+                "Items": [row], "warnings": []}
+
+    @pytest.mark.parametrize("argv", [
+        ["audit", "results", "--handle", QID],
+        ["audit", "show", "--handle", QID, "--record-id", "rec-1"],
+    ])
+    def test_no_row_value_reaches_the_log_file(self, cli_runner, generic_command_mocks,
+                                               real_logging, argv):
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].get_audit_query.return_value = self._page()
+            result = cli_runner.invoke(cli, argv)
+        assert result.exit_code == 0, result.output
+        assert ROW_USER in result.output  # the command's own output keeps the row
+        text = _log_text()
+        assert ROW_USER not in text and ENTITY not in text
+        # Positive control: the returned result itself was logged, as its summary.
+        returned = [line for line in text.splitlines() if "returned result" in line]
+        assert returned, "no returned-result line was logged"
+        assert ("1 rows omitted" if argv[1] == "results" else "rec-1") in returned[-1]

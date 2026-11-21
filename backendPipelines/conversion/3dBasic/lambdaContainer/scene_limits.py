@@ -23,8 +23,9 @@ MAX_TRIANGLES = 30_000_000
 
 logger = safeLogger(service="conversionTrimeshPipeline")
 
-# Scene nodes one walk visits at most. Each visit costs a few microseconds of Python, so the bound
-# keeps a walk to seconds; real scenes stay well below it.
+# Scene nodes one walk visits at most. A cheap visit costs a few microseconds of Python, so a mesh
+# walk stays within seconds; the USD walk computes a world transform per rendered prim, so at the
+# bound it runs for minutes, still within the thumbnail job's timeout. Real scenes stay well below it.
 MAX_SCENE_NODES = 1_000_000
 
 # Vertices placed per triangle of the limit. A triangle soup (no shared vertices) has three per

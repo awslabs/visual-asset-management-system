@@ -91,17 +91,25 @@ describe("batchTier on", () => {
         template.resourceCountIs("AWS::Batch::JobDefinition", 1);
     });
 
-    test("the job definition has 200 GiB of storage, an init process and the Region", () => {
+    test("the job definition has 200 GiB of storage, no ECS init process and the Region", () => {
         template.hasResourceProperties("AWS::Batch::JobDefinition", {
             ContainerProperties: Match.objectLike({
                 EphemeralStorage: { SizeInGiB: 200 },
-                LinuxParameters: { InitProcessEnabled: true },
                 Environment: Match.arrayWith([
                     Match.objectLike({ Name: "AWS_REGION" }),
                     Match.objectLike({ Name: "AWS_DEFAULT_REGION" }),
                 ]),
             }),
         });
+    });
+
+    test("no ECS init process is enabled on the job definition (the image's entry is PID 1)", () => {
+        // The ECS init would run as the task uid and hold the task environment, so a worker child
+        // could read the task's credential endpoint from /proc/1/environ. With no init, batch_entry.py
+        // is PID 1: non-dumpable before the worker starts, and it reaps orphaned descendants.
+        const jobDefs = template.findResources("AWS::Batch::JobDefinition");
+        const props = Object.values(jobDefs)[0].Properties.ContainerProperties;
+        expect(props.LinuxParameters?.InitProcessEnabled).toBeUndefined();
     });
 
     test("the job role holds no Step Functions action and writes only under the run's output prefix", () => {
@@ -142,13 +150,60 @@ describe("batchTier on", () => {
         });
     });
 
-    test("openPipeline has the cap, the container log group and the job definition name", () => {
+    test("openPipeline has the cap and the converter's log group, and no Batch log source", () => {
         const envs = lambdaEnvironmentsByHandler(template, "openPipeline.lambda_handler");
         expect(envs).toHaveLength(1);
         expect(envs[0].MAX_MEMORY_GIB).toBe("120");
+        expect(envs[0].CONVERTER_LOG_GROUP_NAME).toBeDefined();
+        expect(envs[0].ALLOWED_INPUT_FILEEXTENSIONS).toContain(".stp");
+        // The Batch container source is registered by constructPipeline, once the job size is known.
+        expect(envs[0].BATCH_JOB_LOG_GROUP_NAME).toBeUndefined();
+        expect(envs[0].BATCH_JOB_DEFINITION_NAME).toBeUndefined();
+    });
+
+    test("constructPipeline registers the container log under the state each job size runs", () => {
+        const envs = lambdaEnvironmentsByHandler(template, "constructPipeline.lambda_handler");
+        expect(envs).toHaveLength(1);
         expect(envs[0].BATCH_JOB_DEFINITION_NAME).toBeDefined();
         expect(envs[0].BATCH_JOB_LOG_GROUP_NAME).toBeDefined();
-        expect(envs[0].ALLOWED_INPUT_FILEEXTENSIONS).toContain(".stp");
+        expect(envs[0].BATCH_JOB_LOG_GROUP_ARN).toBeDefined();
+        expect(envs[0].ORCHESTRATION_BUS_NAME).toBeDefined();
+        const names = JSON.parse(envs[0].BATCH_STATE_NAMES);
+        expect(names).toEqual({
+            "30720": "ConversionBatchJob",
+            "61440": "ConversionBatchJob8Vcpu",
+            "122880": "ConversionBatchJob16Vcpu",
+        });
+        // The map is the one the Choice routes on: each non-default branch sends that memory to that state.
+        const choices = parseAsl(singleStateMachine(template)).States.JobSizeChoice;
+        for (const branch of choices.Choices) {
+            expect(names[String(branch.NumericEquals)]).toBe(branch.Next);
+        }
+        expect(choices.Default).toBe("ConversionBatchJob");
+    });
+
+    test("every Batch state tags its job with the pipeline job tags, which its role may apply", () => {
+        const states = parseAsl(singleStateMachine(template)).States;
+        for (const name of [
+            "ConversionBatchJob",
+            "ConversionBatchJob8Vcpu",
+            "ConversionBatchJob16Vcpu",
+        ]) {
+            expect([name, states[name].Parameters.Tags]).toEqual([
+                name,
+                {
+                    "vams:stackname": expect.any(String),
+                    "vams:pipeline": "conversion3dBasic",
+                },
+            ]);
+        }
+        const tagging = Object.values<any>(template.findResources("AWS::IAM::Policy"))
+            .flatMap((p) => p.Properties.PolicyDocument.Statement)
+            .filter((s: any) => [].concat(s.Action).includes("batch:TagResource" as never));
+        expect(tagging).toHaveLength(1);
+        expect(tagging[0].Condition.StringEquals["aws:RequestTag/vams:pipeline"]).toBe(
+            "conversion3dBasic"
+        );
     });
 
     test("the state machine branches on escalate and has one Batch state per job size", () => {

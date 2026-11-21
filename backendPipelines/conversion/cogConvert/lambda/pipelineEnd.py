@@ -4,6 +4,7 @@
 import os
 import boto3
 import json
+import executionLogKeys
 from customLogging.logger import safeLogger
 from botocore.config import Config
 
@@ -78,6 +79,9 @@ def lambda_handler(event, context):
     Handles final pipeline closeout and external task token callbacks.
     """
 
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
     logger.info("Event", event=event)
 
     externalSfnTaskToken = event.get('externalSfnTaskToken', "")

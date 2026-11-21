@@ -363,6 +363,9 @@ jobs, are left out.
 `get_zip_download_url` (a write-tier tool) also signs another user's archive
 when the caller may download from the asset. Every archive, the caller's own or
 another user's, is signed only while every file in it is still downloadable.
+When the server cannot check every file in time (a very large archive), the
+tool returns its "could not be checked right now. Try again in a moment."
+error; call it again.
 `get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
 CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the

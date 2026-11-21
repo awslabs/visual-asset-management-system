@@ -49,7 +49,8 @@ EDH_SCHEDULE_DAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "sa
 
 # EDH session_state -> VAMS state. A value outside this map leaves the stored state alone. EDH's ``error`` means
 # ORPHANED only for a new launch whose desktop never ran (``state_for_edh_desktop``): EDH also sets it on a running
-# desktop whose Amazon DCV health check failed, and such a desktop keeps its state, its disk and its credential.
+# desktop whose Amazon DCV health check failed, and such a desktop keeps its state and its disk; the error itself
+# revokes nothing.
 EDH_SESSION_STATE_TO_STATE = {
     EDH_SESSION_STATE_PENDING: STATE_CREATING,
     EDH_SESSION_STATE_PLACING: STATE_CREATING,
@@ -146,8 +147,9 @@ STOP_SETTLE_SECONDS = 300
 # EDH listed the desktop running with a link that signs no user in, which it does when the DCV broker holds no session
 # for the desktop (the desktop keeps running and the row stays ACTIVE; a stop and a start, which register a DCV session
 # with the broker again, recover it); ``DESKTOP_ERROR``, EDH reports a desktop that has run in its ``error`` state,
-# which it sets when the desktop's Amazon DCV health check fails while it runs (the row keeps its state, its disk and
-# its credential; EDH moves the desktop on once the check passes again, and a stop and a start recover it).
+# which it sets when the desktop's Amazon DCV health check fails while it runs (the row keeps its state and its disk,
+# and the error itself revokes nothing; EDH moves the desktop on once the check passes again, and a stop and a start
+# recover it).
 CONNECTION_UNAVAILABLE_REASON_FIELD = "connectionUnavailableReason"
 CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED = "DISPLAY_SESSION_ENDED"
 CONNECTION_UNAVAILABLE_DESKTOP_ERROR = "DESKTOP_ERROR"

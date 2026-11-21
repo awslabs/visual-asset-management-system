@@ -18,8 +18,8 @@ to one hit per (database, asset, path, version) with the file's matching segment
 one named, ranked by similarity plus a fixed bonus for the file types the query mentions, joined to
 their asset rows and authorized per hit through Casbin. When an OpenSearch mode is enabled the
 OpenSearch-only constraints are applied and ``_source`` enriched through the ``/search`` code, imported
-lazily. The answer is the OpenSearch-style envelope the web table, CLI formatters and MCP helpers read,
-with terms aggregations over the whole answer for the web filter panels; ``SearchVectors`` has no
+lazily, by keyword search's API deadline (_api_deadline). The answer is the OpenSearch-style envelope the
+web table, CLI formatters and MCP helpers read, with terms aggregations over the whole answer for the web filter panels; ``SearchVectors`` has no
 cursor, so there is no pagination and ``size`` is the whole window.
 """
 
@@ -120,6 +120,12 @@ ENRICHMENT_FAILED_MESSAGE = "File details could not be loaded."
 CONSTRAINTS_FAILED_MESSAGE = (
     "The search filters could not be applied. Try again; if it keeps failing, contact your administrator."
 )
+# The OpenSearch step ends by keyword search's API deadline (osSemanticSearch/search.py
+# _api_check_deadline: API Gateway's 29-second floor less its 2.5-second reserve for the answer, from when
+# API Gateway received the request), so a slow or cold index (a first answer of 10-28 s seen live) costs the
+# file details, not the request: each OpenSearch query waits at most the time left, with no retry, and no
+# query starts with less than this left. The step then fails as any OpenSearch failure does.
+OPENSEARCH_STEP_MIN_SECONDS = 0.5
 SEARCH_BUSY_MESSAGE = "Search is busy right now. Try again in a moment."
 # Error codes of a dependency that is throttling the call or briefly unable to serve it.
 BUSY_ERROR_CODES = (
@@ -154,6 +160,68 @@ class OpenSearchConstraintsFailed(Exception):
 
 class SearchBusy(Exception):
     """A dependency kept refusing the work past the handler's own retries."""
+
+
+class OpenSearchStepOutOfTime(Exception):
+    """The OpenSearch step reached the API deadline before its next query (OPENSEARCH_STEP_MIN_SECONDS)."""
+
+
+# The OpenSearch step's manager, one per container once its client is up (_opensearch_manager)
+_search_manager = None
+
+
+def _opensearch_manager(search_module):
+    """The OpenSearch step's manager: built once per container with a client that does not retry, so a query
+    that times out at the time left ends the step instead of starting again. A manager whose client did not
+    come up is not kept; its query fails and the step degrades, and the next request builds a new one."""
+    global _search_manager
+    if _search_manager is None:
+        manager = search_module.DualIndexSearchManager(max_retries=0, retry_on_timeout=False)
+        if not manager.is_available():
+            return manager
+        _search_manager = manager
+    return _search_manager
+
+
+def _opensearch_module():
+    """The /search module (``handlers.osSemanticSearch.search``), imported here and nowhere else in the
+    vector family: the one admitted crossing into the OpenSearch family
+    (tests/common/test_indexer_families_import_boundary.py). Every caller has ruled out OPENSEARCH_DISABLED
+    first, so a deployment without OpenSearch never loads it or opensearch-py."""
+    from handlers.osSemanticSearch import search as opensearch_search
+
+    return opensearch_search
+
+
+def _api_deadline(event) -> Optional[float]:
+    """This request's API deadline, in ``time.monotonic()`` seconds: keyword search's
+    (osSemanticSearch/search.py _api_check_deadline), from when API Gateway received the request, or
+    SEARCH_REQUEST_MAX_SECONDS from now without a receipt time. None without an OpenSearch mode, because it
+    bounds only the OpenSearch step, and when the /search module does not load; the step then loads it
+    again and, if that fails too, degrades as before."""
+    if opensearch_disabled:
+        return None
+    try:
+        return _opensearch_module()._api_check_deadline(event)
+    except Exception:
+        logger.exception("The /search module did not load; the OpenSearch step has no API deadline")
+        return None
+
+
+def _time_left(deadline: Optional[float]) -> float:
+    """The ``request_timeout`` of the OpenSearch step's next query: the seconds left before ``deadline``.
+    Raises OpenSearchStepOutOfTime when fewer than OPENSEARCH_STEP_MIN_SECONDS are left or there is no
+    deadline.
+
+    shortcut: the requests transport applies the timeout to the connect and to each read separately, so a
+    query that connects slowly and then reads slowly can run past the deadline; the step keeps one pooled
+    client per container, so most queries do not connect. Bound the total time per query if that is seen."""
+    if deadline is None:
+        raise OpenSearchStepOutOfTime("no API deadline")
+    left = deadline - time.monotonic()
+    if left < OPENSEARCH_STEP_MIN_SECONDS:
+        raise OpenSearchStepOutOfTime(f"{max(left, 0.0):.2f} s left before the API deadline")
+    return left
 
 
 def _store() -> DynamoDbVectorStore:
@@ -573,16 +641,21 @@ def _opensearch_constraints(request: NlpSearchRequestModel, search_module, datab
     return clauses
 
 
-def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, Any]], warnings: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, Any]], warnings: List[Dict[str, str]],
+                     deadline: Optional[float]) -> List[Dict[str, Any]]:
     """Constrain by the OpenSearch-only fields and enrich, as keyword search does for the entity type: a
     file answer is constrained by, and merges ``_source`` from, the file index; an asset answer is
     constrained by the asset index, which holds the asset metadata, tags and location the file documents
-    do not (``_asset_index_step``). Imports the /search module here, once OPENSEARCH_DISABLED has been
-    ruled out, so an OpenSearch-less deployment never loads opensearch-py. The hits go to OpenSearch in
-    windows of OPENSEARCH_ENRICH_WINDOW ids, each query sized to its own window, so every hit is
-    answered: an ``ids`` filter scores every document the same, and one query over more ids than its size
-    would keep an arbitrary subset. The file index's preview key wins over the one the vector item
+    do not (``_asset_index_step``). Loads the /search module (_opensearch_module) only once
+    OPENSEARCH_DISABLED has been ruled out, so an OpenSearch-less deployment never loads opensearch-py. The
+    hits go to OpenSearch in windows of OPENSEARCH_ENRICH_WINDOW ids, each query sized to its own window,
+    so every hit is answered: an ``ids`` filter scores every document the same, and one query over more
+    ids than its size would keep an arbitrary subset. The file index's preview key wins over the one the vector item
     captured at embedding time, which may be older.
+
+    Every query ends by ``deadline``, the request's API deadline (_api_deadline): it waits at most the time
+    left (_time_left), on a client that does not retry (_opensearch_manager), and none starts once too little
+    is left. Running out of time is a failure like any other.
 
     A failure with no OpenSearch-only constraint in the request degrades to a warning and the hits stay
     as they were. With a constraint, the failure raises OpenSearchConstraintsFailed: the step decides
@@ -590,13 +663,12 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
     if not file_hits:
         return file_hits
     try:
-        from handlers.osSemanticSearch import search as opensearch_search
-
         from common.indexing.documentIds import build_file_document_id
 
-        manager = opensearch_search.DualIndexSearchManager()
+        opensearch_search = _opensearch_module()
+        manager = _opensearch_manager(opensearch_search)
         if request.entityTypes == ["asset"]:
-            return _asset_index_step(request, opensearch_search, manager, file_hits)
+            return _asset_index_step(request, opensearch_search, manager, file_hits, deadline)
         ids = [build_file_document_id(h["_source"]["str_databaseid"], h["_source"]["str_assetid"], h["_source"]["str_key"]) for h in file_hits]
         constrained = bool(request.opensearch_only_fields())
         shared_clauses: List[Dict[str, Any]] = []
@@ -611,7 +683,8 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
             window_hits = file_hits[start:start + OPENSEARCH_ENRICH_WINDOW]
             clauses = [{"ids": {"values": window_ids}}] + shared_clauses
             response = manager.client.search(
-                index=manager.file_index, body={"size": len(window_ids), "query": {"bool": {"filter": clauses}}}
+                index=manager.file_index, body={"size": len(window_ids), "query": {"bool": {"filter": clauses}}},
+                request_timeout=_time_left(deadline),
             )
             by_id = {hit["_id"]: hit.get("_source", {}) for hit in response.get("hits", {}).get("hits", [])}
             for doc_id, hit in zip(window_ids, window_hits):
@@ -631,7 +704,10 @@ def _opensearch_step(request: NlpSearchRequestModel, file_hits: List[Dict[str, A
         if request.opensearch_only_fields():
             logger.exception("OpenSearch step failed; the request's constraints could not be applied")
             raise OpenSearchConstraintsFailed() from e
-        logger.exception("OpenSearch enrichment failed")
+        if isinstance(e, OpenSearchStepOutOfTime):
+            logger.warning(f"OpenSearch enrichment stopped at the API deadline: {e}")
+        else:
+            logger.exception("OpenSearch enrichment failed")
         warnings.append(_warning("opensearch:enrichment_failed", ENRICHMENT_FAILED_MESSAGE))
         return file_hits
 
@@ -653,7 +729,7 @@ def _location_fields(source: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _asset_index_step(request: NlpSearchRequestModel, search_module, manager,
-                      file_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                      file_hits: List[Dict[str, Any]], deadline: Optional[float]) -> List[Dict[str, Any]]:
     """The OpenSearch step of an asset answer, in one read of the asset index per window of
     OPENSEARCH_ENRICH_WINDOW assets. Keyword search applies an asset search's constraints to the asset
     index, where the asset metadata, tags and location are, so this does too: with an OpenSearch-only
@@ -666,9 +742,10 @@ def _asset_index_step(request: NlpSearchRequestModel, search_module, manager,
     file's location, never its asset's. Each document is read by the id the asset indexer writes for the
     record the hit was authorized on (``_authorize``): ``{databaseId}#{assetId}``, with ``#deleted`` on
     the database id of an archived record, so the fields come from a record the caller may already open,
-    and only assets of authorized hits are asked. ``manager`` is the one ``_opensearch_step`` built (the
-    vector family's one admitted OpenSearch import). A failure raises, and ``_opensearch_step`` answers it:
-    503 under a constraint, the ``opensearch:enrichment_failed`` warning otherwise."""
+    and only assets of authorized hits are asked. ``manager`` is the one ``_opensearch_step`` uses (from the
+    vector family's one admitted OpenSearch import, _opensearch_module), and each read ends by ``deadline``
+    as there. A failure raises, and ``_opensearch_step`` answers it: 503 under a constraint, the
+    ``opensearch:enrichment_failed`` warning otherwise."""
     from common.indexing.documentIds import build_asset_document_id
 
     constrained = bool(request.opensearch_only_fields())
@@ -694,6 +771,7 @@ def _asset_index_step(request: NlpSearchRequestModel, search_module, manager,
                 "_source": [GEO_LOCATION_FIELD, "MD_"] if request.enrich else False,
                 "query": {"bool": {"filter": [{"ids": {"values": window_ids}}] + shared_clauses}},
             },
+            request_timeout=_time_left(deadline),
         )
         for hit in response.get("hits", {}).get("hits", []):
             matched.add(hit["_id"])
@@ -750,7 +828,11 @@ def _log_search(event, request: NlpSearchRequestModel, hits_returned: int) -> No
                request_parameters=_search_request_parameters(request))
 
 
-def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
+def handle_nlp_search(event, claims_and_roles, api_deadline: Optional[float] = None) -> APIGatewayProxyResponseV2:
+    """Answer POST /search/nlp. ``api_deadline`` is lambda_handler's _api_deadline; without one it is taken
+    now."""
+    if api_deadline is None:
+        api_deadline = _api_deadline(event)
     started = time.monotonic()
     request = _parse_request(event)
     warnings: List[Dict[str, str]] = []
@@ -808,7 +890,7 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
         items_collapsed = candidates - len(authorized)
         file_hits = [_file_hit(h) for h in authorized]
         if not opensearch_disabled and (request.enrich or ignored):
-            file_hits = _opensearch_step(request, file_hits, warnings)
+            file_hits = _opensearch_step(request, file_hits, warnings, api_deadline)
     result = _asset_hits(file_hits) if request.entityTypes == ["asset"] else file_hits
     page = result[: request.size]
     body = _envelope(
@@ -823,6 +905,9 @@ def handle_nlp_search(event, claims_and_roles) -> APIGatewayProxyResponseV2:
 
 @audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
+    # First, as in keyword search, so the deadline's fallback without a receipt time runs from the handler's
+    # start
+    api_deadline = _api_deadline(event)
     claims_and_roles = request_to_claims(event)
     try:
         path = event["requestContext"]["http"]["path"]
@@ -834,7 +919,7 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
         if not method_allowed_on_api:
             return authorization_error()
         if method == "POST" and API_SEARCH_NLP.matches(path):
-            return handle_nlp_search(event, claims_and_roles)
+            return handle_nlp_search(event, claims_and_roles, api_deadline)
         return validation_error(body={"message": ROUTE_NOT_SERVED_MESSAGE}, event=event)
     except ValidationError as v:
         # A refused request is the caller's mistake, not a fault: WARNING, not ERROR, and no traceback.
