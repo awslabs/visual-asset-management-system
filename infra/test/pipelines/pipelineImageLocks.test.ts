@@ -272,6 +272,22 @@ describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfil
     });
 });
 
+describe("the Isaac Lab training image", () => {
+    const root = path.join(PIPELINES_DIR, "simulation/isaacLabTraining/container");
+    const steps = instructions(fs.readFileSync(path.join(root, "Dockerfile"), "utf-8"));
+
+    it("builds its one source package with the base image's pinned setuptools, not a fetched build environment", () => {
+        const installs = installSteps(steps);
+        expect(installs.length).toBeGreaterThan(0);
+        for (const step of installs) {
+            expect(step).toMatch(/--no-binary moviepy/);
+            expect(step).toMatch(/--no-build-isolation/);
+        }
+        const baseConstraints = fs.readFileSync(path.join(root, "base-constraints.txt"), "utf-8");
+        expect(baseConstraints).toMatch(/^setuptools==\S+$/m);
+    });
+});
+
 describe("the Cosmos images", () => {
     const COSMOS = [
         "genAi/nvidia/cosmos/3/container",
