@@ -59,7 +59,8 @@ WORKDIR /workspace
 
 # Install dependencies: every file at the version and hash in requirements.lock (Isaac-GR00T's pyproject.toml
 # with the `base` extra, plus requirements-image.txt, with the versions of requirements-overrides.txt in place
-# of upstream's pins and without tensorflow; its header holds the command). Four packages publish no
+# of upstream's pins and without tensorflow; its header holds the command, which reproduces the lock when run
+# over the committed requirements.lock, as requirements-overrides.txt explains). Four packages publish no
 # wheel (antlr4-python3-runtime, fvcore, gpustat, iopath), so they build from their hashed source against
 # the build tools of requirements-build.lock, installed first: `--no-build-isolation` keeps the build from
 # fetching unhashed tools. Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
