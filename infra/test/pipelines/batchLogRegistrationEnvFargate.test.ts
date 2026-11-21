@@ -418,7 +418,13 @@ describe("conversion/cogConvert registration environment and state machine loggi
     });
 
     test("openPipeline names the function of each Lambda state, and every Lambda state is named", () => {
-        const producer = path.join(PRODUCERS, "conversion", "cogConvert", "lambda", "openPipeline.py");
+        const producer = path.join(
+            PRODUCERS,
+            "conversion",
+            "cogConvert",
+            "lambda",
+            "openPipeline.py"
+        );
         expectDeclaredStagesInAsl(template, producer);
         const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
         const refs = stateFunctionRefs(template, env.STATE_FUNCTION_NAMES);
