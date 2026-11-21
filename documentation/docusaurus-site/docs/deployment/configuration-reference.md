@@ -120,7 +120,7 @@ Optional network restrictions on presigned URL access. Used in `app.assetBuckets
 
 | Field             | Type  | Default | Description                                                                                                                                                                                                                                      |
 | ----------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `allowedIpRanges` | array | `[]`    | Array of IPv4 and IPv6 CIDR blocks (e.g., `["192.168.1.0/24", "2001:db8::/32"]`) permitted to use presigned URLs. Empty array means no IP restrictions. Mutually exclusive with `allowedVpceIds`.                                                |
+| `allowedIpRanges` | array | `[]`    | Array of IPv4 and IPv6 CIDR blocks (e.g., `["192.168.1.0/24", "2001:db8::/32"]`) permitted to use presigned URLs. Empty array means no IP restrictions. Mutually exclusive with `allowedVpceIds`. With [S3 Transfer Acceleration](s3-transfer-acceleration.md) on, requests reach Amazon S3 over IPv4, so the list must include the users' IPv4 egress ranges.                                                |
 | `allowedVpceIds`  | array | `[]`    | Array of Amazon S3 VPC endpoint IDs (e.g., `["vpce-1234abcd"]`) permitted to use presigned URLs. Accepts both interface and gateway VPC endpoint IDs. Empty array means no VPC endpoint restrictions. Mutually exclusive with `allowedIpRanges`. |
 
 **Example configuration with restrictions:**
