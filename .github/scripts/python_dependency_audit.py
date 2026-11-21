@@ -14,8 +14,7 @@ hand-kept list) it:
    fixes it). A requirements file without the header fails: a hand-written file beside a lock would
    otherwise be installed without being checked or audited;
 3. audits each export with pip-audit and fails on every advisory that is not on the allowlist
-   `.github/python-audit-allowlist.json`. A requirement installed from a direct URL cannot be audited by
-   pip-audit; it is left out of the file pip-audit reads and named in the job summary.
+   `.github/python-audit-allowlist.json`.
 
 The allowlist is validated first: every entry needs `id`, `package`, `reason` and a `reviewBy` date
 (ISO, not in the past). An entry that matches no current finding is stale and also fails the run.
@@ -48,7 +47,7 @@ ALLOWED_EXPORT_FLAGS = {
     "--no-annotate",
     "--all-groups",
 }
-ALLOWED_EXPORT_VALUE_FLAGS = {"--group", "--only-group", "--no-group", "--extra", "--no-extra", "--no-emit-package"}
+ALLOWED_EXPORT_VALUE_FLAGS = {"--group", "--only-group", "--no-group", "--extra", "--no-extra"}
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Top-level files in a locked directory that must be uv exports. A `requirements*.lock` is the file a
 # container Dockerfile installs with `pip install --require-hashes`: a hashed export, not a second source.
@@ -352,68 +351,26 @@ def check_ranged_inputs(root, tracked, lock_dirs):
     return paths
 
 
-# A requirement installed from a direct URL (`name @ https://...`, or a git URL). pip-audit cannot audit one
-# (it has no version to look up), so the audit hands it the rest of the file and reports these by name.
-URL_REQUIREMENT = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*@\s*\S+")
-NOT_AUDITED = []  # (export path, package name)
-
-
-def split_url_requirements(text):
-    """(text without the direct-URL requirement entries, their names). An entry is its line and the indented
-    continuation lines (hashes) below it."""
-    kept, names, skipping = [], [], False
-    for line in text.splitlines(keepends=True):
-        if line[:1] in (" ", "\t") and (skipping or kept):
-            if not skipping:
-                kept.append(line)
-            continue
-        match = URL_REQUIREMENT.match(line)
-        skipping = bool(match)
-        if match:
-            names.append(canonical_name(match.group(1)))
-        else:
-            kept.append(line)
-    return "".join(kept), names
-
-
 def audit_export(root, rel_path, pip_audit):
     """Findings for one requirements file: list of (package, version, [ids])."""
-    with open(os.path.join(root, rel_path), encoding="utf-8") as handle:
-        filtered, url_names = split_url_requirements(handle.read())
-    temp_filtered = None
-    audited_path = rel_path
-    if url_names:
-        NOT_AUDITED.extend((rel_path, name) for name in url_names)
-        handle_fd, temp_filtered = tempfile.mkstemp(prefix="uv-export-nourl-", suffix=".txt")
-        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
-            handle.write(filtered)
-        audited_path = temp_filtered
-    try:
-        return _audit_file(root, audited_path, rel_path, pip_audit)
-    finally:
-        if temp_filtered:
-            os.unlink(temp_filtered)
-
-
-def _audit_file(root, rel_path, shown_path, pip_audit):
     command = pip_audit + ["-r", rel_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
     result = run(command, root, check=False)
     try:
         report = json.loads(result.stdout)
     except ValueError:
         raise AuditError(
-            f"pip-audit gave no readable result for {shown_path} (exit {result.returncode}); "
+            f"pip-audit gave no readable result for {rel_path} (exit {result.returncode}); "
             f"the advisory service may be unreachable: {last_line(result.stderr)}"
         )
     findings = []
     for dep in report.get("dependencies", []):
         if "skip_reason" in dep:
-            raise AuditError(f"pip-audit skipped {dep.get('name')} in {shown_path}: {dep['skip_reason']}")
+            raise AuditError(f"pip-audit skipped {dep.get('name')} in {rel_path}: {dep['skip_reason']}")
         for vuln in dep.get("vulns", []):
             ids = [vuln["id"]] + list(vuln.get("aliases") or [])
             findings.append((dep["name"], dep["version"], ids))
     if result.returncode not in (0, 1) or (result.returncode == 1 and not findings):
-        raise AuditError(f"pip-audit failed for {shown_path} (exit {result.returncode}): {last_line(result.stderr)}")
+        raise AuditError(f"pip-audit failed for {rel_path} (exit {result.returncode}): {last_line(result.stderr)}")
     return findings
 
 
@@ -542,9 +499,6 @@ def audit():
         f"Projects: {len(lock_dirs)}. Findings: {len(all_findings)}. Allowlisted: {len(all_findings) - len(blocking)}.",
         "",
     ]
-    if NOT_AUDITED:
-        listed = ", ".join(sorted({name for _, name in NOT_AUDITED}))
-        summary += [f"Not audited (installed from a direct URL, which pip-audit cannot check): {listed}.", ""]
     if blocking:
         summary += ["| Project | Package | Version | Advisory |", "| --- | --- | --- | --- |"]
         # One row per (project, package, version, advisory): an export and its dev export can both list it.
