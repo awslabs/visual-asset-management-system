@@ -189,7 +189,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/createAssetResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use ("The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.") and an assetId equal to the name of such a folder ("The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
                     content:
                         application/json:
                             schema:
@@ -2166,7 +2166,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip:
         post:
             summary: "Create a Download as Zip job for files, folders, or the whole asset."
-            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. A single-file asset (one created from a bucketExistingKey without a trailing '/') is refused with 400: download its files directly instead. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
             requestBody:
                 required: true
                 content:
@@ -3495,7 +3495,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, source file is archived, the source is the file of a single-file asset (it cannot be moved or renamed), or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
@@ -13402,7 +13402,7 @@ components:
                     description: "Whether the asset can be downloaded."
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
-                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation."
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
                 tags:
                     type: array
                     items:
@@ -13412,7 +13412,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset."
+                    description: "Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment is refused with 400."
             required:
                 - databaseId
                 - assetName
@@ -19029,7 +19029,7 @@ components:
                     description: "File path relative to the asset root"
                 isPrefix:
                     type: boolean
-                    description: "Whether to archive all files under this prefix"
+                    description: "Whether filePath names a folder: archive every file in that folder. A trailing '/' is added when missing, so a file whose name only starts with the folder name is not selected."
                     default: false
             required:
                 - filePath
@@ -19051,7 +19051,7 @@ components:
                     description: "File path relative to the asset root"
                 isPrefix:
                     type: boolean
-                    description: "Whether to delete all files under this prefix"
+                    description: "Whether filePath names a folder: delete every file in that folder. A trailing '/' is added when missing, so a file whose name only starts with the folder name is not selected."
                     default: false
                 confirmPermanentDelete:
                     type: boolean

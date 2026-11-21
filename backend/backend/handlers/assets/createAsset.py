@@ -28,6 +28,8 @@ from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
+from common.assetLocations import locations_share_key
+from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -373,23 +375,43 @@ def normalize_location_key(key):
     return key.lstrip('/')
 
 
+# Folder names a bucketExistingKey may not pass through: the reserved VAMS system folders bucket sync
+# skips (pipeline run I/O, previews, temporary uploads, workspaces) and the prepared-downloads folder.
+RESERVED_EXISTING_KEY_FOLDERS = RESERVED_S3_PREFIX_FOLDERS | {AUXILIARY_PREPARED_DOWNLOADS_PREFIX.strip('/')}
+RESERVED_EXISTING_KEY_MESSAGE = ("The specified bucketExistingKey is inside a folder VAMS reserves for system "
+                                 "use. Choose another location.")
+RESERVED_ASSET_ID_MESSAGE = ("The specified assetId is the name of a folder VAMS reserves for system use. "
+                             "Choose another asset ID.")
+
+
+def is_reserved_asset_id(asset_id):
+    """Whether an assetId names a reserved VAMS system folder. A location derived from it,
+    ``{base prefix}{assetId}/``, would be that folder."""
+    return bool(asset_id) and asset_id in RESERVED_EXISTING_KEY_FOLDERS
+
+
+def is_reserved_existing_key(s3_key, base_prefix):
+    """Whether a resolved bucketExistingKey has a reserved VAMS system folder as a path segment of the part
+    under the bucket's base prefix. The base prefix itself is the registration's choice and is not checked,
+    so a prefix such as ``exports/workspace/`` does not refuse every key under it."""
+    key = (s3_key or "").lstrip("/")
+    base = (base_prefix or "").strip("/")
+    if base and key.startswith(base + "/"):
+        key = key[len(base) + 1:]
+    return any(part in RESERVED_EXISTING_KEY_FOLDERS for part in key.split("/"))
+
+
 def keys_conflict(existing_key, target_key):
-    """Whether two stored S3 asset locations occupy the same place in the bucket.
+    """Whether two stored S3 asset locations hold a key in common.
 
-    Compared on prefix-folder semantics, so a conflict is an exact match or a
-    parent/child containment in either direction.
+    Decided by `common.assetLocations.locations_share_key` over the keys each
+    location holds (a folder: every key under it; a single file: its object, its
+    companion folder `{key}/` and its own previews `{key}.previewFile.{ext}`). That
+    covers an exact match and one location holding the other's key, and also two
+    locations that share a key neither of them names: `a/x` and `a/x.previewFile`
+    both hold `a/x.previewFile.previewFile.z`. An empty location conflicts with nothing.
     """
-    existing_key = normalize_location_key(existing_key)
-    target_key = normalize_location_key(target_key)
-    if not existing_key or not target_key:
-        return False
-
-    existing_prefix = existing_key if existing_key.endswith('/') else existing_key + '/'
-    target_prefix = target_key if target_key.endswith('/') else target_key + '/'
-
-    return (existing_key == target_key
-            or target_prefix.startswith(existing_prefix)
-            or existing_prefix.startswith(target_prefix))
+    return locations_share_key(normalize_location_key(existing_key), normalize_location_key(target_key))
 
 
 def prefix_roots_overlap(prefix_a, prefix_b):
@@ -731,6 +753,12 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     if request_model.assetId and not s3ExternalGenerated:
         validate_ascii_asset_id(request_model.assetId)
 
+    # A chosen asset id that names a reserved VAMS system folder would derive that folder as its location.
+    # Refused before any read, so the answer does not depend on what the tables hold.
+    if is_reserved_asset_id(request_model.assetId):
+        logger.error(f"assetId {request_model.assetId} names a reserved VAMS system folder")
+        raise VAMSGeneralErrorResponse(RESERVED_ASSET_ID_MESSAGE)
+
     # Generate asset ID if not provided
     assetId = request_model.assetId if request_model.assetId else f"x{str(uuid.uuid4())}"
     databaseId = request_model.databaseId
@@ -817,6 +845,12 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
                 f"{error_msg}: resolved {s3_key} equals base prefix root "
                 f"{normalize_base_assets_prefix(s3_bucket_prefix)!r}")
             raise VAMSGeneralErrorResponse(error_msg)
+
+        # A key inside a VAMS system folder holds system data, never an asset's files. Refused before any
+        # S3 read, with a message that names no other record.
+        if is_reserved_existing_key(s3_key, s3_bucket_prefix):
+            logger.error(f"bucketExistingKey {s3_key} is inside a reserved VAMS system folder")
+            raise VAMSGeneralErrorResponse(RESERVED_EXISTING_KEY_MESSAGE)
 
         # Check if the key exists in S3 (full path: bucketPrefix/bucketExistingKey)
         if not check_s3_key_exists(s3_bucket, s3_key):

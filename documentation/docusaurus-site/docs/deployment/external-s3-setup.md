@@ -1080,7 +1080,7 @@ curl -X POST "https://{VAMS_API}/database/my-3d-database/assets" \
 VAMS validates that the specified key exists in the bucket, then creates an asset record pointing to that S3 location without copying data. This approach gives you control over `assetName`, `description`, and `tags`, whereas the init-file approach auto-generates these fields from the folder name.
 
 :::warning[Key format requirements]
-The `bucketExistingKey` value must point to an existing S3 key (file or prefix) in the bucket. VAMS resolves the full path by combining the `baseAssetsPrefix` with the `bucketExistingKey`, intelligently avoiding duplication if the key already includes the prefix. The key should end with `/` if it represents a folder containing multiple files.
+The `bucketExistingKey` value must point to an existing S3 key (file or prefix) in the bucket. VAMS resolves the full path by combining the `baseAssetsPrefix` with the `bucketExistingKey`, intelligently avoiding duplication if the key already includes the prefix. The key should end with `/` if it represents a folder containing multiple files. A key without a trailing `/` names one object. The asset holds that object (at the path `/{file name}`), everything under `{key}/` (its companion folder, where uploads and pipeline outputs are written) and its previews `{key}.previewFile.{ext}`. Its file list, downloads, file operations, archive and permanent delete act on those keys only, never on other keys that start with the same characters (such as `model.glb.bak` next to `model.glb`). An upload at `/{file name}` writes a new version of the object, a pipeline output at that path is refused, and such an asset cannot be downloaded as a zip.
 :::
 
 ### What happens after import
@@ -1088,7 +1088,7 @@ The `bucketExistingKey` value must point to an existing S3 key (file or prefix) 
 After assets are created (via init files or API):
 
 1. **Viewing in VAMS**: The assets appear in the VAMS web interface under the specified database. You can browse files, view metadata, and use any compatible viewer plugin.
-2. **File listing**: VAMS lists files by querying Amazon S3 with the asset's `assetLocation.Key` prefix. All files under that prefix appear in the file manager.
+2. **File listing**: VAMS lists files by querying Amazon S3 with the asset's `assetLocation.Key` prefix. All files under that folder appear in the file manager; an asset created from a single object key lists that object, its previews and the files under its companion folder `{key}/`.
 3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets). It does not do so for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID; see **Ongoing sync** below.
 4. **Presigned URLs**: Downloads and viewer access use presigned URLs generated against the original bucket location.
 5. **Pipelines**: You can run processing pipelines (for example, 3D preview generation) on imported assets. Pipeline outputs are written to the appropriate output paths within the same bucket.
@@ -1111,7 +1111,7 @@ If your 3D models are individual files (not in folders), you need to reorganize 
 
 **Can I add files to an imported asset after creation?**
 
-Yes. After creating an asset, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically, except for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID. Add files to such an asset through VAMS; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
+Yes. After creating an asset from a folder key, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. An asset created from a single object key keeps its file at that key, and files you add are placed under its companion folder `{key}/`. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically, except for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID. Add files to such an asset through VAMS; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
 
 **What if I have thousands of assets to import?**
 
