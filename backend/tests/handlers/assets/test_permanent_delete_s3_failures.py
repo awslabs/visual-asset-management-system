@@ -62,6 +62,10 @@ PREFIX_MESSAGE = ("Error deleting files: the files under the prefix could not al
                   "storage. " + _FIX + " The remaining files were kept.")
 FILE_MESSAGE = ("Error deleting file: the file could not be fully deleted from the asset's storage. " + _FIX
                 + " The file and its previews were kept.")
+PREVIEWS_MESSAGE = ("Error deleting file: the file was deleted, but its previews could not all be deleted from "
+                    "the asset's storage. Check that VAMS can delete objects in the asset's storage bucket (its "
+                    "permissions and any object lock), then delete the file again to remove the previews that "
+                    "were kept.")
 
 
 class _NeverRaised(Exception):
@@ -81,24 +85,56 @@ class _DeniedPaginator:
         raise _access_denied("ListObjectVersions")
 
 
+class _DeniedPreviewPaginator:
+    """Refuses a listing of a file's previews (``{key}.previewFile.``) and serves every other prefix."""
+
+    def __init__(self, paginator):
+        self._paginator = paginator
+
+    def paginate(self, **kwargs):
+        if (kwargs.get("Prefix") or "").endswith(".previewFile."):
+            raise _access_denied("ListObjectsV2")
+        return self._paginator.paginate(**kwargs)
+
+
+class _RecordingPaginator:
+    def __init__(self, paginator, name, listings):
+        self._paginator, self._name, self._listings = paginator, name, listings
+
+    def paginate(self, **kwargs):
+        self._listings.append((self._name, kwargs.get("Prefix"), None))
+        return self._paginator.paginate(**kwargs)
+
+
 class _FaultyS3:
-    """An S3 client that answers AccessDenied for the version listing or for chosen deletes.
+    """An S3 client that answers AccessDenied for the version listing, a preview listing or chosen deletes.
 
     ``deny_keys`` refuses every delete of a key; ``deny_versions`` refuses one (key, VersionId).
+    ``listings`` records every listing as (operation, Prefix, MaxKeys or None for a paged listing).
     Everything else goes to the wrapped moto client.
     """
 
     def __init__(self, client):
         self._client = client
         self.deny_listing = False
+        self.deny_preview_listing = False
         self.deny_all_deletes = False
         self.deny_keys = set()
         self.deny_versions = set()
+        self.listings = []
 
     def get_paginator(self, name):
         if name == "list_object_versions" and self.deny_listing:
             return _DeniedPaginator()
-        return self._client.get_paginator(name)
+        if name == "list_objects_v2" and self.deny_preview_listing:
+            return _DeniedPreviewPaginator(self._client.get_paginator(name))
+        return _RecordingPaginator(self._client.get_paginator(name), name, self.listings)
+
+    def list_object_versions(self, **kwargs):
+        if self.deny_listing:
+            raise _access_denied("ListObjectVersions")
+        self.listings.append(("list_object_versions", kwargs.get("Prefix"), kwargs.get("MaxKeys")))
+        return self._client.list_object_versions(**kwargs)
 
     def delete_object(self, **kwargs):
         key, version = kwargs.get("Key"), kwargs.get("VersionId")
@@ -107,7 +143,7 @@ class _FaultyS3:
         return self._client.delete_object(**kwargs)
 
     def lift(self):
-        self.deny_listing = self.deny_all_deletes = False
+        self.deny_listing = self.deny_preview_listing = self.deny_all_deletes = False
         self.deny_keys.clear()
         self.deny_versions.clear()
 
@@ -502,9 +538,36 @@ class TestSingleFileDeleteChecksTheFileFirst:
 TABLE_KEYS = {"metadata": "metadataKey", "attributes": "attributeKey"}
 
 
+class _RecordedTable:
+    """A table whose reads and row deletes are recorded in one event list, in call order."""
+
+    def __init__(self, table, events):
+        self._table, self._events = table, events
+
+    def query(self, **kwargs):
+        self._events.append(("query", kwargs.get("IndexName"), kwargs.get("Limit")))
+        return self._table.query(**kwargs)
+
+    def batch_writer(self):
+        table, events = self._table, self._events
+
+        class _Writer:
+            def __enter__(self):
+                self._writer = table.batch_writer().__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._writer.__exit__(*exc)
+
+            def delete_item(self, Key):
+                events.append(("delete", Key["databaseId:assetId:filePath"]))
+                self._writer.delete_item(Key=Key)
+        return _Writer()
+
+
 @pytest.fixture
 def record_tables(monkeypatch):
-    """The file metadata and attribute tables in moto, with the asset-wide reads counted."""
+    """The file metadata and attribute tables in moto, their reads and row deletes recorded per table."""
     with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
         tables = {}
@@ -524,39 +587,135 @@ def record_tables(monkeypatch):
                                    {"AttributeName": row_key, "KeyType": "RANGE"}]}])
             tables[name] = dynamodb.Table(f"test-{name}")
         rows = {"metadata": [("/x.txt", "k1"), ("/x.txt", "k2"), ("/sub/y.txt", "k1"), ("/sub/z.txt", "k1"),
-                             ("/", "assetLevel")],
-                "attributes": [("/x.txt", "a1"), ("/sub/z.txt", "a1")]}
+                             ("/notes.txt ", "k1"), ("/", "assetLevel")],
+                "attributes": [("/x.txt", "a1"), ("/sub/z.txt", "a1"), ("/notes.txt ", "a1")]}
         for name, entries in rows.items():
             for path, key in entries:
                 tables[name].put_item(Item={TABLE_KEYS[name]: key, "databaseId:assetId:filePath": f"db1:a1:{path}",
                                             "databaseId:assetId": "db1:a1"})
             tables[name].put_item(Item={TABLE_KEYS[name]: "other", "databaseId:assetId:filePath": "db1:a2:/x.txt",
                                         "databaseId:assetId": "db1:a2"})
-        monkeypatch.setattr(af, "asset_file_metadata_table", tables["metadata"])
-        monkeypatch.setattr(af, "file_attribute_table", tables["attributes"])
-        reads = []
-        real_query_all_items = af.query_all_items
-
-        def counted(table, **kwargs):
-            reads.append(kwargs.get("IndexName"))
-            return real_query_all_items(table, **kwargs)
-        monkeypatch.setattr(af, "query_all_items", counted)
-        yield SimpleNamespace(tables=tables, reads=reads)
+        events = {name: [] for name in TABLE_KEYS}
+        monkeypatch.setattr(af, "asset_file_metadata_table", _RecordedTable(tables["metadata"], events["metadata"]))
+        monkeypatch.setattr(af, "file_attribute_table", _RecordedTable(tables["attributes"], events["attributes"]))
+        yield SimpleNamespace(tables=tables, events=events)
 
 
 def _remaining(table):
     return sorted(item["databaseId:assetId:filePath"] for item in table.scan()["Items"])
 
 
+def _reads(events):
+    """(IndexName, Limit) of each read, in order."""
+    return [(event[1], event[2]) for event in events if event[0] == "query"]
+
+
 @pytest.mark.unit
-class TestFileRecordsAreDeletedInBatches:
-    def test_the_named_files_lose_their_rows_with_one_read_per_table(self, record_tables):
+class TestFileRecordCleanup:
+    def test_a_few_files_read_only_their_own_rows(self, record_tables):
         deleted = af.delete_files_metadata("db1", "a1", ["/x.txt", "sub/y.txt", "", "folder/"])
 
         assert deleted == 4
-        assert record_tables.reads == ["DatabaseIdAssetIdIndex", "DatabaseIdAssetIdIndex"]
-        assert _remaining(record_tables.tables["metadata"]) == ["db1:a1:/", "db1:a1:/sub/z.txt", "db1:a2:/x.txt"]
-        assert _remaining(record_tables.tables["attributes"]) == ["db1:a1:/sub/z.txt", "db1:a2:/x.txt"]
+        for name in TABLE_KEYS:
+            assert _reads(record_tables.events[name]) == [("DatabaseIdAssetIdFilePathIndex", None)] * 2, name
+        assert _remaining(record_tables.tables["metadata"]) == [
+            "db1:a1:/", "db1:a1:/notes.txt ", "db1:a1:/sub/z.txt", "db1:a2:/x.txt"]
+        assert _remaining(record_tables.tables["attributes"]) == [
+            "db1:a1:/notes.txt ", "db1:a1:/sub/z.txt", "db1:a2:/x.txt"]
+
+    def test_a_path_is_matched_as_stored_apart_from_its_leading_slash(self, record_tables):
+        """A stored path may end in a space; only the leading '/' is normalized, as the per-file delete does."""
+        deleted = af.delete_files_metadata("db1", "a1", ["notes.txt "])
+
+        assert deleted == 2
+        assert "db1:a1:/notes.txt " not in _remaining(record_tables.tables["metadata"])
+        assert "db1:a1:/notes.txt " not in _remaining(record_tables.tables["attributes"])
+
+    def test_many_files_read_the_asset_rows_a_bounded_page_at_a_time(self, record_tables, monkeypatch):
+        monkeypatch.setattr(af, "FILE_RECORDS_PER_FILE_QUERY_LIMIT", 1, raising=False)
+        monkeypatch.setattr(af, "FILE_RECORDS_DELETE_PAGE_SIZE", 2, raising=False)
+
+        deleted = af.delete_files_metadata("db1", "a1", ["/x.txt", "/sub/z.txt"])
+
+        assert deleted == 5
+        events = record_tables.events["metadata"]
+        reads = _reads(events)
+        # Six rows of the asset, two per page: every read is a bounded page of the asset's rows
+        assert len(reads) >= 3 and set(reads) == {("DatabaseIdAssetIdIndex", 2)}
+        # Each page's rows are deleted as it is read, not after the whole asset was read
+        queries = [i for i, event in enumerate(events) if event[0] == "query"]
+        deletes = [i for i, event in enumerate(events) if event[0] == "delete"]
+        assert deletes and deletes[0] < queries[-1], events
+        assert _remaining(record_tables.tables["metadata"]) == [
+            "db1:a1:/", "db1:a1:/notes.txt ", "db1:a1:/sub/y.txt", "db1:a2:/x.txt"]
+        assert _remaining(record_tables.tables["attributes"]) == ["db1:a1:/notes.txt ", "db1:a2:/x.txt"]
+
+
+@pytest.mark.unit
+class TestASingleFileLocationIsListedByItsOwnPrefixes:
+    def test_the_permanent_delete_collects_the_keys_from_the_held_prefixes(self, svc):
+        """The object is read with a one-key listing, then its previews and its companion folder."""
+        svc.asset["assetLocation"] = {"Key": FILE_LOCATION}
+        svc.client.put_object(Bucket=BUCKET, Key="p1/model.glb.bak", Body=b"neighbour")
+
+        assert _delete_permanently(svc).success is True
+
+        listed = [(prefix, cap) for operation, prefix, cap in svc.faulty.listings
+                  if operation == "list_object_versions"]
+        assert listed[:3] == [(FILE_LOCATION, 1), (FILE_LOCATION + ".previewFile.", None),
+                              (FILE_LOCATION + "/", None)], listed
+        assert _keys_under(svc.client, FILE_LOCATION) == ["p1/model.glb.bak"]
+
+
+@pytest.mark.unit
+class TestSingleFileDeleteKeepsRecordsInStepWithItsPreviews:
+    """#1789: a single-file delete reports a preview it could not list or delete."""
+
+    def test_a_refused_preview_listing_changes_nothing(self, files):
+        files.faulty.deny_preview_listing = True
+
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.delete_file("db1", "a1", "/x.txt", False, True, CLAIMS)
+
+        assert str(raised.value).endswith(FILE_MESSAGE)
+        assert _keys_under(files.client, "proj/a/x.txt") == ["proj/a/x.txt", "proj/a/x.txt.previewFile.png"]
+        files.aux.assert_not_called()
+        files.delete_file_metadata.assert_not_called()
+        files.delete_file_version_records.assert_not_called()
+        files.send_subscription_email.assert_not_called()
+
+    def test_a_kept_preview_fails_the_delete_and_keeps_its_records(self, files):
+        files.faulty.deny_keys.add("proj/a/x.txt.previewFile.png")
+
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.delete_file("db1", "a1", "/x.txt", False, True, CLAIMS)
+
+        assert str(raised.value).endswith(PREVIEWS_MESSAGE)
+        # The file is gone, so its records and derived data go; the kept preview keeps its version rows
+        assert _keys_under(files.client, "proj/a/x.txt") == ["proj/a/x.txt.previewFile.png"]
+        files.delete_file_metadata.assert_called_once_with("db1", "a1", "x.txt")
+        files.delete_file_version_records.assert_called_once_with("db1", "a1", ["/x.txt"])
+        assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/"]
+        files.send_subscription_email.assert_not_called()
+
+    def test_deleting_the_file_again_removes_the_kept_preview(self, files):
+        files.faulty.deny_keys.add("proj/a/x.txt.previewFile.png")
+        with pytest.raises(af.VAMSGeneralErrorResponse):
+            af.delete_file("db1", "a1", "/x.txt", False, True, CLAIMS)
+
+        files.faulty.lift()
+        response = af.delete_file("db1", "a1", "/x.txt", False, True, CLAIMS)
+
+        assert response.success is True
+        assert sorted(response.affectedFiles) == ["/x.txt", "/x.txt.previewFile.png"]
+        assert _keys_under(files.client, "proj/a/x.txt") == []
+        files.send_subscription_email.assert_called_once_with("db1", "a1")
+
+    def test_a_path_with_no_file_and_no_preview_is_not_found(self, files):
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.delete_file("db1", "a1", "/missing.txt", False, True, CLAIMS)
+
+        assert "File not found" in str(raised.value)
 
 
 def _api_event(path, body):
