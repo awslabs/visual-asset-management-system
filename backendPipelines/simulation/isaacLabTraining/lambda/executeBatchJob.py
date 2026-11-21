@@ -128,6 +128,12 @@ def lambda_handler(event, context):
         },
     }
 
+    # The mode's own bound on this attempt (openPipeline's taskTimeoutSeconds); the job definition's
+    # value is the largest mode's, so it only backstops a submission that carries none.
+    attempt_seconds = event.get("taskTimeoutSeconds")
+    if attempt_seconds:
+        submit_params["timeout"] = {"attemptDurationSeconds": int(attempt_seconds)}
+
     if PIPELINE_JOB_TAGS:
         submit_params["tags"] = PIPELINE_JOB_TAGS
 

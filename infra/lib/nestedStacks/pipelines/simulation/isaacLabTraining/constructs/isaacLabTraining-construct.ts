@@ -402,15 +402,17 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
                     }),
                 ],
             }),
-            // AWS Batch's own bound on one attempt, counted from the attempt's start. It equals the
-            // training bundle's taskTimeout (28800 s) and executeBatchJobState's taskTimeout (8 h),
-            // so a training run gets the 8 hours the workflow allows; a lower value would stop the
-            // job while the workflow still waits and surface it as a heartbeat timeout. Both of those
-            // clocks start before the attempt (they include the RUNNABLE wait and the image pull), so
-            // the workflow times out first and its error handler terminates the registered job; this
-            // value is the backstop. Evaluation shares this job definition and is bounded by its own
-            // bundle's taskTimeout (7200 s). Keep it no lower than the training taskTimeout.
-            timeout: cdk.Duration.hours(8),
+            // AWS Batch's own bound on one attempt, counted from the attempt's start. This is the
+            // LARGEST mode's value: evaluation's 9 hours (its bundle taskTimeout, 32400 s). Each run
+            // narrows it to its own mode's bound (training 28800 s, evaluation 32400 s) through the
+            // `timeout` of the submit call (executeBatchJob.py), so this value only backstops a
+            // submission that carries none. The workflow clocks (the bundle taskTimeout and the
+            // batch task's TimeoutSecondsPath) start before the attempt (they include the RUNNABLE
+            // wait and the image pull), so the workflow times out first and its error handler
+            // terminates the registered job. Keep it no lower than the largest bundle taskTimeout: a
+            // lower value would stop a job the workflow still waits for and surface it as a
+            // heartbeat timeout.
+            timeout: cdk.Duration.hours(9),
         });
 
         // Lambda functions
@@ -451,6 +453,9 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
                 // here is unreachable downstream — and the batch task references it by path, which
                 // makes an omission a States.Runtime failure rather than a skipped registration.
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+                // The run's own time limit in seconds (training 28800, evaluation 32400), emitted by
+                // openPipeline from the run's mode. The batch task reads it as its TimeoutSecondsPath.
+                "taskTimeoutSeconds.$": "$.openResult.Payload.taskTimeoutSeconds",
             },
         });
 
@@ -472,9 +477,15 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
                 // sub-process: this pipeline submits under WAIT_FOR_TASK_TOKEN rather than the
                 // Batch .sync integration, so Step Functions does not stop the job on abort.
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+                // Becomes the Batch attempt's duration for this run's mode.
+                "taskTimeoutSeconds.$": "$.taskTimeoutSeconds",
             }),
             resultPath: "$.batchResult",
-            taskTimeout: sfn.Timeout.duration(cdk.Duration.hours(8)),
+            // Per mode, from openPipeline: 28800 s for training, 32400 s for evaluation, each equal to
+            // that mode's bundle taskTimeout. Both clocks start close together (the parent's at the
+            // workflow step, this one when the task is entered, a moment later), so this one fires
+            // first or together, and its Catch reports a readable failure.
+            taskTimeout: sfn.Timeout.at("$.taskTimeoutSeconds"),
             // The heartbeat clock starts when this task is ENTERED, but the only producer is the
             // container (first beat 5 minutes after it starts). Nothing beats while the Batch job sits
             // RUNNABLE waiting for GPU capacity or pulls its multi-gigabyte image, so this value is
@@ -544,12 +555,12 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
 
         const stateMachine = new sfn.StateMachine(this, "IsaacLabStateMachine", {
             definitionBody: sfn.DefinitionBody.fromChainable(definition),
-            // ENVELOPES the task timeout (8h) rather than matching it. openPipelineState runs before
+            // ENVELOPES the longest task timeout (evaluation, 9h) rather than matching it. openPipelineState runs before
             // executeBatchJobState, so the task's deadline always falls after the execution's when the
             // two are equal — the task-level States.Timeout becomes unreachable and the execution-level
             // one fires instead. That bypasses every Catch, so the error handler writes no record and
             // closePipelineState never runs. Same invariant the Splat Toolbox state machine states.
-            timeout: cdk.Duration.hours(9),
+            timeout: cdk.Duration.hours(10),
             logs: {
                 destination: stateMachineLogGroup,
                 includeExecutionData: true,

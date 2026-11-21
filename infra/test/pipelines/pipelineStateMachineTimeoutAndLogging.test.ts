@@ -270,7 +270,13 @@ describe("Isaac Lab training state machine", () => {
         const perState = stateTimeouts(asl);
         // The control: at least one state declares its own timeout, or "envelopes the task timeout"
         // holds for a definition that has no task timeout to envelope.
-        expect(Object.keys(perState).length).toBeGreaterThan(0);
+        // Isaac Lab's batch task reads its limit per mode (TimeoutSecondsPath, 28800 or 32400), so it
+        // appears here as a path; the envelope against both values is pinned by isaacLabTimeoutChain.
+        const pathTimeouts = Object.entries(asl.States ?? {}).filter(
+            ([, state]) => typeof (state as any).TimeoutSecondsPath === "string"
+        );
+        expect(Object.keys(perState).length + pathTimeouts.length).toBeGreaterThan(0);
+        expect(pathTimeouts.map(([name]) => name)).toContain("ExecuteBatchJobState");
 
         const jobDefinitions = Object.values(
             template.findResources("AWS::Batch::JobDefinition")

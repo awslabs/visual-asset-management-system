@@ -113,7 +113,7 @@ def _event(training_config, input_file="model.usd"):
 
 
 def _train(**overrides):
-    config = {"mode": "train", "task": "Isaac-Cartpole-Direct-v0", "rlLibrary": "rsl_rl"}
+    config = {"mode": "train", "task": "Isaac-Cartpole-Direct", "rlLibrary": "rsl_rl"}
     config.update(overrides)
     return config
 
@@ -121,7 +121,7 @@ def _train(**overrides):
 def _evaluate(**overrides):
     config = {
         "mode": "evaluate",
-        "task": "Isaac-Cartpole-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "rlLibrary": "rsl_rl",
         "policyS3Uri": "s3://asset-bucket/xid130a6/checkpoints/model_300.pt",
     }
