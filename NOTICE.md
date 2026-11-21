@@ -457,7 +457,7 @@ All rights reserved.
 | openai            | 2.x     | Apache-2.0                   | OpenAI Python SDK, installed by the `strands-agents[openai]` extra     |
 | bedrock-agentcore | 1.23.1  | Apache-2.0                   | Amazon Bedrock AgentCore Runtime application SDK                       |
 | cadquery          | 2.8.0   | Apache-2.0                   | Parametric CAD modelling; STEP import and export                       |
-| cadquery-ocp      | 8.x     | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
+| cadquery-ocp      | 7.9.x   | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
 | ddgs              | 9.16.0  | MIT                          | Web search for the agent's research tool                               |
 | httpx             | 0.28.1  | BSD-3-Clause                 | Bounded page fetch for the agent's research tool                       |
 | boto3             | 1.43.x  | Apache-2.0                   | AWS SDK for Python                                                     |
