@@ -328,7 +328,7 @@ describe("CI workflow", () => {
 
         test("a requirements file beside a lock that is not a uv export fails the audit", () => {
             expect(script).toContain(
-                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.txt$")'
+                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.(txt|lock)$")'
             );
             expect(script).toContain("is not a uv export");
         });
