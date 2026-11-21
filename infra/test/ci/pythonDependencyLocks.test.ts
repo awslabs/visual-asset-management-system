@@ -413,6 +413,41 @@ describe("Python dependency lock coverage (control)", () => {
                 "scripts/setup.sh",
                 "cd pkg && pip install -r requirements.txt\n",
             ],
+            [
+                "an AMI recipe installs it by an absolute path under a renamed directory",
+                "backendAddons/x/recipe.yml",
+                "- /venv/bin/pip3 install -r /opt/vams/pkg-src/requirements.txt\n",
+            ],
+            [
+                "a shell continuation splits the option from the path",
+                ".github/workflows/ci.yml",
+                "run: |\n  pip install \\\n    -r \\\n    pkg/requirements.txt\n",
+            ],
+            [
+                "a path with a two-component suffix is referenced",
+                "scripts/setup.sh",
+                "pip install -r ../other/pkg/requirements.txt\n",
+            ],
+            [
+                "a Python script runs pip on it",
+                "scripts/x.py",
+                "subprocess.run(['pip', 'install', '-r', 'pkg/requirements.txt'])\n",
+            ],
+            [
+                "a bash script installs it",
+                "scripts/a.bash",
+                "pip install -r pkg/requirements.txt\n",
+            ],
+            [
+                "a TOML command installs it",
+                "scripts/a.toml",
+                "x = 'pip install -r pkg/requirements.txt'\n",
+            ],
+            [
+                "a JSON command installs it",
+                "scripts/a.json",
+                '{"c": "pip install -r pkg/requirements.txt"}\n',
+            ],
         ])("fails when %s", (_label, file, text) => {
             expect(
                 check({
@@ -421,6 +456,29 @@ describe("Python dependency lock coverage (control)", () => {
                     [file]: text,
                 })
             ).toContain("installed or copied by");
+        });
+
+        test("a requirements file at an unrelated absolute path does not trip the scan", () => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                    "recipe.yml": "- pip install -r /opt/other-app/requirements.txt\n",
+                })
+            ).toBe("");
+        });
+
+        // Documented gaps (developer setup guide, coverage gaps): the scan reads text, not build contexts.
+        test("known gaps: a directory COPY then -r on a renamed path, and a path built in code", () => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                    Dockerfile: "COPY pkg /src\nRUN pip install -r /src/requirements.txt\n",
+                    "bundle.ts":
+                        "const d = 'pk' + 'g'; const r = path.join(d, 'requirements.txt'); exec(`pip install -r ${r}`);\n",
+                })
+            ).toBe("");
         });
 
         test("an unrelated requirements file of another project does not trip the scan", () => {

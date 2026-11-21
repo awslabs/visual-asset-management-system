@@ -188,9 +188,42 @@ def load_allowlist(root, today):
 
 # Files that can install a requirements file: Dockerfiles, CI and recipe YAML, shell scripts, and the
 # CDK code that runs bundling commands. Tests and docs only mention paths, so they are not scanned.
-INSTALLER_FILE = re.compile(r"(^|/)(Dockerfile[^/]*|makefile|Makefile|[^/]+\.(ya?ml|sh|ts))$")
-INSTALLER_SKIP = re.compile(r"(^|/)(test|tests|node_modules|cdk\.out)/|\.d\.ts$|^documentation/|^planning/")
-INSTALL_VERB = re.compile(r"(\s-r\s|--requirement|\bCOPY\b|\bADD\b|\bpip3?\s+(install|download)\b|\buv\s+pip\b|\bcp\b)")
+# Files that can install a requirements file: Dockerfiles, CI and recipe YAML, shell, Python and TOML/JSON
+# command files, and the CDK code that runs bundling commands. Tests and docs only mention paths, so they
+# are not scanned; neither are lock files, the package manager's own lock JSON or this exemption file.
+INSTALLER_FILE = re.compile(
+    r"(^|/)(Dockerfile[^/]*|makefile|Makefile|[^/]+\.(ya?ml|sh|bash|ts|py|toml|json))$"
+)
+INSTALLER_SKIP = re.compile(
+    r"(^|/)(test|tests|node_modules|cdk\.out)/|\.d\.ts$|^documentation/|^planning/"
+    r"|(^|/)(package-lock|npm-shrinkwrap|tsconfig[^/]*|cdk)\.json$|^\.github/python-lock-exemptions\.json$"
+)
+INSTALL_VERB = re.compile(
+    r"([\s'\"\[,]-r[\s'\",\]]|--requirement|\bCOPY\b|\bADD\b|\bpip3?['\"\s,]+(install|download)\b|\buv['\"\s,]+pip\b|\bcp\b)"
+)
+
+
+def _flat(text):
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def logical_lines(text):
+    """(first line number, text) of each line, with backslash continuations joined, as a shell reads them."""
+    result = []
+    pending, start = [], 0
+    for number, line in enumerate(text.splitlines()):
+        if not pending:
+            start = number
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            pending.append(stripped[:-1])
+            continue
+        pending.append(line)
+        result.append((start, " ".join(part.strip() for part in pending)))
+        pending = []
+    if pending:
+        result.append((start, " ".join(part.strip() for part in pending)))
+    return result
 
 
 def requirement_names(path, text):
@@ -216,33 +249,53 @@ def locked_names(lock_text):
 
 
 def installers_of(root, tracked, target):
-    """Files that install or copy `target` (a repository path): returns [(file, line number)]."""
+    """Files that install or copy `target` (a repository path): returns [(file, line number)].
+
+    A reference counts when the installing line names the file's basename in an install, COPY or cp
+    command and the path is any of: the full repository path or a suffix of it with at least two
+    components (`VamsCLI/requirements.txt`), a path relative to the installing file, an absolute or
+    unrelated-prefix path whose parent directory name contains the listed project's directory name
+    (`/opt/vams/vamscli-src/requirements.txt` for `tools/VamsCLI`, compared lower-case without
+    punctuation), or the bare name where the lines just above name the project's directory
+    (working-directory, WORKDIR, cd). Backslash-continued shell lines are joined first.
+
+    Known gaps, documented in the developer setup guide: a directory COPY followed by `-r` on a path
+    under another name (`COPY tools/VamsCLI /src` then `-r /src/requirements.txt`), a path assembled in
+    code (`path.join('tools', 'VamsCLI', 'requirements.txt')`), and a bare name in a file of another
+    directory. The package-name check against the lock still bounds what such an install can contain.
+    """
     base = os.path.basename(target)
     directory = os.path.dirname(target)
+    project_flat = _flat(os.path.basename(directory))
     found = []
     for rel in tracked:
         if not INSTALLER_FILE.search(rel) or INSTALLER_SKIP.search(rel) or rel == target:
             continue
         try:
             with open(os.path.join(root, rel), encoding="utf-8") as handle:
-                lines = handle.read().splitlines()
+                text = handle.read()
         except (OSError, UnicodeDecodeError):
             continue
-        for index, line in enumerate(lines):
+        if base not in text:
+            continue
+        lines = text.splitlines()
+        for index, line in logical_lines(text):
             if base not in line or not INSTALL_VERB.search(line):
                 continue
-            tokens = re.split(r"[\s'\"=,:()]+", line)
-            for token in tokens:
+            nearby = "\n".join(lines[max(0, index - 12) : index + 1])
+            for token in re.split(r"[\s'\"=,:()`]+", line):
                 if os.path.basename(token) != base:
                     continue
+                parent = os.path.dirname(token)
+                parts = [part for part in parent.split("/") if part not in ("", ".", "..")]
                 resolved = os.path.normpath(os.path.join(os.path.dirname(rel), token))
-                # A match is the full path, a path relative to the installing file, or the bare name in a
-                # step/stage that also names the listed project's directory (working-directory, WORKDIR, cd).
-                nearby = "\n".join(lines[max(0, index - 12) : index + 1])
+                suffix = "/".join(parts[-1:] + [base]) if parts else ""
                 if (
                     token.lstrip("./").endswith(target)
                     or resolved == target
-                    or (os.path.dirname(token) == "" and directory in nearby)
+                    or (len(parts) >= 1 and target.endswith("/" + suffix) and len(suffix.split("/")) >= 2)
+                    or (project_flat and parts and project_flat in _flat(parts[-1]))
+                    or (not parent and directory in nearby)
                 ):
                     found.append((rel, index + 1))
                     break
