@@ -410,6 +410,17 @@ export class CogConvertConstruct extends Construct {
             },
             tracingEnabled: true,
         });
+        NagSuppressions.addResourceSuppressions(stateMachine, [
+            {
+                id: "AwsSolutions-SF1",
+                reason:
+                    "The state machine logs errors, not every event, on purpose: its execution input carries the " +
+                    "workflow's task token (externalSfnTaskToken) and the batch task's payload the internal one, " +
+                    "which every VAMS logger redacts and which must not persist in a log group, and ERROR level " +
+                    "without execution data cannot store them. The run's stages and errors are in the execution " +
+                    "history and in the Lambda and container logs.",
+            },
+        ]);
 
         // Open pipeline Lambda
         const allowedExtensions = ".tif,.tiff";
