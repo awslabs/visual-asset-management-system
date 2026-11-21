@@ -811,6 +811,12 @@ pip install -e '.[dev]'
 pytest
 ```
 
+`tools/VamsMCP/uv.lock` is for development, CI and the dependency audit only: the `vamsmcp-test` job runs
+`uv sync --frozen --extra dev` against it, with `vamscli` resolved from `../VamsCLI` (`[tool.uv.sources]`).
+The published ranges in `pyproject.toml` do not change with it, installing the package with pip never uses it, and
+the steps above remain a valid way to install. Re-lock with `uvx --from uv==0.13.8 uv lock` after a range
+change (see `tools/VamsCLI/CLAUDE.md`, "Updating Python Dependencies (uv)").
+
 Tests mock `vams_mcp.server.CLIENT`, or pass a mocked client to an add-on module's
 `register`, so no live VAMS deployment is required.
 

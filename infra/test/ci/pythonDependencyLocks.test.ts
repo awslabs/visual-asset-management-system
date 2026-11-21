@@ -20,6 +20,8 @@
  */
 
 import { execFileSync } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { REPO_ROOT, read } from "../docs/support/docsText";
 
@@ -30,6 +32,11 @@ interface Exemption {
     path: string;
     reason: string;
     plannedIn: string;
+}
+
+interface RangedInput {
+    path: string;
+    reason: string;
 }
 
 interface AllowlistEntry {
@@ -129,7 +136,8 @@ export function isDependencyFile(file: string, content: (file: string) => string
 export function unlockedDependencyFiles(
     files: string[],
     content: (file: string) => string,
-    exemptPaths: Set<string>
+    exemptPaths: Set<string>,
+    rangedInputs: Set<string> = new Set()
 ): string[] {
     const lockDirs = new Set(
         files.filter((f) => path.posix.basename(f) === "uv.lock").map((f) => path.posix.dirname(f))
@@ -141,7 +149,7 @@ export function unlockedDependencyFiles(
         const base = path.posix.basename(file);
         const covered =
             lockDirs.has(path.posix.dirname(file)) &&
-            (base === "pyproject.toml" || isUvExportName(file));
+            (base === "pyproject.toml" || isUvExportName(file) || rangedInputs.has(file));
         return !covered;
     });
 }
@@ -151,13 +159,18 @@ export function unlockedDependencyFiles(
  * header. The audit regenerates and audits only uv exports, so a hand-written or header-less file
  * beside a lock would be installed unchecked; the audit job fails on it too.
  */
-export function headerlessExports(files: string[], content: (file: string) => string): string[] {
+export function headerlessExports(
+    files: string[],
+    content: (file: string) => string,
+    rangedInputs: Set<string> = new Set()
+): string[] {
     const lockDirs = new Set(
         files.filter((f) => path.posix.basename(f) === "uv.lock").map((f) => path.posix.dirname(f))
     );
     return files.filter(
         (file) =>
             isUvExportName(file) &&
+            !rangedInputs.has(file) &&
             lockDirs.has(path.posix.dirname(file)) &&
             content(file)
                 .replace(/^\uFEFF/, "")
@@ -165,6 +178,55 @@ export function headerlessExports(files: string[], content: (file: string) => st
                 .trim() !== UV_EXPORT_HEADER
     );
 }
+
+/**
+ * Runs the audit script's own `check_ranged_inputs` (the CI job runs the same function) on a tree: the
+ * `rangedInputs` of `.github/python-lock-exemptions.json` must have a reason, sit beside a uv.lock that
+ * locks every package they name, and be installed by nothing. Returns the problems, or "" when valid.
+ */
+function rangedInputProblems(root: string, tracked: string[]): string {
+    const code = [
+        "import json, os, sys",
+        `sys.path.insert(0, ${JSON.stringify(path.join(REPO_ROOT, ".github", "scripts"))})`,
+        "import python_dependency_audit as m",
+        "root, tracked = sys.argv[1], json.load(sys.stdin)",
+        "lock_dirs = {os.path.dirname(p) or '.' for p in tracked if os.path.basename(p) == 'uv.lock'}",
+        "try:",
+        "    m.check_ranged_inputs(root, tracked, lock_dirs)",
+        "except m.AuditError as exc:",
+        "    print(exc)",
+    ].join("\n");
+    return execFileSync("python3", ["-c", code, root], {
+        encoding: "utf8",
+        input: JSON.stringify(tracked),
+    }).trim();
+}
+
+/** A small tree in a temp directory; `files` maps repository paths to content. */
+function withTree<T>(
+    files: Record<string, string>,
+    body: (root: string, tracked: string[]) => T
+): T {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ranged-inputs-"));
+    try {
+        Object.entries(files).forEach(([rel, text]) => {
+            fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+            fs.writeFileSync(path.join(root, rel), text);
+        });
+        return body(root, Object.keys(files));
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+}
+
+const hasPython = (() => {
+    try {
+        execFileSync("python3", ["--version"], { stdio: "ignore" });
+        return true;
+    } catch {
+        return false;
+    }
+})();
 
 const files = trackedFiles();
 const describeWithGit = files ? describe : describe.skip;
@@ -254,6 +316,26 @@ describe("Python dependency lock coverage (control)", () => {
         ]);
     });
 
+    test("a listed ranged input of a published package may sit beside a lock without the header", () => {
+        const tree: Record<string, string> = {
+            "pkg/uv.lock": "",
+            "pkg/pyproject.toml": '[project]\ndependencies = ["click>=8"]\n',
+            "pkg/requirements.txt": "click>=8\n",
+            "pkg/setup.py": "setup(name='x', install_requires=['click>=8'])\n",
+        };
+        const ranged = new Set(["pkg/requirements.txt", "pkg/setup.py"]);
+        expect(headerlessExports(Object.keys(tree), (f) => tree[f])).toEqual([
+            "pkg/requirements.txt",
+        ]);
+        expect(headerlessExports(Object.keys(tree), (f) => tree[f], ranged)).toEqual([]);
+        expect(unlockedDependencyFiles(Object.keys(tree), (f) => tree[f], new Set())).toEqual([
+            "pkg/setup.py",
+        ]);
+        expect(
+            unlockedDependencyFiles(Object.keys(tree), (f) => tree[f], new Set(), ranged)
+        ).toEqual([]);
+    });
+
     test("an exemption removes a file from the report", () => {
         expect(
             unlockedDependencyFiles(
@@ -269,10 +351,187 @@ describe("Python dependency lock coverage (control)", () => {
     });
 });
 
+(hasPython ? describe : describe.skip)(
+    "rangedInputs cannot hide an unaudited install file (control)",
+    () => {
+        const listed = (paths: string[], reason = "ranged by design") =>
+            JSON.stringify({
+                exemptions: [],
+                rangedInputs: paths.map((p) => ({ path: p, reason })),
+            });
+        const lock = (names: string[]) =>
+            names.map((n) => `[[package]]\nname = "${n}"\n`).join("\n");
+        const base = {
+            "pkg/uv.lock": lock(["click", "pkg"]),
+            "pkg/pyproject.toml": '[project]\nname = "pkg"\ndependencies = ["click>=8"]\n',
+            "pkg/requirements.txt": "click>=8\n",
+        };
+        const check = (files: Record<string, string>) =>
+            withTree(files, (root, tracked) => rangedInputProblems(root, tracked));
+
+        test("a ranged input of the locked package passes", () => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                })
+            ).toBe("");
+        });
+
+        test("the reviewed repro fails: a file CI installs, with a package the lock does not hold", () => {
+            const problems = check({
+                ".github/python-lock-exemptions.json": listed(["backend/requirements-dev.txt"]),
+                "backend/uv.lock": lock(["backend", "pytest"]),
+                "backend/pyproject.toml": '[project]\nname = "backend"\ndependencies = []\n',
+                "backend/requirements-dev.txt": "jinja2==2.10\n",
+                ".github/workflows/ci.yml":
+                    "jobs:\n  t:\n    steps:\n      - name: Install\n        working-directory: backend\n        run: pip install -r requirements-dev.txt\n",
+            });
+            expect(problems).toContain("names not in backend/uv.lock: jinja2");
+            expect(problems).toContain("installed or copied by .github/workflows/ci.yml:6");
+        });
+
+        test.each([
+            [
+                "a workflow installs it by its full path",
+                ".github/workflows/ci.yml",
+                "run: pip install -r pkg/requirements.txt\n",
+            ],
+            [
+                "a Dockerfile copies it",
+                "pkg/Dockerfile",
+                "COPY requirements.txt /tmp/requirements.txt\nRUN pip install -r /tmp/requirements.txt\n",
+            ],
+            [
+                "an AMI recipe installs it",
+                "backendAddons/x/recipe.yml",
+                "- /venv/bin/pip install -r /opt/pkg/requirements.txt\n",
+            ],
+            [
+                "a CDK bundling command installs it",
+                "infra/lib/x.ts",
+                'command: ["bash", "-c", "pip install -r pkg/requirements.txt -t /asset-output"],\n',
+            ],
+            [
+                "a script installs it",
+                "scripts/setup.sh",
+                "cd pkg && pip install -r requirements.txt\n",
+            ],
+            [
+                "an AMI recipe installs it by an absolute path under a renamed directory",
+                "backendAddons/x/recipe.yml",
+                "- /venv/bin/pip3 install -r /opt/vams/pkg-src/requirements.txt\n",
+            ],
+            [
+                "a shell continuation splits the option from the path",
+                ".github/workflows/ci.yml",
+                "run: |\n  pip install \\\n    -r \\\n    pkg/requirements.txt\n",
+            ],
+            [
+                "a path with a two-component suffix is referenced",
+                "scripts/setup.sh",
+                "pip install -r ../other/pkg/requirements.txt\n",
+            ],
+            [
+                "a Python script runs pip on it",
+                "scripts/x.py",
+                "subprocess.run(['pip', 'install', '-r', 'pkg/requirements.txt'])\n",
+            ],
+            [
+                "a bash script installs it",
+                "scripts/a.bash",
+                "pip install -r pkg/requirements.txt\n",
+            ],
+            [
+                "a TOML command installs it",
+                "scripts/a.toml",
+                "x = 'pip install -r pkg/requirements.txt'\n",
+            ],
+            [
+                "a JSON command installs it",
+                "scripts/a.json",
+                '{"c": "pip install -r pkg/requirements.txt"}\n',
+            ],
+        ])("fails when %s", (_label, file, text) => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                    [file]: text,
+                })
+            ).toContain("installed or copied by");
+        });
+
+        test("a requirements file at an unrelated absolute path does not trip the scan", () => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                    "recipe.yml": "- pip install -r /opt/other-app/requirements.txt\n",
+                })
+            ).toBe("");
+        });
+
+        // Documented gaps (developer setup guide, coverage gaps): the scan reads text, not build contexts.
+        test("known gaps: a directory COPY then -r on a renamed path, and a path built in code", () => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                    Dockerfile: "COPY pkg /src\nRUN pip install -r /src/requirements.txt\n",
+                    "bundle.ts":
+                        "const d = 'pk' + 'g'; const r = path.join(d, 'requirements.txt'); exec(`pip install -r ${r}`);\n",
+                })
+            ).toBe("");
+        });
+
+        test("an unrelated requirements file of another project does not trip the scan", () => {
+            expect(
+                check({
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                    "other/Dockerfile":
+                        "COPY requirements.txt /tmp/\nRUN pip install -r /tmp/requirements.txt\n",
+                })
+            ).toBe("");
+        });
+
+        test.each([
+            [
+                "a stale entry (file gone)",
+                { ...base, ".github/python-lock-exemptions.json": listed(["pkg/gone.txt"]) },
+                "not a tracked file any more",
+            ],
+            [
+                "an entry with no uv.lock beside it",
+                {
+                    "pkg/requirements.txt": "click>=8\n",
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"]),
+                },
+                "has no uv.lock beside it",
+            ],
+            [
+                "an entry with no reason",
+                {
+                    ...base,
+                    ".github/python-lock-exemptions.json": listed(["pkg/requirements.txt"], ""),
+                },
+                "no reason",
+            ],
+        ])("fails for %s", (_label, files, message) => {
+            expect(check(files as Record<string, string>)).toContain(message);
+        });
+    }
+);
+
 describeWithGit("Python dependency lock coverage", () => {
     const tracked = files ?? [];
-    const exemptionFile = JSON.parse(read(EXEMPTIONS)) as { exemptions: Exemption[] };
+    const exemptionFile = JSON.parse(read(EXEMPTIONS)) as {
+        exemptions: Exemption[];
+        rangedInputs?: RangedInput[];
+    };
     const exemptions = exemptionFile.exemptions;
+    const rangedInputs = new Set((exemptionFile.rangedInputs ?? []).map((e) => e.path));
     const trackedSet = new Set(tracked);
     const lockDirs = new Set(
         tracked
@@ -289,7 +548,8 @@ describeWithGit("Python dependency lock coverage", () => {
         const missing = unlockedDependencyFiles(
             tracked,
             read,
-            new Set(exemptions.map((e) => e.path))
+            new Set(exemptions.map((e) => e.path)),
+            rangedInputs
         );
         if (missing.length > 0) {
             throw new Error(
@@ -305,7 +565,7 @@ describeWithGit("Python dependency lock coverage", () => {
     });
 
     test("every requirements*.txt and requirements*.lock beside a uv.lock is a uv export", () => {
-        const headerless = headerlessExports(tracked, read);
+        const headerless = headerlessExports(tracked, read, rangedInputs);
         if (headerless.length > 0) {
             throw new Error(
                 `requirements files beside a uv.lock without the uv export header:\n  ${headerless.join(
@@ -342,6 +602,13 @@ describeWithGit("Python dependency lock coverage", () => {
         });
         expect(problems).toEqual([]);
     });
+
+    (hasPython ? test : test.skip)(
+        "every ranged input is valid, locked and installed by nothing (the audit's own check)",
+        () => {
+            expect(rangedInputProblems(REPO_ROOT, tracked)).toBe("");
+        }
+    );
 
     test("every uv.lock project requires the uv version the CI audit installs", () => {
         const ci = read(".github/workflows/ci.yml");

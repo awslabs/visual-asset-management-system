@@ -302,7 +302,7 @@ jobs:
                   path: ash-output/
                   retention-days: 7
 
-    # The VamsCLI suite. Its build backend is setuptools, so pip installs it directly.
+    # The VamsCLI suite, installed from tools/VamsCLI/uv.lock. Its build backend stays setuptools.
     vamscli-test:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest
@@ -319,10 +319,25 @@ jobs:
               with:
                   python-version: 3.12.16
 
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the suite installs from the lock.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            # The locked set (tools/VamsCLI/uv.lock) with the dev extra, in tools/VamsCLI/.venv; the venv's
+            # bin directory goes on PATH so the suites below run in it. uv does not change what users
+            # install: the published package keeps its ranged dependencies and pip.
             - name: Install VamsCLI dependencies
               working-directory: tools/VamsCLI
+              env:
+                  UV_PYTHON_DOWNLOADS: never
               run: |
-                  pip install -e ".[dev]"
+                  uv sync --frozen --extra dev --python 3.12
+                  echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
             - name: Run VamsCLI pytest tests
               working-directory: tools/VamsCLI
@@ -794,11 +809,24 @@ jobs:
               with:
                   python-version: 3.12.16
 
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the suite installs from the lock.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            # The locked set (tools/VamsMCP/uv.lock) with the dev extra, in tools/VamsMCP/.venv. The lock
+            # resolves vamscli from ../VamsCLI as an editable install, as this job always installed it.
             - name: Install VamsMCP dependencies
               working-directory: tools/VamsMCP
+              env:
+                  UV_PYTHON_DOWNLOADS: never
               run: |
-                  pip install -e ../VamsCLI
-                  pip install -e ".[dev]"
+                  uv sync --frozen --extra dev --python 3.12
+                  echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
             - name: Run VamsMCP pytest tests
               working-directory: tools/VamsMCP
