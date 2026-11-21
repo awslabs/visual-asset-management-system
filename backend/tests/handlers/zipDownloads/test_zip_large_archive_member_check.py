@@ -80,7 +80,7 @@ def _finished(e, members, user="alice", selection=None):
 
 def _url(e, request_id, user="alice"):
     h.AUTH.user = user
-    e.s3.list_calls.clear()
+    e.s3.new_request()
     path = h.asset_path("db1", "asset1", f"/{request_id}/url")
     return e.svc.lambda_handler(h.api_event(
         "POST", path, {"databaseId": "db1", "assetId": "asset1", "requestId": request_id}), None)
@@ -101,20 +101,23 @@ def large(env, monkeypatch):
 def test_a_large_archive_on_a_deep_version_history_downloads_within_the_bound(large):
     env, request_id, members = large
     assert len(members) > env.svc.HEAD_CHECK_MAX_FILES
-    started = env.s3.clock
+    started = env.s3.max_clock()
     response = _url(env, request_id)
     assert response["statusCode"] == 200, h.body_of(response)
+    # One run of up to 1,000 sorted member keys per call: 2,001 members, 3 calls, in parallel.
     assert len(env.s3.list_calls) == 3
-    assert env.s3.clock - started < BOUND_SECONDS
+    assert env.s3.max_clock() - started < BOUND_SECONDS
     assert len(env.s3.presigned) == 1
 
 
-def test_only_the_members_folders_are_listed_and_no_version_listing_runs(large):
+def test_only_the_members_keys_are_listed_current_objects_only(large):
     env, request_id, _ = large
     assert _url(env, request_id)["statusCode"] == 200
-    listed = {(operation, prefix) for operation, prefix, _ in env.s3.list_calls}
-    assert listed == {("list_objects_v2", "xasset1/big/")}
-    assert all(delimiter == "/" for _, _, delimiter in env.s3.list_calls)
+    assert {operation for operation, _, _ in env.s3.list_calls} == {"list_objects_v2"}
+    # Each run is listed under its members' common prefix: never the asset root, the unrelated folder or
+    # the old versions.
+    assert all(prefix.startswith("xasset1/big/part") for _, prefix, _ in env.s3.list_calls)
+    assert all(delimiter is None for _, _, delimiter in env.s3.list_calls)
 
 
 CHANGES = {
@@ -163,12 +166,59 @@ def test_members_in_several_folders_and_a_folder_over_several_pages_are_confirme
         {"type": "asset", "relativePath": "/"}]})
     monkeypatch.setattr(env.svc, "SHARED_RECHECK_HEAD_MAX_FILES", 0)
     assert _url(env, request_id)["statusCode"] == 200
-    prefixes = sorted({prefix for _, prefix, _ in env.s3.list_calls})
-    assert prefixes == ["xasset1/", "xasset1/a/", "xasset1/a/b/", "xasset1/many/"]
-    # Listing stops once every member of a folder is confirmed: the trailing files are not read.
-    assert sum(1 for _, prefix, _ in env.s3.list_calls if prefix == "xasset1/many/") == 3
+    # 2,503 members in sorted runs of 1,000: one call each for the first two, three for the last, which
+    # reads past the 1,500 files that sort between file02499.glb and top.glb.
+    assert len(env.s3.list_calls) == 5
     env.s3.add("xasset1/a/b/two.glb", version="vdm", delete_marker=True)
     assert _url(env, request_id)["statusCode"] == 400
+
+
+def test_an_archive_in_many_small_folders_is_checked_by_its_size_not_its_folder_count(env, monkeypatch):
+    # 4,000 single-version members in 2,000 folders: a call per folder, 25 at a time, would be 80 calls
+    # on one thread; runs of sorted keys need 4 calls in parallel.
+    members = [f"/tiles/{n:05d}/{leaf}.b3dm" for n in range(2000) for leaf in ("a", "b")]
+    for rel in members:
+        env.s3.add("xasset1" + rel)
+    request_id = _finished(env, members, selection={"selection": [
+        {"type": "folder", "relativePath": "/tiles/"}]})
+    h.use_clock(env, monkeypatch, PAGE_SECONDS)
+    started = env.s3.max_clock()
+    response = _url(env, request_id)
+    assert response["statusCode"] == 200, h.body_of(response)
+    assert len(env.s3.list_calls) == 4
+    assert env.s3.max_clock() - started <= 2 * PAGE_SECONDS
+
+
+def test_one_folder_larger_than_a_page_is_split_across_the_pool(env, monkeypatch):
+    # 12,000 members in one folder: 12 pages on one thread would pass the bound; 12 runs in parallel do
+    # not.
+    members = [f"/scan/p{n:06d}.e57" for n in range(12000)]
+    for rel in members:
+        env.s3.add("xasset1" + rel)
+    request_id = _finished(env, members, selection={"selection": [
+        {"type": "folder", "relativePath": "/scan/"}]})
+    h.use_clock(env, monkeypatch, PAGE_SECONDS)
+    started = env.s3.max_clock()
+    response = _url(env, request_id)
+    assert response["statusCode"] == 200, h.body_of(response)
+    assert len(env.s3.list_calls) == 12
+    assert env.s3.max_clock() - started <= 2 * PAGE_SECONDS
+
+
+def test_member_keys_with_special_characters_are_confirmed_and_refused(env, monkeypatch):
+    names = ["/sp ace/a b.glb", "/plus/x+y.glb", "/pct/a%20b.glb", "/hash/a#b.glb", "/acc/foldér/é.glb",
+             "/cjk/模型.glb", "/q/it's \"x\".glb"]
+    members = names + [f"/fill/f{n:05d}.glb" for n in range(2000)]
+    for rel in members:
+        env.s3.add("xasset1" + rel)
+    request_id = _finished(env, members, selection={"selection": [
+        {"type": "asset", "relativePath": "/"}]})
+    assert len(members) > env.svc.SHARED_RECHECK_HEAD_MAX_FILES
+    assert _url(env, request_id)["statusCode"] == 200
+    env.s3.add("xasset1/acc/foldér/é.glb", version="vdm", delete_marker=True)
+    response = _url(env, request_id)
+    assert response["statusCode"] == 400
+    assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE
 
 
 def _assert_check_incomplete(env, response, request_id, details=None):
@@ -184,6 +234,8 @@ def _assert_check_incomplete(env, response, request_id, details=None):
 
 def test_a_listing_that_outruns_the_bound_answers_try_again(large, monkeypatch):
     env, request_id, _ = large
+    # One run over all 2,001 members, so the listing needs a second page after the bound has passed.
+    monkeypatch.setattr(env.svc, "SHARED_RECHECK_LIST_RUN", 5000)
     monkeypatch.setattr(env.svc, "SHARED_RECHECK_MAX_SECONDS", PAGE_SECONDS / 2)
     env.audit.reset_mock()
     _assert_check_incomplete(env, _url(env, request_id), request_id)
@@ -214,6 +266,7 @@ def test_head_checks_that_outrun_the_bound_answer_try_again(env, monkeypatch):
 def test_another_users_link_gets_the_same_answers(large, monkeypatch):
     env, request_id, members = large
     assert _url(env, request_id, user="bob")["statusCode"] == 200
+    monkeypatch.setattr(env.svc, "SHARED_RECHECK_LIST_RUN", 5000)
     monkeypatch.setattr(env.svc, "SHARED_RECHECK_MAX_SECONDS", PAGE_SECONDS / 2)
     env.audit.reset_mock()
     env.s3.presigned.clear()

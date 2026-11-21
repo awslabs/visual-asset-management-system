@@ -192,21 +192,45 @@ class FakeS3:
         self.aborted = []
         self.puts = {}
         self.presigned = []
-        # Every listing call, as (operation, Prefix, Delimiter). Each one advances `clock` by
-        # page_seconds: a test that reads time from the clock (use_clock) gives a listing page the
-        # cost it has against Amazon S3 without waiting for it.
+        # Every listing call, as (operation, Prefix, Delimiter). Each one costs page_seconds on the
+        # calling thread's clock, so a test that reads time from it (use_clock) gives a listing page the
+        # cost it has against Amazon S3 without waiting for it, and calls made in parallel on a pool
+        # cost what they would: a thread sees `clock` (the time its request started, which the calling
+        # thread's own calls advance) plus its own calls. max_clock() is the request's elapsed time.
         self.list_calls = []
         self.page_seconds = 0.0
+        self.page_hold = 0.0
         self.clock = 0.0
+        self._main = threading.get_ident()
+        self._thread_cost = {}
         self._clock_lock = threading.Lock()
 
     def _listed(self, operation, prefix, delimiter=None):
         self.list_calls.append((operation, prefix, delimiter))
         with self._clock_lock:
-            self.clock += self.page_seconds
+            me = threading.get_ident()
+            if me == self._main:
+                self.clock += self.page_seconds
+            else:
+                self._thread_cost[me] = self._thread_cost.get(me, 0.0) + self.page_seconds
+        if self.page_hold:
+            # Held for real, briefly, so the calls a pool submits together run on separate threads as
+            # they would against Amazon S3, instead of one fast thread taking them all in turn.
+            time.sleep(self.page_hold)
 
     def monotonic(self):
-        return self.clock
+        me = threading.get_ident()
+        return self.clock + (0.0 if me == self._main else self._thread_cost.get(me, 0.0))
+
+    def max_clock(self):
+        return self.clock + max(self._thread_cost.values(), default=0.0)
+
+    def new_request(self):
+        """A request starts at the latest time any thread reached; pool threads start fresh."""
+        with self._clock_lock:
+            self.clock = self.max_clock()
+            self._thread_cost = {}
+            self.list_calls.clear()
 
     def add(self, key, size=10, version="v1", bucket=ASSET_BUCKET, content_type="model/gltf-binary",
             storage_class="STANDARD", metadata=None, delete_marker=False):
@@ -257,10 +281,10 @@ class FakeS3:
         return result
 
     def list_objects_v2(self, Bucket, Prefix="", Delimiter=None, MaxKeys=1000, ContinuationToken=None,
-                        **_):
+                        StartAfter=None, **_):
         """The current objects under Prefix (a key whose newest version is a delete marker is not
-        listed), MaxKeys entries a page in key order. With a Delimiter, a deeper key is rolled up into
-        its CommonPrefixes entry, as Amazon S3 does."""
+        listed), MaxKeys entries a page in key order, after StartAfter when given. With a Delimiter, a
+        deeper key is rolled up into its CommonPrefixes entry, as Amazon S3 does."""
         self._listed("list_objects_v2", Prefix, Delimiter)
         rows, rolled_up = [], set()
         for (bucket, key), versions in sorted(self.objects.items()):
@@ -277,8 +301,9 @@ class FakeS3:
             rows.append((key, {"Key": key, "Size": v["Size"], "StorageClass": v["StorageClass"]}))
         rows.sort(key=lambda row: row[0])
         start = 0
-        if ContinuationToken:
-            start = next((n for n, (name, _) in enumerate(rows) if name > ContinuationToken), len(rows))
+        after = ContinuationToken or StartAfter
+        if after:
+            start = next((n for n, (name, _) in enumerate(rows) if name > after), len(rows))
         page = rows[start:start + MaxKeys]
         result = {"Contents": [obj for _, obj in page if obj],
                   "CommonPrefixes": [{"Prefix": name} for name, obj in page if not obj],
@@ -511,8 +536,9 @@ def land_archive(env, row, size=10, token=UPLOAD_TOKEN, version="v1"):
 
 def use_clock(env, monkeypatch, page_seconds):
     """The service reads time.monotonic from the fake bucket's clock, which each listing page
-    advances by page_seconds; time.sleep is unchanged."""
+    advances by page_seconds (on the calling thread's clock); time.sleep is unchanged."""
     env.s3.page_seconds = page_seconds
+    env.s3.page_hold = 0.05
     monkeypatch.setattr(env.svc, "time", types.SimpleNamespace(monotonic=env.s3.monotonic,
                                                                sleep=time.sleep))
 

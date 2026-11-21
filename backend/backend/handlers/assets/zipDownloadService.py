@@ -197,11 +197,14 @@ register_bucket_region(aux_bucket_name, deployment_region())
 USER_ASSET_INDEX = "UserAssetIndex"
 ASSET_INDEX = "AssetIndex"
 # The member recheck of a finished archive (_recheck_members): an archive of at most this many members
-# has each member head-checked; a larger one is checked from listings of the folders that hold its
-# members, current objects only. Both run on the head-check pool within the time bound; a check that
-# does not finish in time signs nothing and answers 503 (try again), never the archived-or-deleted
-# refusal.
+# has each member head-checked; a larger one is checked from listings of its sorted member keys, in runs
+# of SHARED_RECHECK_LIST_RUN members, current objects only, so the number of listing calls follows the
+# member count, not the folder count or the version history. Both run on the head-check pool within the
+# time bound; a check that does not finish in time signs nothing and answers 503 (try again), never the
+# archived-or-deleted refusal.
 SHARED_RECHECK_HEAD_MAX_FILES = HEAD_CHECK_MAX_FILES
+# One ListObjectsV2 page holds up to 1,000 keys.
+SHARED_RECHECK_LIST_RUN = 1000
 SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_MAX_SECONDS", "15"))
 
 
@@ -1301,20 +1304,29 @@ def _current_member_ok(bucket, key):
     return bool(validateUnallowedFileExtensionAndContentType(key, head.get("ContentType", "")))
 
 
-def _folder_members_ok(bucket, folder, wanted, deadline) -> bool:
-    """Whether every member in one folder is still downloadable, from a listing of the folder's own
-    current objects (ListObjectsV2 with a "/" delimiter, so neither subfolders nor old versions are
-    read). Each member must be listed (an archived or deleted file's current version is a delete
-    marker, which is not), not in an archive storage class and not a blocked type. Stops once every
-    member is confirmed; raises MemberCheckIncomplete when the deadline passes between pages."""
+def _member_run_ok(bucket, members, start_after, deadline) -> bool:
+    """Whether every member in one run of sorted member keys is still downloadable, from a listing of
+    current objects (ListObjectsV2 without a delimiter, so old versions are not read) under the run's
+    longest common prefix, from just after ``start_after`` (the previous run's last member) and stopped
+    past the run's last member. Python orders keys by code point, which is the UTF-8 byte order S3 lists
+    in. Each member must be listed (an archived or deleted file's current version is a delete marker,
+    which is not), not in an archive storage class and not a blocked type. Raises MemberCheckIncomplete
+    when the deadline passes between pages."""
+    wanted, last = set(members), members[-1]
     found = set()
-    kwargs = {"Bucket": bucket, "Prefix": folder, "Delimiter": "/", "MaxKeys": 1000}
+    kwargs = {"Bucket": bucket, "Prefix": os.path.commonprefix([members[0], last]), "MaxKeys": 1000}
+    if start_after:
+        kwargs["StartAfter"] = start_after
     while True:
         if time.monotonic() > deadline:
             raise MemberCheckIncomplete()
         response = s3.list_objects_v2(**kwargs)
+        past_last = False
         for obj in response.get("Contents", []) or []:
             key = obj.get("Key", "")
+            if key > last:
+                past_last = True
+                break
             if key not in wanted:
                 continue
             if obj.get("StorageClass") in ARCHIVED_STORAGE_CLASSES:
@@ -1322,7 +1334,7 @@ def _folder_members_ok(bucket, folder, wanted, deadline) -> bool:
             if not validateUnallowedFileExtensionAndContentType(key, ""):
                 return False
             found.add(key)
-        if len(found) == len(wanted) or not response.get("IsTruncated"):
+        if past_last or len(found) == len(wanted) or not response.get("IsTruncated"):
             return len(found) == len(wanted)
         kwargs["ContinuationToken"] = response.get("NextContinuationToken", "")
 
@@ -1353,8 +1365,9 @@ def _recheck_members(asset, row) -> bool:
     before every member is confirmed.
 
     Up to SHARED_RECHECK_HEAD_MAX_FILES members are head-checked (which also reads ``vams-status``
-    and the content type). A larger archive is checked from listings of its members' own folders,
-    which confirm presence, storage class and file extension."""
+    and the content type). A larger archive is checked from listings of its sorted member keys in runs
+    of SHARED_RECHECK_LIST_RUN (_member_run_ok), which confirm presence, storage class and file
+    extension: about one call per run whatever the folders or versions."""
     members = _read_resolved_members(row)
     if not members:
         return False
@@ -1372,12 +1385,13 @@ def _recheck_members(asset, row) -> bool:
     deadline = time.monotonic() + SHARED_RECHECK_MAX_SECONDS
     if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
         return _all_true_within(lambda key: _current_member_ok(bucket, key), keys, deadline)
-    folders = {}
-    for key in keys:
-        folders.setdefault(key[:key.rfind("/") + 1], set()).add(key)
+    ordered = sorted(set(keys))
+    # shortcut: a run also reads the current non-member files that sort between its members (an
+    # unselected folder between two selected ones); split runs at such gaps if that cost shows up.
+    runs = [ordered[i:i + SHARED_RECHECK_LIST_RUN] for i in range(0, len(ordered), SHARED_RECHECK_LIST_RUN)]
     return _all_true_within(
-        lambda folder: _folder_members_ok(bucket, folder[0], folder[1], deadline),
-        list(folders.items()), deadline)
+        lambda n: _member_run_ok(bucket, runs[n], runs[n - 1][-1] if n else None, deadline),
+        range(len(runs)), deadline)
 
 
 def get_job(event, database_id, asset_id, request_id):
