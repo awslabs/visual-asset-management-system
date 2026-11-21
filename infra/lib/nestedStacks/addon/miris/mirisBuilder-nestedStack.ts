@@ -33,7 +33,7 @@ import {
 } from "../../../helper/security";
 import { RouteRegistry, attachFunctionToApi } from "../../apiLambda/apiRouteRegistry";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
-import { publishAddonResourceName } from "../addonStackHelpers";
+import { addonDynamoDbTableDefaults, publishAddonResourceName } from "../addonStackHelpers";
 import { populateHuggingFaceTokenSecret } from "../../pipelines/genAi/nvidia/customResources/populateHuggingFaceTokenSecret";
 import { DynamoDbMetadataSchemaMirisConstruct } from "./constructs/dynamodb-metadataschema-miris-construct";
 import {
@@ -106,20 +106,9 @@ export class MirisBuilderNestedStack extends NestedStack {
                 },
                 timeToLiveAttribute: "ttl",
                 stream: dynamodb.StreamViewType.KEYS_ONLY,
-                contributorInsightsSpecification: {
-                    enabled: false,
-                },
-                pointInTimeRecoverySpecification: {
-                    pointInTimeRecoveryEnabled: true,
-                },
                 // RETAIN and auto-named, as every VAMS table, so a retained orphan never collides
                 // with the table a redeploy creates.
-                removalPolicy: cdk.RemovalPolicy.RETAIN,
-                billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-                encryption: kmsKey
-                    ? dynamodb.TableEncryption.CUSTOMER_MANAGED
-                    : dynamodb.TableEncryption.AWS_MANAGED,
-                encryptionKey: kmsKey,
+                ...addonDynamoDbTableDefaults(kmsKey),
             });
 
             publishAddonResourceName(
@@ -228,9 +217,11 @@ export class MirisBuilderNestedStack extends NestedStack {
             new cloudwatch.Alarm(this, "MirisViewerKeyCleanupDLQAlarm", {
                 alarmName: `${alarmPrefix}-mirisViewerKeyCleanupDLQ`,
                 alarmDescription:
-                    "Expired per-view viewer keys the cleanup function could not delete from Miris " +
-                    "are recorded in this dead-letter queue. Delete those keys in Miris after fixing " +
-                    "the cause.",
+                    "A batch of expired per-view viewer keys the cleanup function could not delete " +
+                    "from Miris reached this dead-letter queue, which holds only the stream's shard " +
+                    "and sequence range. The key IDs are in the cleanup function's log (\"Could not " +
+                    'delete Miris viewer key"). The keys have already expired, so deleting them in ' +
+                    "Miris after fixing the cause is housekeeping.",
                 metric: viewerKeyCleanupDlq.metricApproximateNumberOfMessagesVisible({
                     period: cdk.Duration.minutes(5),
                     statistic: cloudwatch.Stats.MAXIMUM,

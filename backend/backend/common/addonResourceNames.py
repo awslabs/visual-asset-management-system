@@ -22,4 +22,4 @@ class AddonResourceKeys:
     EDH_SESSION_STORAGE_TABLE = ResourceParamKey("addon/dynamoTables/edhSessionStorage", ("EDH_SESSION_STORAGE_TABLE_NAME",))
     EDH_AMI_RECIPE_STORAGE_TABLE = ResourceParamKey("addon/dynamoTables/edhAmiRecipeStorage", ("EDH_AMI_RECIPE_STORAGE_TABLE_NAME",))
     # Miris Spatial Streaming: per-view viewer key records
-    MIRIS_VIEWER_KEY_STORAGE_TABLE = ResourceParamKey("addon/miris/viewerKeyStorage", ("MIRIS_VIEWER_KEY_STORAGE_TABLE_NAME",))
+    MIRIS_VIEWER_KEY_STORAGE_TABLE = ResourceParamKey("addon/dynamoTables/mirisViewerKeyStorage", ("MIRIS_VIEWER_KEY_STORAGE_TABLE_NAME",))

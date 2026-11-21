@@ -178,10 +178,10 @@ The functions never follow a redirect from Miris, so a `mirisApiBaseUrl` that re
 
 The add-on creates two Amazon CloudWatch alarms, named `<configuration name>-<app.baseStackName>-<region>-…`, with no alarm action. Subscribe an Amazon SNS topic or another action to them.
 
-| Alarm                        | Goes into alarm when                                                                                                                                                                |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `…-mirisAuthFailures`        | Miris refuses the Integration Key after a re-read, in any 5-minute period (metric `MirisAuthFailures` in namespace `VAMS/<configuration name>-<app.baseStackName>-<region>/Miris`). |
-| `…-mirisViewerKeyCleanupDLQ` | `perView` mode only: a cleanup batch is in the dead-letter queue. Delete those keys in Miris after fixing the cause.                                                                |
+| Alarm                        | Goes into alarm when                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `…-mirisAuthFailures`        | Miris refuses the Integration Key after a re-read, in any 5-minute period (metric `MirisAuthFailures` in namespace `VAMS/<configuration name>-<app.baseStackName>-<region>/Miris`).                                                                                                                                 |
+| `…-mirisViewerKeyCleanupDLQ` | `perView` mode only: a cleanup batch is in the dead-letter queue. The queue holds only the stream's shard and sequence range; the key IDs are in the cleanup function's log ("Could not delete Miris viewer key"). The keys have already expired, so deleting them in Miris after fixing the cause is housekeeping. |
 
 An upload run the Integration Key fails is reported on the run itself, as a failed execution.
 
@@ -191,7 +191,7 @@ The status route needs Tier 1 `GET` on `/addon/miris/asset-status` and the viewe
 
 ### AWS resources
 
-The add-on deploys `MirisBuilderNestedStack` (`infra/lib/nestedStacks/addon/miris/mirisBuilder-nestedStack.ts`) inside the add-on builder stack. It always creates the `MirisGetAssetStatusFunction` and `MirisMintViewerKeyFunction` Lambda functions and the custom resource that writes the **Miris stream** schema. In `perView` mode it also creates the `MirisViewerKeyStorageTable` Amazon DynamoDB table (retained), its `addon/miris/viewerKeyStorage` SSM parameter, the `MirisViewerKeyCleanupFunction` Lambda function, and the `MirisViewerKeyCleanupDLQ` Amazon SQS queue. See [AWS Resources](../architecture/aws-resources.md) for removal policies and naming.
+The add-on deploys `MirisBuilderNestedStack` (`infra/lib/nestedStacks/addon/miris/mirisBuilder-nestedStack.ts`) inside the add-on builder stack. It always creates the `MirisGetAssetStatusFunction` and `MirisMintViewerKeyFunction` Lambda functions and the custom resource that writes the **Miris stream** schema. In `perView` mode it also creates the `MirisViewerKeyStorageTable` Amazon DynamoDB table (retained), its `addon/dynamoTables/mirisViewerKeyStorage` SSM parameter, the `MirisViewerKeyCleanupFunction` Lambda function, and the `MirisViewerKeyCleanupDLQ` Amazon SQS queue. See [AWS Resources](../architecture/aws-resources.md) for removal policies and naming.
 
 ---
 

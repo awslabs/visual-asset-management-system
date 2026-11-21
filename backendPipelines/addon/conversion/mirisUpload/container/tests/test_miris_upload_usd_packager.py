@@ -285,12 +285,12 @@ def test_paths_outside_lists_files_whose_real_path_leaves_the_asset(tmp_path):
         "geometry-in-a-payload"])
 def test_a_root_renders_only_with_defined_geometry(tmp_path, layers, has_geometry):
     pytest.importorskip("pxr")
-    from usd_packager import defines_geometry
+    from usd_packager import check_geometry
 
     for name, body in layers.items():
         (tmp_path / name).write_text("#usda 1.0\n" + body)
 
-    assert defines_geometry(str(tmp_path / "root.usda")) is has_geometry
+    assert check_geometry(str(tmp_path / "root.usda"))[0] is has_geometry
 
 
 @pytest.mark.parametrize("light", ["RectLight", "SphereLight", "DistantLight", "DomeLight", "DiskLight",
@@ -298,10 +298,10 @@ def test_a_root_renders_only_with_defined_geometry(tmp_path, layers, has_geometr
 def test_a_light_is_not_geometry(tmp_path, light):
     pytest.importorskip("pxr")
     from pxr import UsdLux
-    from usd_packager import defines_geometry
+    from usd_packager import check_geometry
 
     if not hasattr(UsdLux, light):
         pytest.skip(f"{light} is not in this pxr")
     (tmp_path / "root.usda").write_text(f'#usda 1.0\ndef Xform "Rig" {{\n    def {light} "L" {{\n    }}\n}}\n')
 
-    assert defines_geometry(str(tmp_path / "root.usda")) is False
+    assert check_geometry(str(tmp_path / "root.usda"))[0] is False

@@ -17,7 +17,7 @@ can be tested in isolation.
 """
 import os
 import zipfile
-from typing import Iterable, Mapping, Optional
+from typing import Mapping, Optional
 
 CGROUP_ROOT = "/sys/fs/cgroup"
 TASK_MEMORY_ENV = "VAMS_TASK_MEMORY_MIB"
@@ -111,8 +111,3 @@ def text_bytes(path: str) -> int:
             return os.path.getsize(path) if layer.read(len(TEXT_MAGIC)) == TEXT_MAGIC else 0
     except OSError:
         return 0
-
-
-def total_text_bytes(paths: Iterable[str]) -> int:
-    """The text USD bytes across `paths`."""
-    return sum(text_bytes(path) for path in paths)

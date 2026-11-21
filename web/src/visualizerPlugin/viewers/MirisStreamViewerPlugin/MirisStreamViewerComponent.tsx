@@ -40,14 +40,16 @@ import {
 import { MirisStreamDependencyManager } from "./dependencies";
 import type { MirisStreamElement } from "./mirisElements";
 import styles from "./MirisStreamViewer.module.css";
+import { addonFeaturesEnabled } from "../../../addons/addonFeatures";
 
-// Add-on feature switch (ADDON_APP_FEATURES.MIRIS_UPLOAD) published when the deployment includes the
-// Miris upload pipeline that "Stream with Miris" runs.
-const MIRIS_UPLOAD_FEATURE = "MIRIS_UPLOAD";
-
-/** True when the deployment's secure-config lists the Miris upload pipeline's feature switch. */
+/**
+ * True when the deployment's secure-config lists the feature switch of the Miris upload pipeline,
+ * which "Stream with Miris" runs.
+ */
 function uploadPipelineDeployed(): boolean {
-    return !!appCache.getItem("config")?.featuresEnabled?.includes(MIRIS_UPLOAD_FEATURE);
+    return !!appCache
+        .getItem("config")
+        ?.featuresEnabled?.includes(addonFeaturesEnabled.MIRIS_UPLOAD);
 }
 
 type ViewerError =

@@ -17,6 +17,6 @@ export const ADDON_RESOURCE_PARAM_KEYS: Record<string, Record<string, string>> =
         edhSessionStorage: "addon/dynamoTables/edhSessionStorage",
         edhAmiRecipeStorage: "addon/dynamoTables/edhAmiRecipeStorage",
         // Miris Spatial Streaming: per-view viewer key records
-        mirisViewerKeyStorage: "addon/miris/viewerKeyStorage",
+        mirisViewerKeyStorage: "addon/dynamoTables/mirisViewerKeyStorage",
     },
 };

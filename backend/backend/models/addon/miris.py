@@ -115,7 +115,7 @@ class MirisViewerKeyRequestModel(MirisFileRequestModel):
     """Body of the viewer key request."""
 
 
-class MirisAssetStatusResponseModel(BaseModel):
+class MirisAssetStatusResponseModel(BaseModel, extra="ignore"):
     """Stream metadata recorded on the file, plus the stream's state."""
 
     filePath: str
@@ -129,7 +129,7 @@ class MirisAssetStatusResponseModel(BaseModel):
     stale: Optional[bool] = None
 
 
-class MirisViewerKeyResponseModel(BaseModel):
+class MirisViewerKeyResponseModel(BaseModel, extra="ignore"):
     """A viewer key that can stream the file's Miris asset.
 
     In per-view mode the key streams only that asset and ``expiresAt`` is its expiry. In static

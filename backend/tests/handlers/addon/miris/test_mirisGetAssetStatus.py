@@ -40,6 +40,7 @@ VIEWER_KEY = "viewer-key-0000000000"
 MODES = ["static", "perView"]
 
 _AS_USER = claims_after_normalizing({"tokens": ["user"], "roles": []})
+_AS_NOBODY = claims_after_normalizing({"tokens": [], "roles": []})
 
 
 def _event(file_path="/scene.usd", method="GET", path=ROUTE_PATH, extra_query=None,
@@ -76,12 +77,12 @@ def _queue(miris_api, mode, state):
 
 
 def _invoke(event, metadata_table=None, asset_table=None, enforcer=None, viewer_key=VIEWER_KEY,
-            context=None, mode="static"):
+            context=None, mode="static", claims=_AS_USER):
     metadata_table = metadata_table or _streamed()
     with patch.object(getAssetStatus, "asset_file_metadata_table", metadata_table), \
          patch.object(getAssetStatus, "asset_table", asset_table or _asset_table()), \
          patch.object(getAssetStatus, "CasbinEnforcer", return_value=enforcer or _enforcer()), \
-         patch.object(getAssetStatus, "request_to_claims", side_effect=_AS_USER), \
+         patch.object(getAssetStatus, "request_to_claims", side_effect=claims), \
          static_viewer_key(viewer_key), \
          patch.object(getAssetStatus, "miris_viewer_key_mode", mode):
         response = getAssetStatus.lambda_handler(event, context or FakeLambdaContext())
@@ -388,6 +389,14 @@ class TestAssetRootKey:
 
 
 class TestAuthorization:
+    def test_no_caller_identity_is_403_before_any_read(self, miris_api):
+        asset_table = _asset_table()
+        status, _, table = _invoke(_event(), asset_table=asset_table, claims=_AS_NOBODY)
+        assert status == 403
+        asset_table.get_item.assert_not_called()
+        table.get_item.assert_not_called()
+        assert miris_api.calls == []
+
     def test_tier1_denial_is_403_before_any_read(self, miris_api):
         asset_table = _asset_table()
         status, _, table = _invoke(_event(), asset_table=asset_table, enforcer=_enforcer(api=False))

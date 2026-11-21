@@ -156,11 +156,6 @@ STAGE_METADATA_KEYS = ("upAxis", "metersPerUnit")
 _UNOPENED_FILE = re.compile(r"Could not (?:open asset|load sublayer) @([^@]+)@")
 
 
-def defines_geometry(root_path: str) -> bool:
-    """Whether the root defines geometry (see check_geometry)."""
-    return check_geometry(root_path)[0]
-
-
 def _package_path(identifier: str) -> str:
     """The file a layer identifier names: a file inside a package ('a.usdz[b.usdc]') names the package."""
     if identifier.endswith("]") and "[" in identifier:

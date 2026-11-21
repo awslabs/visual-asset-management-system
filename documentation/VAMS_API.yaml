@@ -16192,8 +16192,8 @@ components:
             properties:
                 databaseId:
                     type: string
-                    minLength: 1
-                    maxLength: 256
+                    minLength: 3
+                    maxLength: 63
                 assetId:
                     type: string
                     minLength: 1

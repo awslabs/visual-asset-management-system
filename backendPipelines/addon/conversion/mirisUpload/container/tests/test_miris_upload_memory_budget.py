@@ -40,7 +40,7 @@ def test_text_layers_count_and_crate_layers_do_not(tmp_path):
     texture = tmp_path / "wood.png"
     texture.write_bytes(b"#usda" + b"\0" * 5000)
 
-    assert memory_budget.total_text_bytes([str(text), str(crate), str(texture)]) == 1000
+    assert sum(memory_budget.text_bytes(str(path)) for path in (text, crate, texture)) == 1000
 
 
 def test_a_usdz_counts_its_text_members(tmp_path):

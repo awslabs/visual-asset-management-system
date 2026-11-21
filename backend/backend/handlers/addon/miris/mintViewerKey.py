@@ -64,7 +64,7 @@ from common.compliance.quarantineGuard import (
 )
 from common.downloadEligibility import require_distributable_asset
 from common.addonResourceNames import AddonResourceKeys
-from common.resourceNames import ResourceKeys, get_resource_name, get_table_name
+from common.resourceNames import ResourceKeys, get_table_name
 from customLogging.auditLogging import audited_handler, log_auth_other
 from customLogging.logger import safeLogger
 from handlers.auth import request_to_claims
@@ -115,7 +115,7 @@ try:
     miris_viewer_key_mode = os.environ.get("MIRIS_VIEWER_KEY_MODE", VIEWER_KEY_MODE_STATIC).strip()
     # The key table records per-view keys only, so it is resolved in perView mode only.
     miris_viewer_key_table_name = (
-        get_resource_name(AddonResourceKeys.MIRIS_VIEWER_KEY_STORAGE_TABLE)
+        get_table_name(AddonResourceKeys.MIRIS_VIEWER_KEY_STORAGE_TABLE)
         if miris_viewer_key_mode == VIEWER_KEY_MODE_PER_VIEW
         else None
     )
