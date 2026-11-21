@@ -452,6 +452,39 @@ For operations that may exceed the integration timeout, check your AWS Lambda fu
 
 Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
+### Requests Time Out or Workflow Runs Fail After an Idle Period
+
+Each VAMS AWS Lambda function reads its resource names from AWS Systems Manager Parameter Store when it starts. Parameter Store throughput is shared by every application in an AWS account and Region, so when many functions start at once (the first requests after an idle period, a burst of workflow runs, or several VAMS deployments in one account and Region), Parameter Store can throttle those reads.
+
+**Symptoms:**
+
+-   API requests fail or time out for a short time after the deployment was idle, or the web application shows "Page access could not be checked"
+-   Workflow runs fail with an error that names `GetParametersByPath` and `ThrottlingException`
+-   Function logs in Amazon CloudWatch show `Resource name sweep failed (ThrottlingException)` lines
+
+**Behavior:**
+
+A function retries a throttled read for up to 4 seconds. If the read still fails, the function does not read Parameter Store again for a short back-off window (about 2 seconds, doubling up to 30 seconds while the reads keep failing), and a request that needs a name the function has not cached fails at once. Requests succeed again once Parameter Store answers.
+
+**Resolution:**
+
+-   Run fewer VAMS deployments, or other applications that read Parameter Store heavily, in the same account and Region.
+-   Turn on the Parameter Store higher-throughput setting for the account and Region. It raises the `GetParametersByPath` limit from the default of 40 transactions per second, which `GetParameter` and `GetParameters` share, to 500. The setting applies to every application in the account and Region and is charged per API interaction (one per parameter a request returns). Check that it is offered in your partition and Region before relying on it.
+
+Read the current setting (read-only):
+
+```bash
+aws ssm get-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled
+```
+
+Turn it on:
+
+```bash
+aws ssm update-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled --setting-value true
+```
+
+See [Managing Parameter Store throughput](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-throughput.html) for the quotas and pricing.
+
 ### Asset ID Refused as Not Unique Although No Asset Exists
 
 **Symptoms:**

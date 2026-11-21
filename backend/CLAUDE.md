@@ -468,7 +468,11 @@ backend/
 5.  **ALWAYS use safeLogger** from `customLogging.logger`. Never `print()` or raw `logging.getLogger()`.
 
 6.  **ALWAYS wrap AWS clients with retry config** at module level:
-    `retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})`.
+    `retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})`. A client that is
+    bounded instead (shorter timeouts, fewer attempts, or none) is a recorded departure, listed with
+    its reason in `DELIBERATE_DEPARTURES` in `tests/common/test_shared_client_retry_config.py` and
+    beside the client: for example `common/resourceNames.py`'s `sweep_client_config`, whose sweep runs
+    during Lambda init and retries under its own budget.
 
 7.  **ALWAYS raise `VAMSGeneralErrorResponse`** for business logic errors. Never return raw dicts with status codes.
 
@@ -1396,7 +1400,9 @@ except Exception as e:
 asset_table = dynamodb.Table(asset_table_name)
 ```
 
-**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy env-var overrides (e.g. `ASSET_STORAGE_TABLE_NAME`), then a 60-minute in-module cache, then a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call, then fetches all resource-name parameters from SSM via one paginated `GetParametersByPath` call. Pytest and local utilities can inject names as env vars while deployed handlers use SSM. **Pipeline handlers** in `backendPipelines/` still use legacy env vars and do not call `get_table_name()`.
+**Resolution order:** `get_table_name(ResourceKeys.*)` first checks for legacy env-var overrides (e.g. `ASSET_STORAGE_TABLE_NAME`), then a 60-minute in-module cache, then a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call, then fetches all resource-name parameters from SSM via one paginated `GetParametersByPath` sweep. Pytest and local utilities can inject names as env vars while deployed handlers use SSM. **Pipeline handlers** in `backendPipelines/` still use legacy env vars and do not call `get_table_name()`.
+
+**A sweep is bounded, and a failed one backs off.** Sweeps run one at a time per container (a lock taken only when a lookup needs a sweep, so a cache hit never waits) and each finishes or fails inside `SWEEP_BUDGET_SECONDS` (4 s): the page loop retries throttling, 5xx and connection or read timeouts from the page's own `NextToken` with jittered sleeps that never pass the budget, and any other error ends the sweep at once. A failed sweep opens a back-off window (about 2 s, doubling up to 30 s, jittered) in which no sweep starts: a lookup is answered from the cache, stale or not, or refused with `ResourceNameUnavailableError` (a `RuntimeError`, never a `KeyError`, since the parameter may well exist). A failed sweep for a name the cache does not hold raises the same error, with the SSM error as its cause. An unset `VAMS_RESOURCE_PARAM_PREFIX` still raises `KeyError` and opens no window. Each sweep logs one line with its counts and timings, and the refused lookups of a window log one warning.
 
 ### Common Environment Variables
 
