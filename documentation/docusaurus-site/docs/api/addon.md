@@ -1234,7 +1234,7 @@ Terminates one of the caller's container jobs on the backend the query names. Th
 
 ## Miris Spatial Streaming add-on
 
-The Miris Spatial Streaming add-on serves the two routes the Miris viewer plugin calls for a USD file: the stream status and a viewer key. Both are deployed only when `app.addons.useMirisStreaming.enabled` is `true`; the VAMS CLI and MCP server do not call them. See [Miris Spatial Streaming](../developer/miris-spatial-streaming.md) for the viewer, viewer key modes, and configuration.
+The Miris Spatial Streaming add-on serves the two routes the Miris viewer plugin calls for a USD file: the stream status and a viewer key. Both are deployed only when `app.addons.useMirisStreaming.enabled` is `true`; the VAMS CLI and MCP server do not call them. See [Miris Spatial Streaming](../developer/addon/miris-spatial-streaming/overview.md) for the viewer, viewer key modes, and configuration.
 
 Both routes read the Miris asset UUID server side from the file's `miris_asset_uuid` metadata, so a caller reaches only a stream the file itself references. Before any call that depends on the UUID, they read the Miris asset with the Miris Integration Key and require its binding tags, `vams-asset-{assetId}` and `vams-database-{databaseId}`; a missing asset or tag is `notBound`. Both routes take the same fields, as query parameters on the status route and as a JSON body on the viewer key route:
 
@@ -1277,7 +1277,7 @@ Errors: `400` for invalid query parameters or an asset that does not exist, `403
 
 Returns a viewer key that can stream the file's Miris asset once both authorization tiers, the asset distribution rule of the core download routes, and the binding check pass. What is returned follows the deployment's `viewerKeyMode`:
 
--   **`static`**: the deployment-wide viewer key, with `expiresAt` `null`. Nothing is created or stored. Each delivery writes a `mirisStaticViewerKeyIssue` audit record. A caller who passes the checks for one bound asset receives a key that streams every Miris asset it allows, so scope it in Miris with tags and an expiry, or use `perView` mode (see [Static mode](../developer/miris-spatial-streaming.md#static-mode)).
+-   **`static`**: the deployment-wide viewer key, with `expiresAt` `null`. Nothing is created or stored. Each delivery writes a `mirisStaticViewerKeyIssue` audit record. A caller who passes the checks for one bound asset receives a key that streams every Miris asset it allows, so scope it in Miris with tags and an expiry, or use `perView` mode (see [Static mode](../developer/addon/miris-spatial-streaming/how-it-works.md#static-mode)).
 -   **`perView`**: a new key for the one Miris asset that expires `viewerKeyTtlMinutes` minutes after it is minted. Its key ID is recorded in the add-on's viewer key table, and a cleanup function deletes the key from Miris after it expires. Each mint writes a `mirisViewerKeyMint` audit record.
 
 The key material is never stored, logged, or audited. Responses carry `Cache-Control: no-cache, no-store`.

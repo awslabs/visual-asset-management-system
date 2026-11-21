@@ -1,6 +1,6 @@
 # CLAUDE.md -- Miris upload pipeline (Miris Spatial Streaming add-on)
 
-> Auto-loaded when Claude Code works within `backendPipelines/addon/conversion/mirisUpload/`. Every rule in `backendPipelines/CLAUDE.md` applies here as well; this file adds what is specific to the Miris upload pipeline. The pipeline belongs to the Miris Spatial Streaming add-on, which builds it from its own nested stack under `app.addons.useMirisStreaming.upload` (`infra/lib/nestedStacks/addon/miris/CLAUDE.md`, "Upload pipeline (CDK)"), and `backendPipelines/addon/` is where add-on pipelines go. Exit codes and the root selection order are documented in `README.md` here and on `documentation/docusaurus-site/docs/developer/miris-spatial-streaming.md`. The Kiro mirror is `.kiro/steering/ADDON_MIRIS_SPATIAL_STREAMING.md`.
+> Auto-loaded when Claude Code works within `backendPipelines/addon/conversion/mirisUpload/`. Every rule in `backendPipelines/CLAUDE.md` applies here as well; this file adds what is specific to the Miris upload pipeline. The pipeline belongs to the Miris Spatial Streaming add-on, which builds it from its own nested stack under `app.addons.useMirisStreaming.upload` (`infra/lib/nestedStacks/addon/miris/CLAUDE.md`, "Upload pipeline (CDK)"), and `backendPipelines/addon/` is where add-on pipelines go. Exit codes and the root selection order are documented in `README.md` here and on `documentation/docusaurus-site/docs/developer/addon/miris-spatial-streaming/`. The Kiro mirror is `.kiro/steering/ADDON_MIRIS_SPATIAL_STREAMING.md`.
 
 ---
 

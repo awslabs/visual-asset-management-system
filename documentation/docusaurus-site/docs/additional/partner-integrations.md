@@ -136,7 +136,7 @@ The following integrations require separate commercial licenses from their respe
 
 #### Miris Spatial Streaming
 
-The add-on and its optional upload pipeline require a Miris account, a Miris Integration Key stored in AWS Secrets Manager, and the commercial `aws` partition. See [Miris Spatial Streaming](../developer/miris-spatial-streaming.md).
+The add-on and its optional upload pipeline require a Miris account, a Miris Integration Key stored in AWS Secrets Manager, and the commercial `aws` partition. See [Miris Spatial Streaming](../developer/addon/miris-spatial-streaming/overview.md).
 
 #### RapidPipeline
 

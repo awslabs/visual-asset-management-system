@@ -8,7 +8,7 @@ The viewer entry ships enabled. `mirisAddonEnabled.js` reads the deployment conf
 
 1. Run `npm install` (or `npm ci`) in `web/` with that configuration in place. To rebuild only this bundle, run `node customInstalls/miris/mirisInstall.js` from `web/`.
 
-The viewer is offered only when the deployment publishes `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` (the add-on and `app.webUi.allowUnsafeEvalFeatures`). See `documentation/docusaurus-site/docs/developer/miris-spatial-streaming.md`.
+The viewer is offered only when the deployment publishes `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` (the add-on and `app.webUi.allowUnsafeEvalFeatures`). See `documentation/docusaurus-site/docs/developer/addon/miris-spatial-streaming/`.
 
 ## Version updates
 

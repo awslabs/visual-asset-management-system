@@ -52,7 +52,7 @@ backend/
 │   │   ├── auditSearchText.py                      # search_text_parameters(): the typed text of a search or text-filter
 │   │   │                                           #   read (query, metadata text, filter options, typed tags) goes under the redacted `searchText` request
 │   │   │                                           #   parameter; `tests/common/test_audit_search_text.py` pins the limits of its scan
-│   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer, EDH Workstations, Miris stream status + viewer key) → ADDON_ROUTES
+│   │   ├── addonApiRoutes.py                       # Add-on routes (Physna viewer, EDH Workstations, ...) → ADDON_ROUTES
 │   │   ├── addonAuditActions.py                    # Add-on audit actions → merged into auditActions.py
 │   │   ├── addonConstants.py                       # Add-on object types, constraint fields, blocklist entries, log keys
 │   │   ├── addonFeatures.py                        # Add-on feature switches; which ones the deployment enabled
@@ -1511,7 +1511,7 @@ An add-on is optional, upstream-maintained code enabled by configuration: it eit
 
 The add-on lane sits beside each core list and is upstream-owned: `common/addonApiRoutes.py`,
 `common/addonAuditActions.py`, `common/addonResourceNames.py` (`AddonResourceKeys`), `common/addonConstants.py`, `handlers/addon/`
-and `models/addon/` (the Physna viewer, EDH and Miris models). Every list merges in the order core, add-on, custom.
+and `models/addon/` (the Physna viewer and EDH models, ...). Every list merges in the order core, add-on, custom.
 
 **A disabled add-on is not listed.** Each add-on route names its feature switch in
 `ApiRoute.addon_feature` (the add-on's, or that of the optional feature that registers it), and each add-on

@@ -205,7 +205,6 @@ Private and public subnets are created when any of the following are enabled:
 -   NVIDIA Gr00t pipeline
 -   Image to 3D pipeline
 -   GenAI CAD STEP agent pipeline on its `fargate` runtime (the `agentcore` runtime runs outside the VPC)
--   Miris Upload pipeline (`app.addons.useMirisStreaming.upload`)
 -   An add-on configured to place its functions in private subnets (the add-on's own pages name the setting)
 
 The AWS Batch pipelines that run in the isolated subnets — Coordinate Transform, Potree Point Cloud Viewer, 3D Preview Thumbnail and Media Preview Thumbnail, GenAI Metadata Labeling, and Video SOP/BOM Extraction — add neither subnet type and no NAT gateway.
@@ -288,10 +287,6 @@ The AWS Secrets Manager interface VPC endpoint (`com.amazonaws.{region}.secretsm
 
 :::warning[The Physna Sync add-on requires VPC egress]
 The Physna Sync add-on (`app.addons.usePhysnaSync.enabled`) calls the Physna software as a service API and its authorization token endpoint over the public internet. The AWS Secrets Manager endpoint covers the add-on's credential retrieval, but there is no VPC endpoint for a third-party service, so the add-on's Lambda functions need an outbound internet path. With `useGlobalVpc.useForAllLambdas = true` those functions run in the isolated subnets, which have no egress, and every Physna API call fails. Enable the add-on only in a VPC that provides egress to the Physna endpoints — for example, an imported VPC (`optionalExternalVpcId`) whose `optionalExternalIsolatedSubnetIds` name subnets with a NAT gateway route, or a deployment left at `useForAllLambdas = false` so the add-on's Lambda functions run outside the VPC. Configuration validation does not reject the combination, so it is a deployment-planning consideration rather than a synth-time error.
-:::
-
-:::warning[The Miris Spatial Streaming add-on requires VPC egress]
-The Miris Spatial Streaming add-on (`app.addons.useMirisStreaming.enabled`) calls the Miris API at `*.miris.com` over the public internet from its Lambda functions. Nothing in the isolated subnets reaches Miris, so with `useGlobalVpc.useForAllLambdas = true` every Miris call fails. Enable the add-on with `useForAllLambdas = false`, or in an imported VPC whose isolated subnets have a NAT gateway route; configuration validation does not reject the combination. The Miris Upload pipeline's AWS Batch jobs always run in the private subnets and reach Miris through the NAT gateway.
 :::
 
 ### Conditional Interface Endpoints

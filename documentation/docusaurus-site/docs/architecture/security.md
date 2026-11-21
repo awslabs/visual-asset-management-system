@@ -400,8 +400,6 @@ The value is still present in that Lambda's deployment package. Two consequences
 
 Where a credential must be reachable only through Secrets Manager, create the secret out of band and have VAMS reference it. The Physna add-on supports this with `app.addons.usePhysnaSync.credentialsSecretArn`; on that path no credential passes through synthesis and the populate custom resource is not created. The NVIDIA pipelines accept the token value only, so their credential does pass through synthesis — scope `lambda:GetFunction` and access to the CDK assets bucket accordingly, and rotate the HuggingFace token on the HuggingFace side when a principal's access is revoked.
 
-The Miris Spatial Streaming add-on reads its Integration Key from a secret the operator creates (`app.addons.useMirisStreaming.apiKeySecretArn`), so the key never passes through synthesis. In `static` mode its viewer key (`viewerKey`) is a configuration value handled like the credentials above: VAMS creates an empty Secrets Manager secret, populates it at deployment time from a custom resource's code asset, and grants the status and viewer key functions `secretsmanager:GetSecretValue` on exactly that secret, so the key is in neither the template nor a Lambda environment, with the same deployment-package caveats. A viewer key authorizes streaming only and reaches the browser, so scope it in Miris with tags and an expiry, or use `perView` mode, which deploys no shared viewer key.
-
 The temporary directory that carries a credential into a code asset is removed as soon as CDK has staged it, so a build or CI host does not accumulate cleartext copies across synthesis runs.
 
 ### Encryption in Transit

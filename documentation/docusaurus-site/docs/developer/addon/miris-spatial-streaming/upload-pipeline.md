@@ -1,6 +1,10 @@
-# Miris Upload
+---
+sidebar_label: Upload pipeline
+---
 
-The Miris Upload pipeline uploads a VAMS asset's root USD file to [Miris](https://miris.com/) Spatial Streaming and records the resulting Miris asset as [stream metadata](../developer/miris-spatial-streaming.md#stream-metadata) on that file, so users can stream the asset by opening the file in the VAMS file viewer. It is part of the [Miris Spatial Streaming add-on](../developer/miris-spatial-streaming.md), which deploys it as a nested stack when `app.addons.useMirisStreaming.upload.enabled` is `true` and supplies the Miris Integration Key and API base URL it uses.
+# Miris Upload Pipeline
+
+The Miris Upload pipeline uploads a VAMS asset's root USD file to [Miris](https://miris.com/) Spatial Streaming and records the resulting Miris asset as [stream metadata](./how-it-works.md#stream-metadata) on that file, so users can stream the asset by opening the file in the VAMS file viewer. It is part of the [Miris Spatial Streaming add-on](./overview.md), which deploys it as a nested stack when `app.addons.useMirisStreaming.upload.enabled` is `true` and supplies the Miris Integration Key and API base URL it uses.
 
 | Property           | Value                                                                                                 |
 | ------------------ | ----------------------------------------------------------------------------------------------------- |
@@ -22,9 +26,9 @@ The pipeline auto-registers as a GLOBAL pipeline and workflow, both with the ID 
 
 -   **Automatically**, when `autoRegisterAutoTriggerOnFileUpload` is `true` (it is `false` by default), for every uploaded `.usd`, `.usda`, `.usdc`, or `.usdz` file in any database. Turning it on sends every such file uploaded to any database to Miris. To limit uploads to specific databases, leave the global trigger off and register a database-scoped copy of the workflow for each database.
 -   **On demand.** Select one of the asset's USD files in the file manager, choose **Automation**, then **Execute Workflow**, and pick the **Miris Spatial Streaming Upload** workflow with its **Stream with Miris** template.
--   **From the Miris viewer**, with its **Stream with Miris** button (see [Viewer plugin](../developer/miris-spatial-streaming.md#viewer-plugin)).
+-   **From the Miris viewer**, with its **Stream with Miris** button (see [Viewer plugin](./how-it-works.md#viewer-plugin)).
 
-The workflow takes exactly one file; a whole-asset (`/`) or folder selection is rejected. A run on an asset that is not distributable, or is quarantined while `app.compliance.quarantineBlocksDownload` is `true`, fails before anything is claimed or sent to Miris (see [Which assets can be streamed and uploaded](../developer/miris-spatial-streaming.md#which-assets-can-be-streamed-and-uploaded)). A manual run uploads that file; an automatic run uploads the asset's [root USD file](#how-the-root-is-chosen). The pipeline records the stream metadata on the file it uploads.
+The workflow takes exactly one file; a whole-asset (`/`) or folder selection is rejected. A run on an asset that is not distributable, or is quarantined while `app.compliance.quarantineBlocksDownload` is `true`, fails before anything is claimed or sent to Miris (see [Which assets can be streamed and uploaded](./how-it-works.md#which-assets-can-be-streamed-and-uploaded)). A manual run uploads that file; an automatic run uploads the asset's [root USD file](#how-the-root-is-chosen). The pipeline records the stream metadata on the file it uploads.
 
 ### Duplicate uploads and re-runs
 
@@ -86,13 +90,13 @@ The container lists the asset under its resolved root and downloads it: a lone `
 
 ### Miris asset name and tags
 
-The **Stream with Miris** template has two optional fields: `MIRIS_ASSET_NAME` (blank uses the VAMS asset name) and `MIRIS_TAGS` (tags to add; blank adds none). Every Miris asset the pipeline creates carries the tags `vams`, `vams-asset-{assetId}`, and `vams-database-{databaseId}`, the last two being the [binding tags](../developer/miris-spatial-streaming.md#binding-tags). A template tag that begins with `vams-asset-` or `vams-database-`, in any case, is dropped with a warning in the container log.
+The **Stream with Miris** template has two optional fields: `MIRIS_ASSET_NAME` (blank uses the VAMS asset name) and `MIRIS_TAGS` (tags to add; blank adds none). Every Miris asset the pipeline creates carries the tags `vams`, `vams-asset-{assetId}`, and `vams-database-{databaseId}`, the last two being the [binding tags](./how-it-works.md#binding-tags). A template tag that begins with `vams-asset-` or `vams-database-`, in any case, is dropped with a warning in the container log.
 
 ---
 
 ## What the pipeline writes
 
-The pipeline adds no files to the asset. It writes one `.metadata.json` file at `{outputS3AssetMetadataPath}<relativeFilePath>.metadata.json`, where `<relativeFilePath>` is the root USD file's path within the asset root, and the workflow applies it to that file with `updateType: update` when the run succeeds, keeping the file's other metadata keys. It sets the five [stream metadata](../developer/miris-spatial-streaming.md#stream-metadata) keys: `miris_asset_uuid`, `miris_source_version_id` (the Amazon S3 version the container downloaded; empty when there is none), `miris_uploaded_at`, `miris_display_name` (the Miris asset name), and `miris_dependency_manifest` (the ID of the dependency manifest).
+The pipeline adds no files to the asset. It writes one `.metadata.json` file at `{outputS3AssetMetadataPath}<relativeFilePath>.metadata.json`, where `<relativeFilePath>` is the root USD file's path within the asset root, and the workflow applies it to that file with `updateType: update` when the run succeeds, keeping the file's other metadata keys. It sets the five [stream metadata](./how-it-works.md#stream-metadata) keys: `miris_asset_uuid`, `miris_source_version_id` (the Amazon S3 version the container downloaded; empty when there is none), `miris_uploaded_at`, `miris_display_name` (the Miris asset name), and `miris_dependency_manifest` (the ID of the dependency manifest).
 
 -   **Dependency manifest.** Before it creates the Miris asset, the container writes a manifest of the files the upload holds to the auxiliary bucket at `pipelines/miris-upload/manifests/<databaseId>/<assetId>/<sha256>.json`. It is UTF-8 JSON with sorted keys and no insignificant whitespace, `{"files": {"<relativePath>": "<etag>", ...}, "root": "<relativePath>"}`, listing the root USD file and every layer and asset of its dependency tree by path within the asset root, each with the ETag (without quotes) of the bytes downloaded. Other files in the asset are not listed. `<sha256>` is the SHA-256 of the manifest's bytes and is the value of `miris_dependency_manifest`. A manifest that cannot be written fails the run with exit code 1 (`dependency_manifest_not_written`) before anything reaches Miris.
 
@@ -162,7 +166,7 @@ A job stopped at its time limit, an inner execution that timed out or was stoppe
 
 ### Kept Miris assets
 
-A run that fails after the Miris asset was created (exit codes 1 and 8) keeps the asset in Miris unlinked to the VAMS file, logs its ID in a `miris_asset_kept` entry, and names its `vams-asset-{assetId}` tag in the reason. Find it in the Miris Portal by that tag and, once it reaches `preview` or `streamable`, link it by [setting the file's stream metadata by hand](../developer/miris-spatial-streaming.md#editing-the-stream-metadata), or delete it there. Running the workflow again uploads a new Miris asset.
+A run that fails after the Miris asset was created (exit codes 1 and 8) keeps the asset in Miris unlinked to the VAMS file, logs its ID in a `miris_asset_kept` entry, and names its `vams-asset-{assetId}` tag in the reason. Find it in the Miris Portal by that tag and, once it reaches `preview` or `streamable`, link it by [setting the file's stream metadata by hand](./how-it-works.md#editing-the-stream-metadata), or delete it there. Running the workflow again uploads a new Miris asset.
 
 ---
 
@@ -184,7 +188,7 @@ flowchart LR
     EB["EventBridge rule<br/>(FAILED, TIMED_OUT, ABORTED)"] --> END
 ```
 
-The Lambda functions run in the VPC only when `app.useGlobalVpc.useForAllLambdas` is `true`. The AWS Batch jobs always run in the VPC's private subnets and reach Miris through the NAT gateway. The container is built from a digest-pinned `python:3.12-slim` image with `usd-core`, `requests`, `boto3`, and `botocore` from a hash-locked requirements file. See [Notices](../additional/notices.md).
+The Lambda functions run outside the VPC (configuration validation rejects `app.useGlobalVpc.useForAllLambdas` with the add-on). The AWS Batch jobs always run in the VPC's private subnets and reach Miris through the NAT gateway. The container is built from a digest-pinned `python:3.12-slim` image with `usd-core`, `requests`, `boto3`, and `botocore` from a hash-locked requirements file. See [Notices](../../../additional/notices.md).
 
 ---
 
@@ -199,6 +203,6 @@ The Lambda functions run in the VPC only when `app.useGlobalVpc.useForAllLambdas
 | `app.addons.useMirisStreaming.upload.taskTimeoutSeconds`                  | `1800`                   | Seconds the container waits for Miris to report `preview` or `streamable`.                                                           |
 | `app.addons.useMirisStreaming.upload.maxAssetSizeBytes`                   | `5000000000`             | Largest upload, in bytes: the root and the files it references.                                                                      |
 
-The pipeline also reads `apiKeySecretArn` and `mirisApiBaseUrl` from `app.addons.useMirisStreaming`. See the [Configuration Reference](../deployment/configuration-reference.md#miris-upload-appaddonsusemirisstreamingupload) for every validation rule.
+The pipeline also reads `apiKeySecretArn` and `mirisApiBaseUrl` from `app.addons.useMirisStreaming`. See the [Configuration Reference](../../../deployment/configuration-reference.md#miris-upload-appaddonsusemirisstreamingupload) for every validation rule.
 
 The pipeline requires the add-on (`app.addons.useMirisStreaming.enabled`, with its `apiKeySecretArn`) and `app.useGlobalVpc.enabled`. Enabling it adds public and private subnets and a NAT gateway per Availability Zone to the VAMS VPC; an imported VPC needs `optionalExternalPrivateSubnetIds` with a route to the internet.

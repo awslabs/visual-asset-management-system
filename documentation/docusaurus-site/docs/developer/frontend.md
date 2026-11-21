@@ -37,7 +37,7 @@ web/src/
 
   services/               # API and data services (ONLY place to import apiClient)
     APIService.ts         # Main API service (~40+ exports)
-    addons/               # Add-on API calls (physnaAPIService.ts, mirisAPIService.ts)
+    addons/               # Add-on API calls (physnaAPIService.ts and the other add-ons')
     apiClient.ts          # Custom fetch wrapper (internal only)
     appCache.ts           # localStorage cache (replaces Amplify Cache)
     AssetUploadService.ts

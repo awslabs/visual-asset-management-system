@@ -7,4 +7,4 @@ The Miris Upload pipeline uploads a VAMS asset's root USD file to [Miris Spatial
 -   **`vamsSchema/`** - The pipeline and workflow registered in VAMS
 -   CDK: `infra/lib/nestedStacks/addon/miris/upload/`
 
-See `documentation/docusaurus-site/docs/pipelines/miris-upload.md` for triggers, root selection, time limits, failure reasons, and configuration.
+See `documentation/docusaurus-site/docs/developer/addon/miris-spatial-streaming/upload-pipeline.md` for triggers, root selection, time limits, failure reasons, and configuration.

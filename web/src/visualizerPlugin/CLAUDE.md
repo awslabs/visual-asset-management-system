@@ -9,7 +9,7 @@ Auto-loaded when working within `web/src/visualizerPlugin/`. See `web/CLAUDE.md`
 The 3D/media viewer system uses a plugin-based architecture:
 
 -   **PluginRegistry** (`core/PluginRegistry.ts`) — Singleton that manages all viewer plugins
--   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on viewers: Physna, Miris Spatial Streaming and the licensed VNTANA and VEERUM viewers) and `customViewerConfig.json` (fork extension point) hold the rest
+-   **viewerConfig.json** (`config/viewerConfig.json`) — JSON configuration for the core plugins; `addonViewerConfig.json` (add-on viewers: Physna, the other add-ons' viewers and the licensed VNTANA and VEERUM viewers) and `customViewerConfig.json` (fork extension point) hold the rest
 -   **manifest.ts** (`viewers/manifest.ts`) — Vite static-analysis paths for dynamic imports; `viewers/addonManifest.ts` and `viewers/custom/customManifest.ts` for add-on and fork viewers
 -   **viewerSources.ts** (`core/viewerSources.ts`) — Merges the three configs and manifests for the registry (see "Add-on and fork viewers")
 -   **StylesheetManager** (`core/StylesheetManager.ts`) — Per-plugin CSS lifecycle management

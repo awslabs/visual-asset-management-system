@@ -1475,7 +1475,7 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionLogsFuncti
 
 ## Addons (`app.addons`)
 
-Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here. `app.addons.useMirisStreaming` also decides whether the web install bundles the Miris web SDK (see [Configuration](../developer/miris-spatial-streaming.md#configuration)).
+Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here.
 
 ### Garnet Framework (`app.addons.useGarnetFramework`)
 
@@ -1587,7 +1587,7 @@ The four `vdi.lease` values are written to the add-on's settings row only on the
 
 ### Miris Spatial Streaming (`app.addons.useMirisStreaming`)
 
-Streams USD files from Miris Spatial Streaming in the VAMS file viewer. See [Miris Spatial Streaming](../developer/miris-spatial-streaming.md) for the viewer, the viewer key modes, and the Integration Key.
+Streams USD files from Miris Spatial Streaming in the VAMS file viewer. See [Miris Spatial Streaming](../developer/addon/miris-spatial-streaming/overview.md) for the viewer, the viewer key modes, and the Integration Key.
 
 :::note[Implemented by]
 Nested stack: `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts` (`AddonBuilderNestedStack`), which instantiates `addon/miris/mirisBuilder-nestedStack.ts` (`MirisBuilderNestedStack`).
@@ -1602,11 +1602,11 @@ Nested stack: `infra/lib/nestedStacks/addon/addonBuilder-nestedStack.ts` (`Addon
 | `app.addons.useMirisStreaming.apiKeySecretArn`     | string  | `""`                    | Required. The complete ARN of the AWS Secrets Manager secret that holds the Miris Integration Key as a plain string, including the six-character suffix Secrets Manager appends to the secret name (`arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf`). Used in both modes, and by the Miris Upload pipeline.                                                      |
 | `app.addons.useMirisStreaming.mirisApiBaseUrl`     | string  | `https://app.miris.com` | Miris API base URL, called only by the add-on's Lambda functions and the upload pipeline. Must be a valid `https` URL with no leading or trailing whitespace. Its host must not be a loopback, link-local, or private IP address, `localhost`, or a `.local` or `.internal` name; the check reads the host string and does not resolve DNS. Redirects from it are never followed. |
 
-When the add-on is enabled, configuration validation also requires the commercial `aws` partition (checked on the resolved partition, whatever `app.govCloud.enabled` says), `app.webUi.allowUnsafeEvalFeatures: true`, and a `viewerKeyMode` of `static` or `perView`, and rejects `app.useGlobalVpc.useForAllLambdas`, which would place the add-on's Lambda functions in the isolated subnets, with no route to Miris. The Miris web SDK runs in the VAMS web application's own origin, and `allowUnsafeEvalFeatures` adds `'unsafe-eval'` to `script-src` for the whole web application. Each omitted field takes the default above. The viewer plugin is enabled separately in the web application; see [Configuration](../developer/miris-spatial-streaming.md#configuration).
+When the add-on is enabled, configuration validation also requires the commercial `aws` partition (checked on the resolved partition, whatever `app.govCloud.enabled` says), `app.webUi.allowUnsafeEvalFeatures: true`, and a `viewerKeyMode` of `static` or `perView`, and rejects `app.useGlobalVpc.useForAllLambdas`, which would place the add-on's Lambda functions in the isolated subnets, with no route to Miris. The Miris web SDK runs in the VAMS web application's own origin, and `allowUnsafeEvalFeatures` adds `'unsafe-eval'` to `script-src` for the whole web application. Each omitted field takes the default above. The viewer plugin is enabled separately in the web application; see [Configuration](../developer/addon/miris-spatial-streaming/enable.md#configuration).
 
 #### Miris upload (`app.addons.useMirisStreaming.upload`)
 
-The add-on's upload pipeline uploads a VAMS asset's root USD file to Miris and records the Miris asset as file metadata on that file. Runs on AWS Batch with AWS Fargate compute in the private subnets and reaches `*.miris.com` through the NAT gateway. **Requires VPC.** Same-Region only. See the [Miris Upload pipeline](../pipelines/miris-upload.md).
+The add-on's upload pipeline uploads a VAMS asset's root USD file to Miris and records the Miris asset as file metadata on that file. Runs on AWS Batch with AWS Fargate compute in the private subnets and reaches `*.miris.com` through the NAT gateway. **Requires VPC.** Same-Region only. See the [Miris Upload pipeline](../developer/addon/miris-spatial-streaming/upload-pipeline.md).
 
 :::note[Implemented by]
 Nested stack: `infra/lib/nestedStacks/addon/miris/upload/mirisUploadBuilder-nestedStack.ts` (`MirisUploadBuilderNestedStack`), instantiated by `AddonBuilderNestedStack`: AWS Batch on Fargate in the private subnets.

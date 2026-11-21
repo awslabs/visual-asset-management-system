@@ -78,7 +78,7 @@ web/
       MetadataService.ts
       MetadataSchemaService.ts
       ComplianceService.ts  # Compliance schemas, bindings, evaluations, quarantine, cascades, audit
-      addons/               # Add-on API calls (physnaAPIService.ts, mirisAPIService.ts)
+      addons/               # Add-on API calls (physnaAPIService.ts and one per add-on)
 
     addons/                 # Add-on web lane: addonRoutes.tsx, addonNavigation.ts, addonFeatures.ts
                             #   (add-on feature-switch names) — see WEB_FRONTEND.md 7.5, 7.6

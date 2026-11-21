@@ -126,8 +126,7 @@ infra/
         addonVpcEndpoints.ts               # addonInterfaceEndpoints() / addonNeedsPrivateSubnets(): interface endpoints an enabled add-on needs, and whether one needs the private subnets; read by vpcBuilder
         addonWafExclusions.ts              # addonWafRuleExclusions(): scoped rule exclusions for both web ACLs, passed by buildWafStacks()
         garnetFramework/                   # Garnet NGSI-LD digital twin framework
-        miris/                             # Miris Spatial Streaming (mirisBuilder-nestedStack.ts: routes, perView key table + TTL cleanup, metadata schema seed)
-          upload/                          # Miris upload pipeline (mirisUploadBuilder-nestedStack.ts; source in backendPipelines/addon/conversion/mirisUpload)
+        miris/                             # Miris Spatial Streaming (steered by its own CLAUDE.md; upload/ builds its upload pipeline)
         physna/                            # Physna 3D/CAD geometric search sync (builds physnaFileSync, physnaAssetSync, physnaViewer lambdas for addon API)
         edhWorkstations/                   # EDH Workstations add-on stack (proxy Lambdas, session bootstrap, container and AMI recipe builds; see edhWorkstations/CLAUDE.md)
       custom/
@@ -143,7 +142,7 @@ infra/
     pipelines/batchLogRegistrationEnvFargate.test.ts  # Per-pipeline synth: registering-lambda env + every
                                  # producer-declared *_STATE_NAME is a key of the ASL States
                                  # (3dThumbnail, pcPotreeViewer, system/genAiMetadata, coordinateTransform, cogConvert,
-                                 # videoSopBom, mirisUpload)
+                                 # videoSopBom)
     pipelines/batchLogRegistrationEnvGpu.test.ts  # Same for splatToolbox, cosmos x4 (the COSMOS_BATCH_STATE_NAME
                                  # env value is the joined name), gr00t, isaacLabTraining,
                                  # imageTo3d (one job definition per enabled model)

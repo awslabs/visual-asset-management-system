@@ -640,7 +640,6 @@ VAMS may include built-in pipelines depending on your deployment configuration. 
 -   **Coordinate Transform** -- Reprojects point clouds between coordinate reference systems.
 -   **Video SOP/BOM Extraction** -- Transcribes narrated teardown videos and derives a step-by-step procedure, a bill of materials, and a lab summary; select one to four video files of one asset explicitly.
 -   **GenAI CAD Generation** -- Creates or modifies a CAD STEP file from a natural-language instruction.
--   **Miris Upload** -- Uploads an asset's root USD file to Miris Spatial Streaming so it can be streamed in the Miris viewer; run the **Miris Spatial Streaming Upload** workflow on one USD file of the asset.
 -   **Gaussian Splatting** -- Generates 3D Gaussian splats from image and video media files.
 -   **Physical AI Inference and Fine-Tuning** -- GPU-accelerated pipelines for NVIDIA world foundation models, vision language models (VLMs), and vision-language-action models (VLAs) including inference, simulation training, and model fine-tuning.
 

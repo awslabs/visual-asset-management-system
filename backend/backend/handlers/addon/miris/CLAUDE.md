@@ -1,6 +1,6 @@
 # CLAUDE.md -- Miris Spatial Streaming add-on (backend)
 
-> Auto-loaded when Claude Code works within `backend/backend/handlers/addon/miris/`. Covers the add-on's Lambda handlers and their tests. Every rule in `backend/CLAUDE.md` applies here as well; this file adds what is specific to Miris. The CDK side is `infra/lib/nestedStacks/addon/miris/CLAUDE.md`, the viewer `web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/CLAUDE.md`, and the operator page `documentation/docusaurus-site/docs/developer/miris-spatial-streaming.md`. The Kiro mirror is `.kiro/steering/ADDON_MIRIS_SPATIAL_STREAMING.md`.
+> Auto-loaded when Claude Code works within `backend/backend/handlers/addon/miris/`. Covers the add-on's Lambda handlers and their tests. Every rule in `backend/CLAUDE.md` applies here as well; this file adds what is specific to Miris. The CDK side is `infra/lib/nestedStacks/addon/miris/CLAUDE.md`, the viewer `web/src/visualizerPlugin/viewers/MirisStreamViewerPlugin/CLAUDE.md`, and the operator page `documentation/docusaurus-site/docs/developer/addon/miris-spatial-streaming/`. The Kiro mirror is `.kiro/steering/ADDON_MIRIS_SPATIAL_STREAMING.md`.
 
 ---
 

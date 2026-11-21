@@ -306,7 +306,7 @@ Some viewers are provided by optional VAMS add-ons and are gated by a feature fl
 
 The Physna Viewer renders the Physna-hosted 3D/CAD viewer inside VAMS. A VAMS-authorized endpoint applies both authorization tiers and returns a Physna viewer token to the browser, which then loads the viewer directly from Physna; the Physna client credentials stay in AWS Secrets Manager and never reach the browser. That token carries no asset scope, so Physna-hosted viewer access is flat across every synced database. See the [Physna Integration](../developer/physna-integration.md#physna-viewer) developer guide for architecture, configuration, and the side effects of that limitation.
 
-The Miris Spatial Streaming viewer streams USD files from Miris instead of downloading them, after VAMS checks both authorization tiers and that the Miris asset is bound to the VAMS asset. It also needs `ALLOWUNSAFEEVAL`. A file not yet uploaded to Miris shows a note pointing to the **Miris Spatial Streaming Upload** workflow and a **Stream with Miris** button. See [Miris Spatial Streaming](../developer/miris-spatial-streaming.md#viewer-plugin).
+The Miris Spatial Streaming viewer streams USD files from Miris instead of downloading them. See the [Miris Spatial Streaming add-on](../developer/addon/miris-spatial-streaming/overview.md).
 
 ---
 

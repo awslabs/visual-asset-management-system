@@ -14,6 +14,8 @@ fileMatchPattern:
         "web/src/services/addons/miris*",
         "web/customInstalls/miris/**",
         "documentation/docusaurus-site/src/components/ConfigBuilder/addon/mirisStreaming*",
+        "documentation/docusaurus-site/docs/developer/addon/miris-spatial-streaming/**",
+        "infra/test/addon/miris/**",
     ]
 ---
 
