@@ -38,7 +38,7 @@ from common.assetLocations import (
     normalize_base_prefix,
 )
 from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS
-from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
+from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message, AssetLocationInUseError
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
 # Configure AWS clients
@@ -52,6 +52,7 @@ retry_config = Config(
 region = os.environ['AWS_REGION']
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
+sqs_client = boto3.client('sqs', config=retry_config)
 s3_client = region_routing_s3_client()
 logger = safeLogger(service_name="CreateAsset")
 
@@ -142,6 +143,9 @@ def get_default_bucket_details(databaseId):
             'bucketId': bucket_id,
             'bucketName': bucket_name,
             'baseAssetsPrefix': base_assets_prefix,
+            # The registration's bucket-sync created-events queue, written by the deploy (absent on
+            # rows from earlier releases).
+            'syncCreatedQueueUrl': bucket.get('syncCreatedQueueUrl'),
             **bucket_region_fields(bucket)
         }
     except Exception as e:
@@ -534,13 +538,10 @@ def assert_location_not_owned_by_index(bucket_name, resolved_s3_key):
         raise VAMSGeneralErrorResponse("Error validating S3 location")
     if conflicts:
         owner = conflicts[0]
-        logger.error(
-            f"bucketExistingKey {resolved_s3_key} conflicts with existing asset "
-            f"{owner.database_id}:{owner.asset_id} at {owner.location}"
-        )
-        raise VAMSGeneralErrorResponse(
-            "The specified bucketExistingKey is already in use by another asset"
-        )
+        holder = f"{owner.database_id}:{owner.asset_id} at {owner.location}"
+        logger.warning(f"Location {resolved_s3_key} conflicts with existing asset {holder}")
+        raise AssetLocationInUseError(
+            "The specified bucketExistingKey is already in use by another asset", owner=holder)
 
 
 def assert_existing_key_not_owned(bucket_ids, resolved_s3_key, bucket_name=None):
@@ -599,13 +600,10 @@ def assert_existing_key_not_owned(bucket_ids, resolved_s3_key, bucket_name=None)
                         continue
                     if not keys_conflict(existing_key, target):
                         continue
-                    logger.error(
-                        f"bucketExistingKey {resolved_s3_key} conflicts with existing asset "
-                        f"{item.get('databaseId')}:{item.get('assetId')} at {existing_key}"
-                    )
-                    raise VAMSGeneralErrorResponse(
-                        "The specified bucketExistingKey is already in use by another asset"
-                    )
+                    holder = f"{item.get('databaseId')}:{item.get('assetId')} at {existing_key}"
+                    logger.warning(f"Location {resolved_s3_key} conflicts with existing asset {holder}")
+                    raise AssetLocationInUseError(
+                        "The specified bucketExistingKey is already in use by another asset", owner=holder)
 
                 if 'LastEvaluatedKey' in response:
                     query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
@@ -668,13 +666,10 @@ def assert_derived_asset_key_not_owned(bucket_ids, asset_id, resolved_s3_key, da
                     continue
                 if not keys_conflict(existing_key, target):
                     continue
-                logger.error(
-                    f"Derived asset key {resolved_s3_key} conflicts with existing asset "
-                    f"{item.get('databaseId')}:{item.get('assetId')} at {existing_key}"
-                )
-                raise VAMSGeneralErrorResponse(
-                    derived_key_conflict_message(item.get('databaseId', ''), database_id)
-                )
+                holder = f"{item.get('databaseId')}:{item.get('assetId')} at {existing_key}"
+                logger.warning(f"Derived asset key {resolved_s3_key} conflicts with existing asset {holder}")
+                raise AssetLocationInUseError(
+                    derived_key_conflict_message(item.get('databaseId', ''), database_id), owner=holder)
     except VAMSGeneralErrorResponse:
         raise
     except Exception as e:
@@ -791,6 +786,28 @@ def validate_tags_exist(tags, database_id):
         raise ValueError("Invalid tags provided. Tags must exist in the system.")
 
     return True
+
+def request_existing_files_import(bucket_details, bucket_name, location, database_id, asset_id, bucket_id):
+    """Ask bucket sync to import the files already at a `bucketExistingKey` location: one message on
+    the created-events queue of the asset's own registration, which bucket sync validates against the
+    asset row before it lists anything (sqsBucketSync.continue_import). Best-effort: the asset exists
+    either way, and a reindex reaches files an import missed."""
+    queue_url = (bucket_details or {}).get('syncCreatedQueueUrl')
+    if not queue_url:
+        logger.warning(f"Bucket registration {bucket_id} names no bucket-sync queue; the files already at "
+                       f"{location} are not imported until a reindex")
+        return False
+    request = {"vamsImportRequest": {
+        "bucket": bucket_name, "location": location, "start": True,
+        "owner": {"databaseId": database_id, "assetId": asset_id, "bucketId": bucket_id}}}
+    try:
+        sqs_client.send_message(QueueUrl=queue_url, MessageBody=json.dumps(request))
+        return True
+    except Exception as e:
+        logger.error(f"The import of the files already at {location} could not be requested: "
+                     f"{type(e).__name__}; a reindex reaches them")
+        return False
+
 
 def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3ExternalGenerated = False):
     """Create a new asset (metadata only)"""
@@ -983,6 +1000,11 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     
     # Save asset to DynamoDB
     save_asset_details(asset)
+
+    # The files already at an existing key raise no S3 event: bucket sync imports them (and sets the
+    # asset type from them) on request.
+    if request_model.bucketExistingKey and not s3ExternalGenerated:
+        request_existing_files_import(bucketDetails, s3_bucket, s3_key, databaseId, assetId, s3_bucket_id)
 
     # Update asset count (best-effort: the asset record has already been saved)
     try:

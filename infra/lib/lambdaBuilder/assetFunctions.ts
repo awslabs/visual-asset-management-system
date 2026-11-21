@@ -106,6 +106,29 @@ export function buildCreateAssetFunction(
         })
     );
 
+    // An asset created on a bucketExistingKey asks bucket sync to import the files already there: one
+    // message to the created-events queue of the asset's own registration. One statement naming the
+    // deployment's own created-events queues, no wildcard.
+    const syncCreatedQueueArns = Array.from(
+        new Set(
+            s3AssetBuckets
+                .getS3AssetBucketRecords()
+                .map((record) => record.syncCreatedQueueName)
+                .filter((queueName): queueName is string => !!queueName)
+        )
+    ).map(
+        (queueName) =>
+            `arn:${Service.Partition()}:sqs:${config.env.region}:${config.env.account}:${queueName}`
+    );
+    if (syncCreatedQueueArns.length > 0) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["sqs:SendMessage"],
+                resources: syncCreatedQueueArns,
+            })
+        );
+    }
+
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
     return fun;

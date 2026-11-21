@@ -159,8 +159,9 @@ def reset_access_denied_warnings() -> None:
         _access_denied_warned_at.clear()
 
 
-def emit_skipped_metric(reason: str) -> None:
-    """One embedded-metric log line counting a skipped or partial VAMS tag write."""
+def emit_bucket_sync_count(metric_name: str, reason: str) -> None:
+    """One embedded-metric log line adding 1 to a bucket-sync count (namespace `VAMS/BucketSync`,
+    dimension `Reason`)."""
     try:
         sys.stdout.write(json.dumps({
             "_aws": {
@@ -168,14 +169,19 @@ def emit_skipped_metric(reason: str) -> None:
                 "CloudWatchMetrics": [{
                     "Namespace": METRIC_NAMESPACE,
                     "Dimensions": [[METRIC_DIMENSION]],
-                    "Metrics": [{"Name": METRIC_SKIPPED, "Unit": "Count"}],
+                    "Metrics": [{"Name": metric_name, "Unit": "Count"}],
                 }],
             },
             METRIC_DIMENSION: reason,
-            METRIC_SKIPPED: 1,
+            metric_name: 1,
         }) + "\n")
     except Exception:  # A metric line must never fail the sync.
         pass
+
+
+def emit_skipped_metric(reason: str) -> None:
+    """One embedded-metric log line counting a skipped or partial VAMS tag write."""
+    emit_bucket_sync_count(METRIC_SKIPPED, reason)
 
 
 def tag_synced_version(s3_client, bucket: str, key: str, version_id: Optional[str], database_id: str,

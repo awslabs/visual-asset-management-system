@@ -40,7 +40,8 @@ from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
 from common.s3 import is_object_version_archived, region_routing_s3_client
-from common.vamsObjectTags import tag_synced_version, tagging_enabled
+from common.vamsObjectTags import emit_bucket_sync_count, tag_synced_version, tagging_enabled
+from models.common import AssetLocationInUseError
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
     build_asset_snapshot,
@@ -54,14 +55,15 @@ from common.fileAttribution import (
     VAMS_BINDING_FIELD,
 )
 from common.assetLocations import (
+    ARCHIVED_DATABASE_SUFFIX,
     RESOLVED_AMBIGUOUS,
     RESOLVED_FOUND,
     LocationTooDeepError,
     contains,
     derive_location,
     find_conflicts,
+    held_objects,
     index_ready,
-    is_folder_location,
     normalize_base_prefix,
     normalize_location,
     relative_path_in,
@@ -480,38 +482,32 @@ def is_object_permanently_deleted(bucket_name: str, object_key: str) -> bool:
 
 
 def determine_asset_type(assetId, bucket, prefix):
-    """Determine the asset type based on S3 contents"""
+    """Determine the asset type based on S3 contents, as the upload path does
+    (uploadFile.determine_asset_type): a sample of the objects the location holds (`held_objects`, at
+    most ASSET_TYPE_DETECTION_SAMPLE_SIZE per listing), folder markers and archived files left out."""
     try:
-        
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
-        
-        # List all objects with the specified prefix
-        response = s3_client.list_objects_v2(
-            Bucket=bucket,
-            Prefix=prefix,
-        )
-        
-        # Get the contents and filter out folder markers (objects ending with '/'). A single-file
-        # location used as a prefix also lists keys that only share its characters, which are not
-        # part of the asset.
-        contents = response.get('Contents', [])
-        if prefix and not is_folder_location(prefix):
-            contents = [item for item in contents if contains(prefix, item.get('Key'))]
-        
+
+        def sample(list_prefix, cap):
+            limit = min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE)
+            return s3_client.list_objects_v2(Bucket=bucket, Prefix=list_prefix, MaxKeys=limit).get('Contents', [])
+
+        contents = list(held_objects(prefix, sample)) if prefix else sample(prefix, None)
+
         # Filter out archived files
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or (prefix and not contains(prefix, item['Key'])):
+                # Skip folder markers and keys the location does not hold
                 continue
-                
+
             try:
                 # Check if file is archived using the new method
                 if not is_file_archived(bucket, item['Key']):
                     non_archived_files.append(item)
                     file_count += 1
-                    
+
                     # Short circuit if we've found more than one file
                     if file_count > 1:
                         logger.info(f"Found multiple files, short-circuiting and returning 'folder'")
@@ -521,16 +517,9 @@ def determine_asset_type(assetId, bucket, prefix):
                 # If we can't check archive status, include the file by default
                 non_archived_files.append(item)
                 file_count += 1
-                
-                # Short circuit if we've found more than one file
                 if file_count > 1:
-                    logger.info(f"Found multiple files, short-circuiting and returning 'folder'")
                     return 'folder'
-        
-        # At this point, we have 0 or 1 files
-        logger.info(f"Found {file_count} non-archived files in {bucket}/{prefix} (total objects: {len(contents)})")
-        
-        # Determine asset type
+
         if file_count == 0:
             logger.info("No non-archived files found, returning None")
             return None  # No files found
@@ -1107,7 +1096,8 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         )
         
         # Create the asset
-        # Note: We're passing an empty dict for claims_and_roles since this is a system operation
+        # Note: We're passing an empty dict for claims_and_roles since this is a system operation.
+        # AssetLocationInUseError (another asset's location holds the folder) reaches the caller.
         response = create_asset(request_model, {"tokens": ["SYSTEM_USER"]}, True)
         
         # Add the new asset to the cache instead of clearing it
@@ -1124,6 +1114,8 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         asset_cache.set(cache_key, new_asset)
         
         return response.assetId
+    except AssetLocationInUseError:
+        raise
     except Exception as e:
         logger.exception(f"Error creating asset: {e}")
         return None
@@ -1785,6 +1777,12 @@ IMPORT_LIST_TIME_RESERVE_MS = 120_000
 # add-ons but start no fileUpload workflow (no asset.file.uploaded event). True publishes them too.
 IMPORTED_FILES_START_UPLOAD_WORKFLOWS = False
 
+# The asset type is classified from a sample of the location's objects, as the upload path does.
+ASSET_TYPE_DETECTION_SAMPLE_SIZE = 1000
+
+# A bucket-sync auto-create refused because another asset's location already holds the folder.
+AUTO_CREATE_REFUSED_METRIC = "AutoCreateRefused"
+
 # The remaining time of the invocation being served, when its context reports one.
 _time_left_ms = None
 
@@ -1891,9 +1889,53 @@ def split_import_requests(event) -> Tuple[Dict, List[Tuple[str, Dict]]]:
     return {**event, "Records": kept}, requests
 
 
+def validate_import_request(request: Dict) -> Tuple[Optional[Dict], str]:
+    """`(asset row, '')` when an import request names a live asset of this function's registration
+    whose stored location is the request's location, in the request's bucket; `(None, reason)`
+    otherwise. Nothing in the request is trusted beyond the asset it names."""
+    if not isinstance(request, dict):
+        return None, "not an object"
+    owner = request.get("owner") if isinstance(request.get("owner"), dict) else {}
+    database_id_value, asset_id, bucket_id = (owner.get(f) for f in ("databaseId", "assetId", "bucketId"))
+    bucket, location = request.get("bucket"), request.get("location")
+    if not all(isinstance(v, str) and v for v in (database_id_value, asset_id, bucket_id, bucket, location)):
+        return None, "missing fields"
+    if database_id_value.endswith(ARCHIVED_DATABASE_SUFFIX):
+        return None, "archived database partition"
+    if asset_bucket_name and bucket != asset_bucket_name:
+        return None, f"bucket {bucket} is not this registration's bucket"
+    row = dynamodb.Table(asset_table_name).get_item(
+        Key={"databaseId": database_id_value, "assetId": asset_id}, ConsistentRead=True).get("Item")
+    if not row or row.get("status") == "archived":
+        return None, f"asset {database_id_value}:{asset_id} is not live"
+    if str(row.get("bucketId") or "") != bucket_id:
+        return None, f"asset {asset_id} is not in registration {bucket_id}"
+    registration = get_bucket_info_from_bucket_id(bucket_id) or {}
+    if registration.get("bucketName") != bucket or (
+            normalize_base_prefix(registration.get("baseAssetsPrefix"))
+            != normalize_base_prefix(asset_bucket_prefix)):
+        return None, f"registration {bucket_id} is not this function's registration"
+    stored = asset_location_of(row, normalize_base_prefix(asset_bucket_prefix), asset_id)
+    if not stored or stored != normalize_location(location):
+        return None, f"location {location} is not asset {asset_id}'s stored location"
+    return row, ""
+
+
 def continue_import(request: Dict) -> int:
-    owner = request.get("owner") or {}
-    return import_folder(request["bucket"], request["location"], owner, normalize_base_prefix(asset_bucket_prefix),
+    """List and queue an asset's existing files for import, from a request createAsset or an earlier
+    listing sent. The request is validated first, and a request that fails is logged and dropped. The
+    first request of an import also sets the asset type from the location's files."""
+    row, reason = validate_import_request(request)
+    if row is None:
+        logger.warning(f"Import request dropped: {reason}")
+        return 0
+    owner = request["owner"]
+    location = normalize_location(request["location"])
+    if request.get("start") and not request.get("keyMarker"):
+        update_asset_type(owner["bucketId"], owner["assetId"], request["bucket"], location, asset_data=row)
+    return import_folder(request["bucket"], location, import_owner_of(owner["databaseId"], owner["assetId"],
+                                                                         owner["bucketId"]),
+                         normalize_base_prefix(asset_bucket_prefix),
                          key_marker=request.get("keyMarker"), version_id_marker=request.get("versionIdMarker"))
 
 
@@ -1915,8 +1957,8 @@ def process_imported_record(record: Dict, bucket_name: str, object_key: str, pre
     asset_id = owner.get("assetId", "")
     row = dynamodb.Table(asset_table_name).get_item(
         Key={"databaseId": database_id_value, "assetId": asset_id}, ConsistentRead=True).get("Item")
-    if not row:
-        return True, False, f"Imported asset {asset_id} no longer exists; skipped {object_key}"
+    if not row or row.get("status") == "archived":
+        return True, False, f"Imported asset {asset_id} is not live; skipped {object_key}"
     bucket_id = str(row.get("bucketId") or owner.get("bucketId") or "")
     location = asset_location_of(row, normalize_base_prefix(prefix), asset_id)
     relative_path = relative_path_in(location, object_key)
@@ -2170,6 +2212,7 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                     refusal = auto_create_refusal(asset_table, bucket_name, derived_location)
                     if refusal:
                         logger.warning(f"Not auto-creating asset {asset_id} for {object_key}: {refusal}")
+                        emit_bucket_sync_count(AUTO_CREATE_REFUSED_METRIC, "locationInUse")
                         return False, True, f"Auto-create of asset {asset_id} refused"
                     # The folder already holds other objects: an asset created through the API a
                     # moment ago may own one of them and not be in the index yet. Look again once.
@@ -2200,7 +2243,14 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
 
                 # Create the asset
                 logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                try:
+                    created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                except AssetLocationInUseError as e:
+                    # An expected refusal: createAsset logged it once at WARNING with the asset that
+                    # holds the location.
+                    logger.info(f"Auto-create of asset {asset_id} for {object_key} refused: {e.owner}")
+                    emit_bucket_sync_count(AUTO_CREATE_REFUSED_METRIC, "locationInUse")
+                    return False, True, f"Auto-create of asset {asset_id} refused"
                 if not created_asset_id:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"

@@ -3455,11 +3455,12 @@ export function storageResourcesBuilder(
         );
 
         // Create SQS queue for S3 object created events
+        const onS3ObjectCreatedQueueName = `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`;
         const onS3ObjectCreatedQueue = new sqs.Queue(
             scope,
             "bucketSyncCreated--" + record.bucket + bucketSyncIdSuffix,
             {
-                queueName: `${config.name}-${config.app.baseStackName}-bucketSyncCreated--${bucketSyncIndex}`,
+                queueName: onS3ObjectCreatedQueueName,
                 visibilityTimeout: cdk.Duration.seconds(960), // Corresponding function's is 900
                 encryption: kmsEncryptionKey
                     ? sqs.QueueEncryption.KMS
@@ -3504,6 +3505,10 @@ export function storageResourcesBuilder(
             "BUCKET_SYNC_CREATED_QUEUE_URL",
             onS3ObjectCreatedQueue.queueUrl
         );
+        // createAsset sends an import request for the files already at a bucketExistingKey to this
+        // queue: the URL goes onto the registration row, the name into createAsset's send grant.
+        record.syncCreatedQueueName = onS3ObjectCreatedQueueName;
+        record.syncCreatedQueueUrl = onS3ObjectCreatedQueue.queueUrl;
 
         // Setup event source mapping with GovCloud support
         if (config.app.govCloud.enabled) {

@@ -83,6 +83,49 @@ describe("bucket-sync folder import permissions", () => {
         }
     });
 
+    test("createAsset sends to exactly the deployment's created-events queues, in one statement", () => {
+        const s = synth();
+        const [createAsset] = s.where(
+            "AWS::Lambda::Function",
+            (r) => r.properties.Handler === "handlers.assets.createAsset.lambda_handler"
+        );
+        expect(createAsset).toBeDefined();
+        const sqsStatements = statementsOf(s, createAsset).filter((st) =>
+            actionsOf(st).some((a) => a.startsWith("sqs:"))
+        );
+        expect(sqsStatements).toHaveLength(1);
+        expect(actionsOf(sqsStatements[0])).toEqual(["sqs:SendMessage"]);
+        const arns = resourcesOf(sqsStatements[0]);
+        const createdQueueNames = s
+            .ofType("AWS::SQS::Queue")
+            .filter((q) => /^bucketSyncCreated(?!DLQ)/.test(q.logicalId))
+            .map((q) => SynthResult.flatten(q.properties.QueueName));
+        expect(createdQueueNames).toHaveLength(2);
+        expect(arns.map((a) => a.split(":").pop()).sort()).toEqual(createdQueueNames.sort());
+        for (const arn of arns) {
+            expect(arn).not.toContain("*");
+            // The partition and Region of the deployment (service-helper), not a literal.
+            expect(arn.startsWith(`arn:${s.partition}:sqs:${s.region}:`)).toBe(true);
+            expect(arn).not.toMatch(/bucketSyncDeleted|Rejected/);
+        }
+    });
+
+    test("each registration row carries its created-events queue URL", () => {
+        const s = synth();
+        const [populator] = s
+            .ofType("AWS::CloudFormation::CustomResource")
+            .filter((r) => /PopulateS3AssetBucketsTable/.test(r.logicalId));
+        const buckets = SynthResult.flatten(populator.properties.buckets);
+        const createdQueues = s
+            .ofType("AWS::SQS::Queue")
+            .filter((q) => /^bucketSyncCreated(?!DLQ)/.test(q.logicalId));
+        expect(createdQueues).toHaveLength(2);
+        expect((buckets.match(/syncCreatedQueueUrl/g) || []).length).toBe(2);
+        for (const queue of createdQueues) {
+            expect(buckets).toContain(queue.logicalId);
+        }
+    });
+
     test("the deleted-events functions send to no queue", () => {
         const s = synth();
         const fns = functionsOf(s, DELETED_HANDLER);

@@ -8,6 +8,7 @@ recorded in the ledger and forwarded to the file-indexer topic, but starts no up
 version the ledger already has is skipped."""
 
 import json
+import sys
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -26,9 +27,12 @@ from tests.handlers.indexing.test_sqsBucketSync_location_attribution import (  #
 )
 from tests.handlers.indexing.test_sqsBucketSync_recreation_guard import _load
 
+al = sys.modules['common.assetLocations']
+NOT_FOUND = al.Resolution(al.RESOLVED_NOT_FOUND)
+
 OWN_QUEUE = "https://sqs.us-east-1.amazonaws.com/123456789012/bucketSyncCreated--0"
 _EXTRA = ("created_queue_url", "IMPORT_RECORDS_PER_MESSAGE", "_time_left_ms",
-          "IMPORTED_FILES_START_UPLOAD_WORKFLOWS", "tag_version")
+          "IMPORTED_FILES_START_UPLOAD_WORKFLOWS", "tag_version", "logger", "create_asset")
 
 
 @pytest.fixture(autouse=True)
@@ -108,15 +112,78 @@ class TestAnInitMarkerImportsItsFolder:
     def test_a_continuation_message_lists_from_its_markers(self):
         m = _load()
         _wire_import(m, [[_version("a1/f1.bin")]])
-        request = {"vamsImportRequest": {"bucket": BUCKET, "location": "a1/", "keyMarker": "a1/f0.bin",
-                                         "versionIdMarker": "vm",
-                                         "owner": {"databaseId": "db1", "assetId": "a1", "bucketId": "bucket-1"}}}
-        message = {"messageId": "req-1", "receiptHandle": "rh", "eventSource": "aws:sqs",
-                   "attributes": {"ApproximateReceiveCount": "1"}, "body": json.dumps(request)}
-        response = m.lambda_handler_created({"Records": [message]}, MagicMock())
+        _wire_request_checks(m)
+        response = m.lambda_handler_created({"Records": [_request_message(keyMarker="a1/f0.bin")]}, MagicMock())
         assert response["batchItemFailures"] == []
         assert m.s3_client.list_object_versions.call_args.kwargs["KeyMarker"] == "a1/f0.bin"
         assert [r["s3"]["object"]["key"] for r in _sent_records(m)] == ["a1/f1.bin"]
+        # A continuation does not set the asset type again.
+        m.update_asset_type.assert_not_called()
+
+
+OWNER = {"databaseId": "db1", "assetId": "a1", "bucketId": "bucket-1"}
+
+
+def _request_message(message_id="req-1", **fields):
+    request = {"bucket": BUCKET, "location": "a1/", "owner": dict(OWNER), "versionIdMarker": "vm", **fields}
+    return {"messageId": message_id, "receiptHandle": "rh", "eventSource": "aws:sqs",
+            "attributes": {"ApproximateReceiveCount": "1"}, "body": json.dumps({"vamsImportRequest": request})}
+
+
+def _wire_request_checks(m, row=None, registration=None):
+    m.dynamodb.Table.return_value.get_item.return_value = {"Item": row if row is not None else _row()}
+    m.get_bucket_info_from_bucket_id = MagicMock(return_value=registration or {
+        "bucketId": "bucket-1", "bucketName": BUCKET, "baseAssetsPrefix": "/"})
+
+
+@pytest.mark.unit
+class TestAnImportRequestFromCreateAsset:
+    def test_a_valid_request_sets_the_asset_type_once_and_queues_the_files(self):
+        m = _load()
+        _wire_import(m, [[_version("a1/model.glb"), _version("a1/b.obj")]])
+        _wire_request_checks(m)
+        response = m.lambda_handler_created({"Records": [_request_message(start=True)]}, MagicMock())
+        assert response["batchItemFailures"] == []
+        m.update_asset_type.assert_called_once()
+        assert m.update_asset_type.call_args.args == ("bucket-1", "a1", BUCKET, "a1/")
+        assert [r["s3"]["object"]["key"] for r in _sent_records(m)] == ["a1/model.glb", "a1/b.obj"]
+        assert m.dynamodb.Table.return_value.get_item.call_args.kwargs["ConsistentRead"] is True
+
+    def test_a_single_file_location_imports_its_own_object_and_companions_only(self):
+        m = _load()
+        location = "files/model.glb"
+        _wire_import(m, [[_version("files/model.glb"), _version("files/model.glb/notes.txt"),
+                          _version("files/model.glb.bak")]])
+        _wire_request_checks(m, row=_row(location=location))
+        m.lambda_handler_created({"Records": [_request_message(start=True, location=location)]}, MagicMock())
+        assert m.update_asset_type.call_args.args == ("bucket-1", "a1", BUCKET, location)
+        assert [r["s3"]["object"]["key"] for r in _sent_records(m)] == ["files/model.glb", "files/model.glb/notes.txt"]
+
+    @pytest.mark.parametrize("label,fields,row,registration", [
+        ("another location", {"location": "other/"}, None, None),
+        ("the bucket root", {"location": ""}, None, None),
+        ("another bucket", {"bucket": "someone-elses-bucket"}, None, None),
+        ("another registration", {"owner": {**OWNER, "bucketId": "bucket-2"}}, None, None),
+        ("an archived partition", {"owner": {**OWNER, "databaseId": "db1#deleted"}}, None, None),
+        ("no such asset", {}, {}, None),
+        ("an archived asset", {}, {**_row(), "status": "archived"}, None),
+        ("a registration of another bucket", {}, None,
+         {"bucketId": "bucket-1", "bucketName": "other-bucket", "baseAssetsPrefix": "/"}),
+        ("a registration under another prefix", {}, None,
+         {"bucketId": "bucket-1", "bucketName": BUCKET, "baseAssetsPrefix": "elsewhere/"}),
+        ("missing fields", {"owner": {"databaseId": "db1"}}, None, None),
+    ])
+    def test_a_forged_request_is_dropped_without_listing(self, label, fields, row, registration):
+        m = _load()
+        _wire_import(m, [[_version("a1/model.glb")]])
+        _wire_request_checks(m, row=row, registration=registration)
+        m.logger = MagicMock()
+        response = m.lambda_handler_created({"Records": [_request_message(start=True, **fields)]}, MagicMock())
+        assert response["batchItemFailures"] == [], label
+        m.s3_client.list_object_versions.assert_not_called()
+        m.sqs_client.send_message.assert_not_called()
+        m.update_asset_type.assert_not_called()
+        assert any("Import request dropped" in c.args[0] for c in m.logger.warning.call_args_list), label
 
 
 def _page_message(records, message_id="page-1"):
@@ -183,3 +250,61 @@ class TestImportedObjects:
         assert record["s3"]["object"]["key"] == "a1/A%2BB+c.glb"
         m.lambda_handler_created({"Records": [_page_message([record])]}, MagicMock())
         assert m.s3_client.head_object.call_args.kwargs["Key"] == "a1/A+B c.glb"
+
+
+@pytest.mark.unit
+class TestARefusedAutoCreateIsNotAnError:
+    """An auto-create refused because another asset's location already holds the folder is expected:
+    no ERROR line from bucket sync, the AutoCreateRefused count, and the record still forwarded."""
+
+    def _metric_lines(self, out):
+        return [json.loads(line) for line in out.splitlines() if line.startswith('{"_aws"')]
+
+    def test_a_refusal_from_create_asset(self, capsys, _restore_module_attrs):  # noqa: F811
+        m = _load()
+        _wire(m)
+        m.logger = MagicMock()
+        m.create_new_asset = _restore_module_attrs["create_new_asset"]
+        m.get_or_create_database_for_bucket = MagicMock(return_value="testdb1")
+        m.resolve_owner = MagicMock(return_value=NOT_FOUND)
+        m.create_asset = MagicMock(side_effect=m.AssetLocationInUseError(
+            "The specified bucketExistingKey is already in use by another asset", owner="db2:o1 at a1/sub/"))
+        capsys.readouterr()
+        result = m.process_s3_record(_record("a1/model.glb"))
+        assert result == (False, True, "Auto-create of asset a1 refused")
+        m.logger.error.assert_not_called()
+        m.logger.exception.assert_not_called()
+        m.logger.warning.assert_not_called()
+        metrics = self._metric_lines(capsys.readouterr().out)
+        assert [(x["Reason"], x["AutoCreateRefused"]) for x in metrics] == [("locationInUse", 1)]
+        assert metrics[0]["_aws"]["CloudWatchMetrics"][0]["Namespace"] == "VAMS/BucketSync"
+
+    def test_a_refusal_by_the_ready_index_is_one_warning(self, capsys):
+        m = _load()
+        owner = al.LocationEntry(database_id="db2", asset_id="o1", bucket_id="bucket-1", location="a1/sub/")
+        _wire(m, resolve=[NOT_FOUND, NOT_FOUND], ready=True, conflicts=[owner])
+        m.logger = MagicMock()
+        capsys.readouterr()
+        result = m.process_s3_record(_record("a1/model.glb"))
+        assert result == (False, True, "Auto-create of asset a1 refused")
+        m.logger.error.assert_not_called()
+        assert m.logger.warning.call_count == 1
+        assert "db2:o1" in m.logger.warning.call_args.args[0]
+        metrics = self._metric_lines(capsys.readouterr().out)
+        assert [x["AutoCreateRefused"] for x in metrics] == [1]
+
+    def test_many_refused_objects_log_no_error_lines(self, capsys, _restore_module_attrs):  # noqa: F811
+        m = _load()
+        _wire(m)
+        m.logger = MagicMock()
+        m.create_new_asset = _restore_module_attrs["create_new_asset"]
+        m.get_or_create_database_for_bucket = MagicMock(return_value="testdb1")
+        m.resolve_owner = MagicMock(return_value=NOT_FOUND)
+        m.create_asset = MagicMock(side_effect=m.AssetLocationInUseError("in use", owner="db2:o1 at a1/sub/"))
+        records = [_sqs(f"msg-{i}", _record(f"a1/f{i}.glb")) for i in range(25)]
+        capsys.readouterr()
+        response = m.lambda_handler_created({"Records": records}, MagicMock())
+        assert response["batchItemFailures"] == []
+        m.logger.error.assert_not_called()
+        m.logger.exception.assert_not_called()
+        assert len(self._metric_lines(capsys.readouterr().out)) == 25

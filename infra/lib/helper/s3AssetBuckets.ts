@@ -33,6 +33,10 @@ export interface S3AssetBucketRecord {
     isAccelerated: boolean;
     // Bucket sync writes the two VAMS object tags on the file versions it syncs from this record.
     tagSyncedObjects: boolean;
+    // This record's bucket-sync created-events queue, set when the storage stack creates it: the queue
+    // name (a literal, for ARNs in other stacks) and its URL (written onto the registration row).
+    syncCreatedQueueName?: string;
+    syncCreatedQueueUrl?: string;
 }
 
 // Global array to store bucket records
