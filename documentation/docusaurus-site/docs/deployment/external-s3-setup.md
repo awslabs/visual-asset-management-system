@@ -339,6 +339,8 @@ Replace the following placeholder values:
 
 The `s3:*` grant intentionally includes `s3:GetBucketNotification`, `s3:PutBucketNotification`, and `s3:GetBucketVersioning`. VAMS calls these during deployment from AWS CloudFormation custom resource Lambda functions in Account A to wire event notifications and detect versioning. If you scope the grant down from `s3:*`, you must include these actions explicitly or deployment will fail. Include `s3:GetObjectVersion` as well: file version downloads and every pipeline read the version selected or recorded at launch, and Amazon S3 authorizes such a read as `s3:GetObjectVersion`, not `s3:GetObject`.
 
+Bucket sync reads and writes the [VAMS object tags](#vams-object-tags) on each synced file version. The `s3:*` grant includes the four actions it uses. If you replace `s3:*` with a list of actions, add `s3:GetObjectTagging`, `s3:GetObjectVersionTagging`, `s3:PutObjectTagging` and `s3:PutObjectVersionTagging`; without them files are still synced and indexed, but not tagged.
+
 When you use [S3 Transfer Acceleration](#step-5b-enable-s3-transfer-acceleration-optional) on the bucket, the deployment also calls `s3:GetAccelerateConfiguration`. The `s3:*` grant includes it. If you replace `s3:*` with a list of actions, add `s3:GetAccelerateConfiguration` to that list, the same as `s3:GetBucketVersioning`.
 
 The grant also covers `s3:PutObject` and `s3:PutObjectAcl`. Every VAMS write into the bucket — uploads, folder markers, and the in-place object copies that back file move, rename, revert, unarchive, set-primary-type, and pipeline-output ingestion — sets the `bucket-owner-full-control` canned ACL so the object is owned by Account B rather than by the writing Account A role. `s3:PutObjectAcl` authorizes that canned ACL. If you scope the grant down from `s3:*` and the bucket has ACLs enabled (see [object ownership](#object-ownership-cross-account-writes) below), include both `s3:PutObject` and `s3:PutObjectAcl` or writes fail with `AccessDenied`.
@@ -1036,15 +1038,18 @@ sequenceDiagram
     Sync->>S3: Detect "init" file → DELETE it
     Sync->>S3: Determine asset type from other files
     Sync->>DDB: Update asset type
+    Sync->>SQS: Queue the files already in the folder for import
     Note over Sync: init file is NOT sent to file indexer
 ```
 
+The files already in the folder raise no event of their own, so the sync Lambda lists the folder and queues them, a page per message, to its own queue. Each is then handled like a new file, as below, except that it starts no `fileUpload` workflow: it was already in the bucket. A file version VAMS has already synced is skipped, so writing an `init` file again into an imported folder only adds what is new.
+
 For non-init files (regular asset files already present or uploaded later), the sync Lambda also:
 
--   Updates Amazon S3 object metadata with `databaseid` and `assetid` tags.
+-   Writes the object tags `VAMS:databaseId` and `VAMS:assetId` on the file version (see [VAMS object tags](#vams-object-tags)). It does not copy or rewrite the object.
 -   Publishes the event to the file indexer Amazon SNS topic for Amazon OpenSearch indexing.
 -   Publishes an `asset.file.uploaded` event to the VAMS orchestration Amazon EventBridge event bus, which routes it through an Amazon SQS queue to the dispatcher that starts matching `fileUpload` workflow triggers.
--   Adds to each record it forwards, on the file indexer topic and on the `asset.file.uploaded` event, an optional `vamsBinding` object naming the asset the file belongs to: `databaseId`, `assetId`, `bucketId`, `relativePath` (the file's path in the asset, with a leading `/`) and `resolvedBy` (`fastPath` when the first folder under the prefix names the asset, `locationIndex` when the asset's stored location was found through the asset location index). Every other field of the record is unchanged, and a record bucket sync could not attribute has no `vamsBinding`.
+-   Adds to each record it forwards, on the file indexer topic and on the `asset.file.uploaded` event, an optional `vamsBinding` object naming the asset the file belongs to: `databaseId`, `assetId`, `bucketId`, `relativePath` (the file's path in the asset, with a leading `/`) and `resolvedBy` (`fastPath` when the first folder under the prefix names the asset, `locationIndex` when the asset's stored location was found through the asset location index, `import` for a file of an imported folder). Every other field of the record is unchanged, and a record bucket sync could not attribute has no `vamsBinding`.
 
 ### Alternative: Use the API with bucketExistingKey
 
@@ -1075,11 +1080,11 @@ After assets are created (via init files or API):
 
 1. **Viewing in VAMS**: The assets appear in the VAMS web interface under the specified database. You can browse files, view metadata, and use any compatible viewer plugin.
 2. **File listing**: VAMS lists files by querying Amazon S3 with the asset's `assetLocation.Key` prefix. All files under that folder appear in the file manager; an asset created from a single object key lists that object, its previews and the files under its companion folder `{key}/`.
-3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets). It does not do so for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID; see **Ongoing sync** below.
+3. **Asset type detection**: The sync Lambda automatically determines the asset type based on the files present (file extension for single-file assets, `folder` for multi-file assets), from the asset's stored location.
 4. **Presigned URLs**: Downloads and viewer access use presigned URLs generated against the original bucket location.
 5. **Pipelines**: You can run processing pipelines (for example, 3D preview generation) on imported assets. Pipeline outputs are written to the appropriate output paths within the same bucket.
-6. **Ongoing sync**: For an asset whose folder is a top-level folder named after its asset ID, which includes every asset created from an `init` file or without `bucketExistingKey`, files added to or deleted from the folder in Amazon S3 are automatically detected by the sync Lambda and reflected in VAMS (file indexing, asset type updates, metadata cleanup). Bucket sync identifies an asset from the first folder below `baseAssetsPrefix`. For an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID (such as `projects/building-a/`), files added to or deleted from the folder directly in Amazon S3 are not attributed to the asset. They are not indexed for search, do not update the asset type, and do not start `fileUpload` workflow triggers. The same applies to files that were already in the folder when the asset was created. Files uploaded through VAMS (web interface, CLI, or API) are recorded against the asset and indexed, but when one of them is permanently deleted its search entry is not removed. Reindexing with index clearing removes those entries and restores the files uploaded through VAMS.
-7. **No data movement**: Files remain at their original S3 location. VAMS does not copy, move, or reorganize the files.
+6. **Ongoing sync**: Files added to or deleted from an asset's location directly in Amazon S3 are detected by the sync Lambda and reflected in VAMS (file indexing, semantic search, compliance, asset type, `fileUpload` workflow triggers and metadata cleanup), whatever the location. A file belongs to the asset whose stored location holds it. For a location that is not a top-level folder named after its asset ID (such as `projects/building-a/`), this works once the `assetLocationIndex` migration step has completed on an upgraded deployment (a new deployment needs no step). Files that were already in a folder when an asset was created with `bucketExistingKey` raise no event; run the [reindex utility](../developer/utilities/reindex.md) to index them.
+7. **No data movement**: Files remain at their original S3 location. VAMS does not copy, move, or reorganize the files, and does not rewrite them to mark them: it writes two object tags on each synced file version.
 
 ### Common questions
 
@@ -1097,7 +1102,7 @@ If your 3D models are individual files (not in folders), you need to reorganize 
 
 **Can I add files to an imported asset after creation?**
 
-Yes. After creating an asset from a folder key, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. An asset created from a single object key keeps its file at that key, and files you add are placed under its companion folder `{key}/`. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically, except for an asset created with `bucketExistingKey` whose folder is not a top-level folder named after its asset ID. Add files to such an asset through VAMS; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
+Yes. After creating an asset from a folder key, you can upload additional files to the asset through the VAMS web interface or API. New files are placed under the same S3 prefix as the original files. An asset created from a single object key keeps its file at that key, and files you add are placed under its companion folder `{key}/`. You can also add files directly to the asset folder in Amazon S3 and the sync Lambda will detect them automatically; see **Ongoing sync** under [What happens after import](#what-happens-after-import).
 
 **What if I have thousands of assets to import?**
 
@@ -1106,6 +1111,20 @@ The init-file approach scales well. Add a short delay (0.5-1 second) between cre
 **Will the init files remain in my bucket?**
 
 Not in the folders VAMS imports. The sync Lambda deletes the `init` file of each folder it imports from Amazon S3 after processing. If bucket versioning is enabled, all versions of the `init` file (including delete markers) are also removed. Other files in the folder are kept, including files whose names start or end with `init`, such as `init.txt` or `postinit`. A folder whose name is reserved or is not a valid asset ID (see [Step 1](#step-1-organize-your-data-to-match-vams-conventions)) is not imported, so an `init` file written to it remains in the bucket until you delete it. The sample scripts above skip reserved folder names.
+
+## VAMS object tags
+
+When bucket sync attributes a file version to an asset, it writes two object tags on that version: `VAMS:databaseId` (the database ID) and `VAMS:assetId` (the asset ID). They tell your own tools which VAMS database and asset a file is synced to; S3 Lifecycle and Replication rules can select one database's files by tag. VAMS itself never reads them: attribution, triggers, indexing and authorization follow the asset's stored location. Anyone allowed `s3:PutObjectTagging` can change them.
+
+-   **Your tags are kept.** VAMS reads the version's tag set and writes it back with only the two `VAMS:` keys added or corrected. An object that already has more than 8 tags of its own is not tagged (S3 allows 10); VAMS never removes a tag of yours to make room. A file copied in S3 from another asset's folder arrives with that asset's tags and gets the correct ones.
+-   **Values.** A database ID is written as is. An asset ID with a character S3 tag values do not accept (such as `,` or `'`) is written as `b64:` followed by its base64url form. A value longer than 256 characters is left off.
+-   **No new version.** A tag write creates no object version and changes no ETag, LastModified or content. VAMS subscribes to no tagging notification, so it raises no bucket-sync event. A bucket with Amazon EventBridge notifications on sends "Object Tags Added" events to your own rules, and replication rules may carry the tags to replicas.
+-   **When a tag cannot be written** (the bucket policy denies tagging, or there is no room), the file is still attributed, indexed and triggered. The sync ledger records `vamsTags: skipped` with the reason, the `VamsTagsSkipped` metric (namespace `VAMS/BucketSync`) counts it, and a denied bucket is logged as a warning once an hour.
+-   **Turning it off.** Set `tagSyncedObjects` to `false` on the bucket's `externalAssetBuckets` entry (or `app.assetBuckets.tagSyncedObjects` for the bucket VAMS creates) and deploy.
+-   **Files synced by earlier releases** carry the `databaseid` / `assetid` metadata those releases copied onto them, and no tags. `reindex_utility.py --tag-synced` tags them; see [Tag objects synced by earlier releases](../developer/utilities/reindex.md#tag-objects-synced-by-earlier-releases---tag-synced).
+-   **Race.** S3 has no conditional tagging write, so a tag change you make in the milliseconds between VAMS reading and writing a new version's tags is lost.
+
+A write into a location that two assets claim is attributed to neither: bucket sync sends it to the deployment's rejected-record queue and its alarm fires. See the troubleshooting guide for how to resolve the overlap and redrive the queue.
 
 ## Related resources
 
