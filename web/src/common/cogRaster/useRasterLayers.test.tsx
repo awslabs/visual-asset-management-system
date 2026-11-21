@@ -221,7 +221,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         props.entries[0].failed = null as any;
         render(<RasterLayerPanel layers={props} visibilityToggle />);
         expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
-        const toggle = screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' });
+        const toggle = screen.getByRole("checkbox", { name: "Visible: s.tif.cog.tif" });
         expect(toggle).toBeChecked();
         expect(screen.getByTestId("raster-layer-visibility")).toHaveTextContent("Visible");
         await userEvent.click(toggle);
@@ -237,7 +237,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         render(<RasterLayerPanel layers={props} visibilityToggle />);
         expect(screen.queryByTestId("raster-hidden-badge")).not.toBeInTheDocument();
         expect(screen.getByTestId("raster-layer-row")).toHaveAttribute("data-hidden", "true");
-        const toggle = screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' });
+        const toggle = screen.getByRole("checkbox", { name: "Visible: s.tif.cog.tif" });
         expect(toggle).not.toBeChecked();
         // No opacity on the label: its colour comes from the inactive text token.
         const label = screen.getByTestId("raster-layer-label");
@@ -276,7 +276,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         const props = layers(jest.fn(), "tile");
         props.entries[0].failed = null as any;
         render(<RasterLayerPanel layers={props} visibilityToggle />);
-        screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' }).focus();
+        screen.getByRole("checkbox", { name: "Visible: s.tif.cog.tif" }).focus();
         await userEvent.keyboard(" ");
         expect(props.setVisible).toHaveBeenCalledWith("r1", false);
     });
