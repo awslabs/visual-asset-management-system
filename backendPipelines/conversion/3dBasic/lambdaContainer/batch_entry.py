@@ -24,12 +24,21 @@ carries the same text a Lambda run's error would, and exits 1; the state machine
 the workflow.
 """
 
+import ctypes
 import json
 import os
 import sys
 
 import conversion_service
 import size_check
+
+# prctl(2) options. The Batch job definition sets no ECS init process, so this file's process is the
+# task's PID 1: it makes itself non-dumpable before the conversion worker starts, so a worker child of
+# the same user cannot read this process's environment -- the task's credential endpoint
+# (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI) -- through /proc/1/environ, and it reaps the descendants
+# that are reparented to it. The conversion worker already starts with that endpoint scrubbed from its
+# own environment (conversion_service.is_scrubbed); this closes the remaining way to it.
+PR_SET_DUMPABLE = 4
 
 EVENT_VARIABLE = "VAMS_CONVERSION_EVENT"
 ERROR_PREFIX = "VAMS_CONVERSION_ERROR: "
@@ -57,8 +66,38 @@ def read_event(environ=None):
     return data
 
 
+def harden_process():
+    """Make this process non-dumpable so a same-user process cannot read its /proc entry. Returns
+    False where the call is not available (a non-Linux developer machine); nothing else depends on it.
+    The conversion worker started later marks itself the same way through ``lambda.py``."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except Exception:  # noqa: BLE001 - a platform without it keeps the rest of the run
+        return False
+
+
+def reap_orphans():
+    """Reap every descendant reparented to this process (PID 1 of the task), so no zombie is left.
+    Orphans reparent to PID 1 by the kernel; ``lambda.run_worker`` already signals strays after each
+    worker, and this collects their exit status. Returns the count reaped."""
+    reaped = 0
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            return reaped
+        if pid == 0:
+            return reaped
+        reaped += 1
+
+
 def main(environ=None, implementation=None):
     environ = os.environ if environ is None else environ
+    # Before the conversion worker exists: close this process's /proc entry to a same-user reader.
+    harden_process()
     if not size_check.task_memory_bytes(environ):
         print(ERROR_PREFIX + f"{size_check.TASK_MEMORY_VARIABLE} is not set; this entry runs on an AWS "
               f"Batch task only.", file=sys.stderr)
@@ -74,6 +113,8 @@ def main(environ=None, implementation=None):
     except Exception as e:  # noqa: BLE001 - every failure is reported on one line and in the exit status
         print(ERROR_PREFIX + f"{type(e).__name__}: {str(e)[:2000]}", file=sys.stderr)
         return 1
+    finally:
+        reap_orphans()
     body = result.get("body") if isinstance(result, dict) else None
     print(RESULT_PREFIX + (body if isinstance(body, str) and body else "Success"))
     return 0

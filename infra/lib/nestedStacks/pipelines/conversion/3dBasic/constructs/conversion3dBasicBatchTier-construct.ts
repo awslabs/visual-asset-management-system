@@ -239,7 +239,12 @@ export class Conversion3dBasicBatchTier extends Construct {
                 imageBuildArgs: { ENABLE_STEP_INPUT: enableStepInput ? "true" : "false" },
                 ephemeralStorageGiB: CONVERSION_3D_BASIC_BATCH_EPHEMERAL_STORAGE_GIB,
                 maxvCpus: CONVERSION_3D_BASIC_BATCH_MAX_VCPUS,
-                initProcessEnabled: true,
+                // No ECS init process: the image's ENTRYPOINT (batch_entry.py) is PID 1. It makes
+                // itself non-dumpable before it starts the conversion worker and reaps orphaned
+                // descendants, so a worker child of the same user cannot read PID 1's environment
+                // (the task's credential endpoint) through /proc/1/environ. The init ECS would inject
+                // is an ordinary same-uid process that holds the whole task environment and answers
+                // /proc/1/environ to any same-uid reader.
                 environment: {
                     // The S3 clients read the Region at import; do not rely on the platform setting it.
                     AWS_REGION: region,

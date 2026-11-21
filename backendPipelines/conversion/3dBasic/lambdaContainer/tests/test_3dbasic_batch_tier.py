@@ -692,6 +692,36 @@ class TestBatchEntry:
         captured = capsys.readouterr()
         assert "SECRET-TOKEN" not in captured.out + captured.err
 
+    def test_the_process_is_made_non_dumpable_before_the_conversion_runs(self):
+        # No ECS init is enabled on the job definition, so this process is the task's PID 1: it closes
+        # its own /proc entry to a same-user reader (the worker child) before the worker starts, and
+        # reaps orphaned descendants after.
+        order = []
+        implementation = MagicMock()
+        implementation.convert.side_effect = lambda data: (order.append("convert"),
+                                                           {"statusCode": 200, "body": "Success"})[1]
+        with patch.object(batch_entry, "harden_process", lambda: order.append("harden") or True), \
+             patch.object(batch_entry, "reap_orphans", lambda: order.append("reap")):
+            assert batch_entry.main(self._env(), implementation) == 0
+        assert order == ["harden", "convert", "reap"]
+
+    def test_the_process_is_hardened_and_orphans_reaped_even_when_the_conversion_fails(self):
+        order = []
+        implementation = MagicMock()
+        implementation.convert.side_effect = ValueError("boom")
+        with patch.object(batch_entry, "harden_process", lambda: order.append("harden") or True), \
+             patch.object(batch_entry, "reap_orphans", lambda: order.append("reap")):
+            assert batch_entry.main(self._env(), implementation) == 1
+        assert order == ["harden", "reap"]
+
+    def test_orphaned_descendants_are_reaped_until_none_are_left(self):
+        with patch("os.waitpid", MagicMock(side_effect=[(321, 0), (0, 0)])):
+            assert batch_entry.reap_orphans() == 1
+
+    def test_reaping_stops_cleanly_when_there_is_nothing_to_wait_for(self):
+        with patch("os.waitpid", MagicMock(side_effect=ChildProcessError())):
+            assert batch_entry.reap_orphans() == 0
+
     def test_both_tiers_reach_the_same_convert(self):
         handler = _read("lambda.py")
         entry = _read("batch_entry.py")
