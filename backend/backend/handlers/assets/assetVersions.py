@@ -31,7 +31,10 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
-from common.assetLocations import aux_scope, contains, normalize_base_prefix, object_key_for, relative_path_in
+from common.assetLocations import (
+    NestedLocations, aux_scope, contains, normalize_base_prefix, object_key_for, relative_path_in,
+)
+from common.fileAttribution import nested_locations_of_asset
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -390,7 +393,15 @@ def delete_assetAuxiliary_files(prefix, keep=None):
 
     return
 
-def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool = False) -> List[Dict]:
+def nested_locations_for(asset: Dict, bucket: str, prefix: str, destructive: bool = False) -> NestedLocations:
+    """The stored locations of other assets nested in this asset's location: their files are theirs, so a
+    version of this asset neither records nor reverts them."""
+    return nested_locations_of_asset(asset_table, buckets_table, asset, bucket, prefix, destructive=destructive,
+                                     asset_table_name=asset_database)
+
+
+def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool = False,
+                                nested: Optional[NestedLocations] = None) -> List[Dict]:
     """List all files in an S3 bucket prefix with their version information
 
     Uses a single paginated list_object_versions walk (no per-file head_object
@@ -404,6 +415,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
         bucket: The S3 bucket name
         prefix: The S3 key prefix
         include_archived: Whether to also include archived (soft-deleted) files
+        nested: The locations of other assets nested in ``prefix``; their files are left out
 
     Returns:
         List of file dictionaries with version information
@@ -432,7 +444,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
             key = version['Key']
             # Skip folder markers (keys ending with '/')
-            if key.endswith('/') or not contains(location, key):
+            if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                 continue
 
             relative_key = relative_path_in(location, key).lstrip('/')
@@ -465,7 +477,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
                 key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if key.endswith('/') or not contains(location, key):
+                if key.endswith('/') or not contains(location, key) or (nested and not nested.keep(key)):
                     continue
 
                 relative_key = relative_path_in(location, key).lstrip('/')
@@ -1801,9 +1813,12 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     files_to_version = []
     skipped_files = []
     
+    # The files of an asset nested in this asset's location are that asset's: not part of this version
+    nested = nested_locations_for(asset, bucket, prefix)
+
     if request_model.useLatestFiles:
         # Get latest files from S3
-        s3_files = list_s3_files_with_versions(bucket, prefix, include_archived=False)
+        s3_files = list_s3_files_with_versions(bucket, prefix, include_archived=False, nested=nested)
         
         # Format for storage
         for file in s3_files:
@@ -1818,6 +1833,9 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
     else:
         # Validate provided files (not archived for the version provided and not permanently deleted)
         invalid_files = validate_s3_files_exist(bucket, prefix, request_model.files)
+        invalid_files.extend(file.relativeKey for file in request_model.files
+                             if file.relativeKey not in invalid_files
+                             and not nested.keep(object_key_for(prefix, file.relativeKey) or ''))
         
         # Add valid files to version
         for file in request_model.files:
@@ -1900,6 +1918,8 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     
     # Get asset location
     bucket, prefix = get_asset_s3_location(asset)
+    # A file a nested asset's location holds is that asset's: the revert skips it and reports it
+    nested = nested_locations_for(asset, bucket, prefix)
     
     # First check if the version metadata exists
     version_metadata = get_asset_version_metadata(databaseId, assetId, request_model.assetVersionId)
@@ -1940,6 +1960,8 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
         full_key = object_key_for(prefix, relative_key)
+        if not full_key or not nested.keep(full_key):
+            return None, relative_key
 
         try:
             # Check if the file version still exists (wasn't permanently deleted)
@@ -2200,7 +2222,10 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     #   - the key's current state is archived when its IsLatest entry is a delete marker
     # This turns 2N sequential S3 calls into a single listing, which is what kept this
     # endpoint inside the API timeout on assets with many files.
-    snapshot_files = file_versions.get('files', [])
+    # A snapshot taken before nested assets were left out can name a nested asset's files; they are not shown
+    nested = nested_locations_for(asset, bucket, prefix)
+    snapshot_files = [file for file in file_versions.get('files', [])
+                      if not nested or nested.keep(object_key_for(prefix, file.get('relativeKey', '')) or '')]
     existing_version_ids = set()
     archived_keys = set()
 

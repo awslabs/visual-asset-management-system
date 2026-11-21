@@ -46,9 +46,10 @@ from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
 from common.assetLocations import (
-    OWN_FILE_OUTPUT_REFUSAL, contains, held_objects, is_folder_location, names_own_object,
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, contains, held_objects, is_folder_location, names_own_object,
     normalize_base_prefix, object_key_for,
 )
+from common.fileAttribution import nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -827,6 +828,14 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
 OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
 
 
+def nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key) -> bool:
+    """Whether an upload's key lies in the location of another asset nested in this asset's location: the
+    key is that asset's, so neither a user upload nor a workflow output writes it through this asset."""
+    nested = nested_locations_of_asset(asset_table, buckets_table, asset, bucket_name, asset_base_key,
+                                       asset_table_name=asset_storage_table_name)
+    return nested.holder(final_s3_key) is not None
+
+
 def normalize_s3_path(asset_base_key, file_path):
     """
     Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
@@ -1426,6 +1435,8 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+            if nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key):
+                raise VAMSGeneralErrorResponse(NESTED_PATH_REFUSAL)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
@@ -1734,6 +1745,15 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                     has_failures = True
                     continue
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                if nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",  # External uploads don't have S3 upload IDs
+                        success=False,
+                        error=NESTED_PATH_REFUSAL
+                    ))
+                    has_failures = True
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -2320,6 +2340,23 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                if nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error=NESTED_PATH_REFUSAL
+                    ))
+                    has_failures = True
+                    if file.uploadIdS3 != "zero-byte":
+                        try:
+                            s3.abort_multipart_upload(
+                                Bucket=bucket_name,
+                                Key=f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}",
+                                UploadId=file.uploadIdS3)
+                        except Exception as abort_error:
+                            logger.warning(f"Error aborting multipart upload for a refused path: {abort_error}")
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)

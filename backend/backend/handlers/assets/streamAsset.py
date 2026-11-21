@@ -15,6 +15,7 @@ from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
 from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for, relative_path_in
+from common.fileAttribution import nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -157,6 +158,14 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+def held_by_nested_asset(asset_bucket, asset_base_key, object_key) -> bool:
+    """Whether a resolved key is held by another asset's location nested in this asset's location: it is
+    that asset's file, and this asset answers it as a missing file."""
+    nested = nested_locations_of_asset(asset_table, buckets_table, None, asset_bucket, asset_base_key,
+                                       asset_table_name=asset_storage_table_name)
+    return nested.holder(object_key) is not None
+
+
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions
     
@@ -269,6 +278,8 @@ def handle_head_request(event, claims_and_roles):
         message = "File key exceeds the maximum S3 object key length"
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
+    if held_by_nested_asset(asset_bucket, asset_base_key, object_key):
+        return general_error(body={'message': 'File not found'}, status_code=404, event=event)
 
     # The quarantine block is evaluated only for an authorized caller, so a denied caller
     # cannot learn the asset's compliance state from the response. It applies to the resolved key:
@@ -524,6 +535,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Resolve the full S3 key
             object_key = resolve_asset_file_path(asset_base_key, object_key)
+            if held_by_nested_asset(asset_bucket, asset_base_key, object_key):
+                error_response = general_error(body={"message": "File not found"}, status_code=404, event=event)
+                error_response['headers'].update({
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                })
+                return error_response
 
             # The validator bounded the asset-relative part; the resolved key carries the asset prefix
             # as well and is what S3 measures. Refuse it here so an over-long key never reaches get_object.

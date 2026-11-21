@@ -44,6 +44,7 @@ from common.assetLocations import (
     folder_listing_prefix, in_folder, is_folder_location, normalize_base_prefix, normalize_location, object_key_for,
     relative_path_in,
 )
+from common.fileAttribution import nested_locations_of_asset
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.apiRoutes import (
     API_ASSET_METADATA,
@@ -1847,6 +1848,12 @@ def _verify_inputs_exist(selected_inputs, asset_records):
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
         key = _input_key(root, relative)
+        # A key the location of another asset nested in this one holds is that asset's file
+        nested = nested_locations_of_asset(_asset_table(), _buckets_table(), asset, bucket, root,
+                                           asset_table_name=asset_table_name)
+        if nested.holder(key) is not None:
+            missing.append(f"{item['assetId']}{item['relativeFileKey']}")
+            continue
         checks.append(item)
         jobs.append(lambda b=bucket, k=key, v=item.get("versionId", ""): _input_exists_in_s3(b, k, v))
 

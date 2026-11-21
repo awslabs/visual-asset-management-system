@@ -387,7 +387,8 @@ class Job:
             # The request manifest records the value the API chose when the job was created.
             members, empty_dirs = expand_selection(self.clients.for_bucket(bucket), bucket, base_key,
                                                    manifest.get("entries"), manifest.get("pinnedFiles"),
-                                                   include_preview_files(manifest))
+                                                   include_preview_files(manifest),
+                                                   exclude_locations=manifest.get("excludeLocations"))
             check_members(self.clients.for_bucket, members,
                           tuple(manifest.get("blockedExtensions") or CORE_BLOCKED_EXTENSIONS),
                           tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES),

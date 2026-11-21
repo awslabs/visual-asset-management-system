@@ -60,8 +60,8 @@ from common.assetLocations import (
     RESOLVED_FOUND,
     RESOLVED_TOO_DEEP,
     LocationTooDeepError,
+    NestedLocations,
     Resolution,
-    candidate_locations,
     contains,
     derive_location,
     fill_location_attributes,
@@ -69,6 +69,7 @@ from common.assetLocations import (
     held_objects,
     index_ready,
     normalize_base_prefix,
+    nested_locations_in_rows,
     normalize_location,
     relative_path_in,
     resolve_owner,
@@ -1879,38 +1880,30 @@ def _send_import_page(records: List[Dict]) -> None:
 
 
 def nested_locations(bucket_id: str, location: str, database_id_value: str, asset_id: str,
-                     base_prefix: str) -> frozenset:
-    """The stored locations of the registration's other live assets that lie inside `location`. The
-    deepest stored location that contains a key owns it, so each of them keeps its own keys when
-    `location` is imported. One walk of the registration's BucketIdGSI partition."""
-    location = normalize_location(location)
-    nested = set()
+                     base_prefix: str) -> NestedLocations:
+    """The stored locations of the registration's other assets, live and archived, nested in `location`
+    (`assetLocations.is_nested_in`). The deepest stored location that contains a key owns it, so each of
+    them keeps its own keys when `location` is imported. One walk of the registration's BucketIdGSI
+    partition."""
+    rows = []
     table = dynamodb.Table(asset_table_name)
     query_kwargs = {"IndexName": "BucketIdGSI", "KeyConditionExpression": Key("bucketId").eq(bucket_id)}
     while True:
         response = table.query(**query_kwargs)
         for item in response.get("Items", []):
-            item_database_id = str(item.get("databaseId") or "")
-            item_asset_id = str(item.get("assetId") or "")
-            if (item_database_id.endswith(ARCHIVED_DATABASE_SUFFIX) or item.get("status") == "archived"
-                    or (item_database_id, item_asset_id) == (database_id_value, asset_id)):
+            if (str(item.get("databaseId") or ""), str(item.get("assetId") or "")) == (database_id_value, asset_id):
                 continue
-            stored = asset_location_of(item, base_prefix, item_asset_id)
-            if stored != location and stored.startswith(location):
-                nested.add(stored)
+            item_asset_id = str(item.get("assetId") or "")
+            rows.append({**item, "assetLocation": {"Key": asset_location_of(item, base_prefix, item_asset_id)}})
         if "LastEvaluatedKey" not in response:
-            return frozenset(nested)
+            return nested_locations_in_rows(rows, location)
         query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
 
-def held_by_nested(nested, location: str, object_key: str) -> bool:
-    """Whether a key of `location` is held by one of `nested`, locations inside it: it is then that
+def held_by_nested(nested: NestedLocations, location: str, object_key: str) -> bool:
+    """Whether a key of `location` is held by one of `nested`, the locations nested in it: it is then that
     asset's key."""
-    if not nested:
-        return False
-    depth = len(normalize_location(location))
-    return any(len(candidate) > depth and candidate in nested and contains(candidate, object_key)
-               for candidate in candidate_locations(object_key))
+    return bool(nested) and nested.holder(object_key) is not None
 
 
 def import_folder(bucket_name: str, location: str, owner: Dict[str, str], prefix: str,
@@ -1921,7 +1914,7 @@ def import_folder(bucket_name: str, location: str, owner: Dict[str, str], prefix
     Before the location index is ready, the keys held by the stored locations of the registration's
     other live assets inside `location` are left out (`nested_locations`, read once per listing); once
     it is ready, each imported record is checked against the index when it is processed."""
-    nested = (frozenset() if index_ready(asset_table_name)
+    nested = (NestedLocations(location) if index_ready(asset_table_name)
               else nested_locations(owner["bucketId"], location, owner["databaseId"], owner["assetId"],
                                     normalize_base_prefix(prefix)))
     kwargs = {"Bucket": bucket_name, "Prefix": location, "MaxKeys": IMPORT_LIST_PAGE_SIZE}
@@ -2062,7 +2055,7 @@ def imported_key_held_elsewhere(bucket_name: str, object_key: str, location: str
     if not index_ready(asset_table_name):
         return None
     resolution = resolve_by_location(dynamodb.Table(asset_table_name), bucket_name, object_key,
-                                      use_cache=use_cache)
+                                      include_archived=True, use_cache=use_cache)
     if resolution is not None:
         if resolution.status == RESOLVED_AMBIGUOUS:
             return "several assets that share one location"

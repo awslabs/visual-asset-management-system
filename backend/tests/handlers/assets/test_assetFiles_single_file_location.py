@@ -75,6 +75,10 @@ def af(monkeypatch):
 
         asset = {"databaseId": "db1", "assetId": "a1", "bucketId": "b1",
                  "assetLocation": {"Key": FILE_LOCATION}}
+        # The asset and registration tables, in memory: no other asset lies inside the location
+        from tests.common.fileAttributionFakes import AttributionAssetTable, AttributionBucketsTable, registration
+        monkeypatch.setattr(module, "asset_table", AttributionAssetTable([asset]))
+        monkeypatch.setattr(module, "buckets_table", AttributionBucketsTable([registration("b1", BUCKET, "")]))
         monkeypatch.setattr(module, "s3_client", client)
         monkeypatch.setattr(module, "s3_resource", boto3.resource("s3", region_name="us-east-1"))
         monkeypatch.setattr(module, "get_asset_with_permissions", lambda *args, **kwargs: asset)

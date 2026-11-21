@@ -340,13 +340,13 @@ class TestTheDeepestLocationKeepsItsKeys:
         [walk] = m.dynamodb.Table.return_value.query.call_args_list
         assert walk.kwargs["IndexName"] == "BucketIdGSI"
 
-    def test_an_archived_inner_asset_does_not_keep_its_keys(self):
+    def test_an_archived_inner_asset_keeps_its_keys(self):
         m = _load()
         _wire_import(m, [[_version("a1/model.glb"), _version("a1/inner/part.obj")]])
         m.dynamodb.Table.return_value.query.return_value = {"Items": [
             _row(), _row(database_id="db1#deleted", asset_id="inner", location="a1/inner/")]}
         m.process_s3_record(_record("a1/init"))
-        assert [r["s3"]["object"]["key"] for r in _sent_records(m)] == ["a1/model.glb", "a1/inner/part.obj"]
+        assert [r["s3"]["object"]["key"] for r in _sent_records(m)] == ["a1/model.glb"]
 
     def _wire_ready(self, m, owners):
         """The index is ready and answers `owners[key]` (an asset id, or a Resolution)."""

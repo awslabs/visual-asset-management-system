@@ -13,7 +13,9 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
-from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, normalize_base_prefix, object_key_for
+from common.assetLocations import (
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, is_folder_location, normalize_base_prefix, object_key_for,
+)
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -109,7 +111,7 @@ MAX_FILES_PER_COMPLETION_CALL = MAX_FILES_PER_UPLOAD_REQUEST
 MAX_NAMED_WRITE_BACK_FAILURES = 20
 # Per-file refusals of the file ingestion that the user can act on. The run's error repeats one by its
 # fixed text after the file it refused; any other per-file error stays in the log.
-USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL})
+USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL, NESTED_PATH_REFUSAL})
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."

@@ -22,6 +22,7 @@ from common.apiRoutes import (
 )
 from common.validators import validate
 from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for
+from common.fileAttribution import nested_locations_of_asset
 from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
@@ -856,6 +857,13 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
             # Construct full S3 key using asset's actual location
             full_key = f"{asset_base_path}{normalized_file_path}"
         
+        # A file the location of another asset nested in this one holds is that asset's file
+        nested = nested_locations_of_asset(asset_storage_table, s3_asset_buckets_table, asset, bucket_name,
+                                           asset['assetLocation']['Key'],
+                                           asset_table_name=asset_storage_table_name)
+        if nested.holder(full_key) is not None:
+            raise VAMSGeneralErrorResponse("File not found in S3")
+
         # Check if file exists in S3
         try:
             s3.head_object(Bucket=bucket_name, Key=full_key)
