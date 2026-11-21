@@ -119,7 +119,7 @@ export async function getPresignedFileUrl(
     return (await resolvePresignedFileUrl(request, subject, options)).url;
 }
 
-async function resolvePresignedFileUrl(
+export async function resolvePresignedFileUrl(
     request: PresignedFileRequest,
     subject: string,
     options: { fresh?: boolean } = {}

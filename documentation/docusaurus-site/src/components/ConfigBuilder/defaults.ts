@@ -280,6 +280,10 @@ const COMMERCIAL: ConfigShape = {
                 enabled: true,
                 autoRegisterWithVAMS: true,
                 enableStepInput: false,
+                batchTier: {
+                    enabled: false,
+                    maxMemoryGiB: 120,
+                },
             },
             usePreview3dThumbnail: {
                 enabled: false,

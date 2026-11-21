@@ -215,6 +215,12 @@ describe("Fargate pipeline job retry", () => {
             )
             .map((file) => path.relative(PIPELINES_DIR, file));
         expect(retrying).toEqual([
+            path.join(
+                "conversion",
+                "3dBasic",
+                "constructs",
+                "conversion3dBasicBatchTier-construct.ts"
+            ),
             path.join("system", "genAiMetadata", "constructs", "systemGenAiMetadata-construct.ts"),
         ]);
     });

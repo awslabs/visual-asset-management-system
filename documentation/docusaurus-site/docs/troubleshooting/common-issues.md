@@ -696,6 +696,7 @@ These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). 
 **Resolution:**
 
 -   STEP input is off by default because it adds Open CASCADE to the conversion image. Set `app.pipelines.useConversion3dBasic.enableStepInput` to `true` in `infra/config/config.json` and deploy again; the image is rebuilt with cascadio. See the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) and the [configuration reference](../deployment/configuration-reference.md).
+-   A model is refused as too large for the conversion function. Turn on the AWS Batch tier (`app.pipelines.useConversion3dBasic.batchTier.enabled`, which needs `app.useGlobalVpc.enabled`) to convert it on an AWS Fargate job of up to 120 GiB. A run that waits for a job and then fails in `RUNNABLE` is blocked by the account's Fargate On-Demand vCPU quota; a run refused above the largest job size, or naming a Region, is explained in the [Batch tier troubleshooting](../pipelines/3d-conversion.md#troubleshooting).
 -   An incomplete conversion names the referenced files it could not include in `conversion-incomplete.json` and the run log, with the reason for each. Upload a missing file to the asset at the path the model names, or change a reference that points outside the asset (an absolute path, a URL, or a path that leaves the asset) to a relative path, and run the conversion again. Set the template's Missing references option to `fail` to stop such a run instead of converting without the files.
 
 ### Media Preview Run Completes With No Preview
