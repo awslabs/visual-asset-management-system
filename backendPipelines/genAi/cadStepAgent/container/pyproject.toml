@@ -1,0 +1,31 @@
+[project]
+name = "cad-step-agent-pipeline"
+version = "0.1.0"
+description = "CAD STEP agent pipeline container image"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "strands-agents[openai]==1.57.0",
+    "bedrock-agentcore==1.23.1",
+    "cadquery==2.8.0",
+    "ddgs==9.16.0",
+    "httpx==0.28.1",
+    "boto3==1.43.100",
+]
+
+# The image installs the committed, hashed requirements.lock with `pip install --require-hashes
+# --only-binary :all:`. It is exported from uv.lock (`uv export`, command in its header); uv is a
+# development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+
+# mcp 2.1.1 carries five advisories (CVE-2026-59951, CVE-2026-116684, CVE-2026-116685, CVE-2026-116686,
+# CVE-2026-115563), fixed in 1.30.0 and 2.2.0. strands-agents 1.57.0 requires mcp below 2.2, so the lock
+# takes the 1.x fix. Remove when strands-agents is moved to a release that allows mcp 2.2 or later.
+constraint-dependencies = ["mcp>=1.30.0,<2"]
+
+# The packages named below were uploaded less than seven days before this lock; they are the versions
+# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is older
+# than seven days: numpy after 2026-11-23, python-multipart and trame-common after 2026-11-24.
+exclude-newer-package = { numpy = "2026-11-16T21:32:28Z", python-multipart = "2026-11-17T10:40:38Z", trame-common = "2026-11-17T18:23:30Z" }

@@ -15,7 +15,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Every package at the version and hash in the lock (generated from requirements.txt; its header holds
+# Every package at the version and hash in the lock (the `uv export` of uv.lock; its header holds
 # the command that regenerates it), as wheels only.
 COPY ./requirements.lock ./requirements.lock
 RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r requirements.lock

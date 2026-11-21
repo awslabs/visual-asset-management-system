@@ -668,7 +668,8 @@ jobs:
     # The pipeline suites under backendPipelines/. Their test modules share basenames across pipelines
     # and no tests directory is a package, so one pytest process over the tree fails at collection.
     # backendPipelines/ci/pipeline_tests.py finds every tests directory, builds each one's environment
-    # from its own requirements, and runs one pytest process per directory. It splits the directories
+    # from its own requirements (uv installs the committed exports of the uv locks), and runs one pytest
+    # process per directory. It splits the directories
     # into three groups, one job each, so a new directory runs without a workflow edit. A directory
     # whose tests render is marked in backendPipelines/ci/suite-settings.json and runs under xvfb-run. A directory
     # that cannot run on a CPU-only runner is listed with its reason in
@@ -696,6 +697,16 @@ jobs:
               uses: actions/setup-python@v7
               with:
                   python-version: 3.12.16
+
+            # The runner builds each suite's environment with uv from the committed exports. The version
+            # every pyproject.toml requires (`[tool.uv] required-version`), checked against the SHA-256 of
+            # its release archive.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
 
             - name: Install the system packages the group's suites need
               # A suite that renders (headlessDisplay in suite-settings.json) runs under xvfb-run; the runner

@@ -8,7 +8,7 @@ For each project directory that has a tracked `uv.lock` (found with `git ls-file
 hand-kept list) it:
 
 1. runs `uv lock --check`, which fails when the lock disagrees with pyproject.toml;
-2. requires every tracked top-level `requirements*.txt` in the directory to be a uv export (its
+2. requires every tracked top-level `requirements*.txt` or `requirements*.lock` in the directory to be a uv export (its
    header names the `uv export` command that produced it), regenerates each one and fails when its
    content changes, which means the export was stale (the file is left regenerated, so a local run
    fixes it). A requirements file without the header fails: a hand-written file beside a lock would
@@ -48,8 +48,9 @@ ALLOWED_EXPORT_FLAGS = {
 }
 ALLOWED_EXPORT_VALUE_FLAGS = {"--group", "--only-group", "--no-group", "--extra", "--no-extra"}
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-# Top-level files in a locked directory that must be uv exports.
-REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\.txt$")
+# Top-level files in a locked directory that must be uv exports. A `requirements*.lock` is the file a
+# container Dockerfile installs with `pip install --require-hashes`: a hashed export, not a second source.
+REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\.(txt|lock)$")
 PIP_AUDIT_STRICT_ARGS = ["--no-deps", "--disable-pip", "--strict", "--progress-spinner", "off"]
 
 

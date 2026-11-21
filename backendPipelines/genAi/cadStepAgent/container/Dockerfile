@@ -26,7 +26,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Every package at the version and hash in the lock (generated from requirements.txt; its header holds
+# Every package at the version and hash in the lock (the `uv export` of uv.lock; its header holds
 # the command that regenerates it), as wheels only. The lock is universal because this image is built for
 # both linux/arm64 and linux/amd64.
 COPY ./requirements.lock ./requirements.lock

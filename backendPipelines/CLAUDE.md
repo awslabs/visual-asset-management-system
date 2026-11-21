@@ -265,8 +265,8 @@ A Batch/Fargate container sizes its work to the limits of the task it runs in ra
 
 Install a container's dependencies so that two builds of one commit ship the same code. `preview/3dThumbnail/container/Dockerfile` is the worked example:
 
--   Python packages come from a lock generated from `requirements.txt` with `uv pip compile --generate-hashes`, installed with `pip install --require-hashes`; `requirements.txt` holds only the direct dependencies, and the lock's header carries the command that regenerates it.
-    -   A Lambda container image follows the same rule: the SYSTEM GenAI Blender image (`system/genAiMetadata/containers/blender/Dockerfile`) and media image (`system/genAiMetadata/containers/media/Dockerfile`) install their `requirements.lock`, and the 3D render Lambda image (`preview/3dThumbnail/container/Dockerfile.lambda`) its `requirements.lambda.lock`, with `--require-hashes --only-binary=:all:`.
+-   Python packages come from the hashed `uv export` of the directory's `uv.lock` (direct dependencies are in `pyproject.toml`; the export's header carries the command that regenerates it), installed with `pip install --require-hashes --only-binary :all:`. The export is `requirements.txt`, or `requirements.lock` where the Dockerfile installs that name (CAD STEP agent, video SOP BOM, zip archive, coordinate transform and Potree): the CI audit regenerates it from the lock and fails on a difference, so no second, hand-made source of versions exists.
+    -   A Lambda container image follows the same rule: the SYSTEM GenAI Blender image (`system/genAiMetadata/containers/blender/Dockerfile`) and media image (`system/genAiMetadata/containers/media/Dockerfile`) install their hashed `requirements.txt`, and the 3D render Lambda image (`preview/3dThumbnail/container/Dockerfile.lambda`) the hashed `lambdaImage/requirements.txt` (its own uv project, because it needs other versions than the Fargate image), with `--require-hashes --only-binary=:all:`. The Potree PDAL image installs `requirements.lock` into the interpreter its entrypoint runs; its conda build environment comes from `pdal-build.explicit.txt` and is outside the lock.
 -   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
@@ -1656,9 +1656,9 @@ file while passing. Prefix a new file with its pipeline (`test_splat_extension_g
 **CI runs every tests directory, one process each.** The `pipelines-test` jobs in `.github/workflows/ci.yml`
 run `backendPipelines/ci/pipeline_tests.py`, which finds every directory named `tests` holding a `test_*.py`
 module and runs `python -m pytest tests -q` from its parent, on Python 3.12 (the Lambda runtime), in a
-virtual environment built from, in order: `ci/requirements-common.txt` (pytest plus the common base layer
+virtual environment built with uv (on `PATH`; CI installs the pinned version) from, in order: `ci/requirements-common.txt` (the export of `ci/uv.lock`: pytest plus the common base layer
 packages the Lambdas import), the nearest `requirements.txt` above the tests directory (stopping below the
-use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`), and the directory's
+use-case directory, so `lambda/requirements.txt` or `container/requirements.txt`; where the directory has a `uv.lock` it is that lock's export, so the suite runs on the locked versions for the runner's Python 3.12; the coordinate transform lock forks by Python version, so its suites do not run on the 3.11 image's versions), and the directory's
 `extraRequirements` in `ci/suite-settings.json` when it has any. Put a package only the tests import, or a
 pipeline-specific Lambda layer (`-r backendPipelines/<use case>/<pipeline>/lambdaLayer/requirements.txt`,
 repo-relative), there, with its reason. **Never put a CI-only file inside a pipeline folder**: CDK packages
