@@ -83,7 +83,7 @@ const codeOf = (file: string): string =>
 
 const relative = (file: string): string => path.relative(REPO_ROOT, file);
 
-/** A plain BatchSubmitJob, constructed or subclassed, under any import name. TaggedBatchSubmitJob is the one allowed subclass. */
+/** A plain BatchSubmitJob, constructed or subclassed, under a one-segment namespace or none. TaggedBatchSubmitJob is the one allowed subclass. */
 const UNTAGGED_BATCH_SUBMIT = /\b(?:new|extends)\s+(?:\w+\.)?BatchSubmitJob\b/;
 
 describe("every pipeline job submit carries the pipeline job tags", () => {

@@ -962,12 +962,12 @@ Converts a georeferenced TIFF into a Cloud Optimized GeoTIFF in EPSG:3857 (Web M
 Nested stack: `infra/lib/nestedStacks/pipelines/conversion/cogConvert/cogConvertBuilder-nestedStack.ts` (`CogConvertBuilderNestedStack`) — AWS Batch on Fargate.
 :::
 
-| Field                                                                | Type    | Default | Description                                                                                                               |
-| -------------------------------------------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `app.pipelines.useCogConversion.enabled`                             | boolean | `false` | Enables the COG conversion pipeline. Validation fails when `app.useGlobalVpc.enabled` is `false`.                         |
-| `app.pipelines.useCogConversion.useCodeBuild`                        | boolean | `false` | Builds the container image with AWS CodeBuild and Amazon ECR instead of a local Docker build.                             |
-| `app.pipelines.useCogConversion.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                 |
-| `app.pipelines.useCogConversion.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Runs the pipeline when a `.tif` or `.tiff` file is uploaded. The trigger ships disabled. Requires `autoRegisterWithVAMS`. |
+| Field                                                                | Type    | Default | Description                                                                                                                                                 |
+| -------------------------------------------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.pipelines.useCogConversion.enabled`                             | boolean | `false` | Enables the COG conversion pipeline. Validation fails when `app.useGlobalVpc.enabled` is `false`.                                                           |
+| `app.pipelines.useCogConversion.useCodeBuild`                        | boolean | `false` | Builds the container image with AWS CodeBuild and Amazon ECR instead of a local Docker build. Supported in the commercial and AWS GovCloud (US) partitions. |
+| `app.pipelines.useCogConversion.autoRegisterWithVAMS`                | boolean | `true`  | Automatically registers the pipeline and workflow in the VAMS database during deployment.                                                                   |
+| `app.pipelines.useCogConversion.autoRegisterAutoTriggerOnFileUpload` | boolean | `false` | Runs the pipeline when a `.tif` or `.tiff` file is uploaded. The trigger ships disabled. Requires `autoRegisterWithVAMS`.                                   |
 
 ### GenAI CAD STEP agent (`app.pipelines.useGenAiCadStepAgent`)
 

@@ -104,6 +104,42 @@ export const expectDeclaredStagesInAsl = (template: Template, producerFile: stri
     }
 };
 
+/**
+ * The {state name: function logical id} map behind a producer's `{state: functionName}` environment
+ * value (a `Stack.toJsonString`), each value checked to be a function of this stack. The producer
+ * registers /aws/lambda/<function> for every key, under the key as the stage name, so a missing or
+ * misnamed key leaves that state's log out of the run's log view.
+ */
+const stateFunctionRefs = (template: Template, value: any): Record<string, string> => {
+    const parts: any[] =
+        typeof value === "string" ? [value] : (value["Fn::Join"] as [string, any[]])[1];
+    const tokens: any[] = [];
+    const text = parts
+        .map((p) => {
+            if (typeof p === "string") return p;
+            tokens.push(p);
+            return `__TOKEN_${tokens.length - 1}__`;
+        })
+        .join("");
+    const names: Record<string, string> = JSON.parse(text);
+    const functions = template.findResources("AWS::Lambda::Function");
+    return Object.fromEntries(
+        Object.entries(names).map(([state, placeholder]) => {
+            const match = /^__TOKEN_(\d+)__$/.exec(placeholder);
+            expect(match).not.toBeNull();
+            const ref = tokens[Number(match![1])].Ref;
+            expect(functions[ref]).toBeDefined();
+            return [state, ref];
+        })
+    );
+};
+
+/** The states of the single state machine that invoke a Lambda function. */
+const lambdaInvokeStates = (template: Template): string[] =>
+    Object.entries(parseAsl(singleStateMachine(template)).States)
+        .filter(([, s]: [string, any]) => s.Resource?.toString().includes("lambda:invoke"))
+        .map(([n]) => n);
+
 describe("preview/3dThumbnail openPipeline registration environment", () => {
     let template: Template;
 
@@ -296,18 +332,7 @@ describe("system/genAiMetadata openPipeline registration environment", () => {
         // stage name, so the keys must be its declared Lambda state names and each value a function of
         // this stack. A missing or misnamed key leaves that branch's log out of the run's log view.
         const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
-        const value = env.ANALYSIS_FUNCTION_NAMES;
-        const parts: any[] =
-            typeof value === "string" ? [value] : (value["Fn::Join"] as [string, any[]])[1];
-        const tokens: any[] = [];
-        const text = parts
-            .map((p) => {
-                if (typeof p === "string") return p;
-                tokens.push(p);
-                return `__TOKEN_${tokens.length - 1}__`;
-            })
-            .join("");
-        const names: Record<string, string> = JSON.parse(text);
+        const names = stateFunctionRefs(template, env.ANALYSIS_FUNCTION_NAMES);
         const producer = path.join(
             PRODUCERS,
             "system",
@@ -318,18 +343,8 @@ describe("system/genAiMetadata openPipeline registration environment", () => {
         const lambdaStates = declaredStageNames(producer).filter((n) => n !== "FargateRenderJob");
         expect(lambdaStates.length).toBe(8);
         expect(Object.keys(names).sort()).toEqual([...lambdaStates].sort());
-        const functions = template.findResources("AWS::Lambda::Function");
-        for (const placeholder of Object.values(names)) {
-            const match = /^__TOKEN_(\d+)__$/.exec(placeholder);
-            expect(match).not.toBeNull();
-            const ref = tokens[Number(match![1])].Ref;
-            expect(functions[ref]).toBeDefined();
-        }
         // The map covers every Lambda the state machine invokes, so no branch is left unregistered.
-        const asl = parseAsl(singleStateMachine(template));
-        const invoked = Object.entries(asl.States)
-            .filter(([, s]: [string, any]) => s.Resource?.toString().includes("lambda:invoke"))
-            .map(([n]) => n);
+        const invoked = lambdaInvokeStates(template);
         expect(invoked.length).toBeGreaterThan(0);
         for (const state of invoked) {
             expect(Object.keys(names)).toContain(state);
@@ -360,7 +375,7 @@ describe("system/genAiMetadata openPipeline registration environment", () => {
     });
 });
 
-describe("conversion/cogConvert executeBatchJob registration environment", () => {
+describe("conversion/cogConvert registration environment and state machine logging", () => {
     let template: Template;
 
     beforeAll(() => {
@@ -400,6 +415,45 @@ describe("conversion/cogConvert executeBatchJob registration environment", () =>
             template,
             path.join(PRODUCERS, "conversion", "cogConvert", "lambda", "executeBatchJob.py")
         );
+    });
+
+    test("openPipeline names the function of each Lambda state, and every Lambda state is named", () => {
+        const producer = path.join(
+            PRODUCERS,
+            "conversion",
+            "cogConvert",
+            "lambda",
+            "openPipeline.py"
+        );
+        expectDeclaredStagesInAsl(template, producer);
+        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+        const refs = stateFunctionRefs(template, env.STATE_FUNCTION_NAMES);
+        expect(Object.keys(refs)).toEqual(declaredStageNames(producer));
+        expect(lambdaInvokeStates(template).sort()).toEqual(Object.keys(refs).sort());
+        // Each state's group is that state's own function.
+        const functions = template.findResources("AWS::Lambda::Function");
+        const handlers = Object.fromEntries(
+            Object.entries(refs).map(([state, ref]) => [state, functions[ref].Properties.Handler])
+        );
+        expect(handlers).toEqual({
+            ConstructPipelineTask: "constructPipeline.lambda_handler",
+            CogConvertBatchJob: "executeBatchJob.lambda_handler",
+            PipelineEndTask: "pipelineEnd.lambda_handler",
+        });
+    });
+
+    test("the batch task hands its Lambda both of the run's ids", () => {
+        const states = parseAsl(singleStateMachine(template)).States;
+        expect(states.CogConvertBatchJob.Parameters.Payload).toMatchObject({
+            "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+            "workflowExecutionId.$": "$.workflowExecutionId",
+        });
+    });
+
+    test("the state machine logs errors only, without execution data (the input carries the task token)", () => {
+        const configuration = singleStateMachine(template).LoggingConfiguration;
+        expect(configuration.Level).toBe("ERROR");
+        expect(configuration.IncludeExecutionData).toBe(false);
     });
 });
 

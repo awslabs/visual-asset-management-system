@@ -5,6 +5,7 @@ import json
 import os
 import boto3
 from customLogging.logger import safeLogger
+import executionLogKeys
 import manifestHelper
 from botocore.config import Config
 
@@ -121,6 +122,9 @@ def lambda_handler(event, context):
     Builds pipeline definition for the Batch container job.
     """
 
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
     logger.info("Event", event=event)
 
     try:
@@ -214,5 +218,8 @@ def _build_execution_params(event):
         # task reads the event prefix to register the Batch job as abortable.
         "externalSfnTaskToken": event.get("externalSfnTaskToken", ""),
         "orchestrationEventPrefix": event.get("orchestrationEventPrefix", ""),
+        # The batch task and pipelineEnd log with the run's ids, so the workflow's travels on too (the
+        # pipeline's is in the event prefix). Always present: the batch task's payload reads it by path.
+        "workflowExecutionId": event.get("workflowExecutionId", "") or "",
         "status": "STARTING",
     }
