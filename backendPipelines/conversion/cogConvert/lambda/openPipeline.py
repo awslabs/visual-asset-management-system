@@ -238,7 +238,7 @@ def lambda_handler(event, context):
         # Lambda under WAIT_FOR_TASK_TOKEN, so Step Functions does not own its lifecycle.
         "orchestrationEventPrefix": orchestration_event_prefix,
         # With the prefix's pipeline execution id, the id every state's Lambda puts on its log lines.
-        # Taken from the prefix, so vamsExecute's payload stays as it is.
+        # Read from the prefix; vamsExecute does not forward it.
         "workflowExecutionId": workflow_execution_id_from_event_prefix(orchestration_event_prefix),
     }
 
