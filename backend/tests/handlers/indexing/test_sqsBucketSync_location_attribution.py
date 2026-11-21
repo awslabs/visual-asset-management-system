@@ -438,3 +438,43 @@ class TestPublishSizeLimits:
         bus_records = _bus_records(m)
         assert {r["s3"]["object"]["key"] for r in bus_records} == expected_keys
         assert all(r["vamsBinding"]["assetId"] == "a1" for r in bus_records)
+
+
+PAGE_LIMIT = RuntimeError("Location index query did not finish within 5 pages")
+TOO_DEEP = al.Resolution(al.RESOLVED_TOO_DEEP)
+
+
+@pytest.mark.unit
+class TestAKeyTheIndexCannotAnswerFor:
+    """A key with more candidate locations than the index resolves, or a lookup that does not finish
+    within its page limit, is attributed as before the index: by its first folder only."""
+
+    KEY = "newfolder/file.glb"
+
+    @pytest.mark.parametrize("answer", [TOO_DEEP, PAGE_LIMIT], ids=["tooDeep", "pageLimit"])
+    def test_the_created_path_decides_by_the_first_folder(self, answer):
+        m = _load()
+        _wire(m, resolve=[answer], ready=True, conflicts=[_entry(location="newfolder/inner/")])
+        result = m.process_s3_record(_record(self.KEY), receive_count=1)
+        assert result[:2] == (True, True)
+        assert m.resolve_owner.call_count == 1
+        m.lookup_archived_asset.assert_called_once_with("bucket-1", "newfolder")
+        m.find_conflicts.assert_not_called()
+        m.create_new_asset.assert_any_call("bucket-1", "db1", "newfolder")
+
+    @pytest.mark.parametrize("error", [al.LocationTooDeepError("Location has 70 candidate locations"), PAGE_LIMIT],
+                             ids=["tooDeep", "pageLimit"])
+    def test_an_auto_create_check_the_index_cannot_answer_leaves_the_decision_to_create_asset(self, error):
+        m = _load()
+        _wire(m)
+        m.find_conflicts = MagicMock(side_effect=error)
+        assert m.auto_create_refusal(MagicMock(), BUCKET, "newfolder/") is None
+
+    def test_the_deleted_path_forwards_the_record_without_a_cleanup(self):
+        m = _load()
+        _wire(m, resolve=[PAGE_LIMIT])
+        m.is_object_permanently_deleted = MagicMock(return_value=True)
+        m.delete_file_metadata_on_s3_delete = MagicMock()
+        m.lambda_handler_deleted({"Records": [_sqs("d1", _deleted("projects/alpha/x.glb"))]}, MagicMock())
+        m.delete_file_metadata_on_s3_delete.assert_not_called()
+        assert [r["s3"]["object"]["key"] for r in _sns_records(m)] == ["projects/alpha/x.glb"]

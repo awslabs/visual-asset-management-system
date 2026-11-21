@@ -58,7 +58,10 @@ from common.assetLocations import (
     ARCHIVED_DATABASE_SUFFIX,
     RESOLVED_AMBIGUOUS,
     RESOLVED_FOUND,
+    RESOLVED_TOO_DEEP,
     LocationTooDeepError,
+    Resolution,
+    candidate_locations,
     contains,
     derive_location,
     find_conflicts,
@@ -264,15 +267,33 @@ def reject_record(record: Dict, bucket_name: str, object_key: str, reason: str,
 
 def auto_create_refusal(asset_table, bucket_name: str, location: str) -> Optional[str]:
     """Why an auto-created asset may not take `location`, or None when the location index shows no
-    asset sharing a key with it. Read only once the index is ready."""
+    asset sharing a key with it. Read only once the index is ready. When the index cannot answer for
+    the location (more candidate locations than it checks, or a lookup that does not finish within its
+    page limit), the answer is None and createAsset's own ownership check decides, as before the index."""
     try:
         conflicts = find_conflicts(asset_table, bucket_name, location)
-    except LocationTooDeepError:
-        return "the location is nested too deeply to check"
+    except (LocationTooDeepError, RuntimeError) as e:
+        logger.warning(f"The location index cannot check {location} for an auto-created asset ({e}); "
+                       "createAsset's ownership check decides")
+        return None
     if conflicts:
         owners = [f"{c.database_id}:{c.asset_id} at {c.location}" for c in conflicts[:5]]
         return f"its location overlaps existing assets {owners}"
     return None
+
+
+def resolve_by_location(asset_table, bucket_name: str, object_key: str, include_archived: bool = False,
+                        use_cache: bool = True) -> Optional[Resolution]:
+    """`resolve_owner`'s answer for a key, or None when the location index cannot answer for it (more
+    candidate locations than it resolves, or a lookup that does not finish within its page limit). The
+    caller then attributes the key as it did before the index."""
+    try:
+        resolution = resolve_owner(asset_table, bucket_name, object_key, include_archived=include_archived,
+                                   use_cache=use_cache)
+    except RuntimeError as e:
+        logger.warning(f"The location index cannot resolve {object_key} in bucket {bucket_name}: {e}")
+        return None
+    return None if resolution.status == RESOLVED_TOO_DEEP else resolution
 
 
 def folder_holds_other_objects(bucket_name: str, folder: str, object_key: str) -> bool:
@@ -1829,10 +1850,52 @@ def _send_import_page(records: List[Dict]) -> None:
     _send_to_own_queue({"Type": "Notification", "Message": json.dumps({"Records": records})})
 
 
+def nested_locations(bucket_id: str, location: str, database_id_value: str, asset_id: str,
+                     base_prefix: str) -> frozenset:
+    """The stored locations of the registration's other live assets that lie inside `location`. The
+    deepest stored location that contains a key owns it, so each of them keeps its own keys when
+    `location` is imported. One walk of the registration's BucketIdGSI partition."""
+    location = normalize_location(location)
+    nested = set()
+    table = dynamodb.Table(asset_table_name)
+    query_kwargs = {"IndexName": "BucketIdGSI", "KeyConditionExpression": Key("bucketId").eq(bucket_id)}
+    while True:
+        response = table.query(**query_kwargs)
+        for item in response.get("Items", []):
+            item_database_id = str(item.get("databaseId") or "")
+            item_asset_id = str(item.get("assetId") or "")
+            if (item_database_id.endswith(ARCHIVED_DATABASE_SUFFIX) or item.get("status") == "archived"
+                    or (item_database_id, item_asset_id) == (database_id_value, asset_id)):
+                continue
+            stored = asset_location_of(item, base_prefix, item_asset_id)
+            if stored != location and stored.startswith(location):
+                nested.add(stored)
+        if "LastEvaluatedKey" not in response:
+            return frozenset(nested)
+        query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def held_by_nested(nested, location: str, object_key: str) -> bool:
+    """Whether a key of `location` is held by one of `nested`, locations inside it: it is then that
+    asset's key."""
+    if not nested:
+        return False
+    depth = len(normalize_location(location))
+    return any(len(candidate) > depth and candidate in nested and contains(candidate, object_key)
+               for candidate in candidate_locations(object_key))
+
+
 def import_folder(bucket_name: str, location: str, owner: Dict[str, str], prefix: str,
                   key_marker: Optional[str] = None, version_id_marker: Optional[str] = None) -> int:
     """Queue the current version of every object `location` holds (folder markers and VAMS system
-    folders left out) for processing as `owner`'s files. Returns the number queued."""
+    folders left out) for processing as `owner`'s files. Returns the number queued.
+
+    Before the location index is ready, the keys held by the stored locations of the registration's
+    other live assets inside `location` are left out (`nested_locations`, read once per listing); once
+    it is ready, each imported record is checked against the index when it is processed."""
+    nested = (frozenset() if index_ready(asset_table_name)
+              else nested_locations(owner["bucketId"], location, owner["databaseId"], owner["assetId"],
+                                    normalize_base_prefix(prefix)))
     kwargs = {"Bucket": bucket_name, "Prefix": location, "MaxKeys": IMPORT_LIST_PAGE_SIZE}
     if key_marker:
         kwargs["KeyMarker"] = key_marker
@@ -1844,7 +1907,7 @@ def import_folder(bucket_name: str, location: str, owner: Dict[str, str], prefix
         for entry in response.get("Versions", []):
             key = entry.get("Key", "")
             if (not entry.get("IsLatest") or key.endswith("/") or not contains(location, key)
-                    or _is_system_key(key, prefix)):
+                    or _is_system_key(key, prefix) or held_by_nested(nested, location, key)):
                 continue
             page.append(import_record(bucket_name, entry, owner))
             if len(page) >= IMPORT_RECORDS_PER_MESSAGE:
@@ -1948,22 +2011,75 @@ def version_already_synced(database_id: str, asset_id: str, relative_path: str, 
     return "Item" in asset_file_version_history_table.get_item(Key=key, ProjectionExpression="versionId")
 
 
-def process_imported_record(record: Dict, bucket_name: str, object_key: str, prefix: str, owner: Dict,
-                            binding_out: Optional[Dict]) -> Tuple[bool, bool, str]:
-    """An object of an imported folder: attributed to the importing asset when its stored location
-    holds the key, tagged and recorded in the ledger, and forwarded to the indexers; skipped when the
-    ledger already has its version, the object is gone or the asset no longer holds it."""
-    database_id_value = owner.get("databaseId", "")
-    asset_id = owner.get("assetId", "")
+def imported_owner_row(database_id_value: str, asset_id: str, owner_rows: Optional[Dict]) -> Optional[Dict]:
+    """The importing asset's row, read strongly consistent, once per batch when `owner_rows` is given."""
+    cache_key = ("row", database_id_value, asset_id)
+    if owner_rows is not None and cache_key in owner_rows:
+        return owner_rows[cache_key]
     row = dynamodb.Table(asset_table_name).get_item(
         Key={"databaseId": database_id_value, "assetId": asset_id}, ConsistentRead=True).get("Item")
+    if owner_rows is not None:
+        owner_rows[cache_key] = row
+    return row
+
+
+def imported_key_held_elsewhere(bucket_name: str, object_key: str, location: str, bucket_id: str,
+                                database_id_value: str, asset_id: str, prefix: str, use_cache: bool,
+                                owner_rows: Optional[Dict]) -> Optional[str]:
+    """The asset that holds an imported key when that is not the importing asset (text for the log),
+    or None when the key is the importing asset's. The deepest stored location that contains a key owns
+    it. Once the location index is ready, its answer decides (a key on a location two assets claim is
+    not imported either); before, the listing already left out the locations inside the imported one.
+    A key the index cannot answer for is checked against those locations, read once per batch."""
+    if not index_ready(asset_table_name):
+        return None
+    resolution = resolve_by_location(dynamodb.Table(asset_table_name), bucket_name, object_key,
+                                      use_cache=use_cache)
+    if resolution is not None:
+        if resolution.status == RESOLVED_AMBIGUOUS:
+            return "several assets that share one location"
+        if resolution.status == RESOLVED_FOUND and (
+                resolution.entry.database_id, resolution.entry.asset_id) != (database_id_value, asset_id):
+            return f"asset {resolution.entry.database_id}:{resolution.entry.asset_id}"
+        return None
+    cache_key = ("nested", database_id_value, asset_id)
+    nested = (owner_rows or {}).get(cache_key)
+    if nested is None:
+        nested = nested_locations(bucket_id, location, database_id_value, asset_id, normalize_base_prefix(prefix))
+        if owner_rows is not None:
+            owner_rows[cache_key] = nested
+    return "an asset whose location lies inside the imported one" if held_by_nested(
+        nested, location, object_key) else None
+
+
+def process_imported_record(record: Dict, bucket_name: str, object_key: str, prefix: str, owner: Dict,
+                            binding_out: Optional[Dict], bucket_id: str = "",
+                            receive_count: Optional[int] = None,
+                            owner_rows: Optional[Dict] = None) -> Tuple[bool, bool, str]:
+    """An object of an imported folder: attributed to the importing asset when it is that asset's key,
+    tagged and recorded in the ledger, and forwarded to the indexers. Skipped when the record or the
+    asset is not in this function's registration `bucket_id`, the asset is not live or no longer holds
+    the key, a deeper location of another asset holds it, the ledger already has its version, or the
+    object is gone."""
+    database_id_value = owner.get("databaseId", "")
+    asset_id = owner.get("assetId", "")
+    if not bucket_id or owner.get("bucketId") != bucket_id:
+        return True, False, f"Imported record for {object_key} is not in registration {bucket_id}; skipped"
+    row = imported_owner_row(database_id_value, asset_id, owner_rows)
     if not row or row.get("status") == "archived":
         return True, False, f"Imported asset {asset_id} is not live; skipped {object_key}"
-    bucket_id = str(row.get("bucketId") or owner.get("bucketId") or "")
+    if str(row.get("bucketId") or "") != bucket_id:
+        return True, False, f"Imported asset {asset_id} is not in registration {bucket_id}; skipped {object_key}"
     location = asset_location_of(row, normalize_base_prefix(prefix), asset_id)
     relative_path = relative_path_in(location, object_key)
     if relative_path is None:
         return True, False, f"Asset {asset_id} does not hold {object_key}; not imported"
+    holder = imported_key_held_elsewhere(bucket_name, object_key, location, bucket_id, database_id_value,
+                                         asset_id, prefix, not (receive_count and receive_count > 1),
+                                         owner_rows)
+    if holder:
+        logger.info(f"{object_key} is held by {holder}, not by the importing asset {asset_id}; not imported")
+        return True, False, f"{object_key} is held by another asset; not imported"
     event_version_id = (record["s3"].get("object") or {}).get("versionId")
     head_kwargs = {"Bucket": bucket_name, "Key": object_key}
     if event_version_id and event_version_id != "null":
@@ -1991,7 +2107,8 @@ def process_imported_record(record: Dict, bucket_name: str, object_key: str, pre
 
 
 def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
-                      receive_count: Optional[int] = None) -> Tuple[bool, bool, str]:
+                      receive_count: Optional[int] = None,
+                      owner_rows: Optional[Dict] = None) -> Tuple[bool, bool, str]:
     """
     Process a single S3 record
     
@@ -2100,7 +2217,9 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         # 1.c' An object of an imported folder belongs to the asset that imported it.
         import_owner = record.get(IMPORT_RECORD_FIELD)
         if isinstance(import_owner, dict):
-            return process_imported_record(record, bucket_name, object_key, prefix, import_owner, binding_out)
+            return process_imported_record(record, bucket_name, object_key, prefix, import_owner, binding_out,
+                                           bucket_id=bucket_id, receive_count=receive_count,
+                                           owner_rows=owner_rows)
 
         # 1.d The first folder is an asset id only for the fast path and for auto-create. A file in
         # any other stored location is found through the location index whatever its first folder is.
@@ -2140,12 +2259,16 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
 
         # 2.b On a miss: the live asset whose stored location contains the key (location index).
         # Two live assets on one location attribute nothing; the record goes to the rejected queue.
+        # A key the index cannot answer for is attributed as before the index (first folder only).
+        index_usable = True
         if not asset_data:
-            resolution = resolve_owner(asset_table, bucket_name, object_key, use_cache=use_index_cache)
-            if resolution.status == RESOLVED_AMBIGUOUS:
+            resolution = resolve_by_location(asset_table, bucket_name, object_key, use_cache=use_index_cache)
+            if resolution is None:
+                index_usable = False
+            elif resolution.status == RESOLVED_AMBIGUOUS:
                 return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
                                      resolution.candidates)
-            if resolution.status == RESOLVED_FOUND:
+            elif resolution.status == RESOLVED_FOUND:
                 asset_data = resolution.row
                 resolved_by = RESOLVED_BY_LOCATION_INDEX
                 owner_asset_id = resolution.entry.asset_id
@@ -2161,10 +2284,12 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
             # there proves nothing, so the first folder decides exactly as before. Once it is ready,
             # an archived owner is found by location, and an auto-created asset may not overlap any
             # asset's location.
-            index_is_ready = index_ready(asset_table_name)
+            index_is_ready = index_usable and index_ready(asset_table_name)
+            archived = (resolve_by_location(asset_table, bucket_name, object_key, include_archived=True,
+                                            use_cache=use_index_cache) if index_is_ready else None)
+            if index_is_ready and archived is None:
+                index_is_ready = False
             if index_is_ready:
-                archived = resolve_owner(asset_table, bucket_name, object_key, include_archived=True,
-                                         use_cache=use_index_cache)
                 if archived.status == RESOLVED_AMBIGUOUS:
                     return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
                                          archived.candidates)
@@ -2283,9 +2408,17 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
 
             # The marker imports its folder: the files already there get no event of their own, so
             # they are typed and queued for import here. The marker itself is not indexed.
+            # A listing or send that fails returns the record to its queue: the delete above finds
+            # nothing to delete when it runs again, and the ledger skips the files already imported.
             update_asset_type(owner_bucket_id, owner_asset_id, bucket_name, asset_location, asset_data=asset_data)
-            queued = import_folder(bucket_name, asset_location,
-                                   import_owner_of(database_id_to_use, owner_asset_id, owner_bucket_id), prefix)
+            try:
+                queued = import_folder(bucket_name, asset_location,
+                                       import_owner_of(database_id_to_use, owner_asset_id, owner_bucket_id),
+                                       prefix)
+            except Exception as e:
+                logger.exception(f"The import of {asset_location} could not be queued; the init record is "
+                                 f"received again: {e}")
+                raise RecordRedrive(f"Import of {asset_location} not queued")
             return True, False, f"Deleted init object {object_key}; queued {queued} existing files"
         
         # 4. Update asset type from the files at the asset's stored location. The object itself is
@@ -2373,6 +2506,9 @@ def on_storage_event_created(event, bindings=None, receive_counts=None, redrives
     skip_count = 0
     successful_records = []
     
+    # The importing asset's row is read once per batch for its imported records.
+    owner_rows = {}
+
     # Process each record in the event
     for record in event.get('Records', []):
         # Skip records without S3 information
@@ -2388,7 +2524,7 @@ def on_storage_event_created(event, bindings=None, receive_counts=None, redrives
             receive_count = (receive_counts or {}).get(record_identity(record))
             try:
                 success, should_index, message = process_s3_record(
-                    record, binding_out=binding, receive_count=receive_count)
+                    record, binding_out=binding, receive_count=receive_count, owner_rows=owner_rows)
             except RecordRedrive as redrive:
                 if redrives is None:
                     error_count += 1
@@ -2861,9 +2997,9 @@ def lambda_handler_deleted(event, context):
                     if asset_data and not contains(asset_location_of(asset_data, base_prefix, asset_id), object_key):
                         asset_data = None
                     if not asset_data:
-                        resolution = resolve_owner(dynamodb.Table(asset_table_name), bucket_name, object_key,
-                                                   include_archived=True)
-                        if resolution.status == RESOLVED_FOUND:
+                        resolution = resolve_by_location(dynamodb.Table(asset_table_name), bucket_name,
+                                                         object_key, include_archived=True)
+                        if resolution is not None and resolution.status == RESOLVED_FOUND:
                             asset_data = resolution.row
                             resolved_by = RESOLVED_BY_LOCATION_INDEX
                             owner_asset_id = resolution.entry.asset_id

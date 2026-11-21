@@ -1042,7 +1042,7 @@ sequenceDiagram
     Note over Sync: init file is NOT sent to file indexer
 ```
 
-The files already in the folder raise no event of their own, so the sync Lambda lists the folder and queues them, a page per message, to its own queue. Each is then handled like a new file, as below, except that it starts no `fileUpload` workflow: it was already in the bucket. A file version VAMS has already synced is skipped, so writing an `init` file again into an imported folder only adds what is new.
+The files already in the folder raise no event of their own, so the sync Lambda lists the folder and queues them, a page per message, to its own queue. Each is then handled like a new file, as below, except that it starts no `fileUpload` workflow: it was already in the bucket. A file version VAMS has already synced is skipped, so writing an `init` file again into an imported folder only adds what is new. Files under another asset's location inside the folder stay that asset's files and are not imported. If the listing or a queue send fails, the `init` event is processed again and the import starts over without importing any file twice.
 
 For non-init files (regular asset files already present or uploaded later), the sync Lambda also:
 
