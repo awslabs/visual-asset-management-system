@@ -26,7 +26,9 @@ S3 ``Prefix`` matching is not path-aware, so a single-file location used as a pr
 also matches longer keys that only share its characters (``projects/model.glb.bak``,
 ``projects/model.glbx/...``). Those are never part of the asset. Code that lists, reads,
 archives or deletes an asset's objects decides membership with ``contains`` rather
-than with the prefix match alone.
+than with the prefix match alone. Code that decides whether two locations overlap asks
+``locations_share_key``: two locations can hold a common key that neither location key
+names (``a/x`` and ``a/x.previewFile`` both hold ``a/x.previewFile.previewFile.z``).
 
 The functions above are pure: no AWS calls.
 
@@ -38,10 +40,19 @@ when the asset is created and by the v2.6-to-v2.7 `assetLocationIndex` migration
 - ``locationKey``: the location without a leading ``/``.
 
 ``AssetLocationGSI`` on the asset table indexes them (partition ``locationBucket``, sort
-``locationKey``, projecting ``bucketId`` beside the table keys). Until the backfill has written its
-completion marker the index does not cover every asset, so no decision may depend on it before
+``locationKey``, projecting ``bucketId`` beside the table keys). Rows whose location holds no key
+(no location, or the bucket root, stored as an empty location) and rows with no bucket
+registration carry no attributes. Until the backfill has written its completion marker the index
+does not cover every row whose location holds keys, so no decision may depend on it before
 ``index_ready()`` answers True; until then callers keep the checks that do not use it. Which
-asset owns a key, and which locations conflict, are decided with ``contains`` above.
+asset owns a key is decided with ``contains`` above, and which locations conflict with
+``locations_share_key``.
+
+Depth limit. A key has about two candidate locations per folder level (the folder ``X/`` and the
+single file ``X``), plus the key and its preview bases. A key or location with more than
+``MAX_CANDIDATE_LOCATIONS`` (64) candidates, about 31 folder levels, is not looked up:
+``resolve_owner`` answers ``RESOLVED_TOO_DEEP`` and ``find_conflicts`` raises
+``LocationTooDeepError``. A caller keeps the checks that do not use the index for such a key.
 
 The index functions build no AWS client at import. Index reads take the caller's asset table
 handle; ``index_ready()`` builds its SSM client on first use unless one is passed.
@@ -120,6 +131,64 @@ def contains(location: Optional[str], object_key: Optional[str]) -> bool:
     return object_key == loc or object_key.startswith(loc + "/") or _is_preview_of(loc, object_key)
 
 
+# The kinds of key set a location is made of (``_held_sets``)
+_ONE_KEY, _PREFIX, _PREVIEWS = "key", "prefix", "previews"
+
+
+def _held_sets(location: str) -> List[Tuple[str, str]]:
+    """The key sets whose union is what a normalized, non-empty location holds (what ``contains`` accepts).
+
+    ``(_ONE_KEY, k)`` is the key ``k``; ``(_PREFIX, p)`` is every key that starts with ``p``, ``p`` included;
+    ``(_PREVIEWS, s)`` is every key ``s{ext}`` with a non-empty ``ext`` that has no ``/``. A folder is one
+    prefix. A single file is its key, its companion folder ``{key}/`` and its preview stem ``{key}.previewFile.``.
+    """
+    if location.endswith("/"):
+        return [(_PREFIX, location)]
+    return [(_ONE_KEY, location), (_PREFIX, location + "/"), (_PREVIEWS, location + PREVIEW_FILE_PATTERN)]
+
+
+def _set_holds(held: Tuple[str, str], key: str) -> bool:
+    kind, text = held
+    if kind == _ONE_KEY:
+        return key == text
+    if not key.startswith(text):
+        return False
+    rest = key[len(text):]
+    return kind == _PREFIX or (bool(rest) and "/" not in rest)
+
+
+def _sets_meet(first: Tuple[str, str], second: Tuple[str, str]) -> bool:
+    """Whether two of the key sets ``_held_sets`` returns have a key in common."""
+    if first[0] == _ONE_KEY:
+        return _set_holds(second, first[1])
+    if second[0] == _ONE_KEY:
+        return _set_holds(first, second[1])
+    # Two open sets, each its stem followed by more characters. They can meet only when one stem starts with
+    # the other. The set with the longer stem then holds keys made of the shorter stem and the extra characters
+    # followed by more: a prefix set with the shorter stem holds all of them, and a preview set with the shorter
+    # stem holds some (the longer stem followed by ``z``, say) exactly when the extra characters have no ``/``.
+    (shorter_kind, shorter), (_, longer) = sorted((first, second), key=lambda held: len(held[1]))
+    if not longer.startswith(shorter):
+        return False
+    return shorter_kind == _PREFIX or "/" not in longer[len(shorter):]
+
+
+def locations_share_key(first: Optional[str], second: Optional[str]) -> bool:
+    """Whether two asset locations hold at least one S3 key in common (a key ``contains`` accepts for both).
+
+    Decided over the keys each location holds (a folder: every key under it; a single file: its key, every
+    key under ``{key}/`` and its previews ``{key}.previewFile.{ext}``), not over the two location keys alone,
+    so it also finds a common key that neither location key names: ``a/x`` and ``a/x.previewFile`` both hold
+    ``a/x.previewFile.previewFile.z``, the preview of ``a/x`` with extension ``previewFile.z`` and the preview
+    of ``a/x.previewFile`` with extension ``z``. An empty location holds nothing and shares nothing.
+    """
+    a = normalize_location(first)
+    b = normalize_location(second)
+    if not a or not b:
+        return False
+    return any(_sets_meet(x, y) for x in _held_sets(a) for y in _held_sets(b))
+
+
 def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Optional[str]:
     """The asset-relative path (leading ``/``) of an object key, or None when the location does not contain it.
 
@@ -144,6 +213,12 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
     if depth is not None:
         return "/" + "/".join([name] * (depth + 1)) + preview
     return object_key[len(loc):]
+
+
+# The refusal of a workflow output at a single-file asset's own file path. The upload completion answers it
+# per file, and output processing repeats it in the run's error, since the user can act on it.
+OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
+                           "Write the output under another file name or folder.")
 
 
 def names_own_object(location: Optional[str], relative_path: Optional[str]) -> bool:
@@ -249,6 +324,66 @@ def in_folder(location: Optional[str], relative_folder: Optional[str], object_ke
     return path is not None and folder != "//" and path.startswith(folder)
 
 
+# ---------------------------------------------------------------------------
+# Auxiliary (viewer and preview) data of one file
+#
+# Auxiliary objects live at ``{databaseId}/{file key}/...``; a file's own data is in its ``preview/``
+# subfolder (``common.workflows.executionRecords.aux_preview_file_prefix``). In a single-file location the
+# rest of ``{databaseId}/{key}/`` holds the data of the companion entries, and the data of a companion
+# entry in a folder named ``preview`` (``{key}/preview/x.glb``) sits inside the object's ``preview/``
+# folder, at ``{databaseId}/{key}/preview/x.glb/preview/...``.
+# ---------------------------------------------------------------------------
+
+
+def aux_bucket_file_base(database_id: Optional[str], file_key: Optional[str]) -> str:
+    """``{databaseId}/{file key}/``, the auxiliary-bucket base of one file (or of a folder and all beneath it)."""
+    key = (file_key or "").strip("/")
+    base = (database_id or "").strip("/")
+    return f"{base}/{key}/" if key else f"{base}/"
+
+
+def is_location_object(location: Optional[str], object_key: Optional[str]) -> bool:
+    """Whether a key is the object of a single-file location (the location key itself)."""
+    loc = normalize_location(location)
+    return bool(loc) and not loc.endswith("/") and (object_key or "").lstrip("/") == loc
+
+
+def aux_file_prefix(database_id: Optional[str], location: Optional[str], object_key: Optional[str]) -> str:
+    """The auxiliary prefix of one file's own data: ``aux_bucket_file_base``, or for the object of a single-file
+    location its ``preview/`` subfolder, since the rest of that base belongs to the companion entries."""
+    base = aux_bucket_file_base(database_id, object_key)
+    return base + "preview/" if is_location_object(location, object_key) else base
+
+
+def aux_owner_filter(database_id: Optional[str], location: Optional[str], target_key: Optional[str],
+                     aux_prefix: Optional[str]) -> Optional[Callable[[str], bool]]:
+    """None, or which auxiliary keys under ``aux_prefix`` belong to ``target_key`` in a single-file location.
+
+    Under ``{databaseId}/{key}/preview/`` a key whose rest has a ``/preview/`` segment (``{entry}/preview/...``)
+    belongs to a companion entry in ``{key}/preview/``, any other key to the object. The predicate keeps the
+    object's keys for the object and the companion entries' keys for any other target.
+    """
+    loc = normalize_location(location)
+    if not loc or loc.endswith("/"):
+        return None
+    shared = aux_bucket_file_base(database_id, loc) + "preview/"
+    if not (aux_prefix or "").startswith(shared):
+        return None
+    is_object = is_location_object(loc, target_key)
+
+    def keep(aux_key: str) -> bool:
+        return ("/preview/" in aux_key[len(shared):]) != is_object
+    return keep
+
+
+def aux_scope(database_id: Optional[str], location: Optional[str],
+              object_key: Optional[str]) -> Tuple[str, Optional[Callable[[str], bool]]]:
+    """``(prefix, keep)`` of one file's own auxiliary data: ``aux_file_prefix`` and ``aux_owner_filter``.
+    ``keep`` is None when every key under the prefix is the file's."""
+    prefix = aux_file_prefix(database_id, location, object_key)
+    return prefix, aux_owner_filter(database_id, location, object_key, prefix)
+
+
 LOCATION_INDEX_NAME = "AssetLocationGSI"
 LOCATION_BUCKET_ATTRIBUTE = "locationBucket"
 LOCATION_KEY_ATTRIBUTE = "locationKey"
@@ -322,11 +457,33 @@ def legacy_location_in_key(object_key: Optional[str], asset_id: str) -> str:
 
 def location_attributes(bucket_name: Optional[str], location_key: Optional[str]) -> Dict[str, str]:
     """The index attributes for an asset row, or {} when the row cannot be indexed (no bucket
-    name, or a location at the bucket root, which an index key cannot hold)."""
+    name, or a location at the bucket root, which is stored as an empty location and holds no
+    key)."""
     location = normalize_location(location_key)
     if not bucket_name or not location:
         return {}
     return {LOCATION_BUCKET_ATTRIBUTE: bucket_name, LOCATION_KEY_ATTRIBUTE: location}
+
+
+def has_location_attributes(row: Optional[Dict[str, Any]]) -> bool:
+    """Whether an asset row carries both index attributes."""
+    return bool(row) and bool(row.get(LOCATION_BUCKET_ATTRIBUTE)) and bool(row.get(LOCATION_KEY_ATTRIBUTE))
+
+
+def fill_location_attributes(row: Dict[str, Any], bucket_name: Optional[str]) -> Dict[str, Any]:
+    """Give a whole asset row that is about to be written back the index attributes it lacks.
+
+    A row read before the backfill reached it has none, and the backfill's consistent verification
+    scan is not a snapshot: a copy written behind its cursor (an archive or unarchive) would stay out
+    of the index while the marker says complete. So each writer that puts a whole row back calls this
+    with the bucket name of the row's registration. A row that already carries both attributes is
+    left as it is, and a row whose location holds no key gets none. Returns `row`.
+    """
+    if has_location_attributes(row):
+        return row
+    location = row.get('assetLocation')
+    row.update(location_attributes(bucket_name, location.get('Key') if isinstance(location, dict) else None))
+    return row
 
 
 def candidate_locations(object_key: Optional[str]) -> List[str]:
@@ -363,6 +520,26 @@ def candidate_locations(object_key: Optional[str]) -> List[str]:
         candidates.add(key[:position])
     candidates.discard('')
     return sorted(candidates, key=lambda c: (-len(c), c))
+
+
+def _preview_partner_locations(location: Optional[str]) -> List[str]:
+    """The single-file locations that share a key with `location` although neither contains the other.
+
+    For a single file `S` they are `S.previewFile` above it (both hold `S.previewFile.previewFile.z`),
+    and the single file whose `.previewFile` or `.previewFile.` partner `S` is (`a/x` for
+    `a/x.previewFile` and for `a/x.previewFile.`). `S.previewFile.` itself sits under the preview stem
+    `S.previewFile.`, which `find_conflicts` reads with a prefix lookup. A folder has none: it holds
+    no preview set, and every location that shares a key with it contains it or lies under it.
+    """
+    loc = normalize_location(location)
+    if not loc or loc.endswith('/'):
+        return []
+    stem = PREVIEW_FILE_PATTERN[:-1]                     # ".previewFile"
+    partners = [loc + stem]
+    for suffix in (stem, PREVIEW_FILE_PATTERN):
+        if loc.endswith(suffix) and len(loc) > len(suffix):
+            partners.append(loc[:-len(suffix)])
+    return partners
 
 
 class LocationTooDeepError(ValueError):
@@ -570,20 +747,26 @@ def resolve_owner(table, bucket: str, object_key: str, include_archived: bool = 
 
 def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int = MAX_PAGES_PER_LOOKUP
                    ) -> List[LocationEntry]:
-    """Index rows, live and archived, that share a key with `location` in `bucket`. An empty list
-    means no conflict.
+    """Index rows, live and archived, that share a key with `location` in `bucket`
+    (`locations_share_key`). An empty list means no conflict.
 
-    Two locations share a key exactly when one contains the other's own key (`contains(stored,
-    location)` or `contains(location, stored)`), so this reads:
+    Two locations share a key when one contains the other's own key, and in one more case: a single
+    file `S` and the single file `S.previewFile` or `S.previewFile.` hold a common preview key that
+    neither location key names (`S.previewFile.previewFile.z`). So this reads, keeping every row
+    where `locations_share_key` holds:
 
     - the stored locations that contain the new one: exact lookups of `candidate_locations(location)`
-      (uncached), kept where `contains` holds. For a single file `S` that is a folder above it, a
-      single file whose companion folder or previews hold it, and `S` itself;
+      (uncached). For a single file `S` that is a folder above it, a single file whose companion
+      folder or previews hold it, and `S` itself;
+    - the preview partners of a single file (`_preview_partner_locations`): `S.previewFile` above
+      it and, for an `S` that ends in `.previewFile` or `.previewFile.`, the single file it is the
+      partner of; one exact lookup each;
     - one stored location inside the new one: the first row under its folder form (`F/`, or the
-      companion folder `S/` of a single file) and, for a single file, the first of its own previews
-      `S.previewFile.{ext}` stored as a location. So a new folder conflicts with a single file whose
-      object, companion folder or previews fall under it, and a new single file with anything under
-      `S/` or at one of its preview keys.
+      companion folder `S/` of a single file) and, for a single file, the first stored location
+      under its preview stem `S.previewFile.` that shares a key with it (its own previews, and
+      `S.previewFile.` itself). So a new folder conflicts with a single file whose object, companion
+      folder or previews fall under it, and a new single file with anything under `S/` or at one of
+      its preview keys.
 
     A location with more than MAX_CANDIDATE_LOCATIONS candidates raises LocationTooDeepError, so a
     caller refuses it. Callers must not act on the answer before `index_ready()` is True.
@@ -595,11 +778,12 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
     if len(candidates) > MAX_CANDIDATE_LOCATIONS:
         raise LocationTooDeepError(
             f"Location has {len(candidates)} candidate locations, more than {MAX_CANDIDATE_LOCATIONS}")
-    lookups = _lookup_all(table, bucket, candidates, use_cache=False)
+    exact = candidates + [p for p in _preview_partner_locations(location) if p not in candidates]
+    lookups = _lookup_all(table, bucket, exact, use_cache=False)
     conflicts: List[LocationEntry] = []
-    for candidate in candidates:
+    for candidate in exact:
         for entry in lookups.get(candidate, ()):
-            if contains(entry.location, location) and entry not in conflicts:
+            if locations_share_key(entry.location, location) and entry not in conflicts:
                 conflicts.append(entry)
     client, table_name = table.meta.client, table.name
     folder_form = location if location.endswith('/') else location + '/'
@@ -607,7 +791,7 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
                            page_size=1, max_pages=max_descendant_pages)]
     if not location.endswith('/'):
         inside.append(_first_under(client, table_name, bucket, location + PREVIEW_FILE_PATTERN,
-                                   lambda entry: contains(location, entry.location),
+                                   lambda entry: locations_share_key(location, entry.location),
                                    page_size=PREVIEW_LOOKUP_PAGE_SIZE, max_pages=max_descendant_pages))
     for entry in inside:
         if entry is not None and entry not in conflicts:
@@ -712,9 +896,13 @@ def reset_index_ready_cache() -> None:
 
 
 def index_ready(asset_table_name: str, ssm_client=None, clock: Callable[[], float] = time.monotonic) -> bool:
-    """Whether the location index covers every row of `asset_table_name`: the backfill's completion
-    marker exists, records `complete` and names that table. Until it does, every decision keeps the
-    logic that does not read the index.
+    """Whether the location index covers every row of `asset_table_name` whose location holds keys:
+    the backfill's completion marker exists, records `complete` and names that table. Until it does,
+    every decision keeps the logic that does not read the index.
+
+    Rows the backfill leaves out hold no key the index could attribute: no location, the bucket
+    root (an empty location), no `bucketId`, or a bucket registration that no longer exists. A row
+    at its registration's own prefix is indexed. The step's report lists both kinds.
 
     The answer is cached per container and table for INDEX_READY_CACHE_TTL_SECONDS either way. A
     marker that cannot be read (no prefix, a missing parameter, AccessDenied, throttling) answers

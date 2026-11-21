@@ -13,6 +13,7 @@ for a Lambda image, whose terminal instruction is `CMD` (the base image supplies
 import io
 import os
 import re
+import tomllib
 
 import pytest
 
@@ -20,7 +21,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _CONTAINER = os.path.dirname(_HERE)
 DOCKERFILE = os.path.join(_CONTAINER, "Dockerfile")
 DOCKERIGNORE = os.path.join(_CONTAINER, ".dockerignore")
-REQUIREMENTS = os.path.join(_CONTAINER, "requirements.txt")
+PYPROJECT = os.path.join(_CONTAINER, "pyproject.toml")
 LICENSE_COPY = os.path.join(_CONTAINER, "GPL3-license.txt")
 
 # The shared libraries Blender dlopens even in --background mode, plus shadow-utils for the `useradd` that
@@ -35,9 +36,10 @@ REQUIRED_DNF_PACKAGES = (
 # Every module the handler imports at runtime must be COPY'd by name.
 RUNTIME_FILES = ("handler.py", "meshAttributes.py", "formatUnits.py", "containerLogger.py", "executionLogKeys.py",
                  "scene_dependencies.py", "renderScene.py")
-LOCK = os.path.join(_CONTAINER, "requirements.lock")
-# The 3D renderer image's lock, which pins usd-core for the same referenced-file module.
-THUMBNAIL_LOCK = os.path.join(_CONTAINER, *([".."] * 4), "preview", "3dThumbnail", "container", "requirements.lock")
+# The hashed export of uv.lock that the image installs.
+LOCK = os.path.join(_CONTAINER, "requirements.txt")
+# The 3D renderer image's export, which pins usd-core for the same referenced-file module.
+THUMBNAIL_LOCK = os.path.join(_CONTAINER, *([".."] * 4), "preview", "3dThumbnail", "container", "requirements.txt")
 
 # The importers renderScene.py dispatches to; the build must prove each exists in the installed Blender.
 # Blender 5.0 removed collada_import, so probing it fails the build.
@@ -177,7 +179,7 @@ def test_the_build_probe_holds_blenders_openusd_at_the_advisory_floor():
 def test_runtime_files_are_copied_by_name_and_nothing_else():
     copies = [i for i in _instructions(_text()) if i.startswith("COPY")]
     joined = " ".join(copies)
-    for name in RUNTIME_FILES + ("GPL3-license.txt", "requirements.lock"):
+    for name in RUNTIME_FILES + ("GPL3-license.txt", "requirements.txt"):
         assert re.search(rf"\s{re.escape(name)}\s", joined), f"{name} is not COPY'd"
     assert not any(re.search(r"^COPY\s+\.\s", c) or re.search(r"^COPY\s+\./\s", c) for c in copies), \
         "a COPY of the whole context ships the tests"
@@ -213,8 +215,7 @@ def test_dockerignore_excludes_tests_and_caches():
 
 @pytest.mark.unit
 def test_requirements_are_exact_pins():
-    lines = [line.strip() for line in io.open(REQUIREMENTS, encoding="utf-8")
-             if line.strip() and not line.startswith("#")]
+    lines = _direct_dependencies()
     names = {}
     for line in lines:
         m = re.fullmatch(r"([A-Za-z0-9_.-]+)==(\d+(?:\.\d+)+)", line)
@@ -235,34 +236,35 @@ def test_the_lock_pins_the_requirements_usd_core():
     assert _locked(LOCK)["usd-core"][1] >= 1
 
 
+def _direct_dependencies():
+    with open(PYPROJECT, "rb") as handle:
+        return [line.strip() for line in tomllib.load(handle)["project"]["dependencies"]]
+
+
 def _locked(path):
     """{package: version} of a hash-locked requirements file, with each package's hash count."""
     text = io.open(path, encoding="utf-8").read()
-    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text, re.M)
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+)(?: ; [^\\\n]*)? \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text, re.M)
     return {name.lower(): (version, block.count("--hash=")) for name, version, block in entries}
 
 
 @pytest.mark.unit
 def test_the_image_installs_the_hash_locked_requirements():
-    """The pip install reads the lock with --require-hashes, so a rebuild of one commit installs the same
-    wheels; the lock's header names the command that regenerates it."""
+    """The pip install reads the uv.lock export with --require-hashes, so a rebuild of one commit installs
+    the same wheels; the export's header names the command that regenerates it."""
     installs = [i for i in _instructions(_text()) if i.startswith("RUN") and "pip install" in i]
     assert len(installs) == 1, installs
-    assert "--require-hashes" in installs[0] and "requirements.lock" in installs[0]
-    assert "requirements.txt" not in installs[0].split("pip install", 1)[1]
+    assert "--require-hashes" in installs[0] and "requirements.txt" in installs[0]
     assert 'python -c "from pxr import Sdf, UsdUtils' in installs[0], "the build proves usd-core imports"
     header = io.open(LOCK, encoding="utf-8").read(400)
-    assert "uv pip compile requirements.txt --generate-hashes --python-version 3.12" in header
+    assert "uv export --frozen" in header and "--no-hashes" not in header
 
 
 @pytest.mark.unit
 def test_the_lock_pins_every_direct_dependency_at_its_requirements_version():
     locked = _locked(LOCK)
-    assert locked, "no entries parsed from requirements.lock"
-    for line in io.open(REQUIREMENTS, encoding="utf-8"):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
+    assert locked, "no entries parsed from requirements.txt"
+    for line in _direct_dependencies():
         name, version = line.split("==")
         assert locked[name.lower()][0] == version, f"{name}: lock {locked.get(name.lower())} vs {version}"
     assert all(hashes >= 1 for _, hashes in locked.values())

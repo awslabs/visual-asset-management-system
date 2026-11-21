@@ -211,6 +211,36 @@ def run_job(job):
     return {"report": report or {}}
 
 
+# What usd-core's reader says when one array of a crate is past the LZ4 block limit.
+_CRATE_UNREADABLE_MARKERS = ("TfFastCompression", "DecompressFromBuffer", "LZ4 error")
+
+
+def translate_error(error, job):
+    """The error the parent reports: a USD crate that cannot be decompressed becomes a ``ValueError``
+    saying the file could not be read (the file is the author's to fix), where it would otherwise be a
+    ``failed unexpectedly`` with the detail only in the log."""
+    text = str(error)
+    if not isinstance(error, ValueError) and any(marker in text for marker in _CRATE_UNREADABLE_MARKERS):
+        name = job.get("input_name", "the input") if isinstance(job, dict) else "the input"
+        return ValueError(
+            f"{name} could not be read: a USD crate stores an array larger than the 2 GiB a crate can "
+            f"decompress (one mesh with hundreds of millions of indices). Export the scene again with "
+            f"its large meshes split, or in another format, and run the conversion again.")
+    return error
+
+
+def peak_memory_mib():
+    """The most resident memory this process held, in MiB (None where the platform does not say). The
+    parent records the largest of its workers in conversion-run.json."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    # Linux reports kibibytes; macOS (a developer's machine) reports bytes.
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round(peak / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
+
+
 def _write_result(path, result):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(result, handle)
@@ -229,12 +259,13 @@ def main(argv):
                                     "message": "The model needs more memory than this function has."})
         return 1
     except BaseException as e:  # noqa: BLE001 - every failure is reported to the parent
+        e = translate_error(e, job)
         kind = type(e).__name__
         if kind not in USER_ERRORS:
             traceback.print_exc(file=sys.stderr)
         _write_result(result_path, {"ok": False, "type": kind, "message": str(e)})
         return 1
-    _write_result(result_path, {"ok": True, **output})
+    _write_result(result_path, {"ok": True, **output, "peakMemoryMiB": peak_memory_mib()})
     return 0
 
 

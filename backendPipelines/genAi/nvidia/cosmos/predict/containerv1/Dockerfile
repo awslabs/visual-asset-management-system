@@ -1,24 +1,41 @@
 # VAMS Cosmos Predict Pipeline Container
 # Based on the official NVIDIA Cosmos-Predict1 Dockerfile pattern
 # https://github.com/nvidia-cosmos/cosmos-predict1/blob/main/Dockerfile
+#
+# Not deployed (cosmosPredict-construct.ts keeps its asset commented out). Its build inputs are pinned
+# like the deployed images' all the same, so the day it is wired back in it builds what was reviewed.
 
-FROM nvcr.io/nvidia/pytorch:24.10-py3
+FROM nvcr.io/nvidia/pytorch:24.10-py3@sha256:36555b43d382425a4281ecfbcb41de2f95fb542ca8e531c5486be10df8026f9d
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y git tree ffmpeg wget curl unzip
+# Pinned upstream revisions; each clone below fails the build if HEAD is anything else.
+ARG COSMOS_PREDICT1_COMMIT=724daa1b2df5ec96bdf111bb947479d2216b3b08
+ARG APEX_COMMIT=4db540366dd9e3c1545825550685f630e3efbe01
+# The Miniconda installer at a fixed release, checked against the SHA-256 Anaconda publishes for it.
+ARG MINICONDA_INSTALLER=Miniconda3-py314_26.9.4-1-Linux-x86_64.sh
+ARG MINICONDA_SHA256=76cf791877078e74410f64e5c2ef7da4e217fd7a433c2c3674c9d9695225c3bb
+
+# Install system dependencies, after the security updates published since the base image was built
+RUN apt-get update && apt-get upgrade -y && apt-get install -y git tree ffmpeg wget curl unzip
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh && ln -s /lib64/libcuda.so.1 /lib64/libcuda.so
 
-# Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
 # Clone cosmos-predict1 repository
-RUN git clone https://github.com/nvidia-cosmos/cosmos-predict1.git /opt/cosmos-predict1
+RUN git clone https://github.com/nvidia-cosmos/cosmos-predict1.git /opt/cosmos-predict1 && \
+    cd /opt/cosmos-predict1 && \
+    git checkout --detach ${COSMOS_PREDICT1_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${COSMOS_PREDICT1_COMMIT}" && \
+    git rev-parse HEAD > /opt/cosmos-predict1/VAMS_UPSTREAM_COMMIT
 
 # Copy yaml and requirements into container (needed for conda env setup)
 RUN cp /opt/cosmos-predict1/cosmos-predict1.yaml /cosmos-predict1.yaml && \
@@ -38,7 +55,8 @@ ENV CONDA_DIR=/home/vams/miniconda3
 # This includes: miniconda, conda env, pip requirements, symlinks, transformer-engine, APEX
 RUN echo "Installing dependencies. This will take a while..." && \
     mkdir -p ${CONDA_DIR} && \
-    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ${CONDA_DIR}/miniconda.sh && \
+    wget -q "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -O ${CONDA_DIR}/miniconda.sh && \
+    echo "${MINICONDA_SHA256}  ${CONDA_DIR}/miniconda.sh" | sha256sum -c - && \
     bash ${CONDA_DIR}/miniconda.sh -b -u -p ${CONDA_DIR} && \
     rm ${CONDA_DIR}/miniconda.sh && \
     source ${CONDA_DIR}/bin/activate && \
@@ -52,6 +70,9 @@ RUN echo "Installing dependencies. This will take a while..." && \
     ln -sf $CONDA_PREFIX/lib/python3.10/site-packages/triton/backends/nvidia/include/* $CONDA_PREFIX/include/ && \
     pip install transformer-engine[pytorch]==1.12.0 && \
     git clone https://github.com/NVIDIA/apex && cd apex && \
+    git checkout --detach ${APEX_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${APEX_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/apex.VAMS_UPSTREAM_COMMIT && \
     CUDA_HOME=$CONDA_PREFIX pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" . && \
     cd / && rm -rf /apex && \
     pip install --no-cache-dir boto3 huggingface_hub && \

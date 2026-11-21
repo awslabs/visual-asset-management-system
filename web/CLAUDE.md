@@ -651,9 +651,10 @@ Backend API endpoints follow REST conventions:
 ```
 GET    /database/{databaseId}/assets              # List assets
 GET    /database/{databaseId}/assets/{assetId}     # Get single asset
-POST   /database/{databaseId}/assets               # Create asset
+POST   /assets                                      # Create asset
 PUT    /database/{databaseId}/assets/{assetId}      # Update asset
-DELETE /database/{databaseId}/assets/{assetId}      # Delete asset
+DELETE /database/{databaseId}/assets/{assetId}/archiveAsset  # Archive asset
+DELETE /database/{databaseId}/assets/{assetId}/deleteAsset   # Permanently delete asset
 POST   /database/{databaseId}/assets/{assetId}/download  # Download
 POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
@@ -1103,6 +1104,7 @@ The Search view's answers follow these rules (`ModernSearchContainer.tsx`):
 -   **One result and one dispatch for every view.** The table and the Map view both get `displayedResult` and `handleListDispatch`, so in natural-language mode both page through the answer held in the browser and a page change runs no search; the map's paginator sizes itself from `getPagedResultCount`.
 -   **The Map view scopes by request.** A keyword search on the map adds `HAS_LOCATION_FILTER` (`_exists_:geo_MD_location`, `hooks/searchRequestBuilders.ts`) through `executeSearch`'s `requireLocation` option. It never adds metadata filter rows or changes the metadata mode or operator, and entering or leaving the map runs the keyword search again from page 1; in natural-language mode a view switch runs no search. A natural-language asset hit's `MD_` holds only its asset's location keys (`hasLocationOnlyMetadata`, `utils/recordType.ts`), so neither the map popup nor the Metadata column lists them as metadata.
 -   **A 503 is a failed search, not a feature-off state.** `POST /search/nlp` answers 503 when OpenSearch cannot apply a metadata, tag or location filter, when Amazon Bedrock or Amazon DynamoDB is throttled or times out, or while the vector index is built, and `POST /search` when OpenSearch is enabled but unreachable. The page reports each as a **Search failed** toast with the API's message and keeps its controls; `opensearch:enrichment_failed` (sent only for a request with no such filter) is a Search notice.
+-   **A failed search with no answer on screen says so in the page (#1763).** When the newest search fails (any refusal, an API Gateway 504 timeout, a network failure) and the page holds no answer for the mode on screen (the first search of a page load, or the first in a mode), `ModernSearchContainer` shows a **Search did not finish** error alert above the results (`SEARCH_FAILED_NOTICE_HEADER` / `SEARCH_FAILED_NOTICE`, `data-testid="search-failed-notice"`) besides the toast, which closes after 8 s, and `SearchPageListView` (`state.searchFailed`) shows "No results to show" instead of "Loading.." or "No matches". An answer already on screen stays, with the toast only; the next search clears the alert.
 -   **Controls only in the mode that uses them.** **Keyword Search Scope** (`includeMetadataInKeywordSearch`) and **Show result explanation** (`showResultExplanation`) are not rendered in natural-language mode, which never sends them.
 -   **Filter panels.** The Database multiselect reads its selection through `selectedValues` (`hooks/searchRequestBuilders.ts`), because a database route locks the filter with `value` only, and the locked control names that database (`SearchLayout/lockedDatabase.ts`). Facet counts carry `+` when the count beside them is a minimum (`nlpCountsAreMinimums` in natural-language mode, `isTotalLowerBound` for a keyword answer). In a filtered search the type and tag lists keep the values of the last unfiltered search but show the current answer's counts, and none for a value it has no bucket for. A facet whose `sum_other_doc_count` is above 0 is cut (`isFacetCut`, `SearchLayout/BasicFiltersPanel.tsx`): the Database filter shows no count for a database without a bucket, and a type or tag list built from a cut facet (the answer's, or the cached unfiltered search's) shows `facetCutNote` under it.
 -   **Breadcrumb.** `pages/search/SearchPage.tsx` ends the trail with `searchPageTitle(databaseId)` and adds only **Databases** before it on a database route; no step links to the page itself.
@@ -1129,7 +1131,7 @@ interface VAMSConfig {
 Configuration is loaded at startup in this order:
 
 1. `GET /api/amplify-config` --> Cached in appCache, configures Amplify v6
-2. `GET /api/secure-config` --> Additional config requiring auth
+2. `GET /secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
 When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.

@@ -38,10 +38,16 @@ tools/VamsCLI/
 ├── tests/                   # Test files (mirror command structure; add-on tests under tests/addon/)
 ├── setup.py                 # Package configuration
 ├── pyproject.toml          # Modern Python packaging
+├── requirements.txt        # Runtime dependencies (ranged, hand-written); matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
+├── requirements-dev.txt    # Dev extra (ranged, hand-written)
+├── requirements-build.txt  # The [build-system] requires of pyproject.toml (ranged, hand-written)
+├── uv.lock                 # uv's resolution of the ranges, for development, CI and the audit; installing the package with pip never uses it
+├── requirements.lock       # Hashed `uv export` of uv.lock (runtime + `build` group), which the EDH Linux AMI recipes install;
+│                           #   regenerate with the command in its header (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
 └── README.md               # User documentation
 ```
 
-### **Command Groups (26 core + add-on groups)**
+### **Command Groups (27 core + add-on groups)**
 
 The core groups are registered in `main.py` via `cli.add_command()`:
 
@@ -273,12 +279,12 @@ Reverse direction applies too: if working on the MCP server or a connector revea
 ```python
 # ✅ CORRECT - Add to constants.py
 API_LOGIN_PROFILE = "/auth/loginProfile"
-API_USER_ASSETS = "/api/user/assets"
-API_ASSET_UPLOAD = "/api/assets/upload"
+API_DATABASE_ASSETS = "/database/{databaseId}/assets"
+API_UPLOADS = "/uploads"
 
 # ❌ INCORRECT - Don't hardcode in methods
-def get_user_assets(self):
-    return self.get("/api/user/assets")  # BAD
+def list_database_assets(self, database_id):
+    return self.get(f"/database/{database_id}/assets")  # BAD
 ```
 
 In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fork Extension Points](#fork-extension-points-commands-client-methods-mcp-tools)).
@@ -287,7 +293,7 @@ In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fo
 
 ```python
 # ✅ CORRECT - Import from constants
-from ..constants import API_LOGIN_PROFILE, API_USER_ASSETS
+from ..constants import API_LOGIN_PROFILE, API_DATABASE_ASSETS
 
 # ✅ CORRECT - Use constants in methods; a value joined onto a prefix constant is one segment
 def call_login_profile(self, user_id: str):
@@ -333,6 +339,7 @@ An add-on's commands, client methods and MCP tools use an add-on lane that mirro
 -   `edh` (`commands/addon/edh.py`) has the `workstation`, `catalog`, `admin` (`images`, `ami-recipe`, `instances`, `capacity`, `capacity-reservation`, `health`, `settings`) and `container` sub-groups. Every command stacks `@requires_feature(FEATURE_EDH_WORKSTATIONS, ...)` after `@requires_setup_and_auth` (`container` uses `FEATURE_EDH_CONTAINERS`, `admin ami-recipe` uses `FEATURE_EDH_AMI_RECIPES`); the switch is a login-time snapshot. The three refusal sentences (`EDH_*_DISABLED_MESSAGE` in `addon_constants.py`) are the ones the MCP server's EDH pre-flight reports.
 -   `EdhAPIClientMixin` (`utils/addon/edh_api_client.py`): every method passes `raise_http_errors=True`, because with the default `_make_request` converts a 404/400/5xx into a generic `APIError` before the method's own handler runs. `_edh_error` maps a 403 the methods read themselves to `PermissionDeniedError("Access forbidden. " + message)` and a 401 to `AuthenticationError`, and `_edh_session_id` checks a workstation id (one path segment, the service's `id_pattern`) before any request. The list routes return every row in one `{"Items": [...]}` page, so the commands take no paging options and the MCP tools use neither `paginate()` nor `unwrap_message()`.
 -   `utils/addon/edh_exceptions.py` holds the `EdhError` family; the class names are the `error_type` that `--json-output` and the MCP tools report. `EdhOutcomeUnknownError` carries `json_fields` `{"outcomeUnknown": True}` and `EdhStartInProgressError` `{"startInProgress": True}` on the class, the flags the API's own error body sets, which `@tool_result` passes through.
+-   Start, stall and stop: `edh workstation start --wait` polls for up to `START_WAIT_TIMEOUT_SECONDS` (600) and exits 1 with `EdhStartStalledError` (`{"waitOutcome": "stalled"}`) as soon as it reads a start the sweep recorded `START_STALLED`. `list` and `get` print `STALLED` for `START_STALLED` and for `LAUNCH_STALLED` (a new launch EDH has not placed after 3 hours; `get` adds the `edh workstation delete` line, its way out), and a stall outranks `DESKTOP_ERROR`; the service never writes `LAUNCH_STALLED` with `DESKTOP_ERROR`, since EDH's `error` on a launch that never ran makes it `ORPHANED`. `EdhDesktopErrorError` (`{"code": "DESKTOP_ERROR"}`) is the `409` of a connect, desktop sign-in or start of a workstation that has run which EDH reports in error. `edh workstation stop` asks unless `--yes` is passed (`--json-output` without `--yes` exits 1 with one `Confirmation required` object), and the MCP tool `stop_edh_workstation(session_id, confirm=False)` sends nothing until `confirm=True`; the API refuses a stop of a `LAUNCH_STALLED` launch with a `409` naming Delete. The full rules: `tools/VamsCLI/CLAUDE.md` ("Add-on Commands"), `tools/VamsMCP/CLAUDE.md` ("Add-on Tools") and their mirror in `.kiro/steering/ADDON_EDH_WORKSTATIONS.md`.
 -   `edh workstation connect` prints only the DCV host in CLI mode; the `connectionUrl`, which carries a session auth token, is returned only with `--json-output`. `--show-sign-in` adds the desktop sign-in under `signIn` (a Windows user name and password, a directory account's user name, or for Linux that no password is needed), which no MCP tool reads.
 -   `addon_tools/edh.py` holds 18 read, 17 write and 8 destructive tools, pre-flighting `FEATURE_EDH_CONTAINERS` (container tools), `FEATURE_EDH_AMI_RECIPES` (AMI recipe tools) or `FEATURE_EDH_WORKSTATIONS` (the rest). The nine compute tools (`create_edh_workstation`, `renew_edh_workstation`, `start_edh_workstation`, `stop_edh_workstation`, `stop_edh_admin_instance`, `submit_edh_container_job`, `start_edh_ami_recipe_build`, `deactivate_edh_admin_instance`, `kill_edh_container_job`) stay out of `autoApprove`. `get_edh_workstation_connect` changes no stored data but issues the DCV `connectionUrl`, so it is the one read placed in the write tier (behind `VAMS_ENABLE_WRITES`) and never enters `autoApprove`. No tool calls `get_edh_workstation_os_sign_in`.
 -   Tests: `tests/addon/test_edh.py` and `tests/addon/test_edh_client.py` (CLI), `tests/addon/test_edh_tools.py` (MCP). The command details and the add-on's other components: `.kiro/steering/ADDON_EDH_WORKSTATIONS.md`; option semantics, output and error texts: `documentation/docusaurus-site/docs/developer/edh-workstations/cli-commands.md` and `cli-troubleshooting.md`.
@@ -784,13 +791,13 @@ if __name__ == '__main__':
 
 ```python
 # ✅ ALWAYS DO THIS - Add to constants.py
-API_USER_ASSETS = "/api/user/assets"
-API_ASSET_UPLOAD = "/api/assets/upload"
-API_WORKFLOW_STATUS = "/api/workflows/status"
+API_DATABASE_ASSETS = "/database/{databaseId}/assets"
+API_UPLOADS = "/uploads"
+API_UPLOAD_STATUS = "/uploads/{uploadId}"
 
 # ❌ NEVER DO THIS - Hardcoded endpoints
-def get_assets(self):
-    return self.get("/api/user/assets")  # VIOLATION
+def list_database_assets(self, database_id):
+    return self.get(f"/database/{database_id}/assets")  # VIOLATION
 ```
 
 An add-on's paths go in `vamscli/addon_constants.py` and, in a fork, the fork's in `vamscli/custom_constants.py`; the contract test below checks both the same way.
@@ -2260,6 +2267,34 @@ elif isinstance(e, NewGlobalError):
     _handle_global_error("New Error", str(e), "What the user can do next.", exc=e)
 ```
 
+### **Key Constants Reference**
+
+#### **Upload/Download Limits**
+
+| Constant                      | Value  | Purpose                                         |
+| ----------------------------- | ------ | ----------------------------------------------- |
+| `DEFAULT_CHUNK_SIZE_SMALL`    | 150 MB | Small file chunk size                           |
+| `DEFAULT_CHUNK_SIZE_LARGE`    | 1 GB   | Large file chunk size                           |
+| `MAX_FILE_SIZE_SMALL_CHUNKS`  | 15 GB  | Threshold for large chunks                      |
+| `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size                               |
+| `MAX_PREVIEW_FILE_SIZE`       | 5 MiB  | Preview image limit (exactly 5 MiB is accepted) |
+| `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request                        |
+| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request                        |
+| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file                           |
+| `MAX_PART_SIZE`               | 5 GB   | S3 part size limit                              |
+
+#### **Retry Configuration**
+
+| Constant                           | Default | Env Var Override               |
+| ---------------------------------- | ------- | ------------------------------ |
+| `DEFAULT_MAX_RETRY_ATTEMPTS`       | 5       | `VAMS_CLI_MAX_RETRY_ATTEMPTS`  |
+| `DEFAULT_INITIAL_RETRY_DELAY`      | 1.0s    | `VAMS_CLI_INITIAL_RETRY_DELAY` |
+| `DEFAULT_MAX_RETRY_DELAY`          | 60.0s   | `VAMS_CLI_MAX_RETRY_DELAY`     |
+| `DEFAULT_RETRY_BACKOFF_MULTIPLIER` | 2.0     | -                              |
+| `DEFAULT_RETRY_JITTER`             | 0.1     | -                              |
+
+Source: `tools/VamsCLI/CLAUDE.md`, "Key Constants Reference" ("Upload/Download Limits", "Retry Configuration").
+
 ## ✅ **Quality Assurance Checklist**
 
 ### **Before Implementation**
@@ -2470,6 +2505,16 @@ this CLI uses, `list`, `get` and `set` are builtins. Prefer a comprehension or `
 will do, since neither names the builtin. No linter catches this — the rebinding is valid Python and
 the call type-checks — so treat a command whose output contains another command's output as this bug
 until shown otherwise.
+
+## 🧱 **Updating Python Dependencies (uv)**
+
+`tools/VamsCLI/uv.lock` and `tools/VamsMCP/uv.lock` are development, CI and audit files. The published packages keep their ranged dependencies (`pyproject.toml` `[project] dependencies`, `setup.py` `install_requires`, the hand-written `requirements*.txt`) and their setuptools build, so installing either with pip never needs uv and is not pinned to the lock. Do not narrow a range or raise a lower bound to move a locked version; that changes what every user installs.
+
+-   Run the uv version `[tool.uv] required-version` names: `uvx --from uv==0.13.8 uv ...`. The `vamscli-test` and `vamsmcp-test` CI jobs install from the lock (`uv sync --frozen --extra dev`), and the `python-dependency-audit` job checks both locks.
+-   Move a locked package: `uv lock --upgrade-package <package>` (one flag per package), then re-export `requirements.lock`. A range edit goes into `pyproject.toml`, `setup.py` and `requirements.txt` together (`tests/test_packaging_manifests.py`), then `uv lock`.
+-   `requirements.lock` is a hashed export of `uv.lock` (runtime dependencies plus the `build` group, which must equal `[build-system] requires`): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The EDH AMI recipes install it with `--require-hashes --only-binary :all:`; the audit regenerates it and fails when it is stale. Never edit it by hand.
+-   The hand-written ranged files are listed under `rangedInputs` in `.github/python-lock-exemptions.json`, each with a reason; a new hand-written `requirements*.txt` beside a lock fails the CI test unless it is a uv export. The audit fails an entry that is stale, has no `uv.lock` beside it, names a package the lock does not hold, or is installed or copied by a Dockerfile, AMI recipe, workflow, script or CDK bundling command. Keep the list to the VamsCLI files. The audit also covers every group and extra of the lock, so the `dev` extras of both packages are checked.
+-   VamsMCP's lock resolves `vamscli` from `../VamsCLI` (`[tool.uv.sources]`, editable), because vamscli is not on PyPI; that setting is not part of the published metadata, and the audit leaves the local package out of the export it audits.
 
 ## 🛠️ **Development Commands**
 

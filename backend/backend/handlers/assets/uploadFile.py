@@ -45,7 +45,10 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import contains, held_objects, is_folder_location, names_own_object, normalize_base_prefix, object_key_for
+from common.assetLocations import (
+    OWN_FILE_OUTPUT_REFUSAL, contains, held_objects, is_folder_location, names_own_object,
+    normalize_base_prefix, object_key_for,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -821,8 +824,7 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
 
 # A single-file asset's own object is the key its location names. A user upload at its path writes a new
 # version of it, as for any other file; a workflow output never replaces it.
-OWN_FILE_PATH_MESSAGE = ("A workflow output cannot replace the file of a single-file asset. "
-                         "Write the output under another file name or folder.")
+OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
 
 
 def normalize_s3_path(asset_base_key, file_path):

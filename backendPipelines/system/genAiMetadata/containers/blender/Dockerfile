@@ -85,12 +85,12 @@ ENV BLENDER_VERSION=${BLENDER_VERSION}
 ENV DISPLAY=
 ENV XDG_RUNTIME_DIR=/tmp/runtime
 
-# The handler's Python packages come from requirements.lock (generated from requirements.txt with
-# `uv pip compile --generate-hashes`; the command is in its header), installed with --require-hashes so two
-# builds of one commit ship the same code. usd-core gives the handler's own Python the OpenUSD reader the
+# The handler's Python packages come from requirements.txt, exported from uv.lock (the command is in its
+# header; direct dependencies are in pyproject.toml), installed with --require-hashes so two builds of one
+# commit ship the same code. usd-core gives the handler's own Python the OpenUSD reader the
 # referenced-file walk uses; the build proves it imports.
-COPY requirements.txt requirements.lock ${LAMBDA_TASK_ROOT}/
-RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.lock \
+COPY requirements.txt ${LAMBDA_TASK_ROOT}/requirements.txt
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r ${LAMBDA_TASK_ROOT}/requirements.txt \
     && python -c "from pxr import Sdf, UsdUtils; print('usd-core ok')"
 
 # Prove the installed Blender starts headless in this image and exposes everything renderScene.py uses: the

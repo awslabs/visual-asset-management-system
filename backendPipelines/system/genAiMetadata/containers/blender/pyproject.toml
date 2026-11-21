@@ -1,0 +1,25 @@
+[project]
+name = "system-genai-blender-image"
+version = "0.1.0"
+description = "SYSTEM GenAI Blender render image handler packages"
+requires-python = ">=3.12,<3.13"
+# Direct dependencies of the Blender render image's handler (not Blender's bundled Python). usd-core is at
+# the release the 3D renderer image pins for the same module (preview/3dThumbnail/container),
+# because releases before 25.11 carry OpenUSD parser advisories (GHSA-58p5-r2f6-g2cj, GHSA-grjp-54v3-c442).
+dependencies = [
+    "boto3==1.43.89",
+    "botocore==1.43.89",
+    "numpy==2.4.3",
+    "trimesh==4.11.4",
+    "aws-lambda-powertools==3.2.0",
+    "usd-core==26.8",
+]
+
+# The image installs the committed, hashed requirements.txt with pip, which is exported from uv.lock;
+# uv is a development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+# Linux for the image; macOS so a developer machine can install the set to run the tests.
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]

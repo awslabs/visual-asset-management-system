@@ -233,8 +233,24 @@ export function buildAssetFiles(
 
         environment: {
             SEND_EMAIL_FUNCTION_NAME: sendEmailFunction.functionName,
+            // A copy to another asset is refused for a quarantined source, as a download is
+            // (common/compliance/quarantineGuard.py); the asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
+
+    if (config.app.compliance.quarantineBlocksDownload) {
+        // check_quarantine_block reads one asset-state row by key.
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                effect: iam.Effect.ALLOW,
+                actions: ["dynamodb:GetItem"],
+                resources: [storageResources.dynamo.complianceAssetStateStorageTable.tableArn],
+            })
+        );
+    }
 
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     storageResources.dynamo.assetStorageTable.grantReadWriteData(fun);

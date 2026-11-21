@@ -86,6 +86,24 @@ export interface BatchFargatePipelineConstructProps extends cdk.StackProps {
      * work.
      */
     retry?: BatchJobRetry;
+    /**
+     * Docker build target of the image asset (a multi-stage Dockerfile's final stage). Ignored when
+     * `ecrImage` is given. Absent builds the Dockerfile's last stage, as before.
+     */
+    imageTarget?: string;
+    /** Docker build arguments of the image asset. Ignored when `ecrImage` is given. */
+    imageBuildArgs?: { [key: string]: string };
+    /**
+     * Upper bound of the compute environment's vCPUs, the cost guard of a pipeline whose jobs can
+     * be many and large. Absent keeps the compute environment's default.
+     */
+    maxvCpus?: number;
+    /**
+     * Run an init process (tini) as the container's PID 1 that reaps orphaned children. Set it for a
+     * container whose entrypoint spawns grandchildren and does not reap them itself. Absent leaves
+     * the container as it was.
+     */
+    initProcessEnabled?: boolean;
 }
 
 /** The retry setting of a Batch job definition: total attempts and the evaluateOnExit rules. */
@@ -177,6 +195,7 @@ export class BatchFargatePipelineConstruct extends Construct {
                     subnets: props.subnets,
                 }),
                 securityGroups: props.securityGroups,
+                ...(props.maxvCpus !== undefined ? { maxvCpus: props.maxvCpus } : {}),
             }
         );
 
@@ -190,6 +209,10 @@ export class BatchFargatePipelineConstruct extends Construct {
               ecs.AssetImage.fromAsset(path.join(__dirname, props.imageAssetPath), {
                   file: props.dockerfileName,
                   platform: cdk.aws_ecr_assets.Platform.LINUX_AMD64,
+                  ...(props.imageTarget !== undefined ? { target: props.imageTarget } : {}),
+                  ...(props.imageBuildArgs !== undefined
+                      ? { buildArgs: props.imageBuildArgs }
+                      : {}),
               });
 
         const batchJobName =
@@ -218,6 +241,15 @@ export class BatchFargatePipelineConstruct extends Construct {
                 },
                 jobRole: props.jobRole,
                 executionRole: props.executionRole,
+                ...(props.initProcessEnabled === true
+                    ? {
+                          linuxParameters: new batch.LinuxParameters(
+                              this,
+                              "PipelineLinuxParameters",
+                              { initProcessEnabled: true }
+                          ),
+                      }
+                    : {}),
                 // The stream is `<awslogs-stream-prefix>/default/<ecs-task-id>` (Batch names the
                 // container `default`). Prefixing with the PHYSICAL job definition name -- base name
                 // plus hash, the string `jobDefinition.jobDefinitionName` resolves to -- keeps the

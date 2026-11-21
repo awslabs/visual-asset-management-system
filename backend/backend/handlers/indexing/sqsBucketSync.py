@@ -64,6 +64,7 @@ from common.assetLocations import (
     candidate_locations,
     contains,
     derive_location,
+    fill_location_attributes,
     find_conflicts,
     held_objects,
     index_ready,
@@ -1012,8 +1013,17 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
     
     return created_db_id
 
-def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) -> Optional[str]:
+# restore_archived_asset's outcome when the asset has neither an archived nor a live record any more
+# (it was permanently deleted after the caller looked it up). The caller handles the key like any other
+# key with no asset.
+ARCHIVED_RECORD_GONE = object()
+
+
+def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict, bucket_name: Optional[str] = None):
     """Restore an archived asset record after a direct S3 upload to its prefix.
+
+    `bucket_name` is the event's bucket, the bucket of `bucket_id`'s registration. The restored row gets
+    the location index attributes from it when the archived row lacks them (`fill_location_attributes`).
 
     DynamoDB-only unarchive: the asset record moves back from the
     {databaseId}#deleted partition to the live partition. Previously archived
@@ -1021,14 +1031,19 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
     define the asset's contents; users unarchive individual old files via the
     file unarchive API as needed.
 
+    Only the archived record as stored now is restored. ``archived_asset`` comes from an eventually
+    consistent index read kept in a 60-second container cache, so the record is read again with a
+    consistent read; when it is gone, nothing is written from the caller's image (#1799).
+
     Concurrency: a batch of ObjectCreated events for the same archived asset can
     race here. The live-partition write is conditional on no live record
     existing, and the archived-record delete is keyed exactly, so the restore
     happens once; losers treat the asset as already restored.
 
     Returns:
-        The live database ID on success (or when already restored), None on error
-        or when the asset's database has been deleted.
+        The live database ID on success (or when already restored); ARCHIVED_RECORD_GONE when the
+        asset has no archived and no live record (permanently deleted); None on error or when the
+        asset's database has been deleted.
     """
     archived_db_id = archived_asset.get('databaseId', '')
     if not archived_db_id.endswith('#deleted'):
@@ -1045,11 +1060,24 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict) 
             return None
 
         # Copy the archived row as stored now: the caller's image comes from an eventually consistent
-        # index read and a container cache, and can predate a write to the row.
+        # index read and a container cache, and can predate a write to the row or its deletion.
         current = table.get_item(Key={'databaseId': archived_db_id, 'assetId': asset_id},
                                  ConsistentRead=True).get('Item')
-        restored = {k: v for k, v in (current or archived_asset).items()
+        if not current:
+            asset_cache.delete(f"{bucket_id}:{asset_id}")
+            asset_cache.delete(f"{bucket_id}:{asset_id}:archived")
+            # No archived row: a concurrent event restored it, or the asset was permanently deleted.
+            live = table.get_item(Key={'databaseId': live_db_id, 'assetId': asset_id},
+                                  ConsistentRead=True).get('Item')
+            if live:
+                logger.info(f"Asset {asset_id} already restored in {live_db_id} by a concurrent event")
+                return live_db_id
+            logger.info(f"Not restoring asset {asset_id}: its archived record no longer exists")
+            return ARCHIVED_RECORD_GONE
+        restored = {k: v for k, v in current.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
+        # A row the location index backfill has not reached gets the attributes on the copy.
+        fill_location_attributes(restored, bucket_name)
         restored['databaseId'] = live_db_id
         restored['unarchivedAt'] = utc_now().isoformat()
         restored['unarchivedBy'] = 'SYSTEM_USER'
@@ -2317,17 +2345,27 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                         f"Object {object_key} no longer exists; not restoring archived asset {owner_asset_id}"
                     )
                     return True, True, f"Skipped stale create event for archived asset {owner_asset_id}"
-                restored_database_id = restore_archived_asset(owner_bucket_id, owner_asset_id, archived_asset)
-                if not restored_database_id:
+                restored_database_id = restore_archived_asset(owner_bucket_id, owner_asset_id, archived_asset,
+                                                              bucket_name=bucket_name)
+                if restored_database_id is ARCHIVED_RECORD_GONE:
+                    # Deleted since the lookup: handled below like any other key with no asset.
+                    logger.info(
+                        f"Archived asset {owner_asset_id} no longer exists; "
+                        f"treating {object_key} as a key with no asset"
+                    )
+                    archived_asset = None
+                    resolved_by, owner_asset_id, owner_bucket_id = RESOLVED_BY_FAST_PATH, asset_id, bucket_id
+                elif not restored_database_id:
                     logger.error(f"Failed to restore archived asset {owner_asset_id}")
                     return False, True, f"Failed to restore archived asset {owner_asset_id}"
-                _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=owner_asset_id)
-                logger.info(
-                    f"Restored archived asset {owner_asset_id} to database {restored_database_id} "
-                    f"after direct S3 upload of {object_key}"
-                )
-                database_id_to_use = restored_database_id
-            else:
+                else:
+                    _log_sync("assetSync", "restore", database_id=restored_database_id, asset_id=owner_asset_id)
+                    logger.info(
+                        f"Restored archived asset {owner_asset_id} to database {restored_database_id} "
+                        f"after direct S3 upload of {object_key}"
+                    )
+                    database_id_to_use = restored_database_id
+            if not asset_data and not archived_asset:
                 # Auto-create an asset for a new first-level folder.
                 if not first_folder_valid:
                     logger.info(f"Asset ID {asset_id} is not valid, skipping processing but forwarding to indexers")

@@ -32,7 +32,10 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.assetProvenance import asset_edit_provenance
-from common.assetLocations import contains, held_objects, is_folder_location, normalize_base_prefix, relative_path_in
+from common.assetLocations import (
+    contains, fill_location_attributes, held_objects, is_folder_location, normalize_base_prefix,
+    relative_path_in,
+)
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -1512,8 +1515,8 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         archived_db_id = f"{databaseId}#deleted"
         asset['databaseId'] = archived_db_id
         
-        # Save to archived location
-        asset_table.put_item(Item=asset)
+        # Save to archived location (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket_name))
 
         # Delete from original location
         asset_table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
@@ -1630,8 +1633,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         # Move back to original database ID
         asset['databaseId'] = original_db_id
         
-        # Save to original location
-        asset_table.put_item(Item=asset)
+        # Save to original location (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket_name))
 
         # Delete from archived location
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})

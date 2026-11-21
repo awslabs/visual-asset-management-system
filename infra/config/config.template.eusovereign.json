@@ -106,7 +106,11 @@
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true,
-                "enableStepInput": false
+                "enableStepInput": false,
+                "batchTier": {
+                    "enabled": false,
+                    "maxMemoryGiB": 120
+                }
             },
             "usePreview3dThumbnail": {
                 "enabled": false,
@@ -395,6 +399,7 @@
                     "g5.8xlarge"
                 ],
                 "maxVCpus": 48,
+                "modelCacheGeneration": 0,
                 "models": {
                     "sam3d": {
                         "enabled": false

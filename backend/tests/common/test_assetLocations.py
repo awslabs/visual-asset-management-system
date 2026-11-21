@@ -107,6 +107,77 @@ class TestContains:
         assert al.contains(FOLDER_LOCATION, None) is False
 
 
+# The locations the overlap grid compares pairwise: names ending in or containing '.previewFile', nested
+# names, folder and file pairs, companion chains, and neighbours that only share characters.
+GRID_LOCATIONS = (
+    "a/", "a", "b/x", "a/xy", "a/x.bak",
+    "a/x", "a/x/", "a/x/x", "a/x/x/", "a/x/x/x", "a/x/sub/", "a/x/sub/m.glb",
+    "a/x.previewFil", "a/x.previewFile", "a/x.previewFile.", "a/x.previewFile.z", "a/x.previewFile/",
+    "a/x.previewFile.z/", "a/x.previewFile.z/q", "a/x.previewFile.previewFile", "a/x.previewFile.previewFile.z",
+    "a/x.previewFile.z.previewFile", "a/x/x.previewFile", "a/x/x.previewFile.z", "/a/x.previewFile",
+)
+_CANDIDATE_SUFFIXES = ("", "z", ".z", "/", "/z", "/z/", "/x", "/x/x", ".previewFile.", ".previewFile.z",
+                       ".previewFile.z/q", ".previewFile.previewFile.z")
+
+
+def _candidate_keys(*locations):
+    """Every leading part of each location followed by each suffix: the location keys, their companion
+    folders and entries, keys past each preview stem, and the keys that only share characters with them."""
+    keys = set()
+    for location in locations:
+        loc = al.normalize_location(location)
+        for end in range(1, len(loc) + 1):
+            keys.update(loc[:end] + suffix for suffix in _CANDIDATE_SUFFIXES)
+    return keys
+
+
+def _brute_force_share(first, second):
+    return any(al.contains(first, key) and al.contains(second, key) for key in _candidate_keys(first, second))
+
+
+@pytest.mark.unit
+class TestLocationsShareKey:
+    @pytest.mark.parametrize("first", GRID_LOCATIONS)
+    def test_two_locations_share_a_key_exactly_when_some_key_is_held_by_both(self, first):
+        wrong = [second for second in GRID_LOCATIONS
+                 if al.locations_share_key(first, second) is not _brute_force_share(first, second)]
+        assert wrong == []
+
+    @pytest.mark.parametrize("first,second,witness", [
+        # A preview of a/x with extension previewFile.z, and a preview of a/x.previewFile with extension z
+        ("a/x", "a/x.previewFile", "a/x.previewFile.previewFile.z"),
+        ("a/x", "a/x.previewFile.", "a/x.previewFile..previewFile.z"),
+        ("p/model.glb", "p/model.glb.previewFile", "p/model.glb.previewFile.previewFile.png"),
+    ])
+    def test_two_preview_stems_share_keys_that_neither_location_names(self, first, second, witness):
+        assert not al.contains(first, second) and not al.contains(second, first)
+        assert al.contains(first, witness) and al.contains(second, witness)
+        assert al.locations_share_key(first, second) is True
+        assert al.locations_share_key(second, first) is True
+
+    @pytest.mark.parametrize("first,second", [
+        ("a/x", "a/x"), ("a/x", "a/x/"), ("a/x", "a/x/sub/m.glb"), ("a/x", "a/x.previewFile.z"),
+        ("a/", "a/x"), ("a/x/", "a/x/x/"), ("a/x/x", "a/x/x/x"), ("/a/x", "a/x.previewFile"),
+    ])
+    def test_a_location_holding_the_other_or_its_key_shares_a_key(self, first, second):
+        assert al.locations_share_key(first, second) is True
+        assert al.locations_share_key(second, first) is True
+
+    @pytest.mark.parametrize("first,second", [
+        ("a/x", "a/x.bak"), ("a/x", "a/xy"), ("a/x", "a/x.previewFile/"), ("a/x", "a/x.previewFile.z/"),
+        ("a/x", "a/x.previewFil"), ("a/x/", "a/x.previewFile.z"), ("a/x", "b/x"), ("a/x/", "a/xy"),
+    ])
+    def test_locations_that_only_share_characters_share_no_key(self, first, second):
+        assert al.locations_share_key(first, second) is False
+        assert al.locations_share_key(second, first) is False
+
+    @pytest.mark.parametrize("empty", ["", None, "/"])
+    def test_no_location_shares_a_key(self, empty):
+        assert al.locations_share_key(empty, "a/x") is False
+        assert al.locations_share_key("a/", empty) is False
+        assert al.locations_share_key(empty, empty) is False
+
+
 @pytest.mark.unit
 class TestRelativePathIn:
     @pytest.mark.parametrize("key,expected", [
@@ -320,6 +391,27 @@ class TestAFileNamedLikeAPreview:
         assert al.names_own_object(self.LOCATION, path) is (key == self.LOCATION)
 
 
+@pytest.mark.unit
+class TestAuxScope:
+    def test_the_object_keeps_to_its_preview_folder_and_not_a_companion_preview_folder(self):
+        prefix, keep = al.aux_scope("db1", FILE_LOCATION, FILE_LOCATION)
+        assert prefix == "db1/projects/model.glb/preview/"
+        assert keep("db1/projects/model.glb/preview/PotreeViewer/r.bin")
+        assert not keep("db1/projects/model.glb/preview/x.glb/preview/PotreeViewer/r.bin")
+
+    def test_a_companion_entry_in_a_folder_named_preview_keeps_to_its_own_data(self):
+        prefix, keep = al.aux_scope("db1", FILE_LOCATION, "projects/model.glb/preview/x.glb")
+        assert prefix == "db1/projects/model.glb/preview/x.glb/"
+        assert keep("db1/projects/model.glb/preview/x.glb/preview/a.bin")
+        assert not keep("db1/projects/model.glb/preview/x.glb/a.bin")
+
+    def test_other_files_need_no_filter(self):
+        assert al.aux_scope("db1", FILE_LOCATION, "projects/model.glb/sub/x.obj") == (
+            "db1/projects/model.glb/sub/x.obj/", None)
+        assert al.aux_scope("db1", FOLDER_LOCATION, "projects/building-a/x.txt") == (
+            "db1/projects/building-a/x.txt/", None)
+
+
 BUCKET = "vams-assets"
 
 
@@ -433,11 +525,17 @@ class TestIndexAttributes:
         assert set(holders) <= set(candidates)
         assert all(key.startswith(c) for c in candidates)
 
-    @pytest.mark.parametrize("prefix", ["", "/", "assets", "assets/", "/assets/", "/assets", "a/b", "a/b/"])
-    def test_the_create_path_uses_the_shared_base_prefix_normalizer(self, prefix):
+    @pytest.mark.parametrize("prefix,expected", [
+        ("", ""), (None, ""), ("/", ""), ("assets", "assets/"), ("assets/", "assets/"), ("/assets/", "assets/"),
+        ("/assets", "assets/"), ("a/b", "a/b/"), ("a/b/", "a/b/"),
+    ])
+    def test_base_prefix_normalizer(self, prefix, expected):
+        assert al.normalize_base_prefix(prefix) == expected
+
+    def test_the_create_path_uses_the_one_base_prefix_normalizer(self):
         create_asset = _load_create_asset(fresh=True)
+        assert create_asset.normalize_base_prefix is al.normalize_base_prefix
         assert not hasattr(create_asset, "normalize_base_assets_prefix")
-        assert create_asset.normalize_base_prefix(prefix) == al.normalize_base_prefix(prefix)
 
     @pytest.mark.parametrize("prefix,expected", [
         ("/", "x1/"), ("", "x1/"), ("assets", "assets/x1/"), ("/assets/", "assets/x1/"),
@@ -455,6 +553,35 @@ class TestIndexAttributes:
         assert al.location_attributes(BUCKET, "") == {}
         assert al.location_attributes("", "a/") == {}
         assert al.location_attributes(None, "a/") == {}
+
+    def test_fill_location_attributes_sets_them_on_a_row_without_them(self):
+        row = {"databaseId": "db1", "assetId": "a1", "assetLocation": {"Key": "/a1/"}}
+        assert al.has_location_attributes(row) is False
+        assert al.fill_location_attributes(row, BUCKET) is row
+        assert (row[al.LOCATION_BUCKET_ATTRIBUTE], row[al.LOCATION_KEY_ATTRIBUTE]) == (BUCKET, "a1/")
+        assert al.has_location_attributes(row) is True
+
+    def test_fill_location_attributes_keeps_attributes_already_on_the_row(self):
+        row = _row("db1", "a1", "a1/")
+        before = dict(row)
+        assert al.fill_location_attributes(row, "another-bucket") == before
+
+    def test_fill_location_attributes_completes_a_row_with_one_of_them(self):
+        row = {"assetLocation": {"Key": "a1/"}, al.LOCATION_BUCKET_ATTRIBUTE: BUCKET}
+        al.fill_location_attributes(row, BUCKET)
+        assert row[al.LOCATION_KEY_ATTRIBUTE] == "a1/"
+
+    @pytest.mark.parametrize("row,bucket_name", [
+        ({"assetLocation": {"Key": "/"}}, BUCKET),      # the bucket root holds no key
+        ({"assetLocation": {}}, BUCKET),
+        ({}, BUCKET),
+        ({"assetLocation": "a1/"}, BUCKET),             # not a location map
+        ({"assetLocation": {"Key": "a1/"}}, None),      # no registration bucket name
+        ({"assetLocation": {"Key": "a1/"}}, ""),
+    ])
+    def test_fill_location_attributes_invents_nothing(self, row, bucket_name):
+        before = dict(row)
+        assert al.fill_location_attributes(row, bucket_name) == before
 
 
 @pytest.mark.unit
@@ -708,6 +835,12 @@ class TestFindConflicts:
         ("projects/model.glb", "projects/"),                  # a single file under it
         ("projects/model.glb", "projects/model.glb/sub/"),     # inside a single file's companion
         ("projects/sub/model.glb", "projects/sub/"),           # a single file whose companion is under it
+        # two single files whose preview stems share keys that neither location names (L2, D8)
+        ("a/x", "a/x.previewFile"),
+        ("a/x.previewFile", "a/x"),
+        ("a/x", "a/x.previewFile."),
+        ("a/x.previewFile.", "a/x"),
+        ("a/x.previewFile", "a/x.previewFile.previewFile"),
     ])
     def test_conflict(self, existing, target):
         table = FakeLocationTable([_row("db1", "a1", existing)])
@@ -801,31 +934,36 @@ class TestFindConflicts:
             "projects/model.glb", "projects/model.glb/", "projects/model.glb/sub/",
             "projects/model.glb/sub/n.glb", "projects/model.glb/model.glb", "projects/model.glb.previewFile.png",
             "projects/model.glb.previewFile.x/", "projects/model.glb.bak", "projects/model.glbx/",
-            "projects/beta", "projects/beta/", "projects", "shared/x/", "shared/x/y.glb", "z", "zz/"]
+            "projects/beta", "projects/beta/", "projects", "shared/x/", "shared/x/y.glb", "z", "zz/",
+            # names ending in `.previewFile`: they share a preview key with `a/x` without holding it
+            "a/x", "a/x.previewFile", "a/x.previewFile.", "projects/model.glb.previewFile"]
 
-    @staticmethod
-    def _shared_key(a, b):
-        """A key both locations hold, searched over keys built from the grid, or None."""
-        sample = set()
-        for location in TestFindConflicts.GRID:
-            for key in (location, location + "f", location + "/f", location + ".previewFile.png",
-                        location + ".previewFile.q/r", location.rstrip("/"), location + "/model.glb"):
-                sample.add(key)
-        return next((k for k in sorted(sample) if al.contains(a, k) and al.contains(b, k)), None)
-
-    def test_two_locations_share_a_key_exactly_when_one_contains_the_other(self):
+    def test_the_grid_holds_pairs_that_share_a_key_without_either_containing_the_other(self):
+        # The shared-key rule is not "one contains the other": `a/x` and `a/x.previewFile` both hold
+        # `a/x.previewFile.previewFile.z`. Brute force over keys built from both locations.
+        not_containing = []
         for a in self.GRID:
             for b in self.GRID:
-                expected = al.contains(a, b) or al.contains(b, a)
-                assert (a, b, self._shared_key(a, b) is not None) == (a, b, expected)
+                assert (a, b, _brute_force_share(a, b)) == (a, b, al.locations_share_key(a, b))
+                if al.locations_share_key(a, b) and not (al.contains(a, b) or al.contains(b, a)):
+                    not_containing.append((a, b))
+        assert {("a/x", "a/x.previewFile"), ("a/x", "a/x.previewFile."),
+                ("projects/model.glb", "projects/model.glb.previewFile")} <= set(not_containing)
 
     def test_matches_the_shared_key_rule_on_every_pair(self):
         for existing in self.GRID:
             table = FakeLocationTable([_row("db1", "a1", existing)])
             for target in self.GRID:
-                expected = al.contains(existing, target) or al.contains(target, existing)
                 found = bool(al.find_conflicts(table, BUCKET, target))
-                assert (existing, target, found) == (existing, target, expected)
+                assert (existing, target, found) == (existing, target, al.locations_share_key(existing, target))
+
+    @pytest.mark.parametrize("existing", GRID_LOCATIONS)
+    def test_matches_the_shared_key_rule_on_the_overlap_grid(self, existing):
+        # The grid locations_share_key is checked on (names ending in or containing `.previewFile`).
+        table = FakeLocationTable([_row("db1", "a1", existing)])
+        wrong = [target for target in GRID_LOCATIONS
+                 if bool(al.find_conflicts(table, BUCKET, target)) is not al.locations_share_key(existing, target)]
+        assert wrong == []
 
     def test_agrees_with_the_create_paths_ownership_rule_on_every_pair(self):
         # createAsset.keys_conflict decides the same shared-key rule on the stored rows it walks; the
@@ -936,3 +1074,26 @@ class TestIndexForAFileNamedLikeAPreview:
     def test_conflicts_with_the_file_whose_preview_it_is_named_like(self):
         table = FakeLocationTable([_row("db1", "base", "projects/scan")])
         assert [c.asset_id for c in al.find_conflicts(table, BUCKET, self.LOCATION)] == ["base"]
+
+
+@pytest.mark.unit
+class TestARegistrationRootAsset:
+    """An asset whose location is its bucket registration's own prefix (created before v2.6.1, which
+    refuses it) is indexed like any other folder location: it holds every key under the prefix."""
+
+    ROOT = "assets/"
+
+    def test_its_row_carries_the_index_attributes(self):
+        assert al.location_attributes(BUCKET, self.ROOT) == {
+            al.LOCATION_BUCKET_ATTRIBUTE: BUCKET, al.LOCATION_KEY_ATTRIBUTE: self.ROOT}
+        assert al.location_attributes(BUCKET, "/assets/") == al.location_attributes(BUCKET, self.ROOT)
+
+    def test_it_owns_a_key_no_deeper_asset_holds(self):
+        table = FakeLocationTable([_row("db1", "legacy-root", self.ROOT), _row("db1", "x1", "assets/x1/")])
+        assert al.resolve_owner(table, BUCKET, "assets/x2/model.glb").entry.asset_id == "legacy-root"
+        assert al.resolve_owner(table, BUCKET, "assets/x1/model.glb").entry.asset_id == "x1"
+
+    def test_a_new_location_under_it_conflicts(self):
+        table = FakeLocationTable([_row("db1", "legacy-root", self.ROOT)])
+        assert [c.asset_id for c in al.find_conflicts(table, BUCKET, "assets/new/")] == ["legacy-root"]
+        assert [c.asset_id for c in al.find_conflicts(table, BUCKET, "assets/new/model.glb")] == ["legacy-root"]

@@ -223,14 +223,9 @@ Unauthenticated paths (`VamsAnonymousAuthorizer`: IP check only, no token): `/ap
 
 ## Configuration System
 
-### Three-Tier Fallback Chain
+### Resolution Order
 
-Configuration values resolve in this order:
-
-1. CDK context (`-c key=value`)
-2. `config/config.json` file
-3. Environment variables
-4. Hardcoded defaults
+Most values come from `config/config.json`, with defaults `getConfig()` fills in for absent keys. A few can also come from CDK context (`-c key=value`) or environment variables, and the order differs by value: context, then `config.json`, then the environment for `env.account`, `env.region`, `app.baseStackName` and the two timeouts; context, then the environment, then `config.json` for the admin and default role settings; and the first source that is true for `resolveConfigBool` booleans such as `useWaf`. The [configuration reference](../deployment/configuration-reference.md) lists each one.
 
 The entry point `bin/infra.ts` calls `Config.getConfig(app)` then `Service.SetConfig(config)`.
 

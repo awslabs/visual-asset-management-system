@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 
+from hfguard import hf_pins
 from vams_utils.logging import log
 
 from .base import (
@@ -32,11 +33,12 @@ from .base import (
 
 logger = log.get_logger()
 
-# Driver run inside the upstream repo. The weights are staged into the local-directory layout the
-# upstream loaders expect -- ``Hi3DGenPipeline.from_pretrained`` takes a path, and StableNormal's
-# torch.hub entry point resolves its checkpoint by version name under a cache directory -- rather than
-# the HuggingFace hub cache layout. The download lands inside HF_HOME so the pipeline's existing EFS
-# cache and its S3 backup cover it.
+# Driver run inside the upstream repo. The weights are read from the HuggingFace hub cache at their pinned
+# commits, which the adapter has already fetched: ``Hi3DGenPipeline.from_pretrained`` takes the snapshot
+# directory, and StableNormal's torch.hub entry point, which resolves its checkpoint as
+# ``{local_cache_dir}/{yoso_version}``, gets a directory holding a link of that name to the pinned
+# snapshot. The link directory is named for the pinned commit, so moving the pin cannot leave a run
+# reading the previous commit's link.
 DRIVER_TEMPLATE = '''
 import json
 import os
@@ -60,15 +62,18 @@ os.makedirs(output_dir, exist_ok=True)
 weights_dir = settings["weights_dir"]
 os.makedirs(weights_dir, exist_ok=True)
 
-# Each repo is snapshotted to a directory named after the repo, which is the layout both loaders
-# expect: the geometry pipeline is opened by path, and StableNormal looks its version up by name.
-staged = {}
-for repo_id in settings["hf_repos"]:
-    local_path = os.path.join(weights_dir, repo_id.split("/")[-1])
-    if not os.path.isdir(local_path):
-        print(f"Staging {repo_id} -> {local_path}", flush=True)
-        snapshot_download(repo_id=repo_id, local_dir=local_path)
-    staged[repo_id] = local_path
+# Each repo's pinned snapshot, from the cache the adapter filled; local_files_only, so a missing one fails
+# here rather than downloading during generation.
+staged = {
+    repo_id: snapshot_download(repo_id=repo_id, revision=settings["revisions"][repo_id], local_files_only=True)
+    for repo_id in settings["hf_repos"]
+}
+yoso_link = os.path.join(weights_dir, settings["yoso_version"])
+if os.path.realpath(yoso_link) != os.path.realpath(staged[settings["yoso_repo"]]):
+    # Replaced through a temporary name, so a concurrent run never sees the link half-made.
+    temporary = f"{yoso_link}.{os.getpid()}"
+    os.symlink(staged[settings["yoso_repo"]], temporary)
+    os.replace(temporary, yoso_link)
 
 pipeline = Hi3DGenPipeline.from_pretrained(staged[settings["geometry_repo"]])
 pipeline.cuda()
@@ -155,7 +160,7 @@ class Stable3DGenAdapter(ModelAdapter):
     # Where torch.hub finds the StableNormal checkout baked into the image, named the way torch.hub
     # names a GitHub repo: {owner}_{repo}_{branch}.
     STABLENORMAL_CHECKOUT = "hugoycj_StableNormal_main"
-    # The checkpoint version the predictor is asked for, matched to the staged repo's directory name.
+    # The checkpoint version the predictor is asked for: the name of the link to its pinned snapshot.
     YOSO_VERSION = "yoso-normal-v1-8-1"
 
     def generate(self, image_path: str, work_dir: str, params: dict,
@@ -166,10 +171,14 @@ class Stable3DGenAdapter(ModelAdapter):
         # block in config.json, so a stable3dgen run accepts them and a run on another model does not.
         driver_settings = {
             "hf_repos": list(self.HF_REPOS),
+            "revisions": {repo: hf_pins.revision_for(repo) for repo in self.HF_REPOS},
             "geometry_repo": self.HF_REPOS[0],
+            "yoso_repo": self.HF_REPOS[1],
             "stablenormal_checkout": self.STABLENORMAL_CHECKOUT,
             "yoso_version": self.YOSO_VERSION,
-            "weights_dir": os.path.join(os.environ["HF_HOME"], "stable3dgen_weights"),
+            # Named for the pinned commit of the checkpoint the link inside it points at.
+            "weights_dir": os.path.join(os.environ["HF_HOME"], "stable3dgen_weights",
+                                        hf_pins.revision_for(self.HF_REPOS[1])),
             "seed": int(setting(params, "STABLE3DGEN_SEED", 1)),
             "sparse_steps": int(setting(params, "STABLE3DGEN_SPARSE_STEPS", 50)),
             "sparse_cfg_strength": float(setting(params, "STABLE3DGEN_SPARSE_CFG_STRENGTH", 3.0)),

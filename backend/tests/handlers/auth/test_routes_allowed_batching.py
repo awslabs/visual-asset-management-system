@@ -68,8 +68,8 @@ ALL_METHODS = ("GET", "POST", "PUT", "DELETE", "HEAD")
 # The api-route prefixes the read-only role grants GET on, in the shape the shipped
 # permission templates use (static prefixes, no template syntax).
 _READONLY_GET_PREFIXES = (
-    "/secure-config", "/amplify-config", "/auth/routes", "/asset-links", "/assets", "/comments",
-    "/database", "/metadata", "/metadataschema", "/search", "/tags",
+    "/secure-config", "/auth/routes", "/asset-links", "/assets", "/comments",
+    "/database", "/metadataschema", "/search", "/tags",
 )
 _READONLY_WEB_PREFIXES = ("/assets", "/databases")
 

@@ -391,7 +391,22 @@ Apply a Cross-Origin Resource Sharing (CORS) configuration to the external bucke
 
 `AllowedMethods` accepts only `GET`, `PUT`, `POST`, `DELETE`, and `HEAD`. Amazon S3 answers the browser's `OPTIONS` preflight request from these rules, so `OPTIONS` is not listed. `ExposeHeaders` makes response headers readable by the VAMS web application: `ETag` for multipart uploads, which read each part's ETag from the upload response, and `Accept-Ranges`, `Content-Range`, `Content-Length`, and `Content-Encoding`, the range and streaming headers the VAMS-created asset bucket exposes, so a ranged read returns the same readable headers from either bucket. The Robotics Data Viewer reads `.mcap` and `.bag` files through these range headers.
 
-A viewer that reads a file straight from the bucket through a presigned URL, such as the Three.js, Needle USD and ThatOpen IFC viewers, sends the VAMS web origin with each request, so the single origin listed in `AllowedOrigins` is all the rule needs for it.
+A viewer that reads a file straight from the bucket through a presigned URL sends the VAMS web origin with each request, so the single origin listed in `AllowedOrigins` is all the rule needs for it. The Three.js, Needle USD, ThatOpen IFC and Cesium 3D Tileset viewers read this way. The Cesium viewer does so through a request hook it installs when it opens; if a viewer cannot install the hook, it reads through the streaming route as the VEERUM viewer does, and the bucket then needs `null` too. For a tileset the Cesium viewer asks the API for a presigned URL for each file the tileset names (the tileset JSON, nested tilesets, subtree files, tiles, and the buffers and textures a tile references), with no `Authorization` header on the request to Amazon S3.
+
+#### Viewers that need `null` in AllowedOrigins
+
+The VEERUM 3D Viewer (an [add-on](../developer/addons-overview.md) with a vendor library) is the one viewer that reads its files through the VAMS streaming route. The route answers each request with a redirect to a presigned Amazon S3 URL, and a browser follows a cross-origin redirect with `Origin: null`. A bucket whose rule lists only the web origin sends no `Access-Control-Allow-Origin` for `null`, so the read fails. If you use the VEERUM viewer with files in this bucket, add `null` to `AllowedOrigins` next to the web origin:
+
+```json
+"AllowedOrigins": ["https://your-vams-domain.example.com", "null"]
+```
+
+Prefer `null` over `*`: it admits only requests that carry a `null` origin (a redirected request, a sandboxed frame, a `file:` page) and keeps the rule closed to named sites. Both values mean a page the user has opened can read the response of a request for a URL it already holds. A presigned URL is a bearer capability that anyone holding it can already read with a command-line tool, and a browser attaches no credentials (cookies or `Authorization`) to a request to Amazon S3, so the rule adds no access that the URL does not already give. The exception is a bucket that also grants access by network location, such as an `aws:SourceIp` or VPC endpoint condition in its bucket policy, or objects that are publicly readable. There a hostile page could use a visitor's browser, which sits inside that network, to read objects without holding a URL. Do not add `null` or `*` to a bucket of that kind.
+
+| Viewer                                                | Reads through             | `AllowedOrigins` needs         |
+| ----------------------------------------------------- | ------------------------- | ------------------------------ |
+| Three.js, Needle USD, ThatOpen IFC, Cesium 3D Tileset | A presigned URL, per file | The VAMS web origin only       |
+| VEERUM 3D Viewer                                      | The streaming route (307) | The VAMS web origin and `null` |
 
 Apply the CORS configuration using the AWS Command Line Interface (AWS CLI):
 
@@ -404,7 +419,7 @@ aws s3api put-bucket-cors \
 To configure CORS in the Amazon S3 console instead, paste only the array inside `CORSRules` into the bucket's CORS editor.
 
 :::warning[Production origins]
-Replace `https://your-vams-domain.example.com` with your actual VAMS Amazon CloudFront distribution domain or Application Load Balancer (ALB) domain. Avoid using `*` in production environments.
+Replace `https://your-vams-domain.example.com` with your actual VAMS Amazon CloudFront distribution domain or Application Load Balancer (ALB) domain. Avoid using `*` in production environments. If you need the VEERUM 3D Viewer on this bucket, add `null` as described above rather than `*`.
 :::
 
 ### Step 3: Configure KMS key policy (conditional)

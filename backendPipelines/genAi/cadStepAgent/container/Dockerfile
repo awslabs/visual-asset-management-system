@@ -7,8 +7,11 @@
 # so either platform builds from the same release.
 FROM public.ecr.aws/docker/library/python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
 
-# Sonames the OCP (OpenCascade) wheel links that the slim base does not carry.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Sonames the OCP (OpenCascade) wheel links that the slim base does not carry. The digest pin fixes the
+# Debian packages at the day the base was built, so the layer applies the security updates published
+# since then before it installs.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     libgl1 \
     libglu1-mesa \
     libxrender1 \
@@ -23,8 +26,11 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY ./requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Every package at the version and hash in the lock (the `uv export` of uv.lock; its header holds
+# the command that regenerates it), as wheels only. The lock is universal because this image is built for
+# both linux/arm64 and linux/amd64.
+COPY ./requirements.lock ./requirements.lock
+RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r requirements.lock
 
 COPY ./cad_step_agent/ ./cad_step_agent/
 RUN chmod -R a+rX ./cad_step_agent

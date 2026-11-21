@@ -13,6 +13,10 @@ import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
 import * as Config from "../../../../../../config/config";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    Conversion3dBasicBatchTier,
+    CONVERSION_3D_BASIC_REGISTERED_TASK_TIMEOUT_SECONDS,
+} from "./conversion3dBasicBatchTier-construct";
 
 export interface Conversion3dBasicConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -59,6 +63,30 @@ export class Conversion3dBasicConstruct extends NestedStack {
 
         this.pipelineVamsLambdaFunctionName = pipelineConversion3dBasicLambdaFunction.functionName;
 
+        // With the Batch tier on, the function the workflow calls is the launcher: it starts the state
+        // machine, which runs the converter Lambda above first and continues a refused run on AWS Batch.
+        // With it off nothing below is created and the registration is what it was.
+        const batchTierEnabled = props.config.app.pipelines.useConversion3dBasic.batchTier.enabled;
+        let registeredFunctionName = pipelineConversion3dBasicLambdaFunction.functionName;
+        if (batchTierEnabled) {
+            const batchTier = new Conversion3dBasicBatchTier(this, "BatchTier", {
+                config: props.config,
+                storageResources: props.storageResources,
+                vpc: props.vpc,
+                pipelineSubnets: props.pipelineSubnets,
+                pipelineSecurityGroups: props.pipelineSecurityGroups,
+                lambdaCommonBaseLayer: props.lambdaCommonBaseLayer,
+                converterFunction: pipelineConversion3dBasicLambdaFunction,
+            });
+            registeredFunctionName = batchTier.launcherFunction.functionName;
+            this.pipelineVamsLambdaFunctionName = registeredFunctionName;
+            new CfnOutput(this, "Conversion3dBasicLauncherFunctionName", {
+                value: registeredFunctionName,
+                description:
+                    "The 3dBasic Conversion launcher Lambda Function Name (Batch tier) to use in a VAMS Pipeline",
+            });
+        }
+
         // Auto-register with VAMS (V2 vamsSchema bundle -> V2 pipeline/workflow/template tables). One
         // pipeline with one template per target format (obj/stl/gltf/glb); the target format is
         // selected per execution via the template.
@@ -81,8 +109,16 @@ export class Conversion3dBasicConstruct extends NestedStack {
                     "vamsSchema"
                 ),
                 resourceOverrides: {
-                    lambdaName: pipelineConversion3dBasicLambdaFunction.functionName,
+                    lambdaName: registeredFunctionName,
                 },
+                // The launcher answers through a task token, so the pipeline is registered to wait for
+                // the callback, for as long as the Batch tier's state machine may run.
+                executionConfigOverrides: batchTierEnabled
+                    ? {
+                          waitForCallback: "Enabled",
+                          taskTimeout: CONVERSION_3D_BASIC_REGISTERED_TASK_TIMEOUT_SECONDS,
+                      }
+                    : undefined,
                 idOverrides: {
                     pipelineId: "conversion-3d-basic",
                     workflowId: "conversion-3d-basic",

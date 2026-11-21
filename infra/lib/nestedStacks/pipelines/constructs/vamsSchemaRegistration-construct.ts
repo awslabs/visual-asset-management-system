@@ -22,7 +22,7 @@ import { Construct } from "constructs";
 export interface ExecutionConfigOverrides {
     /** Replaces executionConfig.waitForCallback. */
     waitForCallback?: "Enabled" | "Disabled";
-    /** Replaces executionConfig.taskTimeout (seconds). */
+    /** Replaces executionConfig.taskTimeout (seconds; "" clears it, so the 24-hour default applies). */
     taskTimeout?: string | number;
     /** Replaces executionConfig.taskHeartbeatTimeout (seconds; "" clears it). */
     taskHeartbeatTimeout?: string | number;

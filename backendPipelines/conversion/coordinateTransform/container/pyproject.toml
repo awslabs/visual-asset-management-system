@@ -1,0 +1,33 @@
+[project]
+name = "coordinate-transform-pipeline"
+version = "0.1.0"
+description = "Coordinate transform pipeline container image"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "boto3",
+    "botocore",
+    "pyproj>=3.6,<4",
+    "numpy>=1.26,<3",
+    "pye57>=0.4,<0.5",
+    "laspy[lazrs]>=2.5,<3",
+    "open3d>=0.18,<0.20",
+    # open3d's Linux wheels require ipywidgets but its macOS wheels do not, and a universal lock reads one
+    # wheel's metadata. Named here so the image keeps the Jupyter packages it has always carried.
+    "ipywidgets>=8.0.4; sys_platform == 'linux'",
+    "pyyaml>=6.0,<7",
+    "structlog>=24.0,<27",
+    "pydantic>=2.0,<3",
+]
+
+# The image installs the committed, hashed requirements.lock with `pip install --require-hashes
+# --only-binary :all:`. It is exported from uv.lock (`uv export`, command in its header); uv is a
+# development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+
+# The packages named below were uploaded less than seven days before this lock; they are the versions
+# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is older
+# than seven days: boto3 after 2026-11-25, botocore after 2026-11-25, cloudpickle after 2026-11-26, configargparse after 2026-11-25, janus after 2026-11-23, narwhals after 2026-11-25, platformdirs after 2026-11-25.
+exclude-newer-package = { boto3 = "2026-11-18T20:24:23Z", botocore = "2026-11-18T20:24:18Z", cloudpickle = "2026-11-19T10:27:18Z", configargparse = "2026-11-18T02:53:08Z", janus = "2026-11-16T23:04:45Z", narwhals = "2026-11-18T15:30:43Z", platformdirs = "2026-11-18T20:03:32Z" }

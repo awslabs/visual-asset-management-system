@@ -328,9 +328,12 @@ describe("CI workflow", () => {
 
         test("a requirements file beside a lock that is not a uv export fails the audit", () => {
             expect(script).toContain(
-                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.txt$")'
+                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.(txt|lock)$")'
             );
             expect(script).toContain("is not a uv export");
+            // Every group and extra of the lock is audited too, and the rangedInputs list is validated.
+            expect(script).toContain('"--all-extras"');
+            expect(script).toContain("check_ranged_inputs(root, tracked, set(lock_dirs))");
         });
 
         test("annotations escape %, CR and LF, and package names compare PEP 503-normalised", () => {
@@ -348,6 +351,15 @@ describe("CI workflow", () => {
             expect(runCommands(job("conversion-3dbasic-golden")).join("\n")).toContain(
                 "backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh"
             );
+        });
+
+        test("the 3D Basic golden job also runs the suite on the Batch target", () => {
+            const golden = job("conversion-3dbasic-golden");
+            expect(golden).toMatch(/GOLDEN_TARGET: batch/);
+            expect(golden).toMatch(/timeout-minutes: 30\n/);
+            expect(
+                runCommands(golden).filter((command) => command.includes("run_golden.sh"))
+            ).toHaveLength(2);
         });
 
         const job = (name: string): string =>
@@ -369,6 +381,16 @@ describe("CI workflow", () => {
             expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(/^GROUP_COUNT = 3$/m);
         });
 
+        test("the pipeline test jobs install the pinned uv before the runner builds environments with it", () => {
+            const pipelines = job("pipelines-test");
+            const uv = pipelines.indexOf("astral-sh/setup-uv@");
+            const run = pipelines.indexOf("python backendPipelines/ci/pipeline_tests.py run");
+            expect(uv).toBeGreaterThanOrEqual(0);
+            expect(run).toBeGreaterThan(uv);
+            expect(pipelines).toContain('version: "0.13.8"');
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toContain('[uv, "venv"');
+        });
+
         test("each pipeline group installs the system packages the runner names, before its tests", () => {
             const pipelines = job("pipelines-test");
             const install = pipelines.indexOf(
@@ -386,13 +408,20 @@ describe("CI workflow", () => {
             );
         });
 
-        test("the VamsMCP suite installs VamsCLI before itself, then runs pytest", () => {
-            const commands = runCommands(job("vamsmcp-test"));
-            const cli = commands.indexOf("pip install -e ../VamsCLI");
-            const mcp = commands.indexOf('pip install -e ".[dev]"');
-            expect(cli).toBeGreaterThanOrEqual(0);
-            expect(mcp).toBeGreaterThan(cli);
-            expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
+        test("the VamsCLI and VamsMCP suites install from their uv.lock, then run pytest", () => {
+            const uvSetup =
+                /uses: astral-sh\/setup-uv@[0-9a-f]{40} # v\d+\.\d+\.\d+\n\s+with:\n\s+version: "\d+\.\d+\.\d+"\n\s+checksum: [0-9a-f]{64}\b/;
+            ["vamscli-test", "vamsmcp-test"].forEach((name) => {
+                const body = job(name);
+                expect(body).toMatch(uvSetup);
+                const commands = runCommands(body);
+                const sync = commands.indexOf("uv sync --frozen --extra dev --python 3.12");
+                expect(sync).toBeGreaterThanOrEqual(0);
+                // The venv goes on PATH, so the pytest steps below run in the locked environment.
+                expect(commands).toContain('echo "$PWD/.venv/bin" >> "$GITHUB_PATH"');
+                expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
+                expect(commands.some((command) => /pip install/.test(command))).toBe(false);
+            });
         });
 
         test("the suite jobs and the 3D Basic golden job carry a timeout", () => {

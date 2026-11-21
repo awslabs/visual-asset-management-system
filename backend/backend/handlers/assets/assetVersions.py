@@ -31,7 +31,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
-from common.assetLocations import contains, normalize_base_prefix, object_key_for, relative_path_in
+from common.assetLocations import aux_scope, contains, normalize_base_prefix, object_key_for, relative_path_in
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -345,7 +345,7 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
 
-def delete_assetAuxiliary_files(prefix):
+def delete_assetAuxiliary_files(prefix, keep=None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
 
     The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
@@ -353,6 +353,7 @@ def delete_assetAuxiliary_files(prefix):
 
     Args:
         prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
+        keep: Optional predicate (``common.assetLocations.aux_owner_filter``); only the keys it accepts go
     """
 
     if not prefix:
@@ -370,7 +371,8 @@ def delete_assetAuxiliary_files(prefix):
         paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if keep is None or keep(entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3_client.delete_objects(
@@ -1953,8 +1955,14 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
             if not new_version_id:
                 return None, relative_key
 
-            # Delete the aux files since they are most likely wrong with the version revert
-            delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+            # Delete the file's own aux files since they are most likely wrong with the version revert. The
+            # object of a single-file location keeps its data in {db}/{key}/preview/; the rest of
+            # {db}/{key}/, and a companion folder named preview inside it, holds its companion entries' data.
+            aux_prefix, aux_keep = aux_scope(databaseId, prefix, full_key)
+            if aux_keep is None:
+                delete_assetAuxiliary_files(aux_prefix)
+            else:
+                delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
             return {
                 'relativeKey': relative_key,

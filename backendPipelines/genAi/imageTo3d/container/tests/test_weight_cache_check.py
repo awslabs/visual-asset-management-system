@@ -28,10 +28,15 @@ import time
 import pytest
 
 import model_manager
+from hfguard import hf_pins
 
 
-def _cache(root, repo, weight="model.safetensors", revision="abc123"):
-    """A HuggingFace-shaped cache holding one repo's snapshot, and its blobs beside it."""
+def _cache(root, repo, weight="model.safetensors", revision=None):
+    """A HuggingFace-shaped cache holding one repo's snapshot, and its blobs beside it.
+
+    The snapshot is at the repo's pinned commit unless ``revision`` names another; an unpinned test repo
+    gets an arbitrary one."""
+    revision = revision or hf_pins.HF_REVISIONS.get(repo, "abc123")
     repo_dir = root / "hub" / ("models--" + repo.replace("/", "--"))
     snapshot = repo_dir / "snapshots" / revision
     snapshot.mkdir(parents=True, exist_ok=True)
@@ -91,6 +96,29 @@ class TestItAsksAboutTheRightModel:
         _cache(tmp_path, "Ruicheng/moge-2-vitl-normal", weight="model.pt")
 
         assert model_manager._has_cached_models(str(tmp_path), ("Ruicheng/moge-2-vitl-normal",))
+
+
+@pytest.mark.unit
+class TestAPinnedRepoIsCachedOnlyAtItsPin:
+    """A cache written before the pins, or under an earlier pin, keeps another commit's snapshot. Those
+    are not the weights a run loads, so they are a miss and the pinned commit is fetched."""
+
+    def test_another_commits_snapshot_is_a_miss(self, tmp_path):
+        _cache(tmp_path, "stepfun-ai/Step1X-3D", revision="0" * 40)
+
+        assert not model_manager._has_cached_models(str(tmp_path), ("stepfun-ai/Step1X-3D",))
+
+    def test_the_pinned_snapshot_beside_an_older_one_is_a_hit(self, tmp_path):
+        _cache(tmp_path, "stepfun-ai/Step1X-3D", revision="0" * 40)
+        _cache(tmp_path, "stepfun-ai/Step1X-3D")
+
+        assert model_manager._has_cached_models(str(tmp_path), ("stepfun-ai/Step1X-3D",))
+
+    def test_the_pinned_snapshot_without_weights_is_a_miss(self, tmp_path):
+        _cache(tmp_path, "stepfun-ai/Step1X-3D", revision="0" * 40)
+        _cache(tmp_path, "stepfun-ai/Step1X-3D", weight=None)
+
+        assert not model_manager._has_cached_models(str(tmp_path), ("stepfun-ai/Step1X-3D",))
 
 
 @pytest.mark.unit
@@ -167,13 +195,15 @@ class TestFetchingARepoSurvivesTheSharedFilesystem:
         (blobs / name).write_bytes(b"half a tensor")
         return blobs / name
 
-    def _patched_download(self, monkeypatch, side_effects):
+    def _patched_download(self, monkeypatch, side_effects, revisions=None):
         """Install a fake snapshot_download that yields each side effect in turn."""
         calls = []
         remaining = list(side_effects)
 
         def fake_snapshot_download(repo_id, cache_dir, token=None, **kwargs):
             calls.append(repo_id)
+            if revisions is not None:
+                revisions.append(kwargs.get("revision"))
             outcome = remaining.pop(0)
             if isinstance(outcome, BaseException):
                 raise outcome
@@ -184,6 +214,21 @@ class TestFetchingARepoSurvivesTheSharedFilesystem:
         monkeypatch.setitem(sys.modules, "huggingface_hub", module)
         monkeypatch.setattr(model_manager, "FETCH_RETRY_BACKOFF_SECONDS", 0)
         return calls
+
+    def test_the_fetch_asks_for_the_pinned_commit(self, tmp_path, monkeypatch):
+        revisions = []
+        self._patched_download(monkeypatch, ["/cache/snapshots/abc"], revisions)
+
+        model_manager.fetch_repo("facebook/sam-vit-huge", cache_dir=str(tmp_path))
+
+        assert revisions == [hf_pins.HF_REVISIONS["facebook/sam-vit-huge"]]
+
+    def test_a_repo_with_no_pin_is_refused_before_any_download(self, tmp_path, monkeypatch):
+        calls = self._patched_download(monkeypatch, [])
+
+        with pytest.raises(hf_pins.UnpinnedRepositoryError, match="some/unpinned-repo"):
+            model_manager.fetch_repo("some/unpinned-repo", cache_dir=str(tmp_path))
+        assert calls == []
 
     def test_a_stale_handle_is_retried_and_the_partial_download_discarded(
             self, tmp_path, monkeypatch):
@@ -285,3 +330,34 @@ class TestTheStartupSweepSparesLiveDownloads:
         old, live = self._cache(tmp_path)
         self._sweep(tmp_path, stale_minutes)
         assert all(path.exists() for path in old + live)
+
+
+@pytest.mark.unit
+class TestTheCacheGeneration:
+    """Clearing the cache is the deployment setting modelCacheGeneration, not a run setting: a new
+    generation is a new directory and prefix, so no run deletes what another is reading."""
+
+    def test_generation_zero_keeps_the_layout_every_deployment_has(self):
+        assert model_manager.model_cache_path("stable3dgen", 0) == "hf_cache/stable3dgen"
+        assert model_manager.resolve_hf_home("stable3dgen", base="/mnt/x", generation="0") == \
+            "/mnt/x/hf_cache/stable3dgen"
+
+    def test_a_later_generation_is_its_own_directory(self):
+        assert model_manager.model_cache_path("stable3dgen", 3) == "hf_cache/g3/stable3dgen"
+
+    def test_the_generation_comes_from_the_job_definition(self, monkeypatch):
+        monkeypatch.setenv("MODEL_CACHE_GENERATION", "2")
+        assert model_manager.resolve_hf_home("triposr", base="/mnt/x") == "/mnt/x/hf_cache/g2/triposr"
+
+        monkeypatch.delenv("MODEL_CACHE_GENERATION")
+        assert model_manager.resolve_hf_home("triposr", base="/mnt/x") == "/mnt/x/hf_cache/triposr"
+
+    @pytest.mark.parametrize("bad", ["-1", "two", "1.5"])
+    def test_a_generation_that_is_not_a_whole_number_is_refused(self, bad):
+        with pytest.raises(ValueError, match="MODEL_CACHE_GENERATION"):
+            model_manager.model_cache_path("triposr", bad)
+
+    def test_ensure_models_cached_takes_no_invalidate_argument(self):
+        """The run-level switch is gone: a caller still passing it fails loudly instead of clearing."""
+        with pytest.raises(TypeError):
+            model_manager.ensure_models_cached("/x", "bucket", "prefix", invalidate=True)

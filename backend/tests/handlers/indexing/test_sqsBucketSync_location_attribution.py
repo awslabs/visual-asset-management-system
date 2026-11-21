@@ -524,3 +524,24 @@ class TestARegistrationRootAsset:
         assert al.LOCATION_KEY_ATTRIBUTE not in root
         table = self._wire_index(m, [root])
         assert m.auto_create_refusal(table, BUCKET, "assets/x/") is None
+
+
+@pytest.mark.unit
+class TestAnArchivedOwnerGoneSinceTheLookup:
+    """#1799 with attribution by location: the index names an archived owner whose record is gone by the
+    time it is restored. The key is then handled like any other key with no asset, under its first
+    folder, and nothing is filed under the gone asset."""
+
+    def test_the_key_falls_back_to_its_first_folder(self):
+        m = _load()
+        gone = _entry(database_id="db1#deleted", asset_id="owner-1", location="projects/alpha/")
+        _wire(m, resolve=[NOT_FOUND, _found(gone)], ready=True)
+        m.restore_archived_asset = MagicMock(return_value=m.ARCHIVED_RECORD_GONE)
+        response = m.lambda_handler_created({"Records": [_sqs("msg-1", _record("projects/alpha/x.glb"), 2)]},
+                                            MagicMock())
+        assert response["batchItemFailures"] == []
+        m.create_new_asset.assert_called_once_with("bucket-1", "db1", "projects")
+        [forwarded] = _sns_records(m)
+        assert (forwarded["vamsBinding"]["assetId"], forwarded["vamsBinding"]["resolvedBy"]) == (
+            "projects", "fastPath")
+        assert [(key, asset) for _bucket, key, _db, asset in _tagged(m)] == [("projects/alpha/x.glb", "projects")]
