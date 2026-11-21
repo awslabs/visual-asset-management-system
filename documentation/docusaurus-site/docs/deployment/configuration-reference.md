@@ -1475,7 +1475,7 @@ Grant: `infra/lib/lambdaBuilder/workflowFunctions.ts` (`buildExecutionLogsFuncti
 
 ## Addons (`app.addons`)
 
-Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here. The Miris Spatial Streaming viewer is enabled in that file too, in addition to `app.addons.useMirisStreaming`.
+Settings for the [add-ons](../developer/addons-overview.md) that integrate VAMS with an external solution. Each is off by default. The licensed VNTANA and VEERUM viewers are add-ons as well, but they are enabled in `web/src/visualizerPlugin/config/addonViewerConfig.json` rather than here. `app.addons.useMirisStreaming` also decides whether the web install bundles the Miris web SDK (see [Configuration](../developer/miris-spatial-streaming.md#configuration)).
 
 ### Garnet Framework (`app.addons.useGarnetFramework`)
 

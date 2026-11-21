@@ -94,7 +94,7 @@
             "loadStrategy": "lazy",
             "category": "3d",
             "featuresEnabledRestriction": ["MIRIS_ADDON", "ALLOWUNSAFEEVAL"],
-            "enabled": false
+            "enabled": true
         }
     ]
 }

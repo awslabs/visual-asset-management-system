@@ -46,7 +46,7 @@ The status route still reports the stream recorded on the file, and returns no k
 | --------------------- | --------------------------------- | -------- | ----------------------------------- |
 | `miris-stream-viewer` | `.usd`, `.usda`, `.usdc`, `.usdz` | 0        | `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` |
 
-The entry in `web/src/visualizerPlugin/config/addonViewerConfig.json` ships with `"enabled": false` (see [Configuration](#configuration)) and sets `autoSelect: true`, so the viewer opens USD files automatically in visualize mode while the Needle USD Viewer and the Three.js Viewer stay in the viewer selector.
+The entry in `web/src/visualizerPlugin/config/addonViewerConfig.json` ships enabled, is offered only when the deployment publishes `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` (see [Configuration](#configuration)), and sets `autoSelect: true`, so the viewer opens USD files automatically in visualize mode while the Needle USD Viewer and the Three.js Viewer stay in the viewer selector.
 
 | Status `state`                    | What the viewer shows                                                                                                                                                                                                                                                                             |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -155,13 +155,12 @@ Enable the add-on by setting `app.addons.useMirisStreaming.enabled` to `true`, w
 }
 ```
 
-Enabling the add-on sets the `MIRIS_ADDON` feature switch; enabling `upload` also sets `MIRIS_UPLOAD`. The viewer plugin ships disabled in the web application, so that a deployment without the add-on neither installs nor bundles the Miris web SDK. To enable it:
+Enabling the add-on sets the `MIRIS_ADDON` feature switch; enabling `upload` also sets `MIRIS_UPLOAD`. The same setting decides whether the web application bundles the Miris web SDK, so a deployment without the add-on neither installs nor bundles it:
 
-1. Set `"enabled": true` on the `miris-stream-viewer` entry in `web/src/visualizerPlugin/config/addonViewerConfig.json`.
-2. Run `npm install` (or `npm ci`) in `web/`. Its `postinstall` bundles the [web SDK](#web-sdk). To rebuild only the SDK bundle, run `node customInstalls/miris/mirisInstall.js` from `web/`.
-3. Build the web application (`npm run build` in `web/`) and deploy it with the add-on configuration above.
+1. Run `npm install` (or `npm ci`) in `web/` with the add-on configuration above in `infra/config/config.json`, or with `VAMS_CONFIG_PATH` naming the configuration file you deploy with. Its `postinstall` bundles the [web SDK](#web-sdk) only when that configuration enables `app.addons.useMirisStreaming`. To rebuild only the SDK bundle, run `node customInstalls/miris/mirisInstall.js` from `web/`.
+2. Build the web application (`npm run build` in `web/`) and deploy it with the same configuration.
 
-The viewer is offered only when the entry is enabled and both `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` are present.
+The viewer entry ships enabled, and the viewer is offered only when both `MIRIS_ADDON` and `ALLOWUNSAFEEVAL` are present.
 
 ### Integration Key
 

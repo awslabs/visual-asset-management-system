@@ -7,6 +7,7 @@ const { execSync } = require("child_process");
 const fs = require("fs-extra");
 const path = require("path");
 const { checkViewerEnabled } = require("../utility/checkViewerEnabled");
+const { mirisAddonEnabled } = require("./mirisAddonEnabled");
 
 // Configurations
 const viewerId = "miris-stream-viewer";
@@ -126,7 +127,14 @@ const main = async () => {
         // Always cleanup previous builds first
         await previousCleanUp();
 
-        // Check if viewer is enabled in config
+        // The SDK is bundled only for a deployment that enables the add-on
+        // (app.addons.useMirisStreaming in VAMS_CONFIG_PATH, else infra/config/config.json).
+        if (!mirisAddonEnabled()) {
+            console.log("Miris: The deployment configuration does not enable the add-on");
+            console.log("Miris: Skipping installation");
+            console.log("=".repeat(60));
+            return;
+        }
         if (!checkViewerEnabled(viewerId)) {
             console.log(`Miris: Viewer "${viewerId}" is disabled in addonViewerConfig.json`);
             console.log("Miris: Skipping installation");

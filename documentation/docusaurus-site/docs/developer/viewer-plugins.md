@@ -31,7 +31,7 @@ graph TD
 | DynamicViewer     | `components/DynamicViewer.tsx`  | Main viewer component for rendering                                                    |
 | ViewerSelector    | `components/ViewerSelector.tsx` | UI for choosing between compatible viewers                                             |
 
-The add-on viewers (the Physna viewer, and the Miris Spatial Streaming viewer and the licensed VNTANA and VEERUM viewers, which ship disabled) are configured in `config/addonViewerConfig.json` and listed in `viewers/addonManifest.ts`; a fork's viewers go in `config/customViewerConfig.json` and `viewers/custom/customManifest.ts` (see [Extending VAMS in a Fork](customizing-vams.md)). `core/viewerSources.ts` merges the three tiers in the order core, add-on, custom, so on a priority tie a core viewer is listed before an add-on viewer.
+The add-on viewers (the Physna and Miris Spatial Streaming viewers, and the licensed VNTANA and VEERUM viewers, which ship disabled) are configured in `config/addonViewerConfig.json` and listed in `viewers/addonManifest.ts`; a fork's viewers go in `config/customViewerConfig.json` and `viewers/custom/customManifest.ts` (see [Extending VAMS in a Fork](customizing-vams.md)). `core/viewerSources.ts` merges the three tiers in the order core, add-on, custom, so on a priority tie a core viewer is listed before an add-on viewer.
 
 ### How It Works
 

@@ -61,12 +61,13 @@ describe("checkViewerEnabled", () => {
             expect([viewer.id, checkViewerEnabled(viewer.id)]).toEqual([viewer.id, viewer.enabled]);
         }
         expect(checkViewerEnabled("vntana-viewer")).toBe(false);
-        // Ships disabled, so a default install neither installs nor bundles the Miris web SDK.
-        expect(checkViewerEnabled("miris-stream-viewer")).toBe(false);
+        // Ships enabled; its install also requires the add-on in the deployment configuration
+        // (mirisInstallGate.test.ts).
+        expect(checkViewerEnabled("miris-stream-viewer")).toBe(true);
         expect(checkViewerEnabled("threejs-viewer")).toBe(true);
     });
 
-    it.each(["vntana-viewer", "veerum-viewer", "miris-stream-viewer"])(
+    it.each(["vntana-viewer", "veerum-viewer"])(
         "reports %s enabled once it is enabled in addonViewerConfig.json",
         (id) => {
             const files = configCopy((configs) =>
