@@ -2790,6 +2790,10 @@ export function getConfig(app: cdk.App): Config {
         config.app.assetBuckets.createNewBucket = true;
     }
 
+    if (config.app.assetBuckets.tagSyncedObjects == undefined) {
+        config.app.assetBuckets.tagSyncedObjects = true;
+    }
+
     // Null/omitted restriction lists mean no restrictions (no bucket policy statement).
     if (config.app.assetBuckets.useS3TransferAcceleration == undefined) {
         config.app.assetBuckets.useS3TransferAcceleration = false;
@@ -4246,6 +4250,7 @@ export function getConfig(app: cdk.App): Config {
 
     //Validate S3 Transfer Acceleration (#1610)
     validateS3TransferAcceleration(config.app.assetBuckets, config.env.partition);
+    validateTagSyncedObjects(config.app.assetBuckets);
 
     if (
         config.app.useGlobalVpc.enabled &&
@@ -6254,6 +6259,39 @@ export function validateS3TransferAcceleration(
     }
 }
 
+/**
+ * Validates app.assetBuckets.tagSyncedObjects and the same key on each external bucket: each is a
+ * real boolean when set. A string such as "false" would otherwise read as true.
+ */
+export function validateTagSyncedObjects(assetBuckets: {
+    tagSyncedObjects?: boolean;
+    externalAssetBuckets?: ConfigPublicAssetS3Buckets[] | null;
+}): void {
+    const problems: string[] = [];
+    if (
+        assetBuckets.tagSyncedObjects !== undefined &&
+        typeof assetBuckets.tagSyncedObjects !== "boolean"
+    ) {
+        problems.push("app.assetBuckets.tagSyncedObjects");
+    }
+    (assetBuckets.externalAssetBuckets || []).forEach((bucketConfig, index) => {
+        if (
+            bucketConfig &&
+            bucketConfig.tagSyncedObjects !== undefined &&
+            typeof bucketConfig.tagSyncedObjects !== "boolean"
+        ) {
+            problems.push(`app.assetBuckets.externalAssetBuckets[${index}].tagSyncedObjects`);
+        }
+    });
+    if (problems.length > 0) {
+        throw new Error(
+            `Configuration Error: ${problems.join(
+                ", "
+            )} must be a boolean (true or false, not a string).`
+        );
+    }
+}
+
 export interface ConfigPresignedUrlNetworkRestrictions {
     allowedIpRanges: string[];
     allowedVpceIds: string[];
@@ -6282,6 +6320,9 @@ export interface ConfigPublicAssetS3Buckets {
     // before deployment and the deployment fails, naming the bucket, when it is not enabled.
     // Commercial partition only; missing means false. Entries for one bucket ARN must agree.
     useS3TransferAcceleration?: boolean;
+    // Bucket sync writes the VAMS:databaseId and VAMS:assetId object tags on every file version it
+    // syncs from this registration. Missing means true.
+    tagSyncedObjects?: boolean;
 }
 
 /**
@@ -6398,6 +6439,9 @@ export interface ConfigPublic {
             // S3 Transfer Acceleration for the VAMS-created default asset bucket and, together
             // with it, the auxiliary bucket (#1610). Commercial partition only. Default false.
             useS3TransferAcceleration: boolean;
+            // Bucket sync tags every file version it syncs from the VAMS-created bucket with
+            // VAMS:databaseId and VAMS:assetId. Default true.
+            tagSyncedObjects: boolean;
             externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;

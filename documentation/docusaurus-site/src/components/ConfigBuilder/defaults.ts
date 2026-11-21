@@ -190,6 +190,7 @@ const COMMERCIAL: ConfigShape = {
                 allowedVpceIds: [],
             },
             useS3TransferAcceleration: false,
+            tagSyncedObjects: true,
             externalAssetBuckets: null,
         },
         adminUserId: "administrator",

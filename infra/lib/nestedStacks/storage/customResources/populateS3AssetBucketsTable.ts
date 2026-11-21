@@ -234,6 +234,9 @@ def lambda_handler(event, context):
             # (a missing attribute means false) and toggling the flag off removes it on the next deploy.
             if is_accelerated:
                 item['isAccelerated'] = True
+            # Whether bucket sync tags the file versions it syncs from this registration (VAMS:databaseId,
+            # VAMS:assetId). Always written; a row from an earlier release without it means true.
+            item['tagSyncedObjects'] = bucket.get('tagSyncedObjects') is not False
             table.put_item(Item=item)
             logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
         
@@ -305,6 +308,7 @@ def lambda_handler(event, context):
         // Present only when true, so the custom resource properties of a deployment without
         // acceleration are unchanged.
         ...(record.isAccelerated ? { isAccelerated: true } : {}),
+        tagSyncedObjects: record.tagSyncedObjects,
     }));
 
     // Create the custom resource provider

@@ -492,7 +492,8 @@ export function storageResourcesBuilder(
             undefined,
             !anyExternalIsDefault,
             undefined,
-            Config.createdBucketAccelerated(config.app.assetBuckets)
+            Config.createdBucketAccelerated(config.app.assetBuckets),
+            config.app.assetBuckets.tagSyncedObjects !== false
         );
     }
 
@@ -588,7 +589,8 @@ export function storageResourcesBuilder(
                 bucketKmsKeyArn,
                 !!bucketConfig.isDefault,
                 bucketRegion && bucketRegion != config.env.region ? bucketRegion : undefined,
-                bucketConfig.useS3TransferAcceleration === true
+                bucketConfig.useS3TransferAcceleration === true,
+                bucketConfig.tagSyncedObjects !== false
             );
         }
     }
