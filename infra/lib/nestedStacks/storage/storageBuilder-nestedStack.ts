@@ -98,6 +98,13 @@ const VECTOR_INDEX_PROJECTED_ATTRIBUTES = [
 export const WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX = "WorkflowExecutionLocksByHolderGSI";
 
 /**
+ * Index of AssetStorageTable on each asset row's bucket name and stored location (locationBucket,
+ * locationKey). Mirrored as LOCATION_INDEX_NAME in backend/backend/common/assetLocations.py; every function
+ * whose code reads it holds dynamodb:Query on it (infra/test/storage/assetLocationIndexReaderGrants.test.ts).
+ */
+export const ASSET_LOCATION_INDEX = "AssetLocationGSI";
+
+/**
  * Index of LargeObjectCopyJobsStorageTable on workflowExecutionId: the copy jobs of one workflow
  * execution (batch rows do not carry the attribute). Mirrored as WORKFLOW_EXECUTION_ID_INDEX in
  * backend/backend/common/largeObjectCopy.py.
@@ -1338,7 +1345,7 @@ export function storageResourcesBuilder(
 
     // Asset rows by bucket name and stored location (backend/backend/common/assetLocations.py)
     assetStorageTable.addGlobalSecondaryIndex({
-        indexName: "AssetLocationGSI",
+        indexName: ASSET_LOCATION_INDEX,
         partitionKey: {
             name: "locationBucket",
             type: dynamodb.AttributeType.STRING,

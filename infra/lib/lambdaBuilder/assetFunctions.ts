@@ -37,6 +37,7 @@ import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
+    ASSET_LOCATION_INDEX,
     LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
     PREPARED_DOWNLOADS_PREFIX,
     ZIP_DOWNLOAD_ASSET_INDEX,
@@ -1155,7 +1156,9 @@ export function buildLargeObjectCopyEngine(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
             actions: ["dynamodb:Query"],
-            resources: [`${storage.dynamo.assetStorageTable.tableArn}/index/AssetLocationGSI`],
+            resources: [
+                `${storage.dynamo.assetStorageTable.tableArn}/index/${ASSET_LOCATION_INDEX}`,
+            ],
         })
     );
     fun.addToRolePolicy(
