@@ -290,12 +290,7 @@ graph LR
 
 ### Configuration Resolution Order
 
-Configuration values resolve through a four-tier fallback chain:
-
-1. **CDK context** (`-c key=value` on command line)
-2. **config.json** file (`infra/config/config.json`)
-3. **Environment variables**
-4. **Hardcoded defaults** (in `getConfig()`)
+Most values come from `config.json` (`infra/config/config.json`), with defaults that `getConfig()` fills in for absent keys. A few values can also come from CDK context (`-c key=value`) or environment variables, in an order that differs by value: the environment comes before `config.json` for the admin and default role settings, and a boolean such as `useWaf` is true when any source says so. The [configuration reference](../deployment/configuration-reference.md) lists each value and its order.
 
 ### Feature Flags
 

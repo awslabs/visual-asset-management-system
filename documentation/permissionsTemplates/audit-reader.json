@@ -45,11 +45,6 @@
             "criteriaOr": [
                 {
                     "field": "route__path",
-                    "operator": "equals",
-                    "value": "/audit"
-                },
-                {
-                    "field": "route__path",
                     "operator": "starts_with",
                     "value": "/audit/"
                 }

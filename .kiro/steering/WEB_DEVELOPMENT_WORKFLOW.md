@@ -645,9 +645,15 @@ VAMS supports dark/light themes (default: dark):
 }
 ```
 
+### **A Resizable Table Column's Width Is Seeded Once**
+
+With `resizableColumns`, Cloudscape seeds each column's width **once**, on the render in which that column id first becomes visible, and silently ignores later changes to its declared `width` (raising `minWidth` is not the lever either). **The value that selects the visible column set and the value that selects a column's declared width must come from one source, resolved in the same render**: this is why `SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the `_rectype` filter. Full rule: `WEB_FRONTEND.md` section 10.5.
+
+Source: `web/CLAUDE.md`, "10.5 A Resizable Table Column's Width Is Seeded Once".
+
 ### **Feature Flags**
 
-Feature flags are read from `/api/secure-config` and stored in `appCache`:
+Feature flags are read from `GET /secure-config` and stored in `appCache`:
 
 ```typescript
 const config = appCache.getItem("config");

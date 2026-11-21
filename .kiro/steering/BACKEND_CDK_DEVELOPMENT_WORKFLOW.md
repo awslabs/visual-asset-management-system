@@ -3035,6 +3035,30 @@ for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
 # For API responses that return lists to users, always use the LastEvaluatedKey pattern above.
 ```
 
+### **File Security**
+
+Uploads must be validated against **both** `UNALLOWED_FILE_EXTENSION_LIST` (`.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`) and `UNALLOWED_MIME_LIST` (Java archives, MS-executable, shell/JS/PowerShell/VBScript, etc.). Both lists are built in `common/constants.py` from the core lists plus the add-on (`common/addonConstants.py`) and fork (`custom/customConstants.py`) lanes, append-only; extend the core list there or a lane list, never bypass or remove an entry.
+
+-   **One helper, case-insensitive.** `common/s3.py` `validateUnallowedFileExtensionAndContentType` applies both lists. The file extension and the media-type part of the content type (parameters such as `; charset=binary` stripped) are lower-cased before the membership test, so `.EXE` and `Application/X-Msdownload` are rejected like their lower-case forms.
+-   **What the extension is.** Everything from the last dot of the key's final non-empty segment, read after every trailing dot and whitespace character is removed (`str.isspace`, so a non-ASCII space counts): `payload.exe.`, `payload.exe `, `.exe`, `..exe` and `payload.exe/` are all checked as `.exe`, while `.gitignore` is checked as `.gitignore` and stays allowed. Because the trailing `/` is ignored, a folder whose own name ends in a blocked extension (`builds.exe/`) is refused for prefix download.
+-   **Every colon-separated piece is checked.** The segment is split on `:` and every piece of the name is checked against the list, each read after its own trailing dots and whitespace are removed and lower-cased. On NTFS a `:` opens a stream name, so `payload.exe::$DATA` and `payload.exe:evil` write `payload.exe`; a browser that cannot write `:` substitutes it and keeps the whole name, so `a:b.exe` lands as `a_b.exe`. Both shapes, and `x:payload.exe:evil`, are checked as `.exe`, while a `:` in an ordinary name (`notes:v2.txt`) is still accepted by the helper for an object already in a bucket.
+-   **The request models refuse such names on the paths that CREATE a key.** `models/assetsV3.py` `validate_asset_file_path(..., new_object=True)` refuses a final path segment ending in a dot or whitespace for upload initialize/completion `relativeKey` and move/copy `destinationPath` (Windows drops that character on download, so `payload.exe.` would land as `payload.exe`). `new_object=True` also refuses a `:` anywhere in the value, on every created-key path including `CreateFolderRequestModel` (Windows forbids it in any path segment, so no legitimate name is lost). `file_only=True` additionally refuses a `relativeKey` ending in `/` on the three upload paths (a file key is never a folder; `CreateFolderRequestModel` keeps its own trailing-slash rule). The read paths (download `key`, file info, archive, move/copy `sourcePath`) set neither flag, so an object already stored under such a key stays reachable and a `:` stays accepted.
+-   **Tests.** Keep every list entry lower-case and listed once: `tests/common/test_s3_blocklist_case_insensitive.py` fails on an entry of the merged lists that is not (a lane entry that is not is refused at import first). `tests/common/test_s3_blocklist_trailing_dot.py` and `tests/models/test_assetsV3_trailing_dot_write_paths.py` pin the basename rule and the write-path refusal, `tests/common/test_s3_blocklist_ads_suffix.py` and `tests/models/test_assetsV3_ads_suffix_write_paths.py` pin the per-piece `:` check and the created-key `:` refusal, and `tests/models/test_validate_asset_file_path_call_sites.py` fails on a `validate_asset_file_path` call whose field neither passes `new_object=True` nor is declared a read path.
+-   **Move, rename and copy** (`handlers/assets/assetFiles.py` `move_file` / `copy_file`) run the same helper on the resolved destination key, with an empty content type, right after the key-length check and before any S3 call, and refuse a blocked name with a `400`; `tests/handlers/assets/test_assetFiles_destination_extension_check.py` pins it.
+
+**Upload completion** (`handlers/assets/uploadFile.py` `complete_upload` / `complete_external_upload`) runs the name-level blocklist (and the preview-extension rule) on every object it creates, zero-byte and regular multipart alike, before anything is written, and accepts only the `relativeKey`s the initialize step recorded on the upload record (`AssetUploadTableModel.files`). A record without that attribute predates the binding and is completed with the blocklist checks but without the membership check, logged as a warning, until it expires. `complete_upload` also refuses an external (`isExternalUpload`) record outright, the mirror of the check `complete_external_upload` makes, so the one record class designed without the list cannot be completed by the route that skips membership. The cancelled no-parts multipart file and the `expiresAt` refusal are stated under "Resource Name and Environment Variable Loading Pattern" above.
+
+**The external (workflow-output) completion runs once per upload id.** `claim_external_completion` moves the record from `initialized` to `processing` under a condition; the call that loses it runs nothing, and `answer_repeated_external_completion` answers with the first call's stored result (`completionStatusCode` + zlib-compressed `completionResult`, at most 200 KB), polling while the first still runs and answering 409 when it does not finish within the invocation or stored no result. The record is therefore KEPT once completed (`completed` / `completed_with_errors` / `processing_async`, or `failed` when the completion raised) until the TTL removes it; `complete_upload` still deletes its own records. The caller, `processWorkflowExecutionOutput.py`, sends at most `MAX_FILES_PER_UPLOAD_REQUEST` (1,000) files per call (`_completion_chunks`, a `.previewFile.` in the same call as its base file, one upload record per call) and invokes the completion and the metadata service through `invoke_client`: no botocore retry and a 910 s read timeout, above the invoked functions' 900 s timeout; only a `TooManyRequestsException` is retried. Do not route a RequestResponse cross-call through the retrying `client` (Event invokes only).
+
+**The asynchronous >1GB completion** (`sqsUploadFileLarge.py`, on `LargeFileProcessingQueue`: batchSize 1, maxReceiveCount 3, a dead-letter queue) splits failures in two:
+
+-   **A rejection no retry can change** (blocked type or preview extension, cancelled or S3-rejected multipart upload, upload ID mismatch, oversized preview) returns `False`: `process_large_file` aborts the multipart upload, deletes the staged object from its source bucket (`sourceBucketName`, else `bucketName`), writes a denied `log_file_upload` entry, and the message is consumed.
+-   **Any other failure** (S3 5xx, throttling, a failed copy or read) is raised, `lambda_handler` re-raises after its loop, and SQS redelivers and finally dead-letters the message. The multipart upload and staged object are kept so a later receive can finish the file (a `NoSuchUpload` with the staged object present means an earlier receive completed it), and only the final receive (`ApproximateReceiveCount >= LARGE_FILE_MAX_RECEIVE_COUNT`) aborts the multipart upload. Keep `LARGE_FILE_MAX_RECEIVE_COUNT` equal to the queue's maxReceiveCount in `apiBuilder-nestedStack.ts`. Helpers on this path must raise rather than return `False` for a transient error.
+-   **A duplicate delivery** (SQS is at-least-once) of a file an earlier receive stored finds the staged object gone. `is_large_file_already_stored` then checks the final object (`finalS3Key`) for this file's asset, database and change provenance and a `LastModified` no earlier than the message's `SentTimestamp`; on a match `LargeFileAlreadyProcessed` is raised and `lambda_handler` consumes the message with no cleanup and no audit entry. An older version at the same key, other provenance, or a missing `SentTimestamp` is not a match, so a vanished upload is still rejected and audited as denied.
+-   **What a dead-letter redrive can recover:** a file whose multipart upload completed before the last receive (for example after a failed copy), from the kept staged object. It cannot finish a file whose multipart upload never completed, because the final receive aborted it, and that redrive is rejected (the file must be uploaded again).
+
+Source: `backend/CLAUDE.md`, "File Security".
+
 ### **Choosing a File's `.previewFile.<ext>`**
 
 A file can hold several `<file>.previewFile.<ext>` objects (a pipeline re-run in another format writes a `.png` beside an existing `.gif`; nothing deletes the other). Every path that attaches a file's preview goes through `select_newest_preview_file((key, lastModified, isArchived) …)` (`backend/common/s3PathPatterns.py`): in `handlers/assets/assetFiles.py` the current listing, the version-snapshot listing in basic and detailed mode, and the single-file info that set `previewFile`, in `handlers/assets/assetExportService.py` the export's per-file preview path, and in `handlers/osVectorSearch/vectorIndexer.py` `find_preview_file_key`, the preview key a vector item carries. Natural-language search's OpenSearch step keeps the file index's preview key over the vector item's. A live preview beats an archived one, then the latest `lastModified` wins, ties keep key order. Do not pick "the first in key order" in a new path. Tests: `tests/handlers/assets/test_assetFiles_newest_preview.py`, `tests/handlers/assets/test_assetExportService_newest_preview.py`, `tests/handlers/osVectorSearch/test_vectorIndexer_embedding_ready.py`, and `TestPreviewKey` in `tests/handlers/osVectorSearch/test_vectorSearchService_final_review.py`.
@@ -3141,6 +3165,45 @@ wildcard, a `cdk-nag` suppression, a mutating call from a read-only path, a vali
 The shortcut "the forbidden literal appears nowhere in the source, so the test is spent" is **wrong** — a
 forbid-forever guardrail also has zero occurrences, and that absence is the guard working. Full criterion:
 root `CLAUDE.md` Rule 13; Claude Code counterpart: `backend/tests/CLAUDE.md`.
+
+#### **`xfail` Is the Ratchet for a Test Written Before Its Fix**
+
+`xfail_strict = true` is set in `pytest.ini`, so a test marked `@pytest.mark.xfail(reason="FIX-### …")` stays green while the defect exists and turns **red the moment the fix lands**: an XPASS is a failure under strict mode, which forces whoever fixed it to delete the marker. That is how a test can be written against a known defect without leaving the suite red, and without the marker rotting into a test that no longer asserts anything. The same setting is configured for `tools/VamsCLI` (`pyproject.toml`) and the IsaacSim connector (`tools/ExternalIntegrations/isaacsim_vams_integration/pytest.ini`). The Jest equivalent is `it.failing`, which is strict by construction.
+
+Source: `backend/tests/CLAUDE.md`, "`xfail` is the ratchet for a test written before its fix".
+
+#### **Use the Shared Paging Stubs in `tests/pagingStub.py`**
+
+Do not copy a private pager out of another test file: the shared helper is the one that carries these guarantees, and a copy drifts from them silently. Import it as `from backend.tests.pagingStub import BareMockReader, Pager, RoutedPager`.
+
+-   `Pager(*pages, name=..., max_reads=None)`: a `query`/`scan` side effect serving scripted pages. Pages are keyed on `ExclusiveStartKey`, never on call index, so an extra, retried, or reordered read still resolves to the right page. It rejects the one sequence DynamoDB cannot produce: a page a LATER page continues from with no `LastEvaluatedKey` (the key is omitted only when the result set is exhausted, and pages are keyed on that cursor, so such a page leaves the next unreachable). The LAST scripted page MAY carry a key: a filtered page returns zero Items and still pages on, and a loop with a bound of its own stops with a cursor outstanding. It raises if a loop resumes from a cursor it was never handed, and separately if it continues past the last scripted page.
+-   `Pager.assert_paged_to_exhaustion()`: the completeness assertion. Every cursor a later page answers was resumed from, stated over the SET of cursors, so it cannot pin a read count or a read order. It fails if nothing read the pager, so a single-page script cannot make it vacuous.
+-   `Pager.resumed_from`: every `ExclusiveStartKey` actually sent, so a test can assert "no continuation was needed" without counting calls.
+-   `RoutedPager(on="IndexName", **pagers)`: independent page sequences on one table stub. Two GSIs paged off the same table each get their own sequence, routed by a read kwarg instead of by call order.
+-   `BareMockReader(name=..., max_reads=None)`: a reader whose every page is a bare `MagicMock`, the shape that HANGS a value-form loop. A presence-form loop reads once and stops; the value form reads to the cap and raises with an explanation.
+-   `PagingLoopDidNotTerminate`: the failure both readers raise. It derives from `BaseException` deliberately, because several of these loops sit in best-effort helpers that catch `Exception` and degrade quietly; an `Exception` would be swallowed and the hang would read as an ordinary degraded result.
+
+`max_reads` defaults to 12, which is BELOW the page caps some loops carry of their own (`MAX_ID_LOOKUP_PAGES`, `MAX_REFERENCING_WORKFLOW_PAGES`). A test that bounds the read count against such a cap ("it stopped on the absent key, not by exhausting its pages") must raise `max_reads` above that cap, or the stub trips first and the bound can never fail.
+
+The stubs' own contract (which sequences they accept, which they reject, and that each rejection can actually fire) is covered by `tests/test_pagingStub.py`. Change a check in `pagingStub.py` and run that file first: a stub that rejects legitimate behaviour makes correct code look broken, which is how a real paging fix gets reverted.
+
+Source: `backend/tests/CLAUDE.md`, "Use the shared stubs in `tests/pagingStub.py`".
+
+#### **Per-Handler `conftest.py`**
+
+Create handler-specific `conftest.py` files for environment variables and mocks unique to that handler:
+
+```python
+# tests/your_domain/conftest.py
+import os
+
+os.environ['YOUR_SPECIFIC_TABLE'] = 'test-table'
+os.environ['YOUR_SPECIFIC_BUCKET'] = 'test-bucket'
+```
+
+Handler-specific mocks (custom `patch` targets, fixtures for common event shapes) belong here as well, so each domain's tests remain self-contained.
+
+Source: `backend/tests/CLAUDE.md`, "Per-Handler `conftest.py`".
 
 ### **CDK Development**
 

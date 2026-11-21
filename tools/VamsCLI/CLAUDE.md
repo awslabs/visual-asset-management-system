@@ -109,7 +109,7 @@ tools/VamsCLI/
                              #   uv command in its header after a dependency change (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
 ```
 
-### Command Groups (26 core + add-on groups)
+### Command Groups (27 core + add-on groups)
 
 The core groups are registered in `main.py` via `cli.add_command()`:
 
