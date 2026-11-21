@@ -25,7 +25,7 @@ from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from common.tagScope import GLOBAL_SCOPE
 from common.snsTopicNames import asset_sns_topic_name
-from common.assetLocations import contains
+from common.assetLocations import locations_share_key
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -306,7 +306,7 @@ def check_s3_prefix_exists(bucket_name, prefix):
     appends the slash and reads the very same objects. Widening the probe alone
     would match a sibling such as `<base>legacy-other/`, so each returned key is
     accepted only when it equals the bare form or sits under the slash-bearing
-    one — the same containment rule keys_conflict() applies.
+    one.
 
     Args:
         bucket_name: S3 bucket name
@@ -373,16 +373,14 @@ def normalize_location_key(key):
 def keys_conflict(existing_key, target_key):
     """Whether two stored S3 asset locations hold a key in common.
 
-    Decided by `common.assetLocations.contains` in both directions: an exact match,
-    a folder holding the other location, or a single-file location holding the other
-    one as its companion folder or as one of its own previews.
+    Decided by `common.assetLocations.locations_share_key` over the keys each
+    location holds (a folder: every key under it; a single file: its object, its
+    companion folder `{key}/` and its own previews `{key}.previewFile.{ext}`). That
+    covers an exact match and one location holding the other's key, and also two
+    locations that share a key neither of them names: `a/x` and `a/x.previewFile`
+    both hold `a/x.previewFile.previewFile.z`. An empty location conflicts with nothing.
     """
-    existing_key = normalize_location_key(existing_key)
-    target_key = normalize_location_key(target_key)
-    if not existing_key or not target_key:
-        return False
-
-    return contains(existing_key, target_key) or contains(target_key, existing_key)
+    return locations_share_key(normalize_location_key(existing_key), normalize_location_key(target_key))
 
 
 def prefix_roots_overlap(prefix_a, prefix_b):
@@ -482,9 +480,9 @@ def assert_existing_key_not_owned(bucket_ids, resolved_s3_key):
     Because multiple databases can share one bucket and prefix root, an asset's
     S3 location is only unambiguously owned when a single asset record maps to it.
     We query all assets in the colocated buckets (via the BucketIdGSI) and reject
-    if any existing asset's assetLocation.Key equals, is a parent of, or is a
-    child of the resolved key, so a new asset cannot be bound onto a location
-    another asset owns.
+    if any existing asset's assetLocation.Key shares a key with the resolved key
+    (keys_conflict), so a new asset cannot be bound onto a location another
+    asset owns.
 
     A caller-supplied bucketExistingKey is an arbitrary key, so every record in
     the partition has to be compared: this walks the full BucketIdGSI partition.
