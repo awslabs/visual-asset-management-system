@@ -183,6 +183,12 @@ uv export --frozen --no-emit-project --only-group step --no-annotate -o requirem
 
 Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
 
+#### Published packages: VamsCLI and VamsMCP
+
+`tools/VamsCLI/` and `tools/VamsMCP/` are installable packages, so their `pyproject.toml` ranges (and VamsCLI's `setup.py` and hand-written `requirements*.txt`) are the install contract and stay ranges. Each also has a `uv.lock` that records one resolution of those ranges for development, CI and the audit; installing either package with pip never uses it, and the build backend stays setuptools. Move a locked package with `uvx --from uv==0.13.8 uv lock --upgrade-package <package>`; a range change goes into `pyproject.toml`, `setup.py` and `requirements.txt` together, followed by `uv lock`.
+
+VamsCLI's `requirements.lock`, which the EDH Linux AMI recipes install with `--require-hashes`, is a hashed export of its lock (runtime dependencies plus the `build` group): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The audit regenerates it and fails when it is stale. VamsMCP's lock resolves `vamscli` from `../VamsCLI`, because VamsCLI is not published to PyPI. The hand-written ranged files beside a lock are listed under `rangedInputs` in `.github/python-lock-exemptions.json`.
+
 #### Shared packages across layers
 
 `backend/` and `backend/lambdaLayers/base/` lock every package they share at the same version, because the handler Lambdas load their packages from the base layer while the backend tests install `backend/requirements-dev.txt`. Update a shared package in both projects together; `backend/tests/test_base_layer_dependency_parity.py` fails when the two locks differ.

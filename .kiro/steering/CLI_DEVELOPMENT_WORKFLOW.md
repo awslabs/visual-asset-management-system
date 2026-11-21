@@ -38,10 +38,12 @@ tools/VamsCLI/
 ├── tests/                   # Test files (mirror command structure; add-on tests under tests/addon/)
 ├── setup.py                 # Package configuration
 ├── pyproject.toml          # Modern Python packaging
-├── requirements.txt        # Runtime dependencies; matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
-├── requirements-build.txt  # The [build-system] requires of pyproject.toml
-├── requirements.lock       # Hashed lock of both, which the EDH Linux AMI recipes install; regenerate with the uv
-│                           #   command in its header after a dependency change (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
+├── requirements.txt        # Runtime dependencies (ranged, hand-written); matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
+├── requirements-dev.txt    # Dev extra (ranged, hand-written)
+├── requirements-build.txt  # The [build-system] requires of pyproject.toml (ranged, hand-written)
+├── uv.lock                 # uv's resolution of the ranges, for development, CI and the audit; installing the package with pip never uses it
+├── requirements.lock       # Hashed `uv export` of uv.lock (runtime + `build` group), which the EDH Linux AMI recipes install;
+│                           #   regenerate with the command in its header (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
 └── README.md               # User documentation
 ```
 
@@ -2503,6 +2505,16 @@ this CLI uses, `list`, `get` and `set` are builtins. Prefer a comprehension or `
 will do, since neither names the builtin. No linter catches this — the rebinding is valid Python and
 the call type-checks — so treat a command whose output contains another command's output as this bug
 until shown otherwise.
+
+## 🧱 **Updating Python Dependencies (uv)**
+
+`tools/VamsCLI/uv.lock` and `tools/VamsMCP/uv.lock` are development, CI and audit files. The published packages keep their ranged dependencies (`pyproject.toml` `[project] dependencies`, `setup.py` `install_requires`, the hand-written `requirements*.txt`) and their setuptools build, so installing either with pip never needs uv and is not pinned to the lock. Do not narrow a range or raise a lower bound to move a locked version; that changes what every user installs.
+
+-   Run the uv version `[tool.uv] required-version` names: `uvx --from uv==0.13.8 uv ...`. The `vamscli-test` and `vamsmcp-test` CI jobs install from the lock (`uv sync --frozen --extra dev`), and the `python-dependency-audit` job checks both locks.
+-   Move a locked package: `uv lock --upgrade-package <package>` (one flag per package), then re-export `requirements.lock`. A range edit goes into `pyproject.toml`, `setup.py` and `requirements.txt` together (`tests/test_packaging_manifests.py`), then `uv lock`.
+-   `requirements.lock` is a hashed export of `uv.lock` (runtime dependencies plus the `build` group, which must equal `[build-system] requires`): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The EDH AMI recipes install it with `--require-hashes --only-binary :all:`; the audit regenerates it and fails when it is stale. Never edit it by hand.
+-   The hand-written ranged files are listed under `rangedInputs` in `.github/python-lock-exemptions.json`; a new hand-written `requirements*.txt` beside a lock fails the CI test unless it is a uv export.
+-   VamsMCP's lock resolves `vamscli` from `../VamsCLI` (`[tool.uv.sources]`, editable), because vamscli is not on PyPI; that setting is not part of the published metadata, and the audit leaves the local package out of the export it audits.
 
 ## 🛠️ **Development Commands**
 
