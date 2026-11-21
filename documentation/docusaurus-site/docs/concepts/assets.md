@@ -72,9 +72,12 @@ files.
 
 Earlier releases could also leave two assets on exactly the same location. Archiving or permanently deleting
 one of them leaves the shared files, and every version of them, to the other asset, and deleting, archiving
-or moving one of those files through either asset is refused. Until the `assetLocationIndex` migration step
+or moving one of those files through either asset is refused. No file is written into such a location: an
+upload, a workflow output, a new folder, a copy into either asset, and a revert, unarchive or primary-file change
+of a file there are refused until one of the assets is archived (see "Bucket Sync Rejected-Record Queue Holds
+Messages" in the troubleshooting guide). Until the `assetLocationIndex` migration step
 has run after an upgrade, only archiving, unarchiving and permanently deleting an asset, and deleting,
-archiving or moving a file or folder, look for nested or shared assets.
+archiving or moving a file or folder, look for nested or shared assets; writes behave as before.
 
 ## Updating an asset
 
