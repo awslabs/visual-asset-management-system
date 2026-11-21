@@ -536,11 +536,18 @@ def _count_instancer(prim, xform_cache, context, cache):
 # --------------------------------------------------------------------------------------------------
 
 def _rig_content(stage, name):
-    """(has a camera, has a light) for the root prim ``name``: a UsdGeom camera, and any UsdLux light."""
+    """(has a camera, has a light) for the root prim ``name``: a UsdGeom camera, and any UsdLux light.
+
+    This walk runs after the load's walks, so it is bounded by a fresh node limit of its own: a rig
+    root that expands past the stage bound ends at once with the same message instead of running to
+    the job's timeout."""
     from pxr import Usd, UsdGeom, UsdLux
 
+    limit = SceneLimit("USD stage", max_nodes=MAX_SCENE_NODES)
     camera = light = False
     for prim in Usd.PrimRange(stage.GetPrimAtPath("/" + name), Usd.TraverseInstanceProxies()):
+        if not limit.visit():
+            raise _node_bound_error(limit.max_nodes)
         camera = camera or prim.IsA(UsdGeom.Camera)
         light = light or prim.HasAPI(UsdLux.LightAPI) or str(prim.GetTypeName()).endswith("Light")
         if camera and light:
@@ -627,6 +634,16 @@ def left_out_roots_unused(file_path, left_out):
         return []
 
 
+def _node_bound_error(max_nodes):
+    """The ValueError a walk raises once it passes the node bound. One wording for every walk, so a
+    stage that expands past the bound refuses with the same message wherever the bound is first met."""
+    return ValueError(
+        f"The USD stage expands to more than {max_nodes:,} prims "
+        f"(instance proxies included) and is too large to preview. Reduce the depth or the "
+        f"number of nested instanceable prims."
+    )
+
+
 class _LoadContext:
     def __init__(self, file_path, asset_root, time):
         self.file_path = file_path
@@ -669,11 +686,7 @@ class _LoadContext:
         that expands past it ends at once with a clear message instead of running to the job's
         timeout."""
         if not self.scene_limit.visit():
-            raise ValueError(
-                f"The USD stage expands to more than {self.scene_limit.max_nodes:,} prims "
-                f"(instance proxies included) and is too large to preview. Reduce the depth or the "
-                f"number of nested instanceable prims."
-            )
+            raise _node_bound_error(self.scene_limit.max_nodes)
 
 
 def _counted(counts):
@@ -898,6 +911,7 @@ def _expand_point_instancer(prim, xform_cache, context, plan=None):
         geometry = []
         if root:
             for child in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+                context.count_prim()
                 if not _is_rendered(child, time):
                     continue
                 relative, _ = xform_cache.ComputeRelativeTransform(child, root)

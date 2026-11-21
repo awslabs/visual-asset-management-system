@@ -43,10 +43,51 @@ def _nested_instanceable_stage(path, depth):
     return str(path)
 
 
+def _instancer_with_expanding_prototype(path, depth):
+    """A stage whose PointInstancer has one prototype, ``/C0``, that is a doubling chain of ``class``
+    prims: each class holds two instanceable children that reference the next class, so expanding the
+    prototype yields about 2**depth prims. The classes are abstract and sit beside ``/World``, so a
+    default-predicate walk of the stage skips them -- only the instancer's prototype walk descends
+    into them. Without counting that walk the expansion runs unbounded; with it the load is refused."""
+    from pxr import Gf, Sdf, Usd, UsdGeom
+
+    stage = Usd.Stage.CreateNew(str(path))
+    UsdGeom.SetStageUpAxis(stage, "Y")
+    world = UsdGeom.Xform.Define(stage, "/World").GetPrim()
+    stage.SetDefaultPrim(world)
+    # A drawn triangle beside the instancer, so the stage holds real geometry.
+    mesh = UsdGeom.Mesh.Define(stage, "/World/tri")
+    mesh.GetPointsAttr().Set([Gf.Vec3f(0, 0, 0), Gf.Vec3f(1, 0, 0), Gf.Vec3f(0, 1, 0)])
+    mesh.GetFaceVertexCountsAttr().Set([3])
+    mesh.GetFaceVertexIndicesAttr().Set([0, 1, 2])
+    # The doubling chain of class prims, reached only through the prototypes relationship.
+    stage.CreateClassPrim(f"/C{depth}")
+    for level in range(depth - 1, -1, -1):
+        stage.CreateClassPrim(f"/C{level}")
+        for child in ("a", "b"):
+            prim = stage.DefinePrim(f"/C{level}/{child}")
+            prim.GetReferences().AddInternalReference(f"/C{level + 1}")
+            prim.SetInstanceable(True)
+    instancer = UsdGeom.PointInstancer.Define(stage, "/World/pi")
+    instancer.CreatePositionsAttr([Gf.Vec3f(0, 0, 0)])
+    instancer.CreateProtoIndicesAttr([0])
+    instancer.CreatePrototypesRel().SetTargets([Sdf.Path("/C0")])
+    stage.GetRootLayer().Save()
+    return str(path)
+
+
 @requires_real("pxr", "pyvista")
 def test_a_nested_instancing_stage_is_refused_at_the_node_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(usd_handler, "MAX_SCENE_NODES", 2000)
     path = _nested_instanceable_stage(tmp_path / "bomb.usda", depth=14)
+    with pytest.raises(ValueError, match=r"expands to more than 2,000 prims"):
+        usd_handler.load(path)
+
+
+@requires_real("pxr", "pyvista")
+def test_a_point_instancer_prototype_that_expands_past_the_bound_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(usd_handler, "MAX_SCENE_NODES", 2000)
+    path = _instancer_with_expanding_prototype(tmp_path / "instancer-prototype-expand.usda", depth=14)
     with pytest.raises(ValueError, match=r"expands to more than 2,000 prims"):
         usd_handler.load(path)
 
