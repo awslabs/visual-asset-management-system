@@ -21,13 +21,13 @@
     "exemptions": [
         {
             "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",
-            "reason": "Installed into Isaac Sim's bundled Python, which a lock must target explicitly.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+            "reason": "Installed into Isaac Sim's bundled Python, which a lock must target explicitly. Draft PR #1736 (#1669, Isaac Lab 6.x) rewrites this file and the Dockerfile, so it moves to a uv project after that PR merges.",
+            "plannedIn": "#1741: after #1669 (PR #1736) merges"
         },
         {
             "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs into Isaac Sim's bundled Python; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs into Isaac Sim's bundled Python; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project. Draft PR #1736 (#1669, Isaac Lab 6.x) rewrites this file and the Dockerfile, so it moves to a uv project after that PR merges.",
+            "plannedIn": "#1741: after #1669 (PR #1736) merges"
         }
     ]
 }

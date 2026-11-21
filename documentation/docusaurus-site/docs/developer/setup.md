@@ -186,7 +186,7 @@ uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
 
-Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no lock (the GPU pipeline images) are hand-maintained pip files and are edited directly; each one is listed under `exemptions` in `.github/python-lock-exemptions.json` until it gets a lock. The published command-line packages have locks; their hand-written ranged files are covered in [Published packages: VamsCLI and VamsMCP](#published-packages-vamscli-and-vamsmcp).
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. The one set of requirements files with no lock is the Isaac Lab training image's (the GPU pipeline images are otherwise locked); they are hand-maintained pip files, edited directly, and listed under `exemptions` in `.github/python-lock-exemptions.json` until the image moves to a uv project. The published command-line packages have locks; their hand-written ranged files are covered in [Published packages: VamsCLI and VamsMCP](#published-packages-vamscli-and-vamsmcp).
 
 #### Published packages: VamsCLI and VamsMCP
 
@@ -224,9 +224,13 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
--   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project (today the Isaac Lab training image's two requirements files);
 -   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
--   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos images other than Transfer's NCCL wheel, and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. The GPU images lock only the sets VAMS owns:
+    -   Image to 3D: the shared `requirements.txt` of all seven model images. Each model's own requirements (torch, the CUDA extensions, the upstream repository's packages) are installed by its Dockerfile before or after it and can move a locked package (TripoSR pins trimesh 4.0.5, so its Dockerfile reasserts the floor; TRELLIS.2 and SAM 3D install the shared set after upstream and restore numpy).
+    -   Splat Toolbox: the image is upstream's Dockerfile, which does not install the VAMS `requirements.txt`; the lock covers the file the pipeline test runner installs.
+    -   Cosmos Transfer: only the NCCL wheel added to upstream's environment; upstream's own `uv.lock` is installed by `uv sync --locked`.
+    -   GR00T: Isaac-GR00T's `base` extra at `STABLE_COMMIT` plus what the image adds, resolved on Python 3.10 for Linux x86_64. 151 advisories in upstream-pinned packages are on `.github/python-audit-allowlist.json` with a review date; the prebuilt flash-attn wheel (a direct URL) is named in the audit summary and not audited;
 -   packages that come with a container base image or the Lambda runtime;
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
 

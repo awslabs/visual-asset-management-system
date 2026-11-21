@@ -101,9 +101,13 @@ def test_every_suite_setting_names_a_discovered_directory_and_a_reason(settings,
     for path, entry in settings.items():
         assert path in discovered, f"{path} has settings but holds no test module; remove the entry"
         assert entry, f"{path} has an empty settings entry"
-        assert set(entry) <= {"extraRequirements", "headlessDisplay"}, f"{path}: unknown setting {sorted(entry)}"
+        assert set(entry) <= {"extraRequirements", "headlessDisplay", "ownRequirements"}, f"{path}: unknown setting {sorted(entry)}"
         for name, setting in entry.items():
             assert setting.get("reason", "").strip(), f"{path}: {name} has no reason"
+        if "ownRequirements" in entry:
+            # The opt-out is only meaningful where the runner would otherwise install a requirements file.
+            tests_dir = runner.REPO_ROOT / path
+            assert runner.own_requirements(tests_dir) is not None, f"{path}: ownRequirements skips nothing; remove it"
         if "extraRequirements" in entry:
             requirements = entry["extraRequirements"].get("requirements", [])
             assert requirements and all(r.strip() for r in requirements), f"{path}: no extraRequirements"
