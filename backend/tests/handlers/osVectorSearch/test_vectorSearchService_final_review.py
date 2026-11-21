@@ -18,6 +18,7 @@ from botocore.exceptions import ClientError, ReadTimeoutError
 
 from tests.handlers.osVectorSearch import test_vectorSearchService as behaviour
 from tests.handlers.osVectorSearch.test_vectorSearchService import FakeStore, call, chunk, item, rows
+from tests.handlers.osVectorSearch.vectorsearch_support import stub_api_check_deadline
 
 svc = behaviour.svc
 
@@ -109,11 +110,12 @@ def opensearch(svc):
     svc.opensearch_disabled = False
     stub = types.ModuleType("handlers.osSemanticSearch.search")
     client = MagicMock()
-    client.search.side_effect = lambda index, body: {"hits": {"hits": [
+    client.search.side_effect = lambda index, body, **_: {"hits": {"hits": [
         {"_id": doc, "_source": {"MD_color": "red"}} for doc in body["query"]["bool"]["filter"][0]["ids"]["values"]]}}
     manager = MagicMock()
     manager.client, manager.file_index = client, "vams-files-v3"
     stub.DualIndexSearchManager = MagicMock(return_value=manager)
+    stub._api_check_deadline = stub_api_check_deadline
     builder = MagicMock()
     builder._build_query_clause.return_value = {"bool": {"filter": [{"term": {"str_databaseid": "db1"}}]}}
     stub.DualIndexQueryBuilder = MagicMock(return_value=builder)
@@ -179,7 +181,7 @@ class TestConstraintsFailClosed:
 class TestPreviewKey:
     def test_the_file_index_preview_key_wins_over_the_one_captured_at_embedding(self, svc, opensearch):
         rows(svc, ("db1", "a1"))
-        opensearch.client.search.side_effect = lambda index, body: {"hits": {"hits": [
+        opensearch.client.search.side_effect = lambda index, body, **_: {"hits": {"hits": [
             {"_id": doc, "_source": {"str_previewfilekey": "/f.glb.previewFile.png"}}
             for doc in body["query"]["bool"]["filter"][0]["ids"]["values"]]}}
         store = FakeStore([item(path="f.glb", previewFileKey="/f.glb.previewFile.gif")])

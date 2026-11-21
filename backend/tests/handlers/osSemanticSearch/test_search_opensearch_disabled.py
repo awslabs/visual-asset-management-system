@@ -120,6 +120,18 @@ class TestOpenSearchEnabled:
         assert first.asset_index == "value-of-/vams/aos/assetIndexName"
         assert second.file_index == "value-of-/vams/aos/fileIndexName"
 
+    def test_the_client_retries_as_before_unless_the_caller_turns_retries_off(self, monkeypatch):
+        """Keyword search keeps three retries, timeouts included; natural-language search's OpenSearch step
+        asks for none, so a query that times out at its deadline is not started again."""
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        opensearchpy = MagicMock()
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": opensearchpy}):
+            module.DualIndexSearchManager()
+            module.DualIndexSearchManager(max_retries=0, retry_on_timeout=False)
+        keyword, nlp = (c.kwargs for c in opensearchpy.OpenSearch.call_args_list)
+        assert (keyword["max_retries"], keyword["retry_on_timeout"], keyword["timeout"]) == (3, True, 30)
+        assert (nlp["max_retries"], nlp["retry_on_timeout"], nlp["timeout"]) == (0, False, 30)
+
     def test_client_failure_leaves_the_manager_unavailable(self, monkeypatch):
         module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
         broken = MagicMock()

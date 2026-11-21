@@ -506,8 +506,11 @@ cannot see and a suite importing everything never reaches.
     pipeline publishes `vector.embedding.ready` on the orchestration bus for the vector
     indexer.
 -   **A runtime cross-group read is function-scoped and gated.** Two are admitted:
-    `vectorSearchService._opensearch_step` imports `handlers.osSemanticSearch.search` inside
-    the function after `OPENSEARCH_DISABLED` is ruled out (a file answer is constrained and
+    `vectorSearchService._opensearch_module` imports `handlers.osSemanticSearch.search` inside
+    the function, which its callers reach only after `OPENSEARCH_DISABLED` is ruled out: for
+    keyword search's API deadline (`_api_deadline`, taken when the handler starts; each query
+    of the OpenSearch step waits at most the time it leaves, with no retry) and for
+    `_opensearch_step` (a file answer is constrained and
     enriched on the file index; an asset answer on the asset index alone, where
     `_asset_index_step` applies the constraints built for that index and reads each returned
     asset's location through the same client, so it stays one crossing), and
