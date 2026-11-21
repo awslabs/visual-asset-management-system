@@ -44,11 +44,12 @@ def _nested_instanceable_stage(path, depth):
 
 
 def _instancer_with_expanding_prototype(path, depth):
-    """A stage whose PointInstancer has one prototype, ``/C0``, that is a doubling chain of ``class``
-    prims: each class holds two instanceable children that reference the next class, so expanding the
-    prototype yields about 2**depth prims. The classes are abstract and sit beside ``/World``, so a
-    default-predicate walk of the stage skips them -- only the instancer's prototype walk descends
-    into them. Without counting that walk the expansion runs unbounded; with it the load is refused."""
+    """A stage whose PointInstancer has one prototype that is a doubling chain of prims nested under
+    the instancer at ``/World/pi/C0``: each level holds two instanceable children that reference the
+    next level, so expanding the prototype yields about 2**depth prims. The chain is reached only
+    through the prototypes relationship -- ``_collect_parts`` prunes the instancer's children and hands
+    the prototype to ``_expand_point_instancer``, so that walk is the only one that visits it. Without
+    counting that walk the expansion runs unbounded; with it the load is refused."""
     from pxr import Gf, Sdf, Usd, UsdGeom
 
     stage = Usd.Stage.CreateNew(str(path))
@@ -60,18 +61,20 @@ def _instancer_with_expanding_prototype(path, depth):
     mesh.GetPointsAttr().Set([Gf.Vec3f(0, 0, 0), Gf.Vec3f(1, 0, 0), Gf.Vec3f(0, 1, 0)])
     mesh.GetFaceVertexCountsAttr().Set([3])
     mesh.GetFaceVertexIndicesAttr().Set([0, 1, 2])
-    # The doubling chain of class prims, reached only through the prototypes relationship.
-    stage.CreateClassPrim(f"/C{depth}")
-    for level in range(depth - 1, -1, -1):
-        stage.CreateClassPrim(f"/C{level}")
-        for child in ("a", "b"):
-            prim = stage.DefinePrim(f"/C{level}/{child}")
-            prim.GetReferences().AddInternalReference(f"/C{level + 1}")
-            prim.SetInstanceable(True)
     instancer = UsdGeom.PointInstancer.Define(stage, "/World/pi")
+    base = "/World/pi"
+    # The doubling chain, nested under the instancer so the main walk prunes it and only the
+    # prototype walk reaches it.
+    stage.DefinePrim(f"{base}/C{depth}", "Scope")
+    for level in range(depth - 1, -1, -1):
+        stage.DefinePrim(f"{base}/C{level}", "Scope")
+        for child in ("a", "b"):
+            prim = stage.DefinePrim(f"{base}/C{level}/{child}")
+            prim.GetReferences().AddInternalReference(f"{base}/C{level + 1}")
+            prim.SetInstanceable(True)
     instancer.CreatePositionsAttr([Gf.Vec3f(0, 0, 0)])
     instancer.CreateProtoIndicesAttr([0])
-    instancer.CreatePrototypesRel().SetTargets([Sdf.Path("/C0")])
+    instancer.CreatePrototypesRel().SetTargets([Sdf.Path(f"{base}/C0")])
     stage.GetRootLayer().Save()
     return str(path)
 
