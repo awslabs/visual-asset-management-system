@@ -37,7 +37,10 @@ ARG ISAAC_LAB_VERSION
 ENV ISAAC_LAB_VERSION=${ISAAC_LAB_VERSION}
 
 # Install additional dependencies into Isaac Lab's own environment: every package at the version and hash
-# in the lock (generated from requirements.txt for Python 3.12; its header holds the command). boto3 is
+# in the lock (generated from requirements.txt for Python 3.12; its header holds the command). The lock is
+# resolved against the base image's frozen package set (base-constraints.txt), so it leaves every package
+# the base ships at the base's version; regenerate base-constraints.txt whenever ISAAC_LAB_DIGEST moves,
+# then the lock. boto3 is
 # not in the base image; MoviePy 1.x with imageio-ffmpeg is what Isaac Lab's --video recording needs
 # (MoviePy 2.x fails to import there). MoviePy 1.0.3 publishes no wheel, so it is the one package built
 # from its source archive (--no-binary moviepy); its hash is still checked.
