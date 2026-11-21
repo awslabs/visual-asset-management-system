@@ -604,24 +604,46 @@ def _single_file_location_prefixes(location: str) -> List[str]:
     (``{key}.previewFile.``) and its companion folder (``{key}/``)."""
     return [location + PREVIEW_FILE_PATTERN, location + '/']
 
+# The continuation token of a single-file location's first page when the object fills it: the next
+# request lists the companion folder {key}/ from its start. It is never passed to Amazon S3, and it names
+# no prefix (':' is in no S3 continuation token), so it cannot select keys outside the location.
+COMPANION_FOLDER_START_TOKEN = "vams:companion-folder-start"
+
 def _list_single_file_location_page(bucket: str, location: str, list_params: Dict) -> Dict:
     """One listing page of a single-file location, in the shape of a ListObjectsV2 response.
 
     The first page (no continuation token) holds the object, read with a one-key listing of its own
-    key, and its previews; then, every page, the companion folder ``{key}/``, whose S3 continuation
-    token is the page's token. The first page asks the companion folder for fewer keys by the number
-    already listed, so a page keeps its size.
+    key, and its own previews ``{key}.previewFile.{ext}`` (VAMS writes one per preview image format). The file
+    list attaches previews to their file rather than listing them, so they take no place on the page;
+    reading them with the object keeps the object's preview on the page that lists it. The rest of the
+    page lists the companion folder ``{key}/``. When the object fills the page, the page lists no
+    companion entry: if the folder holds a key (a one-key probe), the page's token is
+    COMPANION_FOLDER_START_TOKEN, which the next request maps to a listing of ``{key}/`` from its start.
+    Later pages list ``{key}/`` with Amazon S3's own continuation token. Every listing names a prefix
+    derived from the location, never from the token, so no page holds more than ``MaxKeys`` files and no
+    token reaches outside the location.
     """
+    size = max(1, int(list_params['MaxKeys']))
+    token = list_params.get('ContinuationToken')
+    folder_prefix = location + '/'
     contents: List[Dict] = []
-    if not list_params.get('ContinuationToken'):
+    if not token:
         head = s3_client.list_objects_v2(Bucket=bucket, Prefix=location, MaxKeys=1)
         contents.extend(obj for obj in head.get('Contents', []) if obj['Key'] == location)
         previews = s3_client.get_paginator('list_objects_v2').paginate(
-            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN)
+            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN, Delimiter='/')
         for preview_page in previews:
             contents.extend(preview_page.get('Contents', []))
-    folder_params = dict(list_params, Prefix=location + '/',
-                         MaxKeys=max(1, int(list_params['MaxKeys']) - len(contents)))
+    room = size - sum(1 for obj in contents if obj['Key'] == location)
+    if room <= 0:
+        page = {'Contents': contents}
+        probe = s3_client.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
+        if probe.get('Contents'):
+            page['NextContinuationToken'] = COMPANION_FOLDER_START_TOKEN
+        return page
+    folder_params = {'Bucket': bucket, 'Prefix': folder_prefix, 'MaxKeys': room}
+    if token and token != COMPANION_FOLDER_START_TOKEN:
+        folder_params['ContinuationToken'] = token
     folder = s3_client.list_objects_v2(**folder_params)
     contents.extend(folder.get('Contents', []))
     page = {'Contents': contents}
@@ -1454,6 +1476,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         
         if single_object:
             page = _list_single_file_location_page(bucket, location, list_params)
+        elif list_params.get('ContinuationToken') == COMPANION_FOLDER_START_TOKEN:
+            # A single-file location's token means nothing for a folder location; it never reaches S3
+            raise VAMSGeneralErrorResponse("Invalid pagination token.")
         else:
             # Single S3 list call
             page = s3_client.list_objects_v2(**list_params)
