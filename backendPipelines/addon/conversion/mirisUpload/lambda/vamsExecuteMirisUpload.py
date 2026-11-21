@@ -48,6 +48,14 @@ def _compliance_asset_state_table():
     return dynamodb.Table(COMPLIANCE_ASSET_STATE_STORAGE_TABLE_NAME)
 
 
+def is_quarantined(item):
+    """Whether a compliance asset state row blocks the asset's content: the condition
+    `check_quarantine_block` in the backend's `common/compliance/quarantineGuard.py` refuses on.
+    `tests/test_miris_upload_quarantine_rule_matches_core.py` holds the two to the same expression.
+    """
+    return bool(item and item.get("complianceState") == "quarantined" and not item.get("exceptionGranted"))
+
+
 def read_distributable_asset(database_id, asset_id):
     """The asset record, once it passes the rule the VAMS file routes apply before serving an
     asset's content (`common/downloadEligibility.py` and `common/compliance/quarantineGuard.py` in
@@ -62,8 +70,7 @@ def read_distributable_asset(database_id, asset_id):
     if not asset.get("isDistributable", False):
         raise Exception("The asset is not distributable, so its files are not sent to Miris.")
     if COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD:
-        state = _compliance_asset_state_table().get_item(Key=key).get("Item")
-        if state and state.get("complianceState") == "quarantined" and not state.get("exceptionGranted"):
+        if is_quarantined(_compliance_asset_state_table().get_item(Key=key).get("Item")):
             raise Exception("The asset is quarantined, so its files are not sent to Miris.")
     return asset
 
