@@ -15,7 +15,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload, audited_handler
 from common.dynamodb import to_update_expr
-from common.assetLocations import contains, held_objects
+from common.assetLocations import contains, held_objects, legacy_location_in_key
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
 from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
@@ -465,7 +465,9 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
             return
         
         # Determine asset type using the asset's bucket and key location
-        asset_base_key = asset.get('assetLocation', {}).get('Key', f"{asset_id}/")
+        # A legacy row without a stored location: its folder under the registration prefix, as the
+        # uploaded file's key shows it.
+        asset_base_key = (asset.get('assetLocation') or {}).get('Key') or legacy_location_in_key(final_s3_key, asset_id)
         asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key)
         logger.info(f"Asset type determined for asset {asset_id}: {asset_type}")
 

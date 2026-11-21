@@ -47,7 +47,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, current_audit_context, log_action
 
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record
-from common.assetLocations import object_key_for
+from common.assetLocations import derive_location, object_key_for
 from common.syncTracking import (
     SYNC_ACTION_DELETE,
     SYNC_ACTION_MODIFY,
@@ -456,9 +456,7 @@ def _sync_asset_metadata_to_physna(
     bucket_name = bucket_details.get("bucketName") if bucket_details else None
     asset_base_key = None
     if bucket_name:
-        asset_base_key = asset_location.get(
-            "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
-        )
+        asset_base_key = asset_location.get("Key", derive_location(bucket_details, "", asset_id))
 
     # VAMS relative paths carrying a metadata or attribute row. A file with
     # neither has no row, so this set is a lower bound on the asset's contents:

@@ -292,14 +292,10 @@ _SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 def normalize_base_prefix(base_assets_prefix: Optional[str]) -> str:
     """A bucket registration's `baseAssetsPrefix` in canonical form: a trailing `/`, no leading
     `/`, and '' for the bucket root. Registrations spell one prefix as `assets`, `assets/` or
-    `/assets/`; every comparison of a prefix goes through this one normalization."""
-    if not base_assets_prefix:
-        return ''
-    if not base_assets_prefix.endswith('/'):
-        base_assets_prefix += '/'
-    if base_assets_prefix.startswith('/'):
-        base_assets_prefix = base_assets_prefix[1:]
-    return base_assets_prefix
+    `/assets/`; every comparison of a prefix goes through this one normalization. Repeated slashes at
+    either end are dropped too, so `//` is the bucket root."""
+    trimmed = (base_assets_prefix or '').strip('/')
+    return f"{trimmed}/" if trimmed else ''
 
 
 def derive_location(registration: Dict[str, Any], database_id: str, asset_id: str) -> str:
@@ -308,6 +304,20 @@ def derive_location(registration: Dict[str, Any], database_id: str, asset_id: st
     Today the layout is `{baseAssetsPrefix}{assetId}/` for every registration; the database id
     is not part of the key."""
     return normalize_base_prefix((registration or {}).get('baseAssetsPrefix')) + asset_id + '/'
+
+
+def legacy_location_in_key(object_key: Optional[str], asset_id: str) -> str:
+    """For an asset row that stores no location: its folder `{baseAssetsPrefix}{assetId}/` as it appears
+    in one of its object keys, the key up to and including the first segment equal to the asset id.
+    '' when no segment of the key is the asset id."""
+    key = normalize_location(object_key)
+    folder = f"{asset_id}/"
+    if not asset_id:
+        return ''
+    if key.startswith(folder):
+        return folder
+    index = key.find('/' + folder)
+    return key[:index + 1 + len(folder)] if index >= 0 else ''
 
 
 def location_attributes(bucket_name: Optional[str], location_key: Optional[str]) -> Dict[str, str]:

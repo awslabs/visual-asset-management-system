@@ -234,8 +234,9 @@ def normalize_base_prefix(base_prefix: str) -> str:
     else names a folder within the bucket, so the run I/O of a bucket registered under a prefix stays
     inside it rather than at the bucket root.
     """
-    trimmed = (base_prefix or "").strip("/")
-    return f"{trimmed}/" if trimmed else ""
+    # The one shared normalizer; imported here so this module keeps no AWS dependency at import.
+    from common.assetLocations import normalize_base_prefix as shared_normalize_base_prefix
+    return shared_normalize_base_prefix(base_prefix)
 
 
 def run_bucket_key(base_prefix: str, key: str) -> str:

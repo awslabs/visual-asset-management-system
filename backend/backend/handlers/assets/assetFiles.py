@@ -44,6 +44,7 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
+    normalize_base_prefix,
     contains, folder_listing_prefix, in_folder, is_folder_location, names_own_object, object_key_for,
     relative_path_in,
 )
@@ -293,13 +294,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,

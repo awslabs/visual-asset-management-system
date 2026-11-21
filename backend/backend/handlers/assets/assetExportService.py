@@ -25,7 +25,7 @@ from common.s3PathPatterns import (
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items, batch_get_items
-from common.assetLocations import contains, is_folder_location, relative_path_in
+from common.assetLocations import contains, is_folder_location, normalize_base_prefix, relative_path_in
 from common.s3 import validateUnallowedFileExtensionAndContentType
 from common.validators import validate
 from common.s3 import region_routing_s3_client, bucket_region_fields, presigned_get_object_params
@@ -151,11 +151,7 @@ def get_default_bucket_details(bucketId: str) -> Dict:
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse("Database configuration invalid")
         
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         bucket_details = {
             'bucketId': bucket_id,

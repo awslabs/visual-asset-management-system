@@ -32,7 +32,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.assetProvenance import asset_edit_provenance
-from common.assetLocations import contains, held_objects, is_folder_location, relative_path_in
+from common.assetLocations import contains, held_objects, is_folder_location, normalize_base_prefix, relative_path_in
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -176,13 +176,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,

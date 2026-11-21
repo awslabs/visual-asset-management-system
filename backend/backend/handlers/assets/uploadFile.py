@@ -45,7 +45,7 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import contains, held_objects, is_folder_location, names_own_object, object_key_for
+from common.assetLocations import contains, held_objects, is_folder_location, names_own_object, normalize_base_prefix, object_key_for
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -247,13 +247,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,

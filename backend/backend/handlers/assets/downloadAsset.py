@@ -9,6 +9,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 # Shared download-eligibility checks (asset, key, version pin, delete marker, blocklist).
@@ -101,13 +102,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,

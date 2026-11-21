@@ -52,7 +52,7 @@ from botocore.exceptions import ClientError
 
 from common import largeObjectCopy as loc
 from common import uploadStatus
-from common.assetLocations import contains, held_objects, normalize_location
+from common.assetLocations import contains, held_objects, legacy_location_in_key, normalize_location
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import (
     bucket_region_for_name,
@@ -616,12 +616,7 @@ def _asset_location(asset, job):
     location = normalize_location((asset.get("assetLocation") or {}).get("Key"))
     if location:
         return location
-    dest_key = normalize_location((job.get("dest") or {}).get("key"))
-    folder = f"{job['assetId']}/"
-    if dest_key.startswith(folder):
-        return folder
-    index = dest_key.find("/" + folder)
-    return dest_key[:index + 1 + len(folder)] if index >= 0 else ""
+    return legacy_location_in_key((job.get("dest") or {}).get("key"), job["assetId"])
 
 
 def _after_landing(job):

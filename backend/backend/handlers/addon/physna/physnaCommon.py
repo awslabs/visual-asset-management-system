@@ -1141,8 +1141,7 @@ def get_database_id_for_asset_id(
         )
         return None
 
-    _normalize_prefix = normalize_base_prefix
-    event_prefix = _normalize_prefix(base_assets_prefix)
+    event_prefix = normalize_base_prefix(base_assets_prefix)
 
     matches: list = []
     for item in items:
@@ -1153,7 +1152,7 @@ def get_database_id_for_asset_id(
         if not bucket_details:
             continue
         item_bucket = bucket_details.get("bucketName")
-        item_prefix = _normalize_prefix(bucket_details.get("baseAssetsPrefix"))
+        item_prefix = normalize_base_prefix(bucket_details.get("baseAssetsPrefix"))
         if item_bucket == bucket_name and item_prefix == event_prefix:
             matches.append(item)
 

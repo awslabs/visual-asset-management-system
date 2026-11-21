@@ -41,7 +41,8 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 
 from common.validators import validate
 from common.assetLocations import (
-    folder_listing_prefix, in_folder, is_folder_location, normalize_location, object_key_for, relative_path_in,
+    folder_listing_prefix, in_folder, is_folder_location, normalize_base_prefix, normalize_location, object_key_for,
+    relative_path_in,
 )
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.apiRoutes import (
@@ -351,10 +352,7 @@ def _asset_bucket_details(bucket_id):
     base_prefix = bucket.get("baseAssetsPrefix") or ""
     if not bucket_name:
         raise VAMSGeneralErrorResponse("Asset bucket details could not be resolved.")
-    if base_prefix and not base_prefix.endswith("/"):
-        base_prefix += "/"
-    if base_prefix.startswith("/"):
-        base_prefix = base_prefix[1:]
+    base_prefix = normalize_base_prefix(base_prefix)
     details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix, **bucket_region_fields(bucket)}
     _bucket_details_cache[bucket_id] = details
     return details

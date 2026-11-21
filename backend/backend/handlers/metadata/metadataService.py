@@ -21,7 +21,7 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
-from common.assetLocations import is_folder_location, object_key_for
+from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for
 from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
@@ -628,13 +628,7 @@ def get_bucket_details(bucket_id: str) -> dict:
         if not bucket_name:
             raise VAMSGeneralErrorResponse("Bucket configuration not found")
         
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
         
         return {
             'bucketName': bucket_name,

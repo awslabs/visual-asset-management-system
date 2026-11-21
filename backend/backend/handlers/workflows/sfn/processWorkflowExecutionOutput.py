@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
-from common.assetLocations import is_folder_location, object_key_for
+from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -298,13 +298,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise Exception(f"Error getting database default bucket details: missing bucket_name or base_assets_prefix")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
