@@ -30,8 +30,8 @@ from customLogging.auditLogging import audited_handler, log_action
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
-from common.assetProvenance import stamp_asset_version_provenance
-from common.assetLocations import contains, is_shadowed, object_key_for, relative_path_in
+from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
+from common.assetLocations import contains, object_key_for, relative_path_in
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -436,7 +436,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
             key = version['Key']
             # Skip folder markers (keys ending with '/')
-            if key.endswith('/') or not contains(location, key) or is_shadowed(location, key):
+            if key.endswith('/') or not contains(location, key):
                 continue
 
             relative_key = relative_path_in(location, key).lstrip('/')
@@ -469,7 +469,7 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
                 key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if key.endswith('/') or not contains(location, key) or is_shadowed(location, key):
+                if key.endswith('/') or not contains(location, key):
                     continue
 
                 relative_key = relative_path_in(location, key).lstrip('/')
@@ -610,16 +610,20 @@ def save_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
         logger.exception(f"Error saving asset file versions: {e}")
         return False
 
-def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) -> Optional[Dict]:
+
+def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str,
+                            raise_errors: bool = False) -> Optional[Dict]:
     """Get file versions for a specific asset version
 
     Args:
         databaseId: The database ID
         assetId: The asset ID
         assetVersionId: The asset version ID
+        raise_errors: Re-raise a failed read instead of answering None, for a caller that must
+            tell a read failure from a snapshot with no files
 
     Returns:
-        Dictionary with file versions or None if not found
+        Dictionary with file versions or None if not found (or, without raise_errors, unreadable)
     """
     try:
         # Query using the table PK (databaseId:assetId:assetVersionId is now the table PK)
@@ -659,6 +663,8 @@ def get_asset_file_versions(databaseId: str, assetId: str, assetVersionId: str) 
         
     except Exception as e:
         logger.exception(f"Error getting asset file versions: {e}")
+        if raise_errors:
+            raise
         return None
 
 def resolve_file_version_from_asset_version(databaseId: str, assetId: str, assetVersionId: str, fileKey: str) -> str:
@@ -1047,30 +1053,56 @@ def get_all_asset_versions(databaseId: str, assetId: str) -> List[Dict]:
         logger.exception(f"Error getting all asset versions: {e}")
         raise
 
+
 def update_asset_current_version_reference(asset: Dict, new_assetVersionId: str) -> bool:
-    """Update the asset's currentVersionId reference
-    
+    """Record new_assetVersionId as the asset's current version, together with the version
+    provenance the caller stamped on `asset` (stamp_asset_version_provenance), as a targeted
+    update of those attributes on the live row.
+
+    The row is not written back whole: `asset` was read when the version operation began, and
+    writing that copy back would revert attributes written since (an upload completion's
+    lastUploadAt, an edit) and recreate an asset archived meanwhile. The update is conditional on
+    the live row still existing.
+
     Args:
         asset: The asset dictionary
         new_assetVersionId: The new current asset version ID
-        
+
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Update only the currentVersionId field
         asset['currentVersionId'] = new_assetVersionId
-        
-        # Remove legacy version fields if they exist
-        if 'currentVersion' in asset:
-            del asset['currentVersion']
-        if 'versions' in asset:
-            del asset['versions']
-        
-        # Save updated asset
-        asset_table.put_item(Item=asset)
+        asset.pop('currentVersion', None)
+        asset.pop('versions', None)
+
+        updates = {'currentVersionId': new_assetVersionId}
+        updates.update({field: asset[field] for field in ASSET_VERSION_STAMPED_FIELDS if field in asset})
+        # Legacy version fields, and the workflow execution id the stamp drops.
+        removed = ['currentVersion', 'versions']
+        if 'lastChangeWorkflowExecutionId' not in asset:
+            removed.append('lastChangeWorkflowExecutionId')
+        names = {f"#s{n}": name for n, name in enumerate(updates)}
+        values = {f":s{n}": updates[name] for n, name in enumerate(updates)}
+        remove_names = {f"#r{n}": name for n, name in enumerate(removed)}
+        names.update(remove_names)
+        asset_table.update_item(
+            Key={'databaseId': asset['databaseId'], 'assetId': asset['assetId']},
+            UpdateExpression=(f"SET {', '.join(f'#s{n} = :s{n}' for n in range(len(updates)))} "
+                              f"REMOVE {', '.join(remove_names)}"),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+            ConditionExpression="attribute_exists(assetId)",
+        )
         return True
-        
+
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.warning(f"Asset {asset.get('assetId')} no longer exists; its current version "
+                           f"{new_assetVersionId} was not recorded on it")
+            return False
+        logger.exception(f"Error updating current version reference: {e}")
+        return False
     except Exception as e:
         logger.exception(f"Error updating current version reference: {e}")
         return False
@@ -1835,7 +1867,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
         logger.warning(f"Failed to save metadata snapshot for version {new_assetVersionId}")
 
     # Make the reserved version the asset's current version (with databaseId for GSI). The asset
-    # row is written back whole with the new version recorded as its latest change.
+    # row records it, with the new version as its latest change, in a targeted update.
     stamp_asset_version_provenance(asset)
     finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 
@@ -1977,8 +2009,8 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
     else:
         logger.info(f"Successfully saved metadata snapshot for reverted version {new_assetVersionId}")
     
-    # Make the reserved version the asset's current version. The asset row is written back whole
-    # with the new version recorded as its latest change.
+    # Make the reserved version the asset's current version. The asset row records it, with the
+    # new version as its latest change, in a targeted update.
     stamp_asset_version_provenance(asset)
     finalize_asset_version(asset, new_assetVersionId, databaseId=databaseId)
 

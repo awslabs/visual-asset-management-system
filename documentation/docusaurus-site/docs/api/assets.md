@@ -147,15 +147,15 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 }
 ```
 
-| Field               | Type          | Required | Description                                                                                                                                                                          |
-| ------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                          |
-| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                       |
-| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                |
-| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                 |
-| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Auto-generated if omitted.                                                      |
-| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md). |
-| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews.         |
+| Field               | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databaseId`        | string        | Yes      | Target database identifier.                                                                                                                                                                                                                                                                                                                                                                  |
+| `assetName`         | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                                                                                                                                                                               |
+| `description`       | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                                                                                                                                                                                        |
+| `isDistributable`   | boolean       | Yes      | Whether the asset can be downloaded.                                                                                                                                                                                                                                                                                                                                                         |
+| `assetId`           | string        | No       | Explicit asset identifier (2-255 characters), ASCII characters only. Cannot contain forward slashes. Cannot be `pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces`, `vams.preparedDownloads`. Auto-generated if omitted.                                                                                                                |
+| `tags`              | array[string] | No       | Tags for categorization. Each name must resolve in the asset's database or `GLOBAL`, and every required tag type that has tags must be represented. See [Tags](../concepts/tags.md).                                                                                                                                                                                                         |
+| `bucketExistingKey` | string        | No       | Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object with its folder `{key}/` and previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment is refused with 400. |
 
 **Response:**
 
@@ -168,12 +168,12 @@ Creates a new asset in the specified database. This endpoint creates the asset r
 
 **Error Responses:**
 
-| Status | Description                                       |
-| ------ | ------------------------------------------------- |
-| `400`  | Invalid parameters or validation error.           |
-| `403`  | Not authorized to create assets in this database. |
-| `404`  | Database not found.                               |
-| `500`  | Internal server error.                            |
+| Status | Description                                                                                                                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400`  | Invalid parameters or validation error, including `The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.` and `The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.` |
+| `403`  | Not authorized to create assets in this database.                                                                                                                                                                                                                        |
+| `404`  | Database not found.                                                                                                                                                                                                                                                      |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -639,6 +639,7 @@ Generates presigned S3 URLs for downloading files from an asset. The URLs are ti
 
 | Field                 | Type               | Required | Description                                                                                                                                                              |
 | --------------------- | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `downloadType`        | string             | Yes      | `assetFile` for the asset's files or `assetPreview` for its preview image.                                                                                               |
 | `key`                 | string             | No       | Relative file path within the asset. If omitted, the asset's primary file is used. Mutually exclusive with `keys`.                                                       |
 | `keys`                | (string\|object)[] | No       | Files to generate URLs for in bulk (max 1,500 per request; `assetFile` only). Each entry is a path string (latest) or `{key, versionId}`. Mutually exclusive with `key`. |
 | `versionId`           | string             | No       | S3 version ID for a single `key`. Cannot be combined with `keys` (put versions on individual keys instead).                                                              |
@@ -789,7 +790,7 @@ Exports comprehensive asset data including the asset hierarchy (child relationsh
 }
 ```
 
-Each file's preview path in the export is chosen the way the file listing chooses it: when a file has several `.previewFile.` objects, the newest one that is not archived.
+Each file's preview path in the export is chosen the way the file listing chooses it: the newest `.previewFile.` object that is not archived, or, with `includeArchivedFiles: true`, the newest archived one when the file has no other.
 
 :::note[A Large Asset Is Returned Over Several Pages]
 `maxFiles` bounds the files one page returns across all of its assets, so a page can end before `maxAssets` assets when the budget runs out. An asset holding more files than the budget is returned over successive pages: its entry sets `files_truncated` to `true`, and `NextToken` resumes that asset's file list where the page stopped rather than moving on to the next asset.

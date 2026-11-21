@@ -6,8 +6,8 @@
 A single-file asset (location key with no trailing ``/``) holds its object, its companion folder
 ``{file key}/`` and its own previews. The compliance asset location appended ``/`` to the key, so the
 asset's own file and previews were never evaluated. The listings run against a versioned moto bucket
-holding the asset's keys beside keys that only share its characters and a companion entry at the
-object's own path, which the object shadows.
+holding the asset's keys beside keys that only share its characters; the companion entry named exactly
+like the object is listed one level down.
 """
 
 from unittest.mock import MagicMock
@@ -51,13 +51,14 @@ class TestComplianceAssetFiles:
     def test_the_file_keys_are_the_keys_the_asset_holds(self, s3, monkeypatch):
         monkeypatch.setattr(store, "s3_client", s3)
         assert store.list_file_keys_under(BUCKET, FILE_LOCATION) == [
-            "/model.glb", "/model.glb.previewFile.png", "/sub/x.obj"]
+            "/model.glb", "/model.glb.previewFile.png", "/model.glb/model.glb", "/sub/x.obj"]
 
     def test_the_current_files_are_the_keys_the_asset_holds(self, s3, monkeypatch):
         monkeypatch.setattr(store, "s3_client", s3)
         monkeypatch.setattr(store, "asset_s3_location", lambda asset: (BUCKET, FILE_LOCATION))
         files = store.get_current_files("db1", "a1", asset={"assetId": "a1"})
-        assert [f[0] for f in files] == ["/model.glb", "/model.glb.previewFile.png", "/sub/x.obj"]
+        assert [f[0] for f in files] == [
+            "/model.glb", "/model.glb.previewFile.png", "/model.glb/model.glb", "/sub/x.obj"]
 
     @pytest.mark.parametrize("relative,key", [("/model.glb", FILE_LOCATION), ("/sub/x.obj", COMPANION)])
     def test_a_file_change_source_reads_the_asset_key(self, monkeypatch, relative, key):

@@ -77,6 +77,10 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
 
     const showUnarchiveButton = selectedItems.length === 1 && isArchivedAsset(selectedItems[0]);
     const hasArchivedSelected = selectedItems.some(isArchivedAsset);
+    // A selection with an archived row can only be permanently deleted, so it needs that permission.
+    const deleteSelectedDisabledReason =
+        assetActionDisabledReasons?.delete ??
+        (hasArchivedSelected ? assetActionDisabledReasons?.permanentDelete : undefined);
 
     const announce = (header: string) => {
         setNotice([
@@ -101,8 +105,8 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
     const headerActions = [
         <Button
             key="delete"
-            disabled={selectedItems.length === 0 || !!assetActionDisabledReasons?.delete}
-            disabledReason={assetActionDisabledReasons?.delete}
+            disabled={selectedItems.length === 0 || !!deleteSelectedDisabledReason}
+            disabledReason={deleteSelectedDisabledReason}
             onClick={() => setShowDeleteModal(true)}
         >
             Delete Selected
@@ -156,6 +160,7 @@ const AssetListProviderComponent: React.FC<SearchProviderProps> = ({
                 mode="asset"
                 selectedAssets={selectedItems}
                 forceDeleteMode={hasArchivedSelected}
+                canPermanentlyDelete={!assetActionDisabledReasons?.permanentDelete}
                 onSuccess={(operation) => {
                     setShowDeleteModal(false);
                     announce(

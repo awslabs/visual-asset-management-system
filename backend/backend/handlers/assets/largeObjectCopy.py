@@ -52,7 +52,7 @@ from botocore.exceptions import ClientError
 
 from common import largeObjectCopy as loc
 from common import uploadStatus
-from common.assetLocations import contains, normalize_location
+from common.assetLocations import contains, held_objects, normalize_location
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import (
     bucket_region_for_name,
@@ -589,7 +589,10 @@ def _audit_once(job, denied, reason, status):
 def _determine_asset_type(bucket, prefix):
     """Empty / single file (its extension) / folder classification, as the queue consumer does."""
     files = []
-    for item in list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE):
+    sample = held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+        bucket, list_prefix, client=s3,
+        max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE)))
+    for item in sample:
         if item["Key"].endswith("/") or not contains(prefix, item["Key"]):
             continue
         try:

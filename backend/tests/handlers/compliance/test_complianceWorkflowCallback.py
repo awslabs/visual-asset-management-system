@@ -81,11 +81,13 @@ class Callback:
     """The tables the callback and the store read: the evaluation table (an in-memory fake honoring
     the store's status conditions) serves the ExecutionIdIndex query, the parent lookup and the
     tracking-row re-read; the pipeline-execution rows and their result rows serve the output read;
-    the execution's V2 main row (`execution_error` its `executionError`, None: no row) serves a
-    non-succeeded execution's failure reason."""
+    the execution's V2 main row serves the run's recorded outcome and a non-succeeded execution's
+    failure reason (`execution_error` its `executionError`, None: none recorded). The row records
+    the status of the event being run, as the writer that publishes the event has written it first,
+    unless `recorded_status` says otherwise (None: no terminal status recorded)."""
 
     def __init__(self, evaluation=None, found=True, tracking=True, pipeline_rows=None,
-                 result_rows=None, execution_error=""):
+                 result_rows=None, execution_error="", recorded_status="from the event"):
         evaluation = evaluation if evaluation is not None else _pending_evaluation()
         self.evaluation_rows = FakeEvaluationTable()
         self.evaluation = self.evaluation_rows.mock
@@ -104,14 +106,32 @@ class Callback:
         self.results.query.return_value = {"Items": list(
             result_rows if result_rows is not None else [_result_row(OUTPUT)])}
         self.executions = MagicMock(name="workflow_executions_table")
-        self.executions.query.return_value = {"Items": [] if execution_error is None else [
-            {"workflowExecutionId": EXECUTION_ID, "executionError": execution_error}]}
+        self.recorded_status = recorded_status
+        self.event_status = None
+
+        def main_row(**_kwargs):
+            status = (self.event_status if self.recorded_status == "from the event"
+                      else self.recorded_status)
+            row = {"workflowExecutionId": EXECUTION_ID}
+            if status is not None:
+                row["executionStatus"] = status
+            if execution_error is not None:
+                row["executionError"] = execution_error
+            return {"Items": [row]}
+        self.executions.query.side_effect = main_row
         # The evaluated asset is live (the callback checks it before recording a run; D126).
         self.assets = MagicMock(name="asset_table")
         self.assets.get_item.side_effect = lambda Key, **_kwargs: (
             {} if Key["databaseId"].endswith("#deleted") else {"Item": {"assetId": Key["assetId"]}})
 
     def run(self, event):
+        detail = event.get("detail") if isinstance(event, dict) else None
+        if isinstance(detail, str):
+            try:
+                detail = json.loads(detail)
+            except ValueError:
+                detail = None
+        self.event_status = detail.get("status") if isinstance(detail, dict) else None
         with patch(f"{STORE}.to_update_expr", REAL_TO_UPDATE_EXPR), \
                 patch(f"{STORE}.evaluation_table", self.evaluation), \
                 patch(f"{STORE}.asset_state_table", self.state), \
@@ -481,6 +501,30 @@ class TestTerminalFailures:
         assert outcome["verdict"] == "non_compliant"
 
 
+@pytest.mark.unit
+class TestTheRecordedOutcomeDecides:
+    """The rule's outcome is the terminal status the execution's main row records; the completion
+    event only says that the execution ended."""
+
+    def test_the_recorded_status_decides_the_rule(self):
+        harness = Callback(recorded_status="FAILED")
+        outcome = json.loads(harness.run(completion_event("SUCCEEDED"))["body"])
+        assert outcome["verdict"] == "quarantined"
+        harness.results.query.assert_not_called()
+        tracking = update_values(harness.evaluation)[0]
+        assert tracking["executionStatus"] == "FAILED"
+        assert json.loads(tracking["ruleResults"])[0]["message"] == "Pipeline execution FAILED"
+
+    @pytest.mark.parametrize("recorded_status", [None, "RUNNING"], ids=["no-status", "running"])
+    def test_an_execution_with_no_recorded_terminal_status_changes_nothing(self, recorded_status):
+        harness = Callback(recorded_status=recorded_status)
+        response = harness.run(completion_event("SUCCEEDED"))
+        assert response["statusCode"] == 200
+        assert harness.finalized() == []
+        assert update_values(harness.evaluation) == []
+        harness.state.update_item.assert_not_called()
+
+
 # The `executionError` the workflow error handler records for a pipeline whose converter rejects
 # the file: `<Error>: <Cause>`, the Cause's stack trace ending in the exception line.
 CONVERTER_ERROR = (
@@ -525,13 +569,12 @@ class TestExecutionFailureReason:
         assert result["executionFailureReason"] is None
         assert update_values(harness.state)[0]["quarantineExecutionFailures"] is None
 
-    def test_a_succeeded_execution_names_its_execution_and_reads_no_error(self):
+    def test_a_succeeded_execution_names_its_execution_and_carries_no_failure_reason(self):
         harness = Callback(execution_error=CONVERTER_ERROR)
         harness.run(completion_event("SUCCEEDED"))
         result = json.loads(update_values(harness.evaluation)[0]["ruleResults"])[0]
         assert result["executionId"] == EXECUTION_ID
         assert result["executionFailureReason"] is None
-        harness.executions.query.assert_not_called()
 
 
 @pytest.mark.unit

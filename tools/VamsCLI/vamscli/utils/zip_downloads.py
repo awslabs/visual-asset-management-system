@@ -3,6 +3,7 @@
 Kept out of commands/zip_download.py so the MCP server and tests can use them without Click.
 """
 
+import os
 import re
 import time
 from pathlib import Path
@@ -158,6 +159,24 @@ def resolve_local_path(output: str, archive_file_name: str, overwrite: bool = Fa
     if not target.parent.exists():
         raise InvalidZipDownloadRequestError(f"The directory '{target.parent}' does not exist")
     return target
+
+
+def check_download_destination(output: str, overwrite: bool = False) -> None:
+    """Refuse, before a job is created, a destination no archive could ever be written to.
+
+    The archive's name is known only once the job has run (the server adds the format's extension and
+    replaces characters), so a directory is checked for being one the CLI can write into, and an
+    existing file in it is caught by `resolve_local_path` when the name is known.
+    """
+    target = Path(output).expanduser()
+    if target.is_dir():
+        if not os.access(target, os.W_OK | os.X_OK):
+            raise InvalidZipDownloadRequestError(f"The directory '{target}' is not writable")
+        return
+    if target.exists() and not overwrite:
+        raise InvalidZipDownloadRequestError(f"'{target}' already exists; pass --overwrite to replace it")
+    if not target.parent.exists():
+        raise InvalidZipDownloadRequestError(f"The directory '{target.parent}' does not exist")
 
 
 def progress_text(job: Dict[str, Any]) -> str:

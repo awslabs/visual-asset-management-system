@@ -6,7 +6,8 @@
 A location ending in '/' is a folder and holds every key under it. Any other location is a single-file
 asset: it holds its own object, everything under '{file key}/' (its companion folder) and its own
 previews '{file key}.previewFile.{ext}'. A key that merely starts with the same characters (a sibling
-such as 'model.glb.bak', or 'model.glbx/...') is not part of it. The module is the REAL one, registered
+such as 'model.glb.bak', or 'model.glbx/...') is not part of it. A companion entry named exactly like the
+object is listed one level down, so every key has one path and nothing is hidden. The module is the REAL one, registered
 by tests/conftest.py.
 """
 
@@ -135,23 +136,68 @@ class TestRelativePathIn:
 
 
 @pytest.mark.unit
-class TestIsShadowed:
-    @pytest.mark.parametrize("key", ["projects/model.glb/model.glb",
-                                     "projects/model.glb/model.glb.previewFile.png"])
-    def test_a_companion_entry_at_the_object_or_preview_path_is_shadowed(self, key):
-        assert al.is_shadowed(FILE_LOCATION, key) is True
+class TestKeysNamedLikeTheFile:
+    """A companion entry named exactly like the object is listed one level down; nothing is hidden."""
+
+    @pytest.mark.parametrize("key,path", [
+        ("projects/model.glb", "/model.glb"),
+        ("projects/model.glb.previewFile.png", "/model.glb.previewFile.png"),
+        ("projects/model.glb/model.glb", "/model.glb/model.glb"),
+        ("projects/model.glb/model.glb.previewFile.png", "/model.glb/model.glb.previewFile.png"),
+        # A real key one level further down shifts with the chain, so every path names one key
+        ("projects/model.glb/model.glb/model.glb", "/model.glb/model.glb/model.glb"),
+        ("projects/model.glb/model.glb/model.glb.previewFile.gif", "/model.glb/model.glb/model.glb.previewFile.gif"),
+        # Every other key keeps the path after the file key
+        ("projects/model.glb/model.glb/sub.txt", "/model.glb/sub.txt"),
+        ("projects/model.glb/model.glb/", "/model.glb/"),
+        ("projects/model.glb/model.glb.bak", "/model.glb.bak"),
+        ("projects/model.glb/sub/model.glb", "/sub/model.glb"),
+    ])
+    def test_chain_keys_and_their_previews_are_one_level_deeper(self, key, path):
         assert al.contains(FILE_LOCATION, key) is True
-        assert al.relative_path_in(FILE_LOCATION, key) == al.relative_path_in(
-            FILE_LOCATION, FILE_LOCATION + key[len(FILE_LOCATION + "/model.glb"):])
+        assert al.relative_path_in(FILE_LOCATION, key) == path
+        assert al.object_key_for(FILE_LOCATION, path) == key
 
-    @pytest.mark.parametrize("key", [FILE_LOCATION, "projects/model.glb.previewFile.png",
-                                     "projects/model.glb/sub/model.glb", "projects/model.glb/model.glb.bak",
-                                     "projects/model.glb.bak"])
-    def test_nothing_else_is_shadowed(self, key):
-        assert al.is_shadowed(FILE_LOCATION, key) is False
+    def test_no_two_keys_share_a_path(self):
+        keys = ["projects/model.glb", "projects/model.glb/model.glb", "projects/model.glb/model.glb/model.glb",
+                "projects/model.glb.previewFile.png", "projects/model.glb/model.glb.previewFile.png",
+                "projects/model.glb/model.glb/sub.txt", "projects/model.glb/sub.txt"]
+        paths = [al.relative_path_in(FILE_LOCATION, key) for key in keys]
+        assert len(set(paths)) == len(keys)
+        # A folder location has no chain
+        assert al.relative_path_in(FOLDER_LOCATION, "projects/building-a/building-a") == "/building-a"
 
-    def test_a_folder_location_shadows_nothing(self):
-        assert al.is_shadowed(FOLDER_LOCATION, "projects/building-a/building-a") is False
+
+@pytest.mark.unit
+class TestFolderPaths:
+    @pytest.mark.parametrize("location,folder,prefix", [
+        (FOLDER_LOCATION, "/sub", "projects/building-a/sub/"),
+        (FOLDER_LOCATION, "/sub/", "projects/building-a/sub/"),
+        (FILE_LOCATION, "/sub/", "projects/model.glb/sub/"),
+        (FILE_LOCATION, "/model.glb/", "projects/model.glb/model.glb"),
+        (FILE_LOCATION, "/model.glb/model.glb/", "projects/model.glb/model.glb/model.glb"),
+    ])
+    def test_listing_prefix(self, location, folder, prefix):
+        assert al.folder_listing_prefix(location, folder) == prefix
+
+    @pytest.mark.parametrize("key,expected", [
+        ("projects/model.glb/model.glb", True),
+        ("projects/model.glb/model.glb.previewFile.png", True),
+        ("projects/model.glb/model.glb/x.txt", True),
+        ("projects/model.glb/model.glb.bak", False),
+        ("projects/model.glb/sub/x.txt", False),
+        ("projects/model.glb", False),
+    ])
+    def test_a_folder_named_like_the_file_holds_the_chain_key_below_it(self, key, expected):
+        assert al.in_folder(FILE_LOCATION, "/model.glb/", key) is expected
+
+    @pytest.mark.parametrize("key,expected", [
+        ("projects/building-a/sub/x.txt", True),
+        ("projects/building-a/sub.txt", False),
+        ("projects/building-a/subway.glb", False),
+    ])
+    def test_a_folder_path_selects_no_sibling_that_only_starts_with_its_name(self, key, expected):
+        assert al.in_folder(FOLDER_LOCATION, "/sub", key) is expected
 
 
 @pytest.mark.unit
@@ -208,9 +254,73 @@ class TestObjectKeyFor:
         assert al.object_key_for(location, al.relative_path_in(location, key)) == key
 
 
+@pytest.mark.unit
+class TestListingPrefixes:
+    def test_a_single_file_location_lists_its_object_previews_and_companion_folder(self):
+        assert al.listing_prefixes(FILE_LOCATION) == [
+            (FILE_LOCATION, 1), (FILE_LOCATION + ".previewFile.", None), (FILE_LOCATION + "/", None)]
+
+    def test_every_key_the_location_holds_is_under_one_of_its_prefixes(self):
+        held = (FILE_LOCATION, "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj",
+                "projects/model.glb/model.glb")
+        for key in held:
+            assert any(key.startswith(prefix) for prefix, _ in al.listing_prefixes(FILE_LOCATION)), key
+
+    def test_a_neighbour_is_only_under_the_one_key_read(self):
+        for key in ("projects/model.glb.bak", "projects/model.glb-old/n.txt", "projects/model.glbx/inner.txt"):
+            wide = [prefix for prefix, cap in al.listing_prefixes(FILE_LOCATION) if cap != 1]
+            assert not any(key.startswith(prefix) for prefix in wide), key
+
+    def test_a_folder_location_is_its_own_prefix(self):
+        assert al.listing_prefixes(FOLDER_LOCATION) == [(FOLDER_LOCATION, None)]
+        assert al.listing_prefixes("/" + FOLDER_LOCATION) == [(FOLDER_LOCATION, None)]
+
+    def test_no_location_lists_nothing(self):
+        assert al.listing_prefixes("") == [] and al.listing_prefixes(None) == []
+
+@pytest.mark.unit
+class TestHeldObjects:
+    @staticmethod
+    def _lister(*keys):
+        def list_objects(prefix, cap):
+            listed = [{"Key": key} for key in sorted(keys) if key.startswith(prefix)]
+            return listed[:cap] if cap else listed
+        return list_objects
+
+    def test_each_held_key_is_yielded_once_when_the_object_has_no_current_version(self):
+        lister = self._lister("projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == [
+            "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj"]
+        lister = self._lister("projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == ["projects/model.glb/sub/x.obj"]
+
+    def test_the_object_and_its_keys_are_yielded_and_neighbours_are_not(self):
+        lister = self._lister(FILE_LOCATION, "projects/model.glb-old/n.txt", "projects/model.glb.bak",
+                              "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == [
+            FILE_LOCATION, "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj"]
+        # A folder location lists its folder once
+        lister = self._lister("projects/building-a/x.txt", "projects/building-a-other/y.txt")
+        assert [o["Key"] for o in al.held_objects(FOLDER_LOCATION, lister)] == ["projects/building-a/x.txt"]
+
+
+@pytest.mark.unit
+class TestAFileNamedLikeAPreview:
+    LOCATION = "projects/scan.previewFile.png"
+
+    @pytest.mark.parametrize("key,path", [
+        ("projects/scan.previewFile.png", "/scan.previewFile.png"),
+        ("projects/scan.previewFile.png/scan.previewFile.png", "/scan.previewFile.png/scan.previewFile.png"),
+        ("projects/scan.previewFile.png.previewFile.gif", "/scan.previewFile.png.previewFile.gif"),
+        ("projects/scan.previewFile.png/sub/x.obj", "/sub/x.obj"),
+    ])
+    def test_its_keys_keep_their_own_paths(self, key, path):
+        assert al.relative_path_in(self.LOCATION, key) == path
+        assert al.object_key_for(self.LOCATION, path) == key
+        assert al.names_own_object(self.LOCATION, path) is (key == self.LOCATION)
+
 
 BUCKET = "vams-assets"
-
 
 
 def _row(database_id, asset_id, location, bucket=BUCKET, bucket_id="b1", **extra):
@@ -717,21 +827,19 @@ class TestFindConflicts:
                 found = bool(al.find_conflicts(table, BUCKET, target))
                 assert (existing, target, found) == (existing, target, expected)
 
-    def test_flags_everything_the_create_paths_ownership_rule_flags(self):
-        # createAsset.keys_conflict compares folder forms only; every pair it flags is a conflict here
-        # too, and the only pairs added are a single file and one of its own previews.
+    def test_agrees_with_the_create_paths_ownership_rule_on_every_pair(self):
+        # createAsset.keys_conflict decides the same shared-key rule on the stored rows it walks; the
+        # index lookup must answer the same for every pair, the single-file preview pairs included.
         keys_conflict = _load_create_asset(fresh=True).keys_conflict
-        added = set()
+        compared = 0
         for existing in self.GRID:
             table = FakeLocationTable([_row("db1", "a1", existing)])
             for target in self.GRID:
                 found = bool(al.find_conflicts(table, BUCKET, target))
-                if keys_conflict(existing, target):
-                    assert (existing, target, found) == (existing, target, True)
-                elif found:
-                    added.add((existing, target))
-        assert added == {("projects/model.glb", "projects/model.glb.previewFile.png"),
-                         ("projects/model.glb.previewFile.png", "projects/model.glb")}
+                assert (existing, target, found) == (existing, target, keys_conflict(existing, target))
+                compared += 1
+        assert compared == len(self.GRID) ** 2
+        assert keys_conflict("projects/model.glb", "projects/model.glb.previewFile.png")
 
 
 @pytest.mark.unit
@@ -806,3 +914,25 @@ class TestIndexReady:
         assert al.index_ready(self.TABLE, ssm_client=complete, clock=lambda: now["t"]) is True
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS - 1
         assert al.index_ready(self.TABLE, ssm_client=missing, clock=lambda: now["t"]) is True
+
+
+@pytest.mark.unit
+class TestIndexForAFileNamedLikeAPreview:
+    """A single-file location named like a preview (`scan.previewFile.png`) owns its own key, its companion
+    folder and its own previews, also when a single file `scan` beside it would claim the key as its preview:
+    the deeper location wins."""
+
+    LOCATION = "projects/scan.previewFile.png"
+
+    @pytest.mark.parametrize("key", [
+        "projects/scan.previewFile.png",
+        "projects/scan.previewFile.png/sub/x.obj",
+        "projects/scan.previewFile.png.previewFile.gif",
+    ])
+    def test_its_keys_resolve_to_it(self, key):
+        table = FakeLocationTable([_row("db1", "base", "projects/scan"), _row("db2", "named", self.LOCATION)])
+        assert al.resolve_owner(table, BUCKET, key).entry.asset_id == "named"
+
+    def test_conflicts_with_the_file_whose_preview_it_is_named_like(self):
+        table = FakeLocationTable([_row("db1", "base", "projects/scan")])
+        assert [c.asset_id for c in al.find_conflicts(table, BUCKET, self.LOCATION)] == ["base"]

@@ -17,6 +17,10 @@ VAMS supports four pipeline execution types. Each type determines how the pipeli
 VAMS validates the form of the target a pipeline names -- an AWS Lambda function ARN or function name, an Amazon SQS queue URL, an Amazon EventBridge bus ARN -- and does not check that the resource exists or that it belongs to the deployment. IAM is the boundary. The shared VAMS workflow role that the generated AWS Step Functions state machines assume allows `lambda:InvokeFunction` and `sqs:SendMessage` on functions and queues in the deployment's own account and Region whose names contain the top-level `name` configuration value (default `vams`), plus Lambda functions matching `vams-*`, and `events:PutEvents` on event buses matching the same name pattern together with the account's `default` bus. A target outside those patterns is accepted when the pipeline is saved and the execution fails at invoke time with an access-denied error. A deployment may also allow exact cross-account targets by listing them in `app.pipelines.externalPipelineBridges[].invokeTargets`; those ARNs are added to the role verbatim (see [Externally owned pipelines](#externally-owned-pipelines-bridge-pattern)). Treat creating and updating pipelines as an administrator-equivalent capability and grant those routes only to roles trusted with that reach -- see [Pipeline permissions](../concepts/pipelines-and-workflows.md#pipeline-permissions).
 :::
 
+:::tip[Job tags]
+The VAMS-deployed pipelines tag every AWS Batch job and Amazon ECS task they start with `vams:stackname` and `vams:pipeline`, ahead of tag-scoped job permissions in a later release. A custom pipeline that starts its own jobs may use the same tags. See [Job tags](overview.md#job-tags).
+:::
+
 ### Synchronous vs. asynchronous execution
 
 -   **Synchronous (Lambda only)** -- The VAMS workflow invokes the Lambda function and waits for a response. Suitable for operations that complete within the Lambda timeout (15 minutes).
@@ -1545,6 +1549,17 @@ override name — `lambdaName`, `sqsQueueUrl`, `eventBridgeBusArn` / `eventBridg
 `eventBridgeDetailType`, or `deadlineFarmId` / `deadlineQueueId` / `deadlineStorageProfileId`. The
 importer reads only these flat keys; a nested object is ignored and the pipeline registers with an
 empty resource identifier, so every execution of it fails at the invoke state.
+
+A deployment can register a bundle with a different execution config than the one in its
+`pipeline.json` by passing `executionConfigOverrides` to `VamsSchemaRegistration`. It takes any of
+`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout`, `taskHeartbeatTimeout` (seconds; `""`
+clears the heartbeat) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
+value replaces the bundle's own. Leave the property out and the registration is exactly what it was.
+A malformed value, such as an unknown key or a `waitForCallback` other than `Enabled` or `Disabled`,
+fails the registration before anything is written. When a value changes the state machines a pipeline
+produces (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`), VAMS redeploys every
+workflow that uses the pipeline, including custom workflows. Executions already running finish on the
+definition they started with.
 
 Set `autoRegisterWithVAMS` to `true` in the pipeline's configuration to enable registration. To also
 create a file-upload trigger on the registered workflow, a pipeline uses one of two configuration

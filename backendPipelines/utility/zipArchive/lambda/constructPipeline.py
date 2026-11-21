@@ -21,7 +21,7 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 logger = safeLogger(service="ConstructPipeline-ZipArchive")
 s3 = boto3.client('s3', config=retry_config)
-sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
+sfn = boto3.client('stepfunctions', region_name=os.environ['AWS_REGION'], config=retry_config)
 
 # The zipArchive run configBody keys the container accepts (anything else is refused, so a typo does not
 # silently fall back to a default).

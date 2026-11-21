@@ -175,6 +175,32 @@ describe("polling", () => {
             "1:SUCCEEDED",
         ]);
     });
+
+    it("drops a row a fresh first page no longer lists within its range", () => {
+        const current = [job("5", "RUNNING"), job("4", "QUEUED"), job("2", "SUCCEEDED")];
+        // The first page now reaches down to 3, with more pages after it: 4 is gone from the list,
+        // 2 lies beyond the page and stays.
+        const fresh = [job("6", "QUEUED"), job("5", "SUCCEEDED"), job("3", "SUCCEEDED")];
+        expect(mergeZipJobs(current, fresh, { hasMore: true }).map((j) => j.requestId)).toEqual([
+            "6",
+            "5",
+            "3",
+            "2",
+        ]);
+        // A first page with no more pages is the whole list.
+        expect(
+            mergeZipJobs(current, [job("5", "SUCCEEDED")], { hasMore: false }).map(
+                (j) => j.requestId
+            )
+        ).toEqual(["5"]);
+        expect(mergeZipJobs(current, [], { hasMore: false })).toEqual([]);
+        // An empty first page with more after it says nothing about the rows on screen.
+        expect(mergeZipJobs(current, [], { hasMore: true }).map((j) => j.requestId)).toEqual([
+            "5",
+            "4",
+            "2",
+        ]);
+    });
 });
 
 describe("display helpers", () => {

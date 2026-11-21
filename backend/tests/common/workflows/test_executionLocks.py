@@ -606,7 +606,8 @@ class TestReleaseForExecution:
         assert self._release(dynamo) == 2
         assert locks.items == {}
         pager.assert_paged_to_exhaustion()
-        workflow_table.get_item.assert_any_call(Key={"databaseId": "GLOBAL", "workflowId": "wf"})
+        workflow_table.get_item.assert_any_call(Key={"databaseId": "GLOBAL", "workflowId": "wf"},
+                                                ConsistentRead=True)
         inputs_table.query.assert_called()
 
     def test_every_locking_restriction_releases_its_own_key_shape(self):
@@ -688,6 +689,22 @@ class TestReleaseForExecution:
         assert sorted(el.held_lock_keys(locks, "E1")) == sorted(mine)
         assert locks.queries == ["E1", "E1", "E1"]
         assert el.held_lock_keys(locks, "E-none") == []
+
+    def test_a_release_right_after_the_launch_reads_the_rows_it_rebuilds_from_strongly_consistent(self):
+        # A run can end seconds after its launch wrote the input rows. Stand-ins that answer only a
+        # strongly consistent read model a replica that has not caught up, and the holder index has
+        # not caught up either, so only the rebuilt keys can release the rows.
+        locks = _FakeLockTable()
+        el.acquire_locks(locks, [K1, K2], "E1", 100, now=NOW)
+        locks.query = lambda **kwargs: {"Items": []}
+        rows = [_input_row("/a1/one.glb", "v1"), _input_row("/a1/two.glb", "v2")]
+        dynamo, workflow_table, inputs_table = self._dynamo(_workflow_record(), None, locks)
+        workflow_table.get_item.side_effect = lambda **kwargs: (
+            {"Item": _workflow_record()} if kwargs.get("ConsistentRead") else {})
+        inputs_table.query.side_effect = lambda **kwargs: (
+            {"Items": rows} if kwargs.get("ConsistentRead") else {"Items": []})
+        assert self._release(dynamo) == 2
+        assert locks.items == {}
 
     def test_an_index_that_has_not_caught_up_still_releases_the_rebuilt_keys(self):
         # The index is eventually consistent: a release right after the launch may find nothing there.

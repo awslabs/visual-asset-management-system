@@ -145,6 +145,7 @@ export interface MetadataContainerProps {
     readOnly?: boolean;
     showBulkEdit?: boolean;
     restrictMetadataOutsideSchemas?: boolean; // Restrict adding new metadata outside schemas
+    canDelete?: boolean; // Whether the role may delete stored fields; adding and editing are unaffected
 }
 
 /**

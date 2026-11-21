@@ -9,8 +9,9 @@ and its own previews (``/model.glb.previewFile.png``). Used as an S3 prefix, the
 that only share its characters -- here ``model.glb.bak`` and ``model.glbx/inner.txt`` -- which belong to
 something else. These tests run the listing, file info, archive, unarchive, delete, folder creation, move
 and preview handling against a versioned moto bucket and check that only the asset's keys are listed,
-resolved and changed. A prefix operation in a folder asset names a folder (``sub/``), so ``sub.txt`` and
-``subway.glb`` beside it are never selected.
+resolved and changed. A companion entry named exactly like the object (``model.glb/model.glb``) is listed
+one level down, at ``/model.glb/model.glb``; nothing is hidden. A prefix operation names a folder
+(``sub/``), so ``sub.txt`` and ``subway.glb`` beside it are never selected.
 """
 
 import os
@@ -104,6 +105,8 @@ class TestResolveAssetFilePath:
         ("/model.glb.bak", "p1/model.glb/model.glb.bak"),
         ("p1/model.glb.bak", "p1/model.glb/p1/model.glb.bak"),
         ("/new/", "p1/model.glb/new/"),
+        ("/model.glb/model.glb", SHADOWED), (SHADOWED, SHADOWED),
+        ("/model.glb/model.glb/model.glb", "p1/model.glb/model.glb/model.glb"),
     ])
     def test_every_path_resolves_inside_the_asset(self, af, path, expected):
         assert af.resolve_asset_file_path(FILE_LOCATION, path) == expected
@@ -141,11 +144,18 @@ class TestListFiles:
     def test_the_object_its_previews_and_companion_folder_are_listed(self, af, basic_mode):
         items = _walk(af, {}, basic_mode)
         assert sorted((i["key"], i["relativePath"]) for i in items) == sorted([
-            (OWN_KEY, "/model.glb"), (OWN_PREVIEW, "/model.glb.previewFile.png"), (COMPANION, "/sub/x.obj")])
+            (OWN_KEY, "/model.glb"), (OWN_PREVIEW, "/model.glb.previewFile.png"), (COMPANION, "/sub/x.obj"),
+            (SHADOWED, "/model.glb/model.glb")])
 
     def test_every_page_of_a_paged_listing_stays_inside_the_asset(self, af, basic_mode):
         items = _walk(af, {"pageSize": 1}, basic_mode, include_archived=False)
-        assert sorted(i["key"] for i in items) == sorted([OWN_KEY, OWN_PREVIEW, COMPANION])
+        assert sorted(i["key"] for i in items) == sorted([OWN_KEY, OWN_PREVIEW, COMPANION, SHADOWED])
+
+    def test_a_real_key_further_down_the_chain_is_listed_one_level_deeper(self, af, basic_mode):
+        af.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/model.glb/model.glb", Body=b"x")
+        items = {i["key"]: i["relativePath"] for i in _walk(af, {}, basic_mode)}
+        assert items[SHADOWED] == "/model.glb/model.glb"
+        assert items["p1/model.glb/model.glb/model.glb"] == "/model.glb/model.glb/model.glb"
 
     def test_an_archived_neighbour_is_not_listed_and_an_archived_own_file_is(self, af, basic_mode):
         af.test_client.delete_object(Bucket=BUCKET, Key="p1/model.glb.bak")
@@ -156,7 +166,8 @@ class TestListFiles:
         assert "p1/model.glb.bak" not in {i["key"] for i in items}
 
     @pytest.mark.parametrize("prefix,listed", [
-        ("mod", [OWN_KEY, OWN_PREVIEW]), ("/model.glb.p", [OWN_PREVIEW]),
+        ("mod", [OWN_KEY, OWN_PREVIEW, SHADOWED]), ("/model.glb.p", [OWN_PREVIEW]),
+        ("model.glb/", [SHADOWED]),
         ("sub/", [COMPANION]), ("/nothing", []),
     ])
     def test_a_prefix_filter_applies_to_the_relative_path(self, af, basic_mode, prefix, listed):
@@ -175,7 +186,7 @@ class TestListAssetFiles:
     def test_the_own_file_carries_its_own_preview(self, af):
         response = af.list_asset_files("db1", "a1", {"pageSize": "100", "maxItems": "1000"}, CLAIMS)
         by_path = {item.relativePath: item for item in response.items}
-        assert sorted(by_path) == ["/model.glb", "/sub/x.obj"]
+        assert sorted(by_path) == ["/model.glb", "/model.glb/model.glb", "/sub/x.obj"]
         assert by_path["/model.glb"].previewFile == "/model.glb.previewFile.png"
 
     @pytest.mark.parametrize("basic", ["true", "false"])
@@ -242,6 +253,44 @@ class TestFileOperations:
         assert _versions(af.test_client, COMPANION) == []
         assert _live(af.test_client, OWN_KEY) and _live(af.test_client, OWN_PREVIEW)
         _neighbours_untouched(af.test_client)
+
+    def test_the_companion_copy_named_like_the_object_is_reached_one_level_down(self, af):
+        info = af.get_file_info("db1", "a1", "/model.glb/model.glb", False, CLAIMS)
+        assert info.relativePath == "/model.glb/model.glb"
+        response = af.archive_file("db1", "a1", "/model.glb/model.glb", False, CLAIMS)
+        assert response.affectedFiles == ["/model.glb/model.glb"]
+        assert not _live(af.test_client, SHADOWED) and _live(af.test_client, OWN_KEY)
+
+    @pytest.mark.parametrize("path", ["/model.glb", "/model.glb/"])
+    def test_a_prefix_delete_of_the_folder_named_like_the_file_takes_the_copy_listed_in_it(self, af, path):
+        af.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/model.glb.previewFile.png", Body=b"x")
+        af.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/model.glb/part.obj", Body=b"x")
+        response = af.delete_file("db1", "a1", path, True, True, CLAIMS)
+        assert sorted(response.affectedFiles) == [
+            "model.glb/model.glb", "model.glb/model.glb.previewFile.png", "model.glb/part.obj"]
+        assert _live(af.test_client, OWN_KEY) and _live(af.test_client, OWN_PREVIEW)
+        assert _live(af.test_client, COMPANION)
+        _neighbours_untouched(af.test_client)
+
+    @pytest.mark.parametrize("operation", ["delete", "archive"])
+    def test_the_folder_named_like_the_file_is_found_behind_many_keys_that_only_start_with_its_name(
+            self, af, operation):
+        """The folder /model.glb/ is listed under p1/model.glb/model.glb, where more than one page of
+        p1/model.glb/model.glb.bak* keys sorts before p1/model.glb/model.glb/part.obj."""
+        client = af.test_client
+        for version in client.list_object_versions(Bucket=BUCKET, Prefix=SHADOWED).get("Versions", []):
+            if version["Key"] == SHADOWED:
+                client.delete_object(Bucket=BUCKET, Key=SHADOWED, VersionId=version["VersionId"])
+        for i in range(1001):
+            client.put_object(Bucket=BUCKET, Key=f"p1/model.glb/model.glb.bak{i:04}", Body=b"x")
+        client.put_object(Bucket=BUCKET, Key="p1/model.glb/model.glb/part.obj", Body=b"x")
+        if operation == "delete":
+            response = af.delete_file("db1", "a1", "/model.glb/", True, True, CLAIMS)
+        else:
+            response = af.archive_file("db1", "a1", "/model.glb/", True, CLAIMS)
+        assert [path.lstrip("/") for path in response.affectedFiles] == ["model.glb/part.obj"]
+        assert not _live(client, "p1/model.glb/model.glb/part.obj")
+        assert _live(client, "p1/model.glb/model.glb.bak0000") and _live(client, OWN_KEY)
 
     def test_unarchive_file_restores_the_object_and_its_preview(self, af):
         af.test_client.delete_object(Bucket=BUCKET, Key=OWN_KEY)

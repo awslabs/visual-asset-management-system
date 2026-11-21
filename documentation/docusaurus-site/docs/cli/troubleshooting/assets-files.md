@@ -487,6 +487,22 @@ A flattened download reports duplicate filenames.
 
 Omit `--flatten-download-tree` to preserve the folder hierarchy. In interactive (non-JSON) mode the CLI prompts to skip, overwrite, or rename conflicting files; in `--json-output` mode the download aborts so it can be re-run interactively.
 
+### File Not Downloaded Because Its Path Leaves the Download Directory
+
+A download reports a file as failed without transferring it.
+
+**Symptoms:**
+
+-   `Not downloaded: the file path does not stay inside the download directory` in `failed_downloads`, and the command exits `1`
+
+**Cause:**
+
+`assets download` and `assets export` write each file at its asset-relative path under the directory you name. A file whose path would place it outside that directory, including through a symbolic link inside the directory, is not written.
+
+**Resolution:**
+
+Ask an administrator to rename or move the file in the asset. To fetch it anyway, use `--flatten-download-tree` (`assets download`) or `--flatten-downloads` (`assets export --download`), which writes each file under its name alone, or remove the symbolic link from the download directory.
+
 ---
 
 ## Directory Synchronization

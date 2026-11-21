@@ -26,6 +26,7 @@ than the parent's only where the caller may read that database and its assets, t
 
 import base64
 import json
+from datetime import datetime, timezone
 
 import boto3
 from aws_lambda_powertools.utilities.parser import ValidationError
@@ -358,11 +359,36 @@ def _encode_token(last_evaluated_key):
     return base64.b64encode(json.dumps(last_evaluated_key, default=str).encode("utf-8")).decode("utf-8")
 
 
+# The answer to a `startDate` or `endDate` that is not an ISO-8601 date or date and time.
+INVALID_DATE_MESSAGE = "startDate and endDate must be ISO-8601 dates or date-times"
+
+
 def _validate_dates(start_date, end_date):
-    return validate({
+    """`(valid, message, start, end)` for the optional `startDate` / `endDate` filters. Each must
+    be an ISO-8601 date or date-time (`datetime.fromisoformat`) and is returned in the stored
+    timestamps' form, UTC `isoformat()` (a value with no offset is read as UTC), because the window
+    compares them with the stored timestamps as strings: a value with an offset, or in the basic or
+    week form, would otherwise compare out of order."""
+    (valid, message) = validate({
         "startDate": {"value": start_date, "validator": "STRING_256", "optional": True},
         "endDate": {"value": end_date, "validator": "STRING_256", "optional": True},
     })
+    if not valid:
+        return valid, message, None, None
+    normalized = []
+    for value in (start_date, end_date):
+        if not value:
+            normalized.append(value)
+            continue
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            logger.info("Audit date filter rejected: not an ISO-8601 date or date-time")
+            return False, INVALID_DATE_MESSAGE, None, None
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        normalized.append(moment.astimezone(timezone.utc).isoformat())
+    return True, None, normalized[0], normalized[1]
 
 
 #######################
@@ -377,9 +403,7 @@ def get_asset_audit(event, database_id, asset_id, params):
         (valid, message) = validate({"assetId": {"value": asset_id, "validator": "ASSET_ID"}})
     if not valid:
         return validation_error(body={"message": message}, event=event)
-    start_date = params.get("startDate")
-    end_date = params.get("endDate")
-    (valid, message) = _validate_dates(start_date, end_date)
+    (valid, message, start_date, end_date) = _validate_dates(params.get("startDate"), params.get("endDate"))
     if not valid:
         return validation_error(body={"message": message}, event=event)
 
@@ -396,6 +420,11 @@ def get_asset_audit(event, database_id, asset_id, params):
     page_size, exclusive_start_key, error = _page_arguments(event, params, ASSET_INDEX_KEY_ATTRIBUTES)
     if error:
         return error
+    # A token of another asset's trail names another partition of the index, which DynamoDB
+    # refuses as a start key.
+    if exclusive_start_key and \
+            exclusive_start_key["databaseId:assetId"] != f"{database_id}:{asset_id}":
+        return validation_error(body={"message": INVALID_PAGINATION_TOKEN_MESSAGE}, event=event)
     # Every entry still under the live id of a deleted database whose move is running is the
     # deleted database's (`databaseRetirement`): none is the asset's of the live id.
     if databaseRetirement.move_in_progress(evaluation_table, database_id):
@@ -611,7 +640,7 @@ def query_audit(event, params):
         return validation_error(body={"message": message}, event=event)
     if asset_id and not database_id:
         return validation_error(body={"message": "assetId requires databaseId"}, event=event)
-    (valid, message) = _validate_dates(start_date, end_date)
+    (valid, message, start_date, end_date) = _validate_dates(start_date, end_date)
     if not valid:
         return validation_error(body={"message": message}, event=event)
     page_size = listing.page_size_of(params.get("maxItems", params.get("limit")),
@@ -744,7 +773,8 @@ def _route_page(page, token, starting_token, database_id, asset_id, event_type, 
         start_key = None
         if starting_token:
             start_key = listing.decode_token(starting_token, ASSET_INDEX_KEY_ATTRIBUTES)
-            if start_key is None:
+            if start_key is None or \
+                    start_key["databaseId:assetId"] != f"{database_id}:{asset_id}":
                 return None
         entries, next_key = page.single(
             "AssetIndex", ASSET_INDEX_KEY_ATTRIBUTES,

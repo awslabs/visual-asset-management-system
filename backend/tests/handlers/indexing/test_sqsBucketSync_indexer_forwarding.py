@@ -388,3 +388,61 @@ class TestReservedSegmentIsPrefixAware:
         assert disagreements == [], (
             "bucket sync and its downstream consumers disagree on these keys, which is how system "
             f"data reaches one and not the other: {disagreements}")
+
+
+class TestAutoCreateNeverReachesASystemFolder:
+    """Bucket sync auto-creates an asset for a new top-level folder through createAsset, with no
+    bucketExistingKey: the location is derived from the first segment after the prefix. A key inside a
+    VAMS system folder, or in the prepared-downloads folder (whose name is a valid asset id), is skipped
+    before that, so createAsset is never asked to create an asset over system data."""
+
+    def _created_record(self, key):
+        return {
+            "eventSource": "aws:s3",
+            "eventName": "ObjectCreated:Put",
+            "s3": {"bucket": {"name": "asset-bucket"}, "object": {"key": key}},
+        }
+
+    def _wire(self, m, prefix):
+        m.parse_event = MagicMock(side_effect=lambda e: e)
+        m.asset_bucket_name = "asset-bucket"
+        m.asset_bucket_prefix = prefix
+        m.get_bucket_id = MagicMock(return_value="bucket-1")
+        m.validate_asset_id = MagicMock(return_value=True)
+        m.lookup_asset = MagicMock(return_value=None)
+        m.get_or_create_database_for_bucket = MagicMock(return_value="db1")
+        m.object_still_exists = MagicMock(return_value=True)
+        m.create_new_asset = MagicMock(return_value="a1")
+        m.update_asset_type = MagicMock(return_value=True)
+        m.update_s3_metadata = MagicMock(return_value=True)
+        m.publish_to_file_indexer_sns = MagicMock()
+        m.publish_to_orchestration_bus = MagicMock()
+
+    @pytest.mark.parametrize("prefix,key", [
+        ("", "pipelines/wf/output/e1/files/model.glb"),
+        ("", "a1/preview/PotreeViewer/octree.bin"),
+        ("myprefix/", "myprefix/temp-uploads/u1/part.bin"),
+        ("myprefix/", "myprefix/a1/workspace/scratch.bin"),
+    ])
+    def test_a_key_in_a_reserved_folder_creates_no_asset(self, prefix, key):
+        m = _load()
+        self._wire(m, prefix)
+        m.lambda_handler_created({"Records": [self._created_record(key)]}, MagicMock())
+        m.create_new_asset.assert_not_called()
+
+    @pytest.mark.parametrize("prefix,key", [
+        ("", "vams.preparedDownloads/db1/a1/u/r/archive.zip"),
+        ("myprefix/", "myprefix/vams.preparedDownloads/db1/a1/u/r/archive.zip"),
+    ])
+    def test_a_key_in_the_prepared_downloads_folder_creates_no_asset(self, prefix, key):
+        m = _load()
+        self._wire(m, prefix)
+        m.lambda_handler_created({"Records": [self._created_record(key)]}, MagicMock())
+        m.create_new_asset.assert_not_called()
+        m.publish_to_file_indexer_sns.assert_not_called()
+
+    def test_control_a_new_top_level_folder_is_auto_created(self):
+        m = _load()
+        self._wire(m, "myprefix/")
+        m.lambda_handler_created({"Records": [self._created_record("myprefix/a1/model.glb")]}, MagicMock())
+        m.create_new_asset.assert_called_once()

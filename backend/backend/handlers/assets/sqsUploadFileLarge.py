@@ -15,7 +15,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload, audited_handler
 from common.dynamodb import to_update_expr
-from common.assetLocations import contains
+from common.assetLocations import contains, held_objects
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
 from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
@@ -601,7 +601,9 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
+        contents = list(held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+            bucket, list_prefix, client=s3,
+            max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE))))
         
         # Filter out archived files and count non-archived files
         non_archived_files = []

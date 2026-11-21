@@ -19,6 +19,10 @@ import {
     buildPipelineEndFunction,
 } from "../lambdaBuilder/preview3dThumbnailFunctions";
 import { BatchFargatePipelineConstruct } from "../../../constructs/batch-fargate-pipeline";
+import {
+    StateTimeoutBatchSubmitJob,
+    grantBatchStateTimeoutCleanup,
+} from "../../../constructs/stateTimeoutBatchSubmitJob";
 import { NagSuppressions } from "cdk-nag";
 import { CfnOutput } from "aws-cdk-lib";
 import { LayerVersion } from "aws-cdk-lib/aws-lambda";
@@ -33,6 +37,11 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 
 export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
     config: Config.Config;
@@ -45,12 +54,17 @@ export interface Preview3dThumbnailConstructProps extends cdk.StackProps {
 }
 
 /**
- * Attempt bounds of the two compute-tier Batch jobs and the state machine that encloses them. The
- * registered pipeline's `taskTimeout` (vamsSchema/pipeline.json) covers the state machine timeout.
+ * Attempt bounds of the two compute-tier Batch jobs, the Batch states' own bound and the state
+ * machine that encloses them. A tier's attempt clock starts when the job leaves the queue; the Batch
+ * state's bound counts the queue wait too, and its States.Timeout reaches pipelineEnd through the
+ * Catch. The state machine leaves 15 minutes past the Batch state for ConstructPipelineTask and
+ * PipelineEndTask (5-minute Lambdas each), and ends 15 minutes inside the registered pipeline's
+ * 14,400-second `taskTimeout` (vamsSchema/pipeline.json), which starts before the execution does.
  */
 export const PREVIEW_3D_THUMBNAIL_STANDARD_TIER_TIMEOUT = Duration.hours(1);
 export const PREVIEW_3D_THUMBNAIL_LARGE_TIER_TIMEOUT = Duration.hours(3);
-export const PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT = Duration.hours(4);
+export const PREVIEW_3D_THUMBNAIL_STATE_MACHINE_TIMEOUT = Duration.minutes(225);
+export const PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT = Duration.minutes(210);
 
 /**
  * Media previews: the image and video extensions the "Media Preview Thumbnail" workflow accepts, the
@@ -322,6 +336,10 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
+        // After a tier's Batch state bound fires, pipelineEnd ends the run's job.
+        grantBatchStateTimeoutCleanup(pipelineEndFunction, [
+            batchPipeline.batchJobQueue.jobQueueArn,
+        ]);
 
         const pipeLineEndTask = new tasks.LambdaInvoke(this, "PipelineEndTask", {
             lambdaFunction: pipelineEndFunction,
@@ -358,7 +376,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
             sizing: { vcpu: number; memoryGiB: number },
             timeout: Duration
         ) =>
-            new tasks.BatchSubmitJob(this, id, {
+            new StateTimeoutBatchSubmitJob(this, id, {
+                stateTimeout: PREVIEW_3D_THUMBNAIL_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.preview3dThumbnail),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: batchPipeline.batchJobDefinition.jobDefinitionArn,
                 jobQueueArn: batchPipeline.batchJobQueue.jobQueueArn,
@@ -454,6 +474,9 @@ export class Preview3dThumbnailConstruct extends NestedStack {
                 tracingEnabled: true,
             }
         );
+
+        // The job-tagging grant's wildcard resources (pipelineJobTags.ts).
+        suppressBatchJobTaggingNag(pipelineStateMachine);
 
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. DescribeJobs has no resource

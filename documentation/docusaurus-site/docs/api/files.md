@@ -11,7 +11,7 @@ For asset-level operations, see [Assets](assets.md). For file metadata, see [Met
 -   **File**: An individual object stored in S3 within an asset's directory structure. Files can be organized in folders.
 -   **File Version**: S3 object versions tracked through bucket versioning. VAMS also tracks file versions within asset version snapshots.
 -   **Primary File Type**: A designation that marks a file as the primary representative of a particular type within an asset (e.g., the primary `.ifc` file).
--   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. When a file has several, `previewFile` names the newest one that is not archived.
+-   **Preview File**: A generated or uploaded preview image (`.previewFile.gif`, `.previewFile.jpg`, `.previewFile.png`) associated with a specific file. `previewFile` names the file's newest preview that is not archived; a listing with `includeArchived=true` names the newest archived preview when the file has no other.
 -   **Archive**: Soft-deletion of a file using S3 delete markers. Archived files can be unarchived.
 
 ---
@@ -73,7 +73,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 }
 ```
 
-`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, uploads and workflow outputs at `/{file name}` are refused, its file cannot be moved or renamed, and a request for `/` alone answers `400` `Requested file is not part of this asset`.
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. A file under `{key}/` named exactly like the object is listed one level down, at `/{file name}/{file name}` (its previews at `/{file name}/{file name}.previewFile.{ext}`), so every file has its own path. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, an upload at `/{file name}` writes a new version of the object (a workflow output at that path is refused), its file cannot be moved or renamed, and a request for `/` alone answers `400` `Requested file is not part of this asset`.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -152,7 +152,7 @@ The `versions` list is present only when `includeVersions` is `true`. `changeWor
 
 `POST /database/{databaseId}/assets/{assetId}/moveFile`
 
-Moves or renames a file within the asset. This copies the file to the new location and deletes the original.
+Moves or renames a file within the asset. This copies the file to the new location and deletes the original. The copy runs within the request, so moving a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
 **Request Parameters:**
 
@@ -199,7 +199,7 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 `POST /database/{databaseId}/assets/{assetId}/copyFile`
 
-Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided.
+Copies a file within the same asset or to a different asset. Supports cross-database copying when `destinationDatabaseId` is provided. The copy runs within the request, so copying a large file can take longer than the Amazon API Gateway integration timeout; see [API Gateway Timeout for Large Operations](../troubleshooting/known-limitations.md#api-gateway-timeout-for-large-operations).
 
 **Request Parameters:**
 
@@ -273,11 +273,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 }
 ```
 
-| Field                    | Type    | Required | Description                                                                      |
-| ------------------------ | ------- | -------- | -------------------------------------------------------------------------------- |
-| `filePath`               | string  | Yes      | Relative file path to delete.                                                    |
-| `isPrefix`               | boolean | No       | When `true`, delete all files under the path prefix. Defaults to `false`.        |
-| `confirmPermanentDelete` | boolean | Yes      | Safety confirmation. Must be `true`; the operation errors when it is not `true`. |
+| Field                    | Type    | Required | Description                                                                                                                                                            |
+| ------------------------ | ------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filePath`               | string  | Yes      | Relative file path to delete.                                                                                                                                          |
+| `isPrefix`               | boolean | No       | When `true`, `filePath` names a folder and every file in it is deleted; a trailing `/` is added when missing, so `/sub` never selects `/sub.txt`. Defaults to `false`. |
+| `confirmPermanentDelete` | boolean | Yes      | Safety confirmation. Must be `true`; the operation errors when it is not `true`.                                                                                       |
 
 **Response:**
 
@@ -321,10 +321,10 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 }
 ```
 
-| Field      | Type    | Required | Description                                                                |
-| ---------- | ------- | -------- | -------------------------------------------------------------------------- |
-| `filePath` | string  | Yes      | Relative file path to archive.                                             |
-| `isPrefix` | boolean | No       | When `true`, archive all files under the path prefix. Defaults to `false`. |
+| Field      | Type    | Required | Description                                                                                                                                                             |
+| ---------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `filePath` | string  | Yes      | Relative file path to archive.                                                                                                                                          |
+| `isPrefix` | boolean | No       | When `true`, `filePath` names a folder and every file in it is archived; a trailing `/` is added when missing, so `/sub` never selects `/sub.txt`. Defaults to `false`. |
 
 **Response:**
 
@@ -611,6 +611,10 @@ A request accepts at most 1,000 files and 1,500 total parts across all files, an
 For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.php`, `.reg`, `.pif`, `.bak`, `.dll`, `.exe`, `.nat`, `.cmd`, `.lnk`, `.docm`, `.vbs`, `.bat`. Corresponding MIME types are also blocked. The destination file name of a move, rename or copy gets the same extension check.
 :::
 
+:::info[Single-file assets]
+For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
+:::
+
 :::info[Preview File Extensions]
 An `assetPreview` file, and any file-level preview companion (a `relativeKey` containing `.previewFile.`) inside an `assetFile` upload, must carry one of `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.webp`, or `.bmp`. For a companion the extension is everything after the `.previewFile.` marker, so `model.gltf.previewFile.p.png` is read as `.p.png` and refused. One offending file rejects the entire request with `400`; no multipart upload is created for any file in it.
 :::
@@ -660,8 +664,6 @@ Completes a multipart file upload by signaling that all parts have been uploaded
 
 Each entry in `files` is an object with `relativeKey`, `uploadIdS3`, and a `parts` array of `{ "PartNumber", "ETag" }` objects. An empty `parts` array completes a file initialized as `zero-byte`. For any other file it cancels the file: the multipart upload is aborted, nothing is stored, and the file's result has `success: false`.
 
-A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, it counts toward `overallSuccess`, and it appears in the asset once the copy finishes.
-
 **Response:**
 
 ```json
@@ -682,15 +684,15 @@ A file over 1 GiB is processed asynchronously: its result has `success: true` an
 }
 ```
 
-A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchronousHandling: true` and counts as a success, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
+A file over 1 GiB is processed asynchronously: its result has `success: true` and `largeFileAsynchronousHandling: true`, and it counts toward `overallSuccess`, also when every file in the upload is that large. The file appears in the asset when the copy finishes. Files over 5 GiB are copied by the large object copy engine, which has no time limit. Read each such file's outcome with [Get Upload Status](#get-upload-status).
 
 **Error Responses:**
 
-| Status | Description                                            |
-| ------ | ------------------------------------------------------ |
-| `400`  | Invalid upload ID, upload not found, or missing parts. |
-| `403`  | Not authorized to upload files to this asset.          |
-| `500`  | Internal server error.                                 |
+| Status | Description                                                                                                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid upload ID, upload not found, missing parts, or `VAMS General Error: Upload has already been completed.` (a completed upload whose record is kept for its asynchronously processed files). |
+| `403`  | Not authorized to upload files to this asset.                                                                                                                                                     |
+| `500`  | Internal server error.                                                                                                                                                                            |
 
 ---
 
@@ -698,7 +700,7 @@ A file over 1 GiB is processed asynchronously: its result has `largeFileAsynchro
 
 `GET /uploads/{uploadId}`
 
-Returns the outcome of each file an upload accepted for asynchronous processing. Completion keeps the record of an upload with such a file, with status `processing_async` and one `PENDING` entry per file. Each file then becomes `SUCCEEDED` or `FAILED`, and the upload `completed` or `completed_with_errors`. The record is kept for 7 days.
+Returns the outcome of each file an upload accepted for asynchronous processing. Completion keeps the record of an upload with such a file, with status `processing_async` and one `PENDING` entry per file. Each file then becomes `SUCCEEDED` or `FAILED`, and the upload `completed` or `completed_with_errors`. The record is kept for 7 days. A user upload whose files all landed at completion has no record; the upload a workflow execution makes to store its pipeline outputs keeps its record with status `completed` or `completed_with_errors`, so it answers `200`.
 
 **Request Parameters:**
 
@@ -737,12 +739,12 @@ Returns the outcome of each file an upload accepted for asynchronous processing.
 
 **Error Responses:**
 
-| Status | Description                                                                                                                                                                              |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters.                                                                                                                                                                      |
-| `403`  | Not authorized to call this route.                                                                                                                                                       |
-| `404`  | Upload not found. Also returned for an upload whose files all landed at completion (it has no record), a record past its 7 days, another database, and an asset the caller may not read. |
-| `500`  | Internal server error.                                                                                                                                                                   |
+| Status | Description                                                                                                                                                                                  |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters.                                                                                                                                                                          |
+| `403`  | Not authorized to call this route.                                                                                                                                                           |
+| `404`  | Upload not found. Also returned for a user upload whose files all landed at completion (it has no record), a record past its 7 days, another database, and an asset the caller may not read. |
+| `500`  | Internal server error.                                                                                                                                                                       |
 
 The route requires `GET` on the upload's asset. From the CLI, use `vamscli file upload-status` or `vamscli file upload --wait-async`.
 

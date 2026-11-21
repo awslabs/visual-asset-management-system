@@ -7,7 +7,7 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from common.timestamps import utc_now
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from botocore.config import Config
@@ -44,7 +44,8 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    contains, is_folder_location, is_shadowed, names_own_object, object_key_for, relative_path_in,
+    contains, folder_listing_prefix, in_folder, is_folder_location, names_own_object, object_key_for,
+    relative_path_in,
 )
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
@@ -352,7 +353,7 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
     Raises:
         VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
     """
-    # A single-file location holds that one object and nothing under or beside it
+    # A single-file location's paths name its object, its previews and its companion folder {key}/
     if asset_base_key and not is_folder_location(asset_base_key):
         object_key = object_key_for(asset_base_key, file_path)
         if object_key is None:
@@ -377,6 +378,30 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         resolved_path = asset_base_key + file_path
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
+
+def _prefix_holds_folder_entry(bucket: str, prefix: str, location: str, folder: Optional[str],
+                               versions: bool = False) -> bool:
+    """Whether a listing of ``prefix`` returns a key held in ``folder``: a current object, or with ``versions``
+    any version or delete marker. Without a single-file folder the first key decides. A single-file folder
+    named like the file is listed without its trailing ``/``, where keys that only start with its name
+    (``{key}/{name}.bak*``) sort first, so the listing pages until a held key or its end."""
+    operation = 'list_object_versions' if versions else 'list_objects_v2'
+    if folder is None:
+        response = getattr(s3_client, operation)(Bucket=bucket, Prefix=prefix, MaxKeys=1)
+        entries = (response.get('Versions', []) + response.get('DeleteMarkers', [])) if versions \
+            else response.get('Contents', [])
+        return any(_held_in_folder(location, None, entry['Key']) for entry in entries)
+    for page in s3_client.get_paginator(operation).paginate(Bucket=bucket, Prefix=prefix):
+        entries = (page.get('Versions', []) + page.get('DeleteMarkers', [])) if versions else page.get('Contents', [])
+        if any(_held_in_folder(location, folder, entry['Key']) for entry in entries):
+            return True
+    return False
+
+def _held_in_folder(location: str, folder: Optional[str], key: str) -> bool:
+    """Whether the location holds a key, under an asset-relative folder path when one is given."""
+    if folder is None:
+        return contains(location, key)
+    return in_folder(location, folder, key)
 
 def _relative_to_location(base_key: str, key: str) -> str:
     """The asset-relative path ('/...') of an S3 key in an asset's location."""
@@ -574,7 +599,93 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
 
-def delete_assetAuxiliary_files(prefix):
+def _single_file_location_prefixes(location: str) -> List[str]:
+    """The S3 prefixes that list what a single-file location holds besides its object: its own previews
+    (``{key}.previewFile.``) and its companion folder (``{key}/``)."""
+    return [location + PREVIEW_FILE_PATTERN, location + '/']
+
+def _list_single_file_location_page(bucket: str, location: str, list_params: Dict) -> Dict:
+    """One listing page of a single-file location, in the shape of a ListObjectsV2 response.
+
+    The first page (no continuation token) holds the object, read with a one-key listing of its own
+    key, and its previews; then, every page, the companion folder ``{key}/``, whose S3 continuation
+    token is the page's token. The first page asks the companion folder for fewer keys by the number
+    already listed, so a page keeps its size.
+    """
+    contents: List[Dict] = []
+    if not list_params.get('ContinuationToken'):
+        head = s3_client.list_objects_v2(Bucket=bucket, Prefix=location, MaxKeys=1)
+        contents.extend(obj for obj in head.get('Contents', []) if obj['Key'] == location)
+        previews = s3_client.get_paginator('list_objects_v2').paginate(
+            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN)
+        for preview_page in previews:
+            contents.extend(preview_page.get('Contents', []))
+    folder_params = dict(list_params, Prefix=location + '/',
+                         MaxKeys=max(1, int(list_params['MaxKeys']) - len(contents)))
+    folder = s3_client.list_objects_v2(**folder_params)
+    contents.extend(folder.get('Contents', []))
+    page = {'Contents': contents}
+    if 'NextContinuationToken' in folder:
+        page['NextContinuationToken'] = folder['NextContinuationToken']
+    return page
+
+def _is_location_object(location: str, object_key: str) -> bool:
+    """Whether a key is the object of a single-file location (the location key itself)."""
+    return bool(location) and not is_folder_location(location) and \
+        (object_key or "").lstrip('/') == location.lstrip('/')
+
+def aux_file_base(database_id: str, location: str, object_key: str) -> str:
+    """Auxiliary-bucket prefix of one file's derived data, scoped to that file.
+
+    The object of a single-file location keeps its data in the ``preview`` subfolder of
+    ``{databaseId}/{key}/``; the rest of that base holds the data of the entries in its
+    companion folder ``{key}/``, so the object's prefix stops at ``preview/``.
+    """
+    base = aux_bucket_asset_file_base(database_id, object_key)
+    return base + "preview/" if _is_location_object(location, object_key) else base
+
+def aux_file_bases(source_db: str, source_location: str, source_key: str,
+                   dest_db: str, dest_location: str, dest_key: str) -> Tuple[str, str]:
+    """Source and destination auxiliary prefixes for a copy or move of one file. When either side is
+    the object of a single-file location both stop at ``preview/``, so the data lands in the same
+    layout and no companion entry's data moves with it."""
+    source = aux_bucket_asset_file_base(source_db, source_key)
+    dest = aux_bucket_asset_file_base(dest_db, dest_key)
+    if _is_location_object(source_location, source_key) or _is_location_object(dest_location, dest_key):
+        return source + "preview/", dest + "preview/"
+    return source, dest
+
+def aux_owner_filter(database_id: str, location: str, target_key: str,
+                     aux_prefix: str) -> Optional[Callable[[str], bool]]:
+    """None, or which auxiliary keys under ``aux_prefix`` belong to ``target_key`` in a single-file location.
+
+    The object's data and the data of companion entries in ``{key}/preview/`` share
+    ``{databaseId}/{key}/preview/``: a key there whose rest has a ``/preview/`` segment
+    (``{entry}/preview/...``) belongs to a companion entry, any other key to the object. The predicate
+    keeps the object's keys for the object and the companion entries' keys for any other target, so
+    neither reaches the other's viewer data.
+    """
+    if not location or is_folder_location(location):
+        return None
+    shared = aux_bucket_asset_file_base(database_id, location) + "preview/"
+    if not (aux_prefix or "").startswith(shared):
+        return None
+    is_object = _is_location_object(location, target_key)
+
+    def keep(aux_key: str) -> bool:
+        return ("/preview/" in aux_key[len(shared):]) != is_object
+    return keep
+
+def _call_with_keep(operation: Callable, *args, keep: Optional[Callable[[str], bool]] = None):
+    """Call an auxiliary-data operation, passing ``keep`` only when there is one (folder assets need none)."""
+    return operation(*args) if keep is None else operation(*args, keep=keep)
+
+def aux_scope(database_id: str, location: str, object_key: str) -> Tuple[str, Optional[Callable[[str], bool]]]:
+    """``(prefix, keep)`` of one file's auxiliary data: ``aux_file_base`` and ``aux_owner_filter``."""
+    prefix = aux_file_base(database_id, location, object_key)
+    return prefix, aux_owner_filter(database_id, location, object_key, prefix)
+
+def delete_assetAuxiliary_files(prefix, keep: Optional[Callable[[str], bool]] = None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
 
     The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
@@ -582,6 +693,7 @@ def delete_assetAuxiliary_files(prefix):
 
     Args:
         prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
+        keep: Optional predicate (see aux_owner_filter); only the keys it accepts are deleted
     """
 
     if not prefix:
@@ -599,7 +711,8 @@ def delete_assetAuxiliary_files(prefix):
         paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if keep is None or keep(entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3_client.delete_objects(
@@ -617,7 +730,7 @@ def delete_assetAuxiliary_files(prefix):
 
     return
 
-def move_auxiliary_files(source_key: str, dest_key: str) -> None:
+def move_auxiliary_files(source_key: str, dest_key: str, keep: Optional[Callable[[str], bool]] = None) -> None:
     """Move auxiliary files from source prefix to destination prefix.
     Silently logs errors if operations fail.
     
@@ -635,6 +748,8 @@ def move_auxiliary_files(source_key: str, dest_key: str) -> None:
                 
             for obj in page.get('Contents', []):
                 source_aux_key = obj['Key']
+                if keep is not None and not keep(source_aux_key):
+                    continue
                 
                 # Calculate the destination key by replacing the source prefix with destination prefix
                 dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
@@ -662,7 +777,7 @@ def move_auxiliary_files(source_key: str, dest_key: str) -> None:
         # Log error but don't raise exception to caller
         logger.warning(f"Error processing auxiliary files for move operation: {e}")
 
-def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
+def copy_auxiliary_files(source_key: str, dest_key: str, keep: Optional[Callable[[str], bool]] = None) -> None:
     """Copy auxiliary files from source prefix to destination prefix.
     Silently logs errors if operations fail.
     
@@ -680,6 +795,8 @@ def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
                 
             for obj in page.get('Contents', []):
                 source_aux_key = obj['Key']
+                if keep is not None and not keep(source_aux_key):
+                    continue
                 
                 # Calculate the destination key by replacing the source prefix with destination prefix
                 dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
@@ -816,14 +933,15 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
-def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None) -> List[str]:
+def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None,
+                                  folder: Optional[str] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
     
     Args:
         bucket: The S3 bucket
         prefix: The S3 key prefix
-        location: The asset location the deleted keys must belong to (``common.assetLocations``);
-            a single-file location deletes its own key only
+        location: The asset location the deleted keys must belong to (``common.assetLocations``)
+        folder: An asset-relative folder path of the location the deleted keys must sit under
         
     Returns:
         List of deleted file keys
@@ -841,7 +959,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
                 key = entry['Key']
-                if location is not None and not contains(location, key):
+                if location is not None and not _held_in_folder(location, folder, key):
                     continue
                 if key not in processed_keys:
                     processed_keys.add(key)
@@ -860,7 +978,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         # Check if the prefix folder itself exists and delete it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or contains(location, folder_prefix):
+        if location is None or _held_in_folder(location, folder, folder_prefix):
             try:
                 # Check if the folder marker exists
                 s3_client.head_object(Bucket=bucket, Key=folder_prefix)
@@ -878,7 +996,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
     return deleted_files
 
 def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
-                      location: Optional[str] = None) -> Dict[str, str]:
+                      location: Optional[str] = None, folder: Optional[str] = None) -> Dict[str, str]:
     """Archive all objects under a prefix
 
     Args:
@@ -887,6 +1005,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         databaseId: The database ID
         assetId: The asset ID
         location: The asset location the archived keys must belong to (``common.assetLocations``)
+        folder: An asset-relative folder path of the location the archived keys must sit under
 
     Returns:
         Dict mapping each archived file key to its new delete-marker VersionId
@@ -900,7 +1019,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
-                if location is not None and not contains(location, key):
+                if location is not None and not _held_in_folder(location, folder, key):
                     continue
 
                 # Process folder markers separately
@@ -919,7 +1038,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         # Check if the prefix folder itself exists and archive it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or contains(location, folder_prefix):
+        if location is None or _held_in_folder(location, folder, folder_prefix):
             try:
                 # Check if the folder marker exists
                 s3_client.head_object(Bucket=bucket, Key=folder_prefix)
@@ -1330,9 +1449,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     """
     logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}, basic_mode: {basic_mode}")
 
-    # A single-file location lists the keys it holds (its object, its companion folder and its own
-    # previews): the S3 prefix also matches keys that only share its characters, and a companion entry
-    # at the object's own path is shadowed by the object
+    # A single-file location lists the keys it holds: its object, its own previews and its companion
+    # folder {key}/. Each is listed by its own prefix, so keys that only share the location's characters
+    # ({key}.bak, {key}_tiles/...) are never read and cannot fill a page.
     location = prefix
     single_object = not is_folder_location(location)
     single_object_filter = (query_params.get('prefix') or '').lstrip('/')
@@ -1340,7 +1459,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     def _listed(key):
         if not single_object:
             return True
-        return (contains(location, key) and not is_shadowed(location, key)
+        return (contains(location, key)
                 and relative_path_in(location, key).lstrip('/').startswith(single_object_filter))
     
     # If prefix filter is provided, append it to the base prefix
@@ -1366,8 +1485,11 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         if query_params.get('startingToken'):
             list_params['ContinuationToken'] = query_params['startingToken']
         
-        # Single S3 list call
-        page = s3_client.list_objects_v2(**list_params)
+        if single_object:
+            page = _list_single_file_location_page(bucket, location, list_params)
+        else:
+            # Single S3 list call
+            page = s3_client.list_objects_v2(**list_params)
         
         # Items that need head_object enrichment (non-basic mode)
         items_needing_enrichment = []
@@ -1485,11 +1607,20 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                 # Track keys we've already processed to avoid duplicates
                 existing_keys = {item['key'] for item in result['items']}
                 
-                for page in version_paginator.paginate(
-                    Bucket=bucket,
-                    Prefix=prefix,
-                    PaginationConfig=pagination_config
-                ):
+                # A single-file location reads its object's newest version alone, then its own prefixes
+                version_pages = []
+                if single_object:
+                    newest = s3_client.list_object_versions(Bucket=bucket, Prefix=location, MaxKeys=1)
+                    version_pages.append({'DeleteMarkers': [marker for marker in newest.get('DeleteMarkers', [])
+                                                            if marker['Key'] == location]})
+                version_pages.extend(page for version_prefix in (
+                    _single_file_location_prefixes(location) if single_object else [prefix])
+                    for page in version_paginator.paginate(
+                        Bucket=bucket,
+                        Prefix=version_prefix,
+                        PaginationConfig=pagination_config
+                    ))
+                for page in version_pages:
                     # Process delete markers
                     for marker in page.get('DeleteMarkers', []):
                         key = marker['Key']
@@ -1618,12 +1749,10 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
@@ -1663,12 +1792,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
@@ -2171,6 +2298,13 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # In a single-file asset a folder is selected by asset-relative path (a folder named like the
+    # file also holds the companion entry listed inside it)
+    folder = None
+    if is_prefix and not is_folder_location(base_key):
+        folder = relative_path_in(base_key, full_key) or file_path
+        full_key = folder_listing_prefix(base_key, folder)
     
     # Check if path exists (including archived files)
     try:
@@ -2190,25 +2324,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             if not (has_versions or has_delete_markers):
                 raise VAMSGeneralErrorResponse(f"File not found.")
         else:
-            # For prefix, check if at least one object exists
-            response = s3_client.list_objects_v2(
-                Bucket=bucket,
-                Prefix=full_key,
-                MaxKeys=1
-            )
-            if 'Contents' not in response or len(response['Contents']) == 0:
-                # If no current objects, check for archived objects
-                versions_response = s3_client.list_object_versions(
-                    Bucket=bucket,
-                    Prefix=full_key,
-                    MaxKeys=1
-                )
-                
-                has_versions = any(version['Key'].startswith(full_key) for version in versions_response.get('Versions', []))
-                has_delete_markers = any(marker['Key'].startswith(full_key) for marker in versions_response.get('DeleteMarkers', []))
-                
-                if not (has_versions or has_delete_markers):
-                    raise VAMSGeneralErrorResponse(f"No files found under prefix.")
+            # For prefix, check if at least one object exists, then for archived objects
+            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder) and \
+                    not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, versions=True):
+                raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         logger.exception(f"Error checking file existence: {e}")
         raise VAMSGeneralErrorResponse(f"Error checking file.")
@@ -2218,10 +2337,12 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     if is_prefix:
         # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key)
+        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder)
 
         # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
+        _call_with_keep(delete_assetAuxiliary_files, folder_aux,
+                        keep=aux_owner_filter(databaseId, base_key, full_key, folder_aux))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2252,7 +2373,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         success = delete_s3_object_all_versions(bucket, full_key)
 
         # Delete aux files if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+        _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
@@ -2341,6 +2463,13 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+
+    # In a single-file asset a folder is selected by asset-relative path (a folder named like the
+    # file also holds the companion entry listed inside it)
+    folder = None
+    if is_prefix and not is_folder_location(base_key):
+        folder = relative_path_in(base_key, full_key) or file_path
+        full_key = folder_listing_prefix(base_key, folder)
     
     # Check if path exists and if it's already archived
     try:
@@ -2360,12 +2489,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 raise e
         else:
             # For prefix, check if at least one object exists
-            response = s3_client.list_objects_v2(
-                Bucket=bucket,
-                Prefix=full_key,
-                MaxKeys=1
-            )
-            if 'Contents' not in response or len(response['Contents']) == 0:
+            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder):
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         if _is_missing_object_error(e):
@@ -2380,7 +2504,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     if is_prefix:
         # Archive all files under prefix (maps each archived key -> delete-marker VersionId)
-        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key)
+        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key, folder=folder)
 
         # Convert full keys to relative paths
         for key, marker_version_id in archived_keys.items():
@@ -2731,10 +2855,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
     # Copy auxiliary files if they exist
-    copy_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(effective_dest_db, dest_key)
-    )
+    source_aux, dest_aux = aux_file_bases(databaseId, source_base_key, source_key,
+                                          effective_dest_db, dest_base_key, dest_key)
+    _call_with_keep(copy_auxiliary_files, source_aux, dest_aux,
+                    keep=aux_owner_filter(databaseId, source_base_key, source_key, source_aux))
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -2892,10 +3016,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     )
     
     # Move auxiliary files if they exist
-    move_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(databaseId, dest_key)
-    )
+    source_aux, dest_aux = aux_file_bases(databaseId, base_key, source_key, databaseId, base_key, dest_key)
+    _call_with_keep(move_auxiliary_files, source_aux, dest_aux,
+                    keep=aux_owner_filter(databaseId, base_key, source_key, source_aux))
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -3010,7 +3133,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
     #Delete aux files for asset as they don't match anymore with the version.
-    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+    aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+    _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -4605,7 +4729,7 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+    aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0
@@ -4616,15 +4740,16 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
         paginator = s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=aux_prefix):
             if 'Contents' in page:
-                file_count += len(page['Contents'])
                 for item in page['Contents']:
-                    deleted_files.append(item['Key'])
+                    if aux_keep is None or aux_keep(item['Key']):
+                        file_count += 1
+                        deleted_files.append(item['Key'])
 
         if file_count == 0:
             raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
 
         # Delete the auxiliary files
-        delete_assetAuxiliary_files(aux_prefix)
+        _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)

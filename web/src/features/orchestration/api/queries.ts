@@ -876,6 +876,7 @@ export function useExecutionResults(executionId: string, enabled: boolean) {
         hasNextPage: Boolean(query.hasNextPage),
         isFetchingNextPage: query.isFetchingNextPage,
         fetchNextPage: query.fetchNextPage,
+        refetch: query.refetch,
     };
 }
 

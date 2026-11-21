@@ -19,8 +19,10 @@ import { act, render, screen } from "@testing-library/react";
 import NeedleUSDViewerComponent from "./NeedleUSDViewerComponent";
 import {
     QUARANTINE_REFUSAL_MESSAGE,
-    quarantineRefusalResponse,
+    QUARANTINE_REFUSED_DOWNLOAD,
 } from "../../core/quarantineRefusal.testdata";
+import { downloadAsset } from "../../../services/APIService";
+import { clearPresignedUrlCache } from "../../core/presignedFetch";
 
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ api: "https://api.example.test/" })) },
@@ -121,6 +123,13 @@ describe("NeedleUSDViewerComponent: a file the API refused", () => {
 
     beforeEach(() => {
         jest.useFakeTimers();
+        // The authorized download route presigns every file (#1630).
+        clearPresignedUrlCache();
+        (downloadAsset as jest.Mock).mockReset();
+        (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://bucket.s3.example.test/${key}?X-Amz-Signature=sig`,
+        ]);
         fakeUsdModule.FS_createDataFile.mockClear();
         (global as any).__fakeUsdBundle = {
             THREE: fakeThree,
@@ -142,7 +151,7 @@ describe("NeedleUSDViewerComponent: a file the API refused", () => {
     });
 
     it("shows the API's reason for a quarantined asset's file (D172)", async () => {
-        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+        (downloadAsset as jest.Mock).mockResolvedValue(QUARANTINE_REFUSED_DOWNLOAD);
 
         render(viewer("models/scene.usda"));
         await finishLoading();
@@ -153,7 +162,7 @@ describe("NeedleUSDViewerComponent: a file the API refused", () => {
     });
 
     it("adds no format hint under the API's reason (D170)", async () => {
-        global.fetch = jest.fn(() => Promise.resolve(quarantineRefusalResponse())) as any;
+        (downloadAsset as jest.Mock).mockResolvedValue(QUARANTINE_REFUSED_DOWNLOAD);
 
         render(viewer("models/scene.usda"));
         await finishLoading();
@@ -172,5 +181,44 @@ describe("NeedleUSDViewerComponent: a file the API refused", () => {
 
         expect(screen.getByText(/No files loaded successfully/)).toBeInTheDocument();
         expect(screen.getByText(FORMAT_HINT)).toBeInTheDocument();
+    });
+
+    it("reads the file and a dependency from presigned URLs with no Authorization header (#1630)", async () => {
+        global.fetch = jest.fn(() =>
+            Promise.resolve({
+                ok: true,
+                arrayBuffer: () => Promise.resolve(new TextEncoder().encode("#usda 1.0\n").buffer),
+            })
+        ) as any;
+
+        render(viewer("models/scene.usda"));
+        await finishLoading();
+
+        expect(downloadAsset).toHaveBeenCalledWith(
+            expect.objectContaining({
+                databaseId: "db-1",
+                assetId: "asset-1",
+                key: "models/scene.usda",
+                signal: expect.any(AbortSignal),
+            })
+        );
+        const calls = (global.fetch as jest.Mock).mock.calls;
+        expect(calls.length).toBeGreaterThan(0);
+        for (const [url, options] of calls) {
+            expect(String(url)).toContain("bucket.s3.example.test");
+            expect(String(url)).not.toContain("/download/stream/");
+            expect(options.headers).toBeUndefined();
+        }
+    });
+
+    it("sends a failed presign of the main file to the error panel without reading S3 (#1630)", async () => {
+        (downloadAsset as jest.Mock).mockResolvedValue(false);
+        global.fetch = jest.fn() as any;
+
+        render(viewer("models/scene.usda"));
+        await finishLoading();
+
+        expect(screen.getByText(/No files loaded successfully/)).toBeInTheDocument();
+        expect(global.fetch).not.toHaveBeenCalled();
     });
 });

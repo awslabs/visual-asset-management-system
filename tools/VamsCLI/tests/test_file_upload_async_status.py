@@ -110,6 +110,20 @@ class TestUploadReportsAsyncIngestion:
         body = json.loads(result.stdout)
         assert body["async_ingestion"][0]["timed_out"] is True
 
+    def test_a_global_error_while_waiting_still_prints_the_upload_result(self, cli_runner, file_command_mocks,
+                                                                        staged_file):
+        from vamscli.utils.exceptions import TokenExpiredError
+
+        with file_command_mocks as mocks:
+            mocks['api_client'].get_upload_status.side_effect = TokenExpiredError("Authentication token has expired")
+            result = _upload(cli_runner, mocks, staged_file, '--wait-async')
+        assert result.exit_code == 1
+        body = json.loads(result.stdout)
+        assert body["successful_files"] == 2 and body["overall_success"] is False
+        assert body["async_ingestion"][0]["status"] == "unknown"
+        assert "TokenExpiredError" in body["async_ingestion"][0]["error"]
+        assert body["async_ingestion"][0]["check_command"].endswith(f"-u {UPLOAD}")
+
     def test_an_upload_without_large_files_carries_no_async_section(
             self, cli_runner, file_command_mocks, staged_file):
         with file_command_mocks as mocks:
@@ -185,6 +199,34 @@ class TestWaitLoop:
                   "async_ingestion": entries}
         file_cmd.apply_async_outcome(result, waited=True)
         assert result["overall_success"] is True
+
+    def test_a_global_error_stops_the_wait_and_keeps_the_upload_result(self):
+        """The files are uploaded: the wait ends, the unsettled uploads are unknown with the reason and
+        their check command, and the upload result is still reported (non-zero exit)."""
+        from vamscli.utils.exceptions import RetryExhaustedError
+
+        client = type("C", (), {})()
+        answers = [_status("processing_async", [("/a", "PENDING", "")]),
+                   RetryExhaustedError("Rate limit exceeded")]
+
+        def status(db, asset, upload_id):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        client.get_upload_status = status
+        now = [0.0]
+        entries = file_cmd.wait_for_async_ingestion(
+            client, "db", "a", ["u1"], 3600, sleep=lambda s: now.__setitem__(0, now[0] + s),
+            clock=lambda: now[0])
+        assert answers == []
+        assert entries == [{"upload_id": "u1", "status": "unknown", "files": [],
+                            "error": "RetryExhaustedError: Rate limit exceeded",
+                            "check_command": "vamscli file upload-status -d db -a a -u u1"}]
+        result = {"overall_success": True, "successful_files": 1, "failed_files": 0, "async_ingestion": entries}
+        file_cmd.apply_async_outcome(result, waited=True)
+        assert result["overall_success"] is False
 
     def test_errors_until_the_deadline_end_as_unknown_and_timed_out(self):
         client = type("C", (), {})()

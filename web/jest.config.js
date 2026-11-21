@@ -13,14 +13,14 @@ module.exports = {
             "./node_modules/@cloudscape-design/jest-preset/js-transformer",
         "node_modules/@cloudscape-design/.+\\.css":
             "./node_modules/@cloudscape-design/jest-preset/css-transformer",
-        "node_modules/(d3-.*|internmap)/.+\\.js$":
+        "node_modules/(d3-.*|internmap|geotiff|quick-lru)/.+\\.js$":
             "./node_modules/@cloudscape-design/jest-preset/js-transformer",
         "^.+\\.(js|jsx|ts|tsx)$": "babel-jest",
     },
     // A file matching ANY ignore pattern is excluded from transformation, so a
     // single pattern must exempt every ESM package that needs transforming.
     transformIgnorePatterns: [
-        "/node_modules/(?!(@cloudscape-design|d3-[^/]+|internmap|react-leaflet|@react-leaflet|axios)/)",
+        "/node_modules/(?!(@cloudscape-design|d3-[^/]+|internmap|react-leaflet|@react-leaflet|axios|geotiff|quick-lru)/)",
     ],
     moduleNameMapper: {
         // axios ships ESM by default, which jest cannot load, so it is mapped to a CommonJS build.

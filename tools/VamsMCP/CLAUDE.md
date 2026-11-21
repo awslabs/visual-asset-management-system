@@ -49,7 +49,7 @@ tools/VamsMCP/
                              # (the server's own token check, before any tool runs)
     http_app.py              # remote mode: RemoteGate (RFC 9728 metadata, the 401 challenge, token
                              # check, per-request identity) in front of the SDK's streamable HTTP app
-    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config (incl. the published externalOAuthIdpAudienceClaims / UserIdClaim and the relative externalOAuthIdpDiscoveryEndpoint path joined to the provider URL, --issuer as fallback and required when the provider URL serves no discovery document, e.g. a Cognito hosted UI domain; --audience-claim overrides)
+    setup_remote.py          # `vams-mcp setup-remote`: writes the auth file from /api/amplify-config (incl. the published externalOAuthIdpAudienceClaims / UserIdClaim and the relative externalOAuthIdpDiscoveryEndpoint path joined to the provider URL, --issuer as fallback and required when the provider URL serves no discovery document, e.g. a Cognito hosted UI domain; --audience-claim overrides). Every read goes through `_get_json`, which refuses a URL that is not https unless its host is loopback (`vamscli.commands.setup.validate_base_url`)
     annotations.py           # the MCP ToolAnnotations constant of each gate tier (Mandatory Rule 12)
     results.py               # typed results of the most-used reads -> outputSchema (Rule 13)
     client.py                # VamsClient: wraps vamscli APIClient + ProfileManager; remote mode's
@@ -110,8 +110,8 @@ tools/VamsMCP/
     test_zip_download_tools.py
                              # the Download as Zip tools: gate tiers, the body create builds (the CLI's
                              # own selection helpers), errors as data, the URL tool out of autoApprove
-    test_compliance_tools.py # the compliance tools: the two single-response listings, the
-                             # maxItems-keyed pages (evaluations, audit, quarantine), the
+    test_compliance_tools.py # the compliance tools: the maxItems-keyed pages (schemas, cascades,
+                             # evaluations, audit, quarantine), the
                              # page-returning overview/bindings reads, the write/destructive
                              # bodies, docstring contracts
     test_audit_tools.py      # the opt-in `audit` set (vams_audit_groups, _search, _results, _stop): the set
@@ -188,10 +188,6 @@ asymmetry other callers rely on):
 -   `_bounded_message_list(page, max_items, page_size, noun)` — lifts a **bare
     array** nested under `message` onto `Items`, and flags the bound the route
     applied. Used by the two asset-scoped comment listings (Mandatory Rule 7).
--   `_single_response_list(page, items_key)` — lifts a list a route returns
-    WHOLE, under its own field name and with no envelope and no token, onto
-    `Items` + `count`, carrying the other top-level fields through. Used by the
-    compliance schema and pending-cascade listings (Mandatory Rule 7).
 
 ---
 
@@ -308,13 +304,11 @@ asymmetry other callers rely on):
     helper: a bare array under `message` (the asset-scoped comment listings —
     `_bounded_message_list()`), an `Items`/`NextToken` page under `message`
     (subscriptions), and no envelope at all (metadata schemas, API keys, every
-    compliance route). Two compliance listings — `schemas` and pending `cascades` —
-    return a WHOLE list under a route-specific field with no token and go through
-    `_single_response_list(page, items_key)`, because `paginate()` would send paging
-    parameters the route ignores and stop after one page anyway. The compliance
-    `evaluations`, audit `entries` and `quarantinedAssets` are
+    compliance route). The compliance `schemas`,
+    `cascades`, `evaluations`, audit `entries` and `quarantinedAssets` are
     `maxItems`/`startingToken`/`NextToken` pages driven by `paginate()` with that
-    field as `items_key`; the database overview and bindings reads return the
+    field as `items_key` (`list_compliance_schemas` also carries the first page's
+    `createScopes` through, an empty list included); the database overview and bindings reads return the
     route's own page (`summary`, `totalAssets`, `assetOverrideCount` describe the
     full set; `summary.error` is an overlay count of assets whose last evaluation
     errored, not a state) with `max_items`/`starting_token` forwarded and `NextToken`
@@ -322,11 +316,11 @@ asymmetry other callers rely on):
     (`vams-rules-v1` | `legacy`).
 
     **A page can name its page size something other than `pageSize`.** The compliance
-    evaluation history, audit trails and quarantine listing page on `maxItems` +
-    `startingToken` and return `NextToken`; `paginate()` still drives them, but the
-    `fetch_page` callable renames `params["pageSize"]` to the route's `maxItems`
+    schema listing, cascade listing, evaluation history, audit trails and quarantine listing page on
+    `maxItems` + `startingToken` and return `NextToken`; `paginate()` still drives them,
+    but the `fetch_page` callable renames `params["pageSize"]` to the route's `maxItems`
     (clamped to the route's cap) and passes the route's list field as `items_key`
-    (`evaluations`, `entries`, `quarantinedAssets`).
+    (`schemas`, `cascades`, `evaluations`, `entries`, `quarantinedAssets`).
 
     **A route can accept the pagination parameters and discard the token.** The
     comment listings apply `maxItems`/`pageSize` and return no `NextToken` — the
@@ -507,6 +501,14 @@ asymmetry other callers rely on):
       state written per request (stdio's `_SIGN_IN_FAILURE` is not touched in remote mode), and the
       only shared cache is the deployment's feature switches (`FeatureSwitchCache`), which are not
       per user. Mixing remote mode with `VAMS_PROFILE` is refused at start.
+    - **The token is forwarded, by design.** `TokenVamsClient` sends the request's own access token
+      to the auth file's `apiUrl` and nothing exchanges it. This departs from the MCP authorization
+      spec's token-passthrough rule on purpose; the reasons are in the docs site's Remote MCP Server
+      page ("Token forwarding"). Keep the controls that make it safe: only the auth file's audiences
+      are accepted, the web application's client is refused at load (`webAppClientId`) and in
+      `setup-remote`, the token goes only to `apiUrl` for the request it arrived with, and the API
+      audits its audience (`token_audience_for_audit`). Never send it to another host or keep it past
+      its request.
     - **No token in logs, errors, metrics or results.** `VerifiedIdentity` hides its token from
       `repr`; remote tool errors pass through `vamscli`'s `scrub_text`; the CLI's shared request log
       is silenced (`silence_cli_request_log`). Log the user, client, tool, outcome and duration
@@ -527,7 +529,10 @@ asymmetry other callers rely on):
       verification on another (`http_app._verify_limiter`), and the verifier never holds its cache lock
       across a key-set download. A user may have at most `VAMS_MCP_MAX_CALLS_PER_USER` (8) calls in
       progress, counted until each worker thread really ends; a call past it is answered
-      `TooManyConcurrentCalls` without running.
+      `TooManyConcurrentCalls` without running. A call whose body never started in a worker thread
+      (still waiting for a thread at its budget, or cancelled first) gives its slot back in the async
+      wrapper and is answered `ServerBusy`, which invites a retry because nothing ran; `server._RemoteCall`
+      decides under `_CALLS_LOCK` which side releases, so a worker that starts late runs nothing.
     - **The request body is read whole in the gate** (at most 1 MiB, declared or chunked; `413`
       otherwise) before the SDK sees the request.
     - The gate is ours, not the SDK's auth middleware, because the SDK's resource-server wiring
@@ -688,9 +693,9 @@ import ...`): the reads directly in its body, write tools under `if config.enabl
     rest `FEATURE_EDH_WORKSTATIONS`. The add-on's list routes return every row in one
     `{"Items": [...]}` page and no `message` envelope, so the tools return the body as it comes,
     without `paginate()` or `unwrap_message()`. `EdhOutcomeUnknownError`,
-    `EdhStartInProgressError`, `EdhReservationFullError`, `EdhReservationNotPermittedError` and
-    `EdhDisplaySessionEndedError` carry `outcomeUnknown` / `startInProgress` / `code`
-    (`RESERVATION_FULL`, `RESERVATION_NOT_PERMITTED`, `DISPLAY_SESSION_ENDED`) in their `json_fields`, which `@tool_result` passes through
+    `EdhStartInProgressError`, `EdhReservationFullError`, `EdhReservationNotPermittedError`,
+    `EdhDisplaySessionEndedError` and `EdhDesktopErrorError` carry `outcomeUnknown` / `startInProgress` / `code`
+    (`RESERVATION_FULL`, `RESERVATION_NOT_PERMITTED`, `DISPLAY_SESSION_ENDED`, `DESKTOP_ERROR`) in their `json_fields`, which `@tool_result` passes through
     (Mandatory Rule 5).
 -   Capacity reservations: the catalog items carry `launchAllowed` (false: the role may see the
     reservation but not launch into it; create answers 403 `RESERVATION_NOT_PERMITTED`) and both

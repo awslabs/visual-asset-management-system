@@ -314,6 +314,8 @@ const CALL_TO_ACTION: ReadonlyArray<[RegExp, string]> = [
     [/\.scan\b/, "dynamodb:Scan"],
     [/\.invoke\(/, "lambda:InvokeFunction"],
     [/\.delete_object\(/, "s3:DeleteObject"],
+    [/\.transact_write_items\(/, "dynamodb:PutItem"],
+    [/\.list_object_versions\(/, "s3:ListBucketVersions"],
 ];
 
 describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
@@ -493,8 +495,70 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
     });
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
-        expect(script).not.toMatch(/list_objects|list_object_versions|\.client\(\s*['"]s3['"]/);
+        // Only assetLocationFolderKeys reads Amazon S3: one HeadObject, the versions of one exact key at a
+        // time, and one single-key listing under '{key}/'.
+        const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
+        const end = script.indexOf("# STEP: orphanedTriggers\n");
+        expect(start).toBeGreaterThan(-1);
+        expect(end).toBeGreaterThan(start);
+        const locationStep = script.slice(start, end);
+        const rest = script.slice(0, start) + script.slice(end);
+        expect(rest).not.toMatch(
+            /list_objects|list_object_versions|head_object|\.client\(\s*['"]s3['"]/
+        );
+        expect(script).not.toMatch(/get_paginator\(\s*['"]list_object/);
+        const listings = locationStep.match(/list_objects_v2\([^)]*\)/g) ?? [];
+        expect(listings).toHaveLength(1);
+        expect(listings[0]).toContain("MaxKeys=1");
+        const versionListings = locationStep.match(/\.list_object_versions\(/g) ?? [];
+        expect(versionListings).toHaveLength(1);
+        const exact = locationStep.slice(locationStep.indexOf("def exact_key_versions("));
+        expect(exact.slice(0, 900)).toContain("if entry['Key'] == key");
         expect(script).not.toMatch(/auxiliary/i);
+    });
+
+    it("moves the copy's records without overwriting, and leaves vectors and execution history", () => {
+        const move = script.slice(script.indexOf("def move_record("));
+        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_exists(#k)'");
+        const block = script.slice(script.indexOf("COPY_TABLE_KEYS = ("));
+        const tables = Array.from(
+            block.slice(0, block.indexOf("\n)\n")).matchAll(/'([A-Z0-9_]+)'/g)
+        ).map((m) => m[1]);
+        for (const name of [
+            "ASSET_FILE_METADATA_STORAGE_TABLE",
+            "FILE_ATTRIBUTE_STORAGE_TABLE",
+            "ASSET_FILE_VERSIONS_STORAGE_TABLE",
+            "ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE",
+            "ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE",
+        ]) {
+            expect(tables).toContain(name);
+        }
+        expect(tables.join(" ")).not.toMatch(/VECTOR|EXECUTION/);
+        expect(readme).toContain("#### Part (b): the copy named like the file");
+        // Idempotent without local state: a conditional marker on the asset row, read by the scan.
+        expect(script).toMatch(/^COPY_DONE_ATTRIBUTE = 'assetLocationCopyRecordsMovedAt'$/m);
+        const mark = script.slice(script.indexOf("def mark_copy_records_done("));
+        expect(mark.slice(0, 1200)).toContain("attribute_not_exists(#m)");
+        expect(script).toMatch(/assetLocation, '\s*\n\s*f'\{COPY_DONE_ATTRIBUTE\}'/);
+        expect(script).not.toMatch(/moved-copies/);
+        expect(readme).toContain("assetLocationCopyRecordsMovedAt");
+        expect(readme).toContain("Run the step before users edit metadata on single-file assets.");
+        expect(readme).toMatch(/run `vectorBackfill` after this step/);
+    });
+
+    it("runs assetLocationFolderKeys first, gated, with a report and a checkpoint", () => {
+        expect(tuple(script, "STEP_CHOICES")[0]).toBe("assetLocationFolderKeys");
+        const body = script.slice(script.indexOf("def main("));
+        expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeGreaterThan(-1);
+        expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeLessThan(
+            body.indexOf("run_orphaned_triggers_step(")
+        );
+        expect(body).toMatch(/gated=run_location_keys or /);
+        expect(script).toContain("ConditionExpression='#loc.#key = :old'");
+        expect(script).toMatch(/parser\.add_argument\('--resume'/);
+        expect(readme).toContain("assetLocationFolderKeys-dry-run-report.jsonl");
+        expect(readme).toContain("--resume");
     });
 
     it("documents what the deploy creates for Download as Zip and the copy engine", () => {
@@ -598,6 +662,25 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
 
     it.each(PAIRS)("%s equals the backend's %s", (migrationName, backendName) => {
         expect(pyConstant(script, migrationName)).toBe(pyConstant(backend, backendName));
+    });
+
+    it("runs after assetLocationFolderKeys, whose fixed keys it indexes, and not after it failed", () => {
+        const body = script.slice(script.indexOf("def main("));
+        const folderKeys = body.indexOf("run_asset_location_folder_keys_step(");
+        const index = body.indexOf("run_asset_location_index_step(");
+        expect(folderKeys).toBeGreaterThan(-1);
+        expect(index).toBeGreaterThan(folderKeys);
+        const steps = Array.from(
+            (/^STEP_CHOICES\s*=\s*\(([^)]*)\)/m.exec(script)?.[1] ?? "").matchAll(/'([A-Za-z]+)'/g)
+        ).map((m) => m[1]);
+        expect(steps.indexOf("assetLocationIndex")).toBe(steps.indexOf("all") - 1);
+        expect(steps[0]).toBe("assetLocationFolderKeys");
+        expect(body).toMatch(
+            /if run_asset_location_index and location_keys_failed and not dry_run:/
+        );
+        // A key the folder-keys step fixes after the index ran keeps its indexed key in step.
+        const append = script.slice(script.indexOf("def append_location_slash("));
+        expect(append.slice(0, append.indexOf("\ndef "))).toContain("ASSET_LOCATION_KEY_ATTRIBUTE");
     });
 
     it("writes the table name into the marker, which the backend requires", () => {
