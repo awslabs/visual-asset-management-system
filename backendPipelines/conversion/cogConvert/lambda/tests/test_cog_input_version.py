@@ -7,7 +7,7 @@
 ``openPipeline``, which forwards it in the state-machine input; ``constructPipeline`` names it in a
 second Batch command argument beside the definition, which stays free of it, and
 ``executeBatchJob`` submits both. An event without it reads the current object, as before. Reuses the
-fixtures of ``test_manifest_refactor`` and ``test_cog_bucket_regions`` (same directory; the suite
+fixtures of ``test_cog_manifest_refactor`` and ``test_cog_bucket_regions`` (same directory; the suite
 runs alone)."""
 
 import json
@@ -21,9 +21,9 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
 
-import test_manifest_refactor as refactor  # noqa: E402
+import test_cog_manifest_refactor as refactor  # noqa: E402
 import test_cog_bucket_regions as regions  # noqa: E402
-import test_batch_job_registration as registration  # noqa: E402
+import test_cog_batch_job_registration as registration  # noqa: E402
 
 VERSION = "3HL4kqtJlcpXroDTDmJ.rmSpXd3dIbrHY"
 

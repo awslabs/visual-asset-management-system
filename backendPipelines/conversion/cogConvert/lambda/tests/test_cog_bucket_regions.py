@@ -6,7 +6,7 @@
 them to ``openPipeline``, which forwards them in the state-machine input; ``constructPipeline`` turns
 them into the definition's ``bucketRegions`` map (bucket name -> Region, deployment-Region buckets
 left out), which the container registers before its first S3 call. Reuses the fixtures of
-``test_manifest_refactor`` (same directory; the suite runs alone)."""
+``test_cog_manifest_refactor`` (same directory; the suite runs alone)."""
 
 import json
 import os
@@ -19,7 +19,7 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
 
-import test_manifest_refactor as refactor  # noqa: E402
+import test_cog_manifest_refactor as refactor  # noqa: E402
 
 
 def _container_pipeline_definition():
