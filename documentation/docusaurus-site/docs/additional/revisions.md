@@ -609,6 +609,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Blender agent on CPU** — The Image to 3D Blender agent runs on a CPU compute environment and queue of its own, created only when it is enabled, instead of holding a GPU instance. (issue #1652)
 -   **Image to 3D model cache generation** — Raising the new `app.pipelines.useImageTo3d.modelCacheGeneration` starts every model on an empty cache in a new directory and prefix; the `INVALIDATE_MODEL_CACHE` run setting is removed. (issue #1652)
 -   **Pipeline image locks** — The CAD STEP agent, Video SOP/BOM, zip archive, coordinate transform and Potree (PDAL) images install their Python packages from hashed locks and the PDAL build environment from a conda lock with a SHA-256 per package; the CAD STEP agent and PDAL runtime images apply OS security updates; the Isaac Lab training and Potree converter images also install from hashed locks; the Cosmos and GR00T images install from their upstream uv lock (used as written for Cosmos 3) or a hashed lock; every pipeline base image is digest-pinned. (issue #1652)
+-   **GR00T image dependency updates** — The NVIDIA GR00T fine-tuning image installs patched versions of its Python dependencies where the GR00T code allows (PyTorch 2.8.0, onnx 1.22.0, protobuf 5.29.6, Ray 2.56.0, Diffusers 0.38.0, PyArrow 23.0.1 and others) and no longer installs TensorFlow or Keras, which the pipeline does not use; Transformers stays at 4.51.3 for the GR00T model code. (PR #1812)
 
 **Documentation:**
 
