@@ -10,11 +10,6 @@
                 ]
             }
         },
-        "backendPipelines/genAi/nvidia/gr00t/container/tests": {
-            "ownRequirements": {
-                "reason": "The container's requirements.lock is the hashed export for the image's Python 3.10 (torch, tensorflow and CUDA wheels), which a CPU runner does not install; these suites import only the standard library and the common requirements."
-            }
-        },
         "backendPipelines/genAi/imageTo3d/benchmark/tests": {
             "extraRequirements": {
                 "reason": "replay.py loads the container's modules, so the tests install the container's requirements.",

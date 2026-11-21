@@ -214,3 +214,17 @@ def test_the_workflow_runs_every_group():
     groups = re.search(r"^\s+group: \[([0-9, ]+)\]\s*$", workflow, re.M)
     assert groups, "the pipeline test job has no group matrix"
     assert [int(g) for g in groups.group(1).split(",")] == list(range(1, runner.GROUP_COUNT + 1))
+
+
+def test_own_requirements_setting_skips_the_nearest_requirements_file(monkeypatch):
+    """A directory with an ``ownRequirements`` entry installs only the common requirements (and extras)."""
+    target = "backendPipelines/genAi/imageTo3d/container/tests"
+    plain = {s.rel: s for s in runner.suites()}[target]
+    assert any(p.name == "requirements.txt" for p in plain.requirement_files)
+
+    settings = runner.load_settings()
+    monkeypatch.setattr(
+        runner, "load_settings", lambda: {**settings, target: {"ownRequirements": {"reason": "test"}}}
+    )
+    opted_out = {s.rel: s for s in runner.suites()}[target]
+    assert opted_out.requirement_files == (runner.COMMON_REQUIREMENTS,)
