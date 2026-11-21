@@ -11,7 +11,7 @@ import sys
 import threading
 
 from .utils.logging import log
-from .utils.pipeline.objects import PipelineStatus, apply_input_versions
+from .utils.pipeline.objects import PipelineStatus, apply_input_versions, input_asset_location
 
 log.set_log_level(logging.INFO)
 
@@ -64,8 +64,10 @@ def main() -> int:
     try:
         if len(sys.argv) < 2:
             raise ValueError("The pipeline definition argument is missing")
-        # The definition, then (when the run has one) the input's launch version.
-        response = run(apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:]))
+        # The definition, then (when the run has either) the input's launch version and where the input
+        # sits in its asset.
+        response = run(apply_input_versions(json.loads(sys.argv[1]), sys.argv[2:]),
+                       input_asset=input_asset_location(sys.argv[2:]))
     except BaseException as error:  # noqa: BLE001 - every route out of the container reports on the token
         logger.exception(error)
         _report(sfn, f"{type(error).__name__}: {error}"[:256])
