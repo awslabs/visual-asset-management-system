@@ -229,6 +229,18 @@ def translate_error(error, job):
     return error
 
 
+def peak_memory_mib():
+    """The most resident memory this process held, in MiB (None where the platform does not say). The
+    parent records the largest of its workers in conversion-run.json."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    # Linux reports kibibytes; macOS (a developer's machine) reports bytes.
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round(peak / (1024 * 1024 if sys.platform == "darwin" else 1024), 1)
+
+
 def _write_result(path, result):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(result, handle)
@@ -253,7 +265,7 @@ def main(argv):
             traceback.print_exc(file=sys.stderr)
         _write_result(result_path, {"ok": False, "type": kind, "message": str(e)})
         return 1
-    _write_result(result_path, {"ok": True, **output})
+    _write_result(result_path, {"ok": True, **output, "peakMemoryMiB": peak_memory_mib()})
     return 0
 
 
