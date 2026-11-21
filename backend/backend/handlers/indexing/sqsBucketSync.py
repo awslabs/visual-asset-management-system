@@ -2301,29 +2301,30 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
             logger.info(f"Asset {owner_asset_id} found in bucket {owner_bucket_id} ({resolved_by})")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # 2.c No live owner. Until the location index is ready (its backfill marker exists) a miss
-            # there proves nothing, so the first folder decides exactly as before. Once it is ready,
-            # an archived owner is found by location, and an auto-created asset may not overlap any
-            # asset's location.
+            # 2.c No live owner. An index hit counts at any time, an archived owner's included: the
+            # asset whose stored location holds the key is restored from it before the backfill marker
+            # exists exactly as after, so bucket sync and the indexers, which read the same index, give
+            # the record one answer. Only a miss waits for readiness: until then the first folder
+            # decides as before. Once it is ready, an auto-created asset may not overlap any asset's
+            # location.
             index_is_ready = index_usable and index_ready(asset_table_name)
             archived = (resolve_by_location(asset_table, bucket_name, object_key, include_archived=True,
-                                            use_cache=use_index_cache) if index_is_ready else None)
-            if index_is_ready and archived is None:
+                                            use_cache=use_index_cache) if index_usable else None)
+            if archived is None:
                 index_is_ready = False
-            if index_is_ready:
-                if archived.status == RESOLVED_AMBIGUOUS:
-                    return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
-                                         archived.candidates)
-                if archived.status == RESOLVED_FOUND:
-                    resolved_by = RESOLVED_BY_LOCATION_INDEX
-                    owner_asset_id = archived.entry.asset_id
-                    owner_bucket_id = archived.entry.bucket_id or bucket_id
-                    if archived.entry.archived:
-                        archived_asset = archived.row
-                    else:
-                        asset_data = archived.row
-                        database_id_to_use = asset_data.get('databaseId')
-            elif first_folder_valid:
+            elif archived.status == RESOLVED_AMBIGUOUS:
+                return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
+                                     archived.candidates)
+            elif archived.status == RESOLVED_FOUND:
+                resolved_by = RESOLVED_BY_LOCATION_INDEX
+                owner_asset_id = archived.entry.asset_id
+                owner_bucket_id = archived.entry.bucket_id or bucket_id
+                if archived.entry.archived:
+                    archived_asset = archived.row
+                else:
+                    asset_data = archived.row
+                    database_id_to_use = asset_data.get('databaseId')
+            if not asset_data and not archived_asset and not index_is_ready and first_folder_valid:
                 archived_asset = lookup_archived_asset(bucket_id, asset_id)
 
             if asset_data:

@@ -89,7 +89,8 @@ def _wire(m, live=None, resolve=(NOT_FOUND,), ready=False, conflicts=()):
     m.update_asset_type = MagicMock(return_value=True)
     m.is_versioning_enabled = MagicMock(return_value=True)
     m.delete_s3_object = MagicMock(return_value=True)
-    m.resolve_owner = MagicMock(side_effect=list(resolve))
+    # The archived-owner lookup that follows a live miss reads the index too (an index hit counts at any time)
+    m.resolve_owner = MagicMock(side_effect=list(resolve) + [NOT_FOUND] * 4)
     m.index_ready = MagicMock(return_value=ready)
     m.find_conflicts = MagicMock(return_value=list(conflicts))
     m.dynamodb = MagicMock()
@@ -545,3 +546,51 @@ class TestAnArchivedOwnerGoneSinceTheLookup:
         assert (forwarded["vamsBinding"]["assetId"], forwarded["vamsBinding"]["resolvedBy"]) == (
             "projects", "fastPath")
         assert [(key, asset) for _bucket, key, _db, asset in _tagged(m)] == [("projects/alpha/x.glb", "projects")]
+
+
+@pytest.mark.unit
+class TestAnArchivedOwnerHitBeforeTheIndexIsReady:
+    """An index hit counts at any time, an archived owner's included: before the backfill a direct write into
+    an archived custom-root asset's folder restores that asset and is recorded, tagged and bound to it, as the
+    indexers (which read the same index) attribute it. Only a miss waits for readiness."""
+
+    def test_the_archived_custom_root_asset_is_restored_and_the_file_recorded(self):
+        m = _load()
+        archived = _entry(database_id="db1#deleted", asset_id="owner-1", location="projects/alpha/")
+        _wire(m, resolve=[NOT_FOUND, _found(archived)], ready=False)
+        response = m.lambda_handler_created({"Records": [_sqs("msg-1", _record("projects/alpha/x.glb"))]},
+                                            MagicMock())
+        assert response["batchItemFailures"] == []
+        assert m.restore_archived_asset.call_args.args[:2] == ("bucket-1", "owner-1")
+        m.lookup_archived_asset.assert_not_called()
+        m.create_new_asset.assert_not_called()
+        [row] = _history_rows(m)
+        assert (row["databaseId:assetId:filePath"], row["resolvedBy"]) == ("db1:owner-1:/x.glb", "locationIndex")
+        assert _tagged(m) == [(BUCKET, "projects/alpha/x.glb", "db1", "owner-1")]
+        [forwarded] = _sns_records(m)
+        assert (forwarded["vamsBinding"]["assetId"], forwarded["vamsBinding"]["databaseId"]) == ("owner-1", "db1")
+
+    def test_a_miss_before_readiness_still_uses_the_first_folder(self):
+        m = _load()
+        _wire(m, resolve=[NOT_FOUND, NOT_FOUND], ready=False)
+        m.process_s3_record(_record("newfolder/file.glb"))
+        m.lookup_archived_asset.assert_called_once_with("bucket-1", "newfolder")
+
+
+@pytest.mark.unit
+class TestOneAutoCreateRefusedDatapointPerRecord:
+    """A deferred auto-create that is refused when the record comes back counts the refusal once."""
+
+    def test_deferral_then_refusal_writes_one_metric_line(self, capsys, _restore_module_attrs):
+        m = _load()
+        _wire(m, resolve=[NOT_FOUND, NOT_FOUND], ready=True)
+        m.s3_client.list_objects_v2.return_value = {"Contents": [{"Key": "newfolder/other.glb"}]}
+        m.create_new_asset = MagicMock(side_effect=m.AssetLocationInUseError("in use", owner="db2:o1 at newfolder/"))
+        capsys.readouterr()
+        first = m.lambda_handler_created({"Records": [_sqs("msg-1", _record("newfolder/f.glb"), 1)]}, MagicMock())
+        assert first["batchItemFailures"] == [{"itemIdentifier": "msg-1"}]
+        m.resolve_owner = MagicMock(side_effect=[NOT_FOUND, NOT_FOUND])
+        second = m.lambda_handler_created({"Records": [_sqs("msg-1", _record("newfolder/f.glb"), 2)]}, MagicMock())
+        assert second["batchItemFailures"] == []
+        lines = [line for line in capsys.readouterr().out.splitlines() if '"AutoCreateRefused"' in line]
+        assert len(lines) == 1
