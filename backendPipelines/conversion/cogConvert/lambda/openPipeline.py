@@ -70,6 +70,19 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def workflow_execution_id_from_event_prefix(orchestration_event_prefix):
+    """The workflow execution id in the orchestration event prefix
+    (``<source>.execution.<executionId>.pipeline.<pipelineExecutionId>``), or ``""`` when the prefix is
+    empty or unrecognized. VAMS builds every prefix from the run's workflow execution id
+    (``executionRecords.orchestration_event_prefix``), and without a prefix nothing is registered, so a
+    log line VAMS reads always has this id. The source may contain dots; the ids do not."""
+    head, marker, _ = (orchestration_event_prefix or "").rpartition(".pipeline.")
+    if not marker:
+        return ""
+    _, marker, execution_id = head.rpartition(".execution.")
+    return execution_id if marker else ""
+
+
 def _state_function_names():
     """{state name: function name} from STATE_FUNCTION_NAMES; {} when unset or not a JSON object."""
     try:
@@ -225,7 +238,8 @@ def lambda_handler(event, context):
         # Lambda under WAIT_FOR_TASK_TOKEN, so Step Functions does not own its lifecycle.
         "orchestrationEventPrefix": orchestration_event_prefix,
         # With the prefix's pipeline execution id, the id every state's Lambda puts on its log lines.
-        "workflowExecutionId": event.get("workflowExecutionId", "") or "",
+        # Taken from the prefix, so vamsExecute's payload stays as it is.
+        "workflowExecutionId": workflow_execution_id_from_event_prefix(orchestration_event_prefix),
     }
 
     try:

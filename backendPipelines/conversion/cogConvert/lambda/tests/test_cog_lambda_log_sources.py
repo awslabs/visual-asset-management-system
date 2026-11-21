@@ -6,11 +6,11 @@
 VAMS reads a registered log group that every run shares for the lines that carry BOTH the workflow
 execution id and the pipeline execution id. The two halves only work together: openPipeline registers
 the /aws/lambda/<function> group of ConstructPipelineTask, CogConvertBatchJob and PipelineEndTask, and
-each of those handlers binds both ids before it logs. The workflow execution id travels vamsExecute ->
-openPipeline's state machine input -> constructPipeline's re-emitted payload -> the batch task's payload;
-the pipeline execution id is the end of orchestrationEventPrefix. Reuses the fixtures of
-``test_cog_manifest_refactor`` and ``test_cog_batch_job_registration`` (same directory; the suite runs
-alone)."""
+each of those handlers binds both ids before it logs. Both ids come from orchestrationEventPrefix
+(``<source>.execution.<workflowExecutionId>.pipeline.<pipelineExecutionId>``): openPipeline puts the
+workflow execution id in the state machine input, constructPipeline re-emits it, and the batch task's
+payload carries it. Reuses the fixtures of ``test_manifest_refactor`` and ``test_batch_job_registration``
+(same directory; the suite runs alone)."""
 
 import ast
 import importlib
@@ -27,8 +27,8 @@ _LAMBDA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LAMBDA_DIR not in sys.path:
     sys.path.insert(0, _LAMBDA_DIR)
 
-import test_cog_manifest_refactor as refactor  # noqa: E402
-import test_cog_batch_job_registration as registration  # noqa: E402
+import test_manifest_refactor as refactor  # noqa: E402
+import test_batch_job_registration as registration  # noqa: E402
 
 PREFIX = "vams.prod.execution.E1.pipeline.P1"
 IDS = {"workflowExecutionId": "E1", "pipelineExecutionId": "P1"}
@@ -56,7 +56,7 @@ def _load_open_pipeline(**env):
 def _run_open_pipeline(mod, event_over=None):
     """Run openPipeline once; returns (the state machine input, the registration detail)."""
     case = refactor.TestOpenPipeline()
-    event = dict(case._event(), workflowExecutionId="E1", orchestrationEventPrefix=PREFIX)
+    event = dict(case._event(), orchestrationEventPrefix=PREFIX)
     event.update(event_over or {})
     start = case._mock_start()
     put_events = MagicMock()
@@ -157,22 +157,56 @@ class TestLambdaLogSourceRegistration:
 
 @pytest.mark.unit
 class TestTheWorkflowExecutionIdTravels:
-    def test_vams_execute_hands_it_to_open_pipeline(self):
+    def test_vams_execute_hands_open_pipeline_the_prefix_from_the_manifest(self):
         case = refactor.TestVamsExecute()
         mod = case._load()
         s3 = MagicMock()
         s3.get_object.return_value = {"Body": MagicMock(read=lambda: json.dumps(case._manifest()).encode("utf-8"))}
         invoke = MagicMock(return_value={"StatusCode": 200})
-        body = dict(case._body(), workflowExecutionId="E1")
         with patch.object(mod, "s3_client", s3), patch.object(mod.lambda_client, "invoke", invoke):
-            assert mod.lambda_handler({"body": json.dumps(body)}, MagicMock())["statusCode"] == 200
+            assert mod.lambda_handler({"body": json.dumps(case._body())}, MagicMock())["statusCode"] == 200
         payload = json.loads(invoke.call_args.kwargs["Payload"].decode("utf-8"))
-        assert payload["workflowExecutionId"] == "E1"
+        assert payload["orchestrationEventPrefix"] == PREFIX
 
-    def test_open_pipeline_puts_it_in_the_state_machine_input(self):
+    def test_open_pipeline_takes_it_from_the_prefix_into_the_state_machine_input(self):
+        """vamsExecute does not forward workflowExecutionId; the event below has none."""
         sfn_input, _detail = _run_open_pipeline(_load_open_pipeline())
         assert sfn_input["workflowExecutionId"] == "E1"
         assert sfn_input["orchestrationEventPrefix"] == PREFIX
+
+    @pytest.mark.parametrize("source", ["vams", "vams.sbxq-us-west-2", "vams.prod.us-gov-west-1"])
+    def test_the_parse_reads_every_prefix_the_backend_builds(self, source):
+        """Every prefix VAMS sends (executeWorkflow for the first step and its records, the interim
+        tracking for later steps) comes from executionRecords.orchestration_event_prefix with the run's
+        workflow execution id, which is what the logs view filters on."""
+        backend_pkg = os.path.join(registration._repo_root(), "backend", "backend")
+        if backend_pkg not in sys.path:
+            sys.path.append(backend_pkg)
+        records = importlib.import_module("common.workflows.executionRecords")
+        execution_id, pipeline_execution_id = records.new_guid(), records.new_guid()
+        prefix = records.orchestration_event_prefix(source, execution_id, pipeline_execution_id)
+        mod = _load_open_pipeline()
+        assert mod.workflow_execution_id_from_event_prefix(prefix) == execution_id
+        assert mod.manifestHelper.pipeline_execution_id_from_event_prefix(prefix) == pipeline_execution_id
+
+    @pytest.mark.parametrize("prefix", ["", None, "garbage", "vams.prod.execution.E1",
+                                        "vams.prod.pipeline.P1"])
+    def test_an_empty_or_unrecognized_prefix_gives_no_id(self, prefix):
+        assert _load_open_pipeline().workflow_execution_id_from_event_prefix(prefix) == ""
+
+    def test_without_a_prefix_nothing_is_registered_so_no_line_is_read_without_the_id(self):
+        """The id is missing only when the prefix is, and then no log source is registered."""
+        mod = _load_open_pipeline(STATE_MACHINE_LOG_GROUP_ARN=STATE_MACHINE_GROUP_ARN,
+                                  STATE_FUNCTION_NAMES=json.dumps(FUNCTION_NAMES))
+        case = refactor.TestOpenPipeline()
+        start = case._mock_start()
+        put_events = MagicMock()
+        with patch.object(mod.sfn, "start_execution", start), \
+                patch.object(mod.events_client, "put_events", put_events):
+            response = mod.lambda_handler(dict(case._event(), orchestrationEventPrefix=""), MagicMock())
+        assert response["statusCode"] == 200
+        put_events.assert_not_called()
+        assert json.loads(start.call_args.kwargs["input"])["workflowExecutionId"] == ""
 
     def test_construct_pipeline_re_emits_it_for_the_batch_task_and_pipeline_end(self):
         """Its outputPath is $.Payload, which replaces the state, and the batch task's payload reads

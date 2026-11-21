@@ -33,8 +33,7 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
                      input_metadata_s3_location, input_configuration_s3_location,
                      external_task_token, executing_userName, executing_requestContext,
                      orchestration_event_prefix="",
-                     input_bucket_region="", output_bucket_region="", input_version_id="",
-                     workflow_execution_id=""):
+                     input_bucket_region="", output_bucket_region="", input_version_id=""):
 
     messagePayload = {
         "inputS3AssetFilePath": input_s3_asset_file_path,
@@ -58,9 +57,6 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
         "orchestrationEventPrefix": orchestration_event_prefix,
-        # The workflow execution id, which the state machine's Lambdas log on every line (VAMS reads
-        # their shared log groups for it and the pipeline execution id).
-        "workflowExecutionId": workflow_execution_id,
     }
 
     logger.info("Invoking Open Pipeline Lambda")
@@ -169,7 +165,6 @@ def lambda_handler(event, context):
             input_bucket_region=resolved['inputBucketRegion'],
             output_bucket_region=resolved['outputBucketRegion'],
             input_version_id=resolved['inputVersionId'],
-            workflow_execution_id=data.get('workflowExecutionId', '') or '',
         )
 
         return {'statusCode': 200, 'body': 'Success'}
