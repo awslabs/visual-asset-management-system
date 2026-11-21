@@ -20,16 +20,6 @@
     ],
     "exemptions": [
         {
-            "path": "backendPipelines/genAi/imageTo3d/container/requirements.txt",
-            "reason": "GPU image requirements installed beside upstream repositories; only the VAMS-owned set will be locked.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
-        },
-        {
-            "path": "backendPipelines/genAi/imageTo3d/container/vams_utils/requirements.txt",
-            "reason": "Requirements of the imageTo3d utils package; folded into the image's lock.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
-        },
-        {
             "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",
             "reason": "Installed into Isaac Sim's bundled Python, which a lock must target explicitly.",
             "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
