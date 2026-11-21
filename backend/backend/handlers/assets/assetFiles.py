@@ -44,8 +44,8 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    contains, folder_listing_prefix, in_folder, is_folder_location, names_own_object, object_key_for,
-    relative_path_in,
+    aux_file_prefix, aux_owner_filter, aux_scope, contains, folder_listing_prefix, in_folder, is_folder_location,
+    is_location_object, names_own_object, object_key_for, relative_path_in,
 )
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
@@ -631,18 +631,11 @@ def _list_single_file_location_page(bucket: str, location: str, list_params: Dic
 
 def _is_location_object(location: str, object_key: str) -> bool:
     """Whether a key is the object of a single-file location (the location key itself)."""
-    return bool(location) and not is_folder_location(location) and \
-        (object_key or "").lstrip('/') == location.lstrip('/')
+    return is_location_object(location, object_key)
 
 def aux_file_base(database_id: str, location: str, object_key: str) -> str:
-    """Auxiliary-bucket prefix of one file's derived data, scoped to that file.
-
-    The object of a single-file location keeps its data in the ``preview`` subfolder of
-    ``{databaseId}/{key}/``; the rest of that base holds the data of the entries in its
-    companion folder ``{key}/``, so the object's prefix stops at ``preview/``.
-    """
-    base = aux_bucket_asset_file_base(database_id, object_key)
-    return base + "preview/" if _is_location_object(location, object_key) else base
+    """Auxiliary-bucket prefix of one file's own derived data (``common.assetLocations.aux_file_prefix``)."""
+    return aux_file_prefix(database_id, location, object_key)
 
 def aux_file_bases(source_db: str, source_location: str, source_key: str,
                    dest_db: str, dest_location: str, dest_key: str) -> Tuple[str, str]:
@@ -655,35 +648,9 @@ def aux_file_bases(source_db: str, source_location: str, source_key: str,
         return source + "preview/", dest + "preview/"
     return source, dest
 
-def aux_owner_filter(database_id: str, location: str, target_key: str,
-                     aux_prefix: str) -> Optional[Callable[[str], bool]]:
-    """None, or which auxiliary keys under ``aux_prefix`` belong to ``target_key`` in a single-file location.
-
-    The object's data and the data of companion entries in ``{key}/preview/`` share
-    ``{databaseId}/{key}/preview/``: a key there whose rest has a ``/preview/`` segment
-    (``{entry}/preview/...``) belongs to a companion entry, any other key to the object. The predicate
-    keeps the object's keys for the object and the companion entries' keys for any other target, so
-    neither reaches the other's viewer data.
-    """
-    if not location or is_folder_location(location):
-        return None
-    shared = aux_bucket_asset_file_base(database_id, location) + "preview/"
-    if not (aux_prefix or "").startswith(shared):
-        return None
-    is_object = _is_location_object(location, target_key)
-
-    def keep(aux_key: str) -> bool:
-        return ("/preview/" in aux_key[len(shared):]) != is_object
-    return keep
-
 def _call_with_keep(operation: Callable, *args, keep: Optional[Callable[[str], bool]] = None):
     """Call an auxiliary-data operation, passing ``keep`` only when there is one (folder assets need none)."""
     return operation(*args) if keep is None else operation(*args, keep=keep)
-
-def aux_scope(database_id: str, location: str, object_key: str) -> Tuple[str, Optional[Callable[[str], bool]]]:
-    """``(prefix, keep)`` of one file's auxiliary data: ``aux_file_base`` and ``aux_owner_filter``."""
-    prefix = aux_file_base(database_id, location, object_key)
-    return prefix, aux_owner_filter(database_id, location, object_key, prefix)
 
 def delete_assetAuxiliary_files(prefix, keep: Optional[Callable[[str], bool]] = None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker

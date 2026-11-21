@@ -312,3 +312,24 @@ class TestAFileNamedLikeAPreview:
         assert al.relative_path_in(self.LOCATION, key) == path
         assert al.object_key_for(self.LOCATION, path) == key
         assert al.names_own_object(self.LOCATION, path) is (key == self.LOCATION)
+
+
+@pytest.mark.unit
+class TestAuxScope:
+    def test_the_object_keeps_to_its_preview_folder_and_not_a_companion_preview_folder(self):
+        prefix, keep = al.aux_scope("db1", FILE_LOCATION, FILE_LOCATION)
+        assert prefix == "db1/projects/model.glb/preview/"
+        assert keep("db1/projects/model.glb/preview/PotreeViewer/r.bin")
+        assert not keep("db1/projects/model.glb/preview/x.glb/preview/PotreeViewer/r.bin")
+
+    def test_a_companion_entry_in_a_folder_named_preview_keeps_to_its_own_data(self):
+        prefix, keep = al.aux_scope("db1", FILE_LOCATION, "projects/model.glb/preview/x.glb")
+        assert prefix == "db1/projects/model.glb/preview/x.glb/"
+        assert keep("db1/projects/model.glb/preview/x.glb/preview/a.bin")
+        assert not keep("db1/projects/model.glb/preview/x.glb/a.bin")
+
+    def test_other_files_need_no_filter(self):
+        assert al.aux_scope("db1", FILE_LOCATION, "projects/model.glb/sub/x.obj") == (
+            "db1/projects/model.glb/sub/x.obj/", None)
+        assert al.aux_scope("db1", FOLDER_LOCATION, "projects/building-a/x.txt") == (
+            "db1/projects/building-a/x.txt/", None)

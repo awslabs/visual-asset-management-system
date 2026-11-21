@@ -220,3 +220,63 @@ def in_folder(location: Optional[str], relative_folder: Optional[str], object_ke
     path = relative_path_in(location, object_key)
     folder = "/" + (relative_folder or "").strip("/") + "/"
     return path is not None and folder != "//" and path.startswith(folder)
+
+
+# ---------------------------------------------------------------------------
+# Auxiliary (viewer and preview) data of one file
+#
+# Auxiliary objects live at ``{databaseId}/{file key}/...``; a file's own data is in its ``preview/``
+# subfolder (``common.workflows.executionRecords.aux_preview_file_prefix``). In a single-file location the
+# rest of ``{databaseId}/{key}/`` holds the data of the companion entries, and the data of a companion
+# entry in a folder named ``preview`` (``{key}/preview/x.glb``) sits inside the object's ``preview/``
+# folder, at ``{databaseId}/{key}/preview/x.glb/preview/...``.
+# ---------------------------------------------------------------------------
+
+
+def aux_bucket_file_base(database_id: Optional[str], file_key: Optional[str]) -> str:
+    """``{databaseId}/{file key}/``, the auxiliary-bucket base of one file (or of a folder and all beneath it)."""
+    key = (file_key or "").strip("/")
+    base = (database_id or "").strip("/")
+    return f"{base}/{key}/" if key else f"{base}/"
+
+
+def is_location_object(location: Optional[str], object_key: Optional[str]) -> bool:
+    """Whether a key is the object of a single-file location (the location key itself)."""
+    loc = normalize_location(location)
+    return bool(loc) and not loc.endswith("/") and (object_key or "").lstrip("/") == loc
+
+
+def aux_file_prefix(database_id: Optional[str], location: Optional[str], object_key: Optional[str]) -> str:
+    """The auxiliary prefix of one file's own data: ``aux_bucket_file_base``, or for the object of a single-file
+    location its ``preview/`` subfolder, since the rest of that base belongs to the companion entries."""
+    base = aux_bucket_file_base(database_id, object_key)
+    return base + "preview/" if is_location_object(location, object_key) else base
+
+
+def aux_owner_filter(database_id: Optional[str], location: Optional[str], target_key: Optional[str],
+                     aux_prefix: Optional[str]) -> Optional[Callable[[str], bool]]:
+    """None, or which auxiliary keys under ``aux_prefix`` belong to ``target_key`` in a single-file location.
+
+    Under ``{databaseId}/{key}/preview/`` a key whose rest has a ``/preview/`` segment (``{entry}/preview/...``)
+    belongs to a companion entry in ``{key}/preview/``, any other key to the object. The predicate keeps the
+    object's keys for the object and the companion entries' keys for any other target.
+    """
+    loc = normalize_location(location)
+    if not loc or loc.endswith("/"):
+        return None
+    shared = aux_bucket_file_base(database_id, loc) + "preview/"
+    if not (aux_prefix or "").startswith(shared):
+        return None
+    is_object = is_location_object(loc, target_key)
+
+    def keep(aux_key: str) -> bool:
+        return ("/preview/" in aux_key[len(shared):]) != is_object
+    return keep
+
+
+def aux_scope(database_id: Optional[str], location: Optional[str],
+              object_key: Optional[str]) -> Tuple[str, Optional[Callable[[str], bool]]]:
+    """``(prefix, keep)`` of one file's own auxiliary data: ``aux_file_prefix`` and ``aux_owner_filter``.
+    ``keep`` is None when every key under the prefix is the file's."""
+    prefix = aux_file_prefix(database_id, location, object_key)
+    return prefix, aux_owner_filter(database_id, location, object_key, prefix)
