@@ -34,7 +34,9 @@ A file belongs to the deepest stored location that contains it. A location of an
 inside an asset's location (releases before the create-time conflict check allowed it): the keys that
 deeper location holds are that asset's, so the containing asset's file operations leave them alone.
 ``deeper_holder`` and ``held_by`` decide it for a key given the nested locations (pure);
-``nested_locations_of`` reads those locations for one asset location (index or registration walk).
+``nested_locations_of`` reads those locations for one asset location (index or registration walk). Two
+live assets can also share one location; a destructive operation of either leaves every shared key alone,
+so the other asset keeps its files.
 
 The functions above are pure: no AWS calls.
 
@@ -226,6 +228,9 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
 # The answer to an upload, a workflow output or a file operation whose target path lies in the location of
 # another asset nested in the asset's location: those keys are that asset's.
 NESTED_PATH_REFUSAL = "This path is not available in this asset"
+# The answer to a destructive file operation on a key another live asset's location also holds (two assets
+# on one location): the key is left alone, for the other asset.
+SHARED_PATH_REFUSAL = "This file is also held by another asset and is not archived or deleted through this asset"
 
 OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
                            "Write the output under another file name or folder.")
@@ -908,62 +913,97 @@ NESTED_LOCATIONS_TTL_SECONDS = 10
 BUCKET_ID_INDEX_NAME = "BucketIdGSI"
 
 
+def _live_identity(database_id: Optional[str], asset_id: Optional[str]) -> Tuple[str, str]:
+    return ((database_id or "").replace(ARCHIVED_DATABASE_SUFFIX, ""), asset_id or "")
+
+
 class NestedLocations:
     """The stored locations of other assets, live and archived, nested in one asset location
-    (``is_nested_in``). ``holds(key)`` says whether a key is the asset's own file; ``keep(key)`` whether a
-    key the location already contains is (no nested location holds it). Empty when nothing is nested, or
-    when the caller keeps the behaviour that does not look for nested locations."""
+    (``is_nested_in``), and for a destructive operation the other live assets stored at the same location
+    (``shared``). ``holder(key)`` is the location whose asset the key is left for; ``holds(key)`` says
+    whether a key is the asset's own file; ``keep(key)`` whether a key the location already contains is
+    left to this asset. Empty when nothing is nested or shared, or when the caller keeps the behaviour that
+    does not look for nested locations.
 
-    def __init__(self, location: Optional[str], entries: Iterable[LocationEntry] = (), source: str = "none"):
+    ``owner`` is ``(databaseId, assetId)`` of the asset whose location this is; equal-location entries count
+    only when it is given and ``include_shared`` is True, and the owner's own row never does."""
+
+    def __init__(self, location: Optional[str], entries: Iterable[LocationEntry] = (), source: str = "none",
+                 owner: Optional[Tuple[str, str]] = None, include_shared: bool = False):
         self.location = normalize_location(location)
+        entries = tuple(entries)
         self.entries: Tuple[LocationEntry, ...] = tuple(
             e for e in entries if is_nested_in(self.location, e.location))
         self.locations = frozenset(e.location for e in self.entries)
+        owner_identity = _live_identity(*owner) if owner else None
+        self.shared: Tuple[LocationEntry, ...] = tuple(
+            e for e in entries
+            if include_shared and owner_identity and self.location and e.location == self.location
+            and not e.archived and _live_identity(e.database_id, e.asset_id) != owner_identity)
         self.source = source
 
     def __bool__(self) -> bool:
-        return bool(self.locations)
+        return bool(self.locations or self.shared)
 
     def __len__(self) -> int:
-        return len(self.locations)
+        return len(self.locations) + len(self.shared)
 
     def holder(self, object_key: Optional[str]) -> Optional[str]:
-        """The nested location that holds the key, or None."""
-        return deeper_holder(self.location, self.locations, object_key)
+        """The nested location that holds the key, or this asset's own location when another live asset
+        shares it (a destructive lookup), or None."""
+        nested = deeper_holder(self.location, self.locations, object_key)
+        if nested is not None:
+            return nested
+        if self.shared and contains(self.location, object_key):
+            return self.location
+        return None
+
+    def is_shared_key(self, object_key: Optional[str]) -> bool:
+        """Whether the key is left alone because another live asset shares this asset's location."""
+        return bool(self.shared) and self.holder(object_key) == self.location
 
     def holds(self, object_key: Optional[str]) -> bool:
-        return held_by(self.location, self.locations, object_key)
+        return contains(self.location, object_key) and self.holder(object_key) is None
 
     def keep(self, object_key: Optional[str]) -> bool:
         return self.holder(object_key) is None
 
     def keep_aux(self, database_id: Optional[str], aux_key: Optional[str]) -> bool:
-        """Whether an auxiliary-bucket key under this asset's ``{databaseId}/`` base is not a nested asset's:
-        a nested asset of the same database keeps the auxiliary data under its own file bases."""
-        live = (database_id or "").replace(ARCHIVED_DATABASE_SUFFIX, "")
+        """Whether an auxiliary-bucket key under this asset's ``{databaseId}/`` base is this asset's to change.
+        Viewer data of a key a nested location holds is that asset's, whatever its database (the rule is
+        ownership); the data of a shared location is kept when the co-owner is of the same database, since
+        both read it at the same auxiliary key."""
+        live = _live_identity(database_id, "")[0]
         key = aux_key or ""
-        return not any(entry.database_id.replace(ARCHIVED_DATABASE_SUFFIX, "") == live
-                       and key.startswith(aux_bucket_file_base(live, entry.location))
-                       for entry in self.entries)
+        prefix = f"{live}/"
+        if not key.startswith(prefix):
+            return True
+        candidate = key[len(prefix):]
+        if deeper_holder(self.location, self.locations, candidate) is not None:
+            return False
+        if any(_live_identity(e.database_id, "")[0] == live for e in self.shared) and \
+                contains(self.location, candidate):
+            return False
+        return True
 
 
 def _nested_prefixes(location: str) -> List[str]:
-    """The index prefixes under which every location nested in ``location`` sorts: the folder itself, or for a
-    single file its companion folder and its preview stem (its ``.previewFile`` partners included)."""
-    if location.endswith('/'):
-        return [location]
-    return [location + '/', location + PREVIEW_FILE_PATTERN[:-1]]
+    """The index prefixes under which every location nested in ``location`` sorts, and the location itself
+    (an equal location of another asset): the location, which for a folder is the folder and for a single file
+    also covers its companion folder ``{key}/`` and its ``.previewFile`` partners."""
+    return [location]
 
 
 def nested_locations_in_index(table, bucket: str, location: Optional[str],
-                              max_pages: Optional[int] = None) -> NestedLocations:
+                              max_pages: Optional[int] = None, owner: Optional[Tuple[str, str]] = None,
+                              include_shared: bool = False) -> NestedLocations:
     """The locations nested in ``location`` in ``bucket``, from the location index (live and archived rows),
     read to the end of each prefix. Raises RuntimeError when a prefix does not finish within ``max_pages``
     (default MAX_NESTED_LOCATION_PAGES). Callers must not act on it before ``index_ready()`` is True."""
     max_pages = max_pages or MAX_NESTED_LOCATION_PAGES
     loc = normalize_location(location)
     if not bucket or not loc:
-        return NestedLocations(loc, source="index")
+        return NestedLocations(loc, source="index", owner=owner, include_shared=include_shared)
     client, table_name = table.meta.client, table.name
     entries: List[LocationEntry] = []
     for prefix in _nested_prefixes(loc):
@@ -977,10 +1017,12 @@ def nested_locations_in_index(table, bucket: str, location: Optional[str],
             query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
         else:
             raise RuntimeError(f"Nested location query did not finish within {max_pages} pages")
-    return NestedLocations(loc, entries, source="index")
+    return NestedLocations(loc, entries, source="index", owner=owner, include_shared=include_shared)
 
 
-def nested_locations_in_rows(rows: Iterable[Dict[str, Any]], location: Optional[str]) -> NestedLocations:
+def nested_locations_in_rows(rows: Iterable[Dict[str, Any]], location: Optional[str],
+                             owner: Optional[Tuple[str, str]] = None,
+                             include_shared: bool = False) -> NestedLocations:
     """The locations nested in ``location`` among asset rows (live and archived) of the registrations of its
     bucket, by their stored ``assetLocation.Key``. Used before the index is ready."""
     entries = []
@@ -990,7 +1032,8 @@ def nested_locations_in_rows(rows: Iterable[Dict[str, Any]], location: Optional[
             entries.append(LocationEntry(database_id=str(row.get('databaseId', '')),
                                          asset_id=str(row.get('assetId', '')),
                                          bucket_id=str(row.get('bucketId', '')), location=stored))
-    return NestedLocations(location, entries, source="registrationWalk")
+    return NestedLocations(location, entries, source="registrationWalk", owner=owner,
+                           include_shared=include_shared)
 
 
 def registration_rows(table, bucket_ids: Iterable[str]) -> Iterator[Dict[str, Any]]:
@@ -1023,6 +1066,7 @@ def clear_nested_locations_cache() -> None:
 
 def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_table_name: Optional[str] = None,
                         destructive: bool = False, bucket_ids: Iterable[str] = (),
+                        owner: Optional[Tuple[str, str]] = None,
                         clock: Callable[[], float] = time.monotonic) -> NestedLocations:
     """The locations of other assets nested in one asset's ``location`` in ``bucket``: the keys they hold are
     not that asset's files.
@@ -1031,8 +1075,13 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     (archive, unarchive or permanent delete of the asset, a folder delete, archive or move) walks the asset
     rows of ``bucket_ids``, the registrations of the bucket; any other operation finds none, as before the
     index. A location the index cannot answer for within ``MAX_NESTED_LOCATION_PAGES`` takes the same
-    pre-index rule. A non-destructive answer is reused for NESTED_LOCATIONS_TTL_SECONDS in this container;
-    a destructive one is always read fresh. Other read errors are raised.
+    pre-index rule. A destructive answer also names the other live assets stored at the same location
+    (``shared``; ``owner`` identifies the asset itself), whose keys it leaves alone. A non-destructive answer
+    is reused for NESTED_LOCATIONS_TTL_SECONDS in this container; a destructive one is always read fresh.
+    Other read errors are raised.
+
+    The lookup has two backends, the location index and the registration walk, and the rule (``NestedLocations``)
+    is the same for both, so a deployment without the index can use the walk alone.
     """
     loc = normalize_location(location)
     if not bucket or not loc:
@@ -1041,6 +1090,7 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     ready = index_ready(table_name)
     if not ready and not (destructive and bucket_ids):
         return NestedLocations(loc)
+    shared = destructive and owner is not None
     cache_key = (table_name, bucket, loc)
     if not destructive:
         with _nested_cache_lock:
@@ -1050,12 +1100,13 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     nested = None
     if ready:
         try:
-            nested = nested_locations_in_index(table, bucket, loc)
+            nested = nested_locations_in_index(table, bucket, loc, owner=owner, include_shared=shared)
         except RuntimeError as e:
             logger.warning(f"The location index cannot list the locations nested in {loc} ({e}); "
                            "keeping the rule that does not use it")
     if nested is None:
-        nested = (nested_locations_in_rows(registration_rows(table, bucket_ids), loc)
+        nested = (nested_locations_in_rows(registration_rows(table, bucket_ids), loc, owner=owner,
+                                           include_shared=shared)
                   if destructive and bucket_ids else NestedLocations(loc))
     if not destructive:
         with _nested_cache_lock:
@@ -1063,7 +1114,8 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
                 _nested_cache.clear()
             _nested_cache[cache_key] = (clock(), nested)
     if nested:
-        logger.info(f"{len(nested)} other asset location(s) lie inside {loc}; their files are left out")
+        logger.info(f"{len(nested.locations)} other asset location(s) lie inside {loc} and {len(nested.shared)} "
+                    "other live asset(s) share it; their files are left out")
     return nested
 
 

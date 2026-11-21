@@ -44,7 +44,7 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, NestedLocations, aux_file_prefix, aux_owner_filter, aux_scope, contains,
+    NESTED_PATH_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations, aux_file_prefix, aux_owner_filter, aux_scope, contains,
     fill_location_attributes, folder_listing_prefix, in_folder, is_folder_location, is_location_object,
     names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
 )
@@ -387,9 +387,13 @@ def nested_locations_for(asset: Dict, bucket: str, base_key: str, destructive: b
 
 
 def refuse_nested_key(nested: Optional[NestedLocations], key: str, message: str) -> None:
-    """Answer a path that resolves to a nested asset's file as the operation answers a missing file."""
-    if nested is not None and nested.holder(key) is not None:
-        raise VAMSGeneralErrorResponse(message)
+    """Answer a path that resolves to a nested asset's file as the operation answers a missing file, and a
+    destructive operation on a key another live asset's location also holds with SHARED_PATH_REFUSAL."""
+    if nested is None or nested.holder(key) is None:
+        return
+    if nested.is_shared_key(key):
+        raise VAMSGeneralErrorResponse(SHARED_PATH_REFUSAL)
+    raise VAMSGeneralErrorResponse(message)
 
 
 def _keep_aux(keep: Optional[Callable[[str], bool]], nested: Optional[NestedLocations],
@@ -2331,8 +2335,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         folder = relative_path_in(base_key, full_key) or file_path
         full_key = folder_listing_prefix(base_key, folder)
     
-    # A path a nested asset's location holds is that asset's file, not this asset's
-    nested = nested_locations_for(asset, bucket, base_key, destructive=is_prefix)
+    # A path a nested asset's location holds is that asset's file, not this asset's; a key another live
+    # asset's location also holds is left alone (destructive lookup)
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
     refuse_nested_key(nested, full_key, "No files found under prefix." if is_prefix else "File not found.")
 
     # Check if path exists (including archived files)
@@ -2502,8 +2507,9 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         folder = relative_path_in(base_key, full_key) or file_path
         full_key = folder_listing_prefix(base_key, folder)
     
-    # A path a nested asset's location holds is that asset's file, not this asset's
-    nested = nested_locations_for(asset, bucket, base_key, destructive=is_prefix)
+    # A path a nested asset's location holds is that asset's file, not this asset's; a key another live
+    # asset's location also holds is left alone (destructive lookup)
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
     refuse_nested_key(nested, full_key, "No files found under prefix." if is_prefix else "File not found.")
 
     # Check if path exists and if it's already archived
@@ -2962,7 +2968,8 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Use smart path resolution to avoid duplication
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
-    nested = nested_locations_for(asset, bucket, base_key)
+    # Moving deletes the source, so a source key another live asset also holds is left alone
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
     refuse_nested_key(nested, source_key, "Source file not found.")
     refuse_nested_key(nested, dest_key, NESTED_PATH_REFUSAL)
 

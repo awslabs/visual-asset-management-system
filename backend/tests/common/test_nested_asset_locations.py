@@ -77,8 +77,8 @@ class TestTheRule:
                                                al.LocationEntry('db2', 'other', 'b1', 'outer/other/')])
         assert nested.keep_aux('db1', 'db1/outer/a.glb/preview/x.png') is True
         assert nested.keep_aux('db1', 'db1/outer/inner/a.glb/preview/x.png') is False
-        # Another database's nested asset keeps its auxiliary data under its own database
-        assert nested.keep_aux('db1', 'db1/outer/other/a.glb/preview/x.png') is True
+        # The rule is ownership, not databases: the viewer data under a nested location is never the outer's
+        assert nested.keep_aux('db1', 'db1/outer/other/a.glb/preview/x.png') is False
 
 
 OUTER = asset_row('db1', 'outer', 'reg-1', 'outer/', BUCKET)
@@ -114,7 +114,7 @@ class TestTheLookup:
                 asset_row('db1', 'bak', 'reg-1', 'a/x.glb.bak', BUCKET)]
         nested, table = _nested(monkeypatch, rows, ready=True, location='a/x.glb')
         assert nested.locations == frozenset({'a/x.glb/sub/', 'a/x.glb.previewFile'})
-        assert [r[2]['ExpressionAttributeValues'][':p'] for r in table.reads] == ['a/x.glb/', 'a/x.glb.previewFile']
+        assert [r[2]['ExpressionAttributeValues'][':p'] for r in table.reads] == ['a/x.glb']
 
     def test_before_the_index_a_read_finds_none_and_reads_nothing(self, monkeypatch):
         nested, table = _nested(monkeypatch, self.ROWS, ready=False)

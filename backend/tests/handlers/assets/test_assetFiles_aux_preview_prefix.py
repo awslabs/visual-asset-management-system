@@ -123,7 +123,8 @@ class TestLifecycleUsesDatabaseScopedPrefix:
                 patch.object(af, 'process_preview_files', return_value=[]), \
                 patch.object(af, 'move_auxiliary_files') as mock_move, \
                 patch.object(af, '_copy_file_metadata_to_destination', return_value=0), \
-                patch.object(af, 'send_subscription_email', MagicMock()):
+                patch.object(af, 'send_subscription_email', MagicMock()), \
+                patch.object(af, 'nested_locations_for', lambda *a, **k: af.NestedLocations('asset-1/')):
             af.move_file("db1", "asset-1", "/scans/pump.e57", "/final/pump.e57", {"tokens": ["alice"]})
 
         mock_move.assert_called_once_with(

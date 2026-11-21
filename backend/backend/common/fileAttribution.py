@@ -442,7 +442,8 @@ def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[s
 
     See `assetLocations.nested_locations_of`. Before the location index is ready a `destructive` operation
     walks the rows of every registration of the bucket (the asset's own registration first); the
-    registrations are read only when that walk runs."""
+    registrations are read only when that walk runs. A destructive answer also names the other live assets
+    stored at `asset`'s own location, whose keys are left alone too."""
     row = asset or {}
     if location is None:
         location = (row.get('assetLocation') or {}).get('Key')
@@ -456,5 +457,6 @@ def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[s
             logger.warning(f"The registrations of bucket {bucket_name} could not be read for the nested "
                            f"location walk; walking the asset's own registration: {type(e).__name__}")
 
+    owner = (str(row.get('databaseId') or ''), str(row.get('assetId') or '')) if row.get('assetId') else None
     return nested_locations_of(asset_table, bucket_name, location, asset_table_name=asset_table_name,
-                               destructive=destructive, bucket_ids=bucket_ids())
+                               destructive=destructive, bucket_ids=bucket_ids(), owner=owner)
