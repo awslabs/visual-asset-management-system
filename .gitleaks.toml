@@ -188,6 +188,7 @@ regexes = [
     # test_audit_search_parsers.py, test_audit_search_redaction_export_matcher.py and
     # backend/tests/handlers/workflows/test_execution_list_log_bound.py. Each has the AKIA or ASIA prefix
     # and a body of plain English words; a real key id body is random. Listed in full.
+    # nosemgrep: detected-aws-access-key-id-value -- the test words above, listed so gitleaks skips them
     '''(?:AKIAABCDEFGHIJKLMNOP|ASIAABCDEFGHIJKLMNOP)''',  # pragma: allowlist secret
 
     # JWT-shaped strings in the audit-search, workflow-log and CLI/MCP token tests
