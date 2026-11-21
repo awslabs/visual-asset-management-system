@@ -368,6 +368,28 @@ class TestProgressInsideTheBudget:
         assert fake.tokens == expected_tokens
         assert rn._failed_sweeps == 0
 
+    def test_partial_throttling_retries_no_more_often_than_constant_throttling(self, rn, clock, monkeypatch):
+        # Every other call throttled, over more pages than one budget can read: the retry sleep keeps
+        # growing across pages, so the sweep retries no more often than one throttled on every call.
+        constant = install(rn, monkeypatch, FakeSsm(fault=always(throttled)))
+        with pytest.raises(ClientError):
+            rn._sweep_parameters(PREFIX)
+        constant_calls = len(constant.tokens)
+
+        def every_other_call(index, token):
+            if index % 2 == 1:
+                raise throttled()
+
+        partial = install(rn, monkeypatch, FakeSsm(
+            parameters={"dynamoTables/t%04d" % i: "v" for i in range(1000)}, fault=every_other_call))
+        with pytest.raises(ClientError):
+            rn._sweep_parameters(PREFIX)
+
+        assert constant_calls > 1, "the constant-throttle sweep never retried, so the bound proves nothing"
+        throttled_calls = [index for index in range(len(partial.tokens)) if index % 2 == 1]
+        assert len(throttled_calls) <= constant_calls
+        assert len(partial.tokens) <= 2 * constant_calls
+
 
 @pytest.mark.unit
 class TestBackoffWindow:

@@ -38,7 +38,7 @@ SWEEP_BUDGET_SECONDS = 4.0
 SWEEP_PAGE_SIZE = 10
 
 # Sleep before retrying a page: uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS,
-# SWEEP_RETRY_BASE_SECONDS * 2 ** k)) for the k-th retry in a row of the same page.
+# SWEEP_RETRY_BASE_SECONDS * 2 ** k)) for the k-th retry of the sweep, whichever pages it was on.
 SWEEP_RETRY_BASE_SECONDS = 0.1
 SWEEP_RETRY_MAX_SLEEP_SECONDS = 1.0
 
@@ -218,7 +218,9 @@ def _sweep_parameters(prefix: str) -> dict:
     SWEEP_BUDGET_SECONDS, and return them keyed by their path below the prefix.
 
     A page that fails with a retryable error is requested again with its own NextToken after a
-    jittered sleep, so the pages already read are kept. Any other error ends the sweep at once.
+    jittered sleep, so the pages already read are kept. The sleep grows with every retry in the
+    sweep, not only with retries of the same page, so a partly throttled sweep backs off as a fully
+    throttled one does. Any other error ends the sweep at once.
     No call starts and no sleep runs past the budget; when the budget runs out the sweep raises
     the last error, or TimeoutError when none was raised. Logs one line per sweep: counts and
     timings, never a parameter name or value."""
@@ -226,7 +228,7 @@ def _sweep_parameters(prefix: str) -> dict:
     started = _monotonic()
     deadline = started + SWEEP_BUDGET_SECONDS
     parameters = {}
-    pages = calls = retries_in_a_row = 0
+    pages = calls = retries = 0
     next_token = None
     last_error = None
 
@@ -250,14 +252,13 @@ def _sweep_parameters(prefix: str) -> dict:
             if not _is_retryable(e):
                 raise failed(e)
             last_error = e
-            pause = _uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS, SWEEP_RETRY_BASE_SECONDS * 2 ** retries_in_a_row))
-            retries_in_a_row += 1
+            pause = _uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS, SWEEP_RETRY_BASE_SECONDS * 2 ** retries))
+            retries += 1
             if _monotonic() + pause >= deadline:
                 raise failed(e)
             _sleep(pause)
             continue
         pages += 1
-        retries_in_a_row = 0
         for param in page.get('Parameters', []):
             key = param['Name'][len(prefix):].lstrip('/')
             parameters[key] = param['Value']
