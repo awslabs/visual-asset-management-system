@@ -133,8 +133,18 @@ class TestAllowListStructure:
             "LOOP_DIAMETER_MM", "LOOP_THICKNESS_MM", "BASE_DIAMETER_MM", "BASE_HEIGHT_MM",
             "EXPORT_FORMATS", "REPAIR_BACKENDS", "MIN_VOLUME_RETENTION", "CLOSE_HOLE_MAX_EDGES",
             "NEGLIGIBLE_FRAGMENT_FRACTION",
-            "BENCHMARK_REPORT", "INVALIDATE_MODEL_CACHE", "PASS_THROUGH_INPUTS",
+            "BENCHMARK_REPORT", "PASS_THROUGH_INPUTS",
         }
+
+    def test_a_run_can_no_longer_clear_the_model_cache(self, main_module, caplog):
+        """The cache is shared by every run of a model; clearing it is the deployment setting
+        modelCacheGeneration, so a run that still sends the old key is told where it went."""
+        allowed = main_module.load_allowed_settings()
+        with caplog.at_level("WARNING"):
+            settings = main_module.resolve_settings(allowed, {"INVALIDATE_MODEL_CACHE": "true"}, "triposr")
+
+        assert "INVALIDATE_MODEL_CACHE" not in settings
+        assert "modelCacheGeneration" in caplog.text
 
     def test_no_model_block_redeclares_a_common_key(self, main_module):
         """A per-model copy of a common key would shadow the common default for that model only."""

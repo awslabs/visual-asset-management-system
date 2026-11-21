@@ -92,6 +92,7 @@ class TestVocabulary:
             "CREATE_TIMED_OUT",
             "START_FAILED",
             "START_STALLED",
+            "LAUNCH_STALLED",
             "LEASE_EXPIRED",
             "RESERVATION_FULL",
             "RESERVATION_ENDED",

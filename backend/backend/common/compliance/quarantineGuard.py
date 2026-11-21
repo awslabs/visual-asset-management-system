@@ -1,11 +1,13 @@
 #  Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #  SPDX-License-Identifier: Apache-2.0
 
-"""Quarantine-blocks-download guard shared by every handler that hands out asset file bytes:
-downloadAsset, streamAsset, assetExportService, streamAuxiliaryPreviewAsset and zipDownloadService.
+"""Quarantine-blocks-download guard shared by every handler that hands out asset file bytes or
+moves them out of the asset: downloadAsset, streamAsset, assetExportService,
+streamAuxiliaryPreviewAsset, zipDownloadService, assetFiles (a copy to another asset) and
+executeWorkflow (the input files of a caller's run).
 
-The guard is switched on by ``COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`` (set on those five Lambdas
-from ``app.compliance.quarantineBlocksDownload``). The compliance asset-state table is resolved at
+The guard is switched on by ``COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD`` (set on those Lambdas from
+``app.compliance.quarantineBlocksDownload``). The compliance asset-state table is resolved at
 import only when the switch is on, so a deployment with the block off resolves no extra resource
 name and reads no extra table.
 
@@ -21,7 +23,9 @@ versions, several files at once, export and the auxiliary viewer data stay block
 A refusal is an expected answer of a control working as configured, not a failure. Each guarded
 handler catches ``QuarantineBlockedResponse`` ahead of its ``VAMSGeneralErrorResponse`` handling
 (which logs with a traceback) and answers it with ``quarantine_refusal``: one INFO line naming the
-database, the asset and the route, no traceback, and the same ``400`` body as before (D174).
+database, the asset and the route, no traceback, and the same ``400`` body as before (D174). The
+download routes answer ``QUARANTINE_BLOCK_MESSAGE``; the copy and workflow-input refusals pass their
+own message, which names the refused action.
 ``general_error`` adds its own WARNING line, as for every 4xx answer.
 """
 
@@ -41,12 +45,16 @@ retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 logger = safeLogger()
 
-# The one client-facing message every guarded handler returns (Rule 11: no asset identifiers).
+# The client-facing messages (Rule 11: no asset identifiers). The download routes answer the first.
 QUARANTINE_BLOCK_MESSAGE = "Asset is quarantined and cannot be downloaded"
+QUARANTINE_COPY_BLOCK_MESSAGE = "Asset is quarantined and its files cannot be copied to another asset"
+QUARANTINE_WORKFLOW_INPUT_BLOCK_MESSAGE = (
+    "Asset is quarantined and its files cannot be used as workflow input")
 
 
 class QuarantineBlockedResponse(VAMSGeneralErrorResponse):
-    """The quarantine block's refusal: status 400, text exactly ``QUARANTINE_BLOCK_MESSAGE``.
+    """The quarantine block's refusal: status 400, text exactly its message
+    (``QUARANTINE_BLOCK_MESSAGE`` unless the caller names another).
 
     Every guarded handler answers a ``VAMSGeneralErrorResponse`` with ``{'message': str(error)}``.
     The base class prefixes its text with "VAMS General Error: ", so the refusal reached the web,
@@ -59,13 +67,14 @@ class QuarantineBlockedResponse(VAMSGeneralErrorResponse):
     ``quarantine_refusal`` writes.
     """
 
-    def __init__(self, database_id=None, asset_id=None):
-        super().__init__(QUARANTINE_BLOCK_MESSAGE, status_code=400)
+    def __init__(self, database_id=None, asset_id=None, message=QUARANTINE_BLOCK_MESSAGE):
+        super().__init__(message, status_code=400)
         self.database_id = database_id
         self.asset_id = asset_id
+        self.message = message
 
     def __str__(self):
-        return QUARANTINE_BLOCK_MESSAGE
+        return self.message
 
 
 def _route(event):
@@ -80,10 +89,10 @@ def _route(event):
 def quarantine_refusal(refusal, event):
     """The answer to a ``QuarantineBlockedResponse``: logged once at INFO with the database, the
     asset and the route, without a traceback, and answered ``400`` with exactly
-    ``{"message": QUARANTINE_BLOCK_MESSAGE}`` (``general_error``, which writes the error audit
+    ``{"message": <the refusal's message>}`` (``general_error``, which writes the error audit
     entry and its own WARNING line as for every 4xx)."""
     logger.info(
-        f"Quarantine block: download refused for asset {refusal.asset_id} in database "
+        f"Quarantine block: refused for asset {refusal.asset_id} in database "
         f"{refusal.database_id} on {_route(event)}")
     return general_error(status_code=refusal.status_code, body={"message": str(refusal)},
                          event=event)
@@ -135,7 +144,8 @@ def is_preview_object(object_key, asset_preview=False):
     return preview_file_has_allowed_extension(name)
 
 
-def check_quarantine_block(database_id, asset_id, object_key=None, asset_preview=False):
+def check_quarantine_block(database_id, asset_id, object_key=None, asset_preview=False,
+                           message=QUARANTINE_BLOCK_MESSAGE):
     """Raise ``QuarantineBlockedResponse`` when the asset is quarantined without a granted exception.
 
     A no-op when the quarantine block is off. Otherwise reads the asset's compliance state row:
@@ -148,7 +158,9 @@ def check_quarantine_block(database_id, asset_id, object_key=None, asset_preview
     only for the object's current version. When it is a preview image (``is_preview_object``, with
     ``asset_preview`` for the asset's preview location) the asset's state is not read and the
     object is served. Every other request (a file, a file version, several files, export, the
-    auxiliary viewer data) passes no key and is guarded for the whole asset.
+    auxiliary viewer data, a copy to another asset, a workflow's input) passes no key and is
+    guarded for the whole asset. ``message`` is the refusal's text (the download message unless the
+    route names its own action).
     """
     if not quarantine_blocks_download or compliance_asset_state_table is None:
         return
@@ -159,4 +171,4 @@ def check_quarantine_block(database_id, asset_id, object_key=None, asset_preview
     )
     item = response.get("Item")
     if item and item.get("complianceState") == "quarantined" and not item.get("exceptionGranted"):
-        raise QuarantineBlockedResponse(database_id, asset_id)
+        raise QuarantineBlockedResponse(database_id, asset_id, message)

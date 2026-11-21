@@ -1,0 +1,49 @@
+[project]
+name = "3d-thumbnail-pipeline"
+version = "0.1.0"
+description = "3D thumbnail pipeline container image (Fargate)"
+requires-python = ">=3.12,<3.13"
+# Lower bounds are the intent; uv.lock pins every package. The Lambda render image has its own
+# project in lambdaImage/, because it needs different versions of the same packages.
+dependencies = [
+    # AWS SDK
+    "boto3>=1.35.0",
+    "botocore>=1.35.0",
+    # 3D rendering (MIT license)
+    "pyvista>=0.44.2",
+    "vtk>=9.4.0",
+    # Mesh loading (MIT license)
+    "trimesh>=4.5.0",
+    "numpy>=1.26.4,<3",
+    "scipy>=1.14.0",
+    # Point cloud formats
+    "laspy[lazrs]>=2.5.4,<3",  # BSD, LAS/LAZ support with lazrs decompression
+    "pye57>=0.4.17,<0.5",  # MIT, E57 point cloud format
+    # CAD format support (LGPL, needed for STEP files); cadquery pulls cadquery-ocp from PyPI
+    "cadquery>=2.4.0",
+    # Image generation
+    "imageio>=2.36.0",  # BSD, GIF/image I/O
+    "Pillow>=11.0.0",  # MIT-like (PIL), image optimization
+    # Media previews (images, TGA/TIFF and video). Decoding runs only on local files inside this container.
+    "tifffile>=2025.1.10",  # BSD-3, TIFF files Pillow cannot read (BigTIFF, tiled, LZW/Deflate 16/32-bit, float)
+    "imagecodecs>=2025.3.30,<2027",  # BSD-3, the codecs tifffile needs; binary wheels only (see NOTICE.md)
+    "av>=14.0.0,<20",  # BSD-3 (PyAV), video decoding; its wheels bundle LGPL FFmpeg libraries, so no Debian ffmpeg
+    # Draco mesh compression support
+    "DracoPy>=1.4.0",  # Apache 2.0, .drc file support
+    # Open3D for additional point cloud formats (MIT license)
+    "open3d>=0.19.0,<0.20",
+    # open3d's Linux wheels require ipywidgets but its macOS wheels do not, and a universal lock reads one
+    # wheel's metadata. Named here so the image keeps the Jupyter packages it has always carried.
+    "ipywidgets>=8.0.4; sys_platform == 'linux'",
+    # USD format support (Modified Apache 2.0 license)
+    "usd-core>=24.8",
+]
+
+# The image installs the committed, hashed requirements.txt with pip, which is exported from uv.lock;
+# uv is a development and CI tool only and is not part of the image.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+# Linux for the image; macOS so a developer machine can install the set to run the tests.
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]

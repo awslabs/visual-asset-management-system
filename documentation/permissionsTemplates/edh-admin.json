@@ -181,7 +181,7 @@
         },
         {
             "name": "{{ROLE_NAME}}-images",
-            "description": "Allow viewing, registering and removing catalog images of any id and OS family for {{ROLE_NAME}}",
+            "description": "Allow viewing, registering and removing catalog images, and every AMI recipe action, on any stack id, stack name, recipe id and OS family for {{ROLE_NAME}}",
             "objectType": "edhImage",
             "criteriaAnd": [
                 {

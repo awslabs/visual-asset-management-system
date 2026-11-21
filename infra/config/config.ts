@@ -393,6 +393,16 @@ export const ZIP_DOWNLOADS_DEFAULTS = {
 // it and the authorizer environment reads it.
 export const EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS = ["aud"];
 
+/** The jobs of the 3D Basic Conversion Batch tier: 4 vCPU / 30 GiB, 8 / 60, 16 / 120 (Fargate-valid pairs). */
+export const CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES: ReadonlyArray<{
+    vcpu: number;
+    memoryGiB: number;
+}> = [
+    { vcpu: 4, memoryGiB: 30 },
+    { vcpu: 8, memoryGiB: 60 },
+    { vcpu: 16, memoryGiB: 120 },
+];
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -1342,6 +1352,24 @@ export function applyZipDownloadsDefaults(config: ConfigPublic): void {
 }
 
 /**
+ * Reject an app.pipelines.useImageTo3d.modelCacheGeneration that is not a whole number of 0 or more. The
+ * value becomes a path segment of the model cache's EFS directory and S3 prefix (`hf_cache/g<N>/<model>`),
+ * which the container composes by the same rule and refuses to run when they disagree.
+ */
+export function validateImageTo3dModelCacheGeneration(
+    block: ConfigPublic["app"]["pipelines"]["useImageTo3d"]
+): void {
+    const generation = block.modelCacheGeneration;
+    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) {
+        const shown = JSON.stringify(generation);
+        throw new Error(
+            `Configuration Error: useImageTo3d.modelCacheGeneration must be a whole number of 0 or ` +
+                `more, not ${shown}. Raise it by one to start every model on an empty weight cache.`
+        );
+    }
+}
+
+/**
  * app.pipelines.useConversion3dBasic.enableStepInput: absent or null is false, so a config.json written
  * before the key keeps an image without Open CASCADE; any other value must be a JSON boolean.
  */
@@ -1355,6 +1383,46 @@ export function resolveConversion3dBasicStepInput(config: { app: any }): void {
     if (typeof value !== "boolean") {
         throw new Error(
             "Configuration Error: app.pipelines.useConversion3dBasic.enableStepInput must be true or false (a JSON boolean). Leave it out to keep STEP input off."
+        );
+    }
+}
+
+/**
+ * app.pipelines.useConversion3dBasic.batchTier: absent or null is `{ enabled: false, maxMemoryGiB: 120 }`,
+ * so a config.json written before the key deploys exactly what it did. `enabled` must be a JSON boolean and
+ * `maxMemoryGiB` one of the job sizes (30, 60, 120); no vCPU/memory pair is user-supplied. The VPC
+ * requirement is checked with the other VPC-requiring features.
+ */
+export function resolveConversion3dBasicBatchTier(config: { app: any }): void {
+    const block = config.app.pipelines.useConversion3dBasic;
+    if (block.batchTier === undefined || block.batchTier === null) {
+        block.batchTier = { enabled: false, maxMemoryGiB: 120 };
+        return;
+    }
+    const tier = block.batchTier;
+    if (typeof tier !== "object" || Array.isArray(tier)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier must be an object with enabled and maxMemoryGiB."
+        );
+    }
+    if (tier.enabled === undefined || tier.enabled === null) {
+        tier.enabled = false;
+    } else if (typeof tier.enabled !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier.enabled must be true or false (a JSON boolean). Leave it out to keep the Batch tier off."
+        );
+    }
+    if (tier.maxMemoryGiB === undefined || tier.maxMemoryGiB === null) {
+        tier.maxMemoryGiB = 120;
+    }
+    const sizes = CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES.map((size) => size.memoryGiB);
+    if (!sizes.includes(tier.maxMemoryGiB)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB must be one of " +
+                sizes.join(", ") +
+                " (the memory in GiB of the largest job the tier may start); got " +
+                JSON.stringify(tier.maxMemoryGiB) +
+                "."
         );
     }
 }
@@ -2456,6 +2524,7 @@ export function getConfig(app: cdk.App): Config {
                 "g5.8xlarge",
             ],
             maxVCpus: 48,
+            modelCacheGeneration: 0,
             models: {
                 sam3d: { enabled: false },
                 // Stable3DGen is the default model: it builds from wheels alone, carries no
@@ -2499,6 +2568,9 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.pipelines.useImageTo3d.enabled == undefined) {
         config.app.pipelines.useImageTo3d.enabled = false;
+    }
+    if (config.app.pipelines.useImageTo3d.modelCacheGeneration == undefined) {
+        config.app.pipelines.useImageTo3d.modelCacheGeneration = 0;
     }
 
     // Deadline Cloud pipeline execution-type support (workflow createJob task states +
@@ -2589,6 +2661,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
     resolveConversion3dBasicStepInput(config);
+    resolveConversion3dBasicBatchTier(config);
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
         config.app.pipelines.useConversionCoordinateTransform = {
@@ -3344,6 +3417,13 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
     if (config.app.pipelines.useMediaPreviews.enabled)
         vpcRequiringFeatures.push("pipelines.useMediaPreviews");
+    //The Batch tier runs in the isolated pipeline subnets and exists only in an enabled pipeline (the VPC
+    //builder keys its endpoints the same way), so the sub-flag on a disabled pipeline demands nothing.
+    if (
+        config.app.pipelines.useConversion3dBasic.enabled &&
+        config.app.pipelines.useConversion3dBasic.batchTier.enabled
+    )
+        vpcRequiringFeatures.push("pipelines.useConversion3dBasic.batchTier");
     //The Fargate render branch exists only in an enabled pipeline (the VPC builder keys its endpoints
     //the same way), so the sub-flag on a disabled pipeline demands nothing.
     if (
@@ -3674,6 +3754,8 @@ export function getConfig(app: cdk.App): Config {
                 "Configuration Error: useImageTo3d.instanceTypes must be a non-empty array."
             );
         }
+
+        validateImageTo3dModelCacheGeneration(config.app.pipelines.useImageTo3d);
 
         // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
         // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
@@ -6490,6 +6572,13 @@ export interface ConfigPublic {
                  *  CASCADE, LGPL-2.1 with the OCCT exception); without it a STEP run is refused before
                  *  download. Absent = false. */
                 enableStepInput: boolean;
+                /** AWS Batch Fargate tier for models the Lambda function cannot convert (off by default;
+                 *  needs app.useGlobalVpc.enabled). Absent = off, largest job 120 GiB. */
+                batchTier: {
+                    enabled: boolean;
+                    /** Memory in GiB of the largest job the tier may start: 30, 60 or 120. */
+                    maxMemoryGiB: number;
+                };
             };
             useConversionCoordinateTransform: {
                 enabled: boolean;
@@ -6776,6 +6865,10 @@ export interface ConfigPublic {
                 autoTriggerOnFileExtensionsUpload: string;
                 instanceTypes: string[];
                 maxVCpus: number;
+                // Raise by one to start every model on an empty weight cache at its next run: generation N
+                // reads and writes `hf_cache/gN/<model>` on EFS and `imageTo3d/hf_cache/gN/<model>/` in S3,
+                // and 0 uses `hf_cache/<model>` and `imageTo3d/hf_cache/<model>/`. Running jobs keep theirs.
+                modelCacheGeneration: number;
                 models: {
                     sam3d: { enabled: boolean };
                     stable3dgen: { enabled: boolean };

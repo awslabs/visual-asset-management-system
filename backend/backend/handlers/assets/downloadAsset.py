@@ -10,6 +10,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import asset_authorization_object
 from common.validators import validate
 # Shared download-eligibility checks (asset, key, version pin, delete marker, blocklist).
 # is_file_archived and normalize_s3_path keep their historical names in this module.
@@ -453,21 +454,23 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             logger.error(f"Validation error: {v}")
             return validation_error(body={'message': validation_error_message(v)}, event=event)
         
-        # Check authorization
         asset = get_asset_details(database_id, asset_id)
-        if not asset:
-            return validation_error(body={'message': "Asset not found"}, event=event)
-        
-        asset["object__type"] = "asset"
 
         # Fail closed: with no authenticated identity no authorization can be
         # evaluated, so deny rather than fall through to presigned-URL generation.
         if len(claims_and_roles["tokens"]) == 0:
             return authorization_error()
 
+        # Authorize before existence and the distributable check, so a refused caller gets the
+        # same 403 for a missing asset as for an existing one (the request's ids stand in for a
+        # missing record).
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
-        if not (casbin_enforcer.enforce(asset, "GET") and casbin_enforcer.enforceAPI(event)):
+        if not (casbin_enforcer.enforceAPI(event)
+                and casbin_enforcer.enforce(asset_authorization_object(asset, database_id, asset_id), "GET")):
             return authorization_error()
+
+        if not asset:
+            return general_error(status_code=404, body={'message': "Asset not found"}, event=event)
 
         # Process download request based on type
         try:

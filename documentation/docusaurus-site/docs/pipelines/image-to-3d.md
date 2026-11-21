@@ -24,23 +24,23 @@ One deployment can carry up to seven generation paths -- **Stable-X Stable3DGen*
 
 ## Approximate Run Times
 
-| Phase                                        | Duration       | Notes                                                                                                                                             |
-| -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cold start (instance launch)                 | 4-8 min        | AWS Batch scales to zero between jobs, so every execution pays an instance launch                                                                 |
-| Container image pull                         | 3-6 min        | Cached after the first pull on an instance                                                                                                        |
-| Model weight restore (Amazon EFS)            | < 1 min        | First run per model: 10-40 min while weights download from HuggingFace                                                                            |
-| Preprocess (validation + background removal) | 5-30 sec       | Depends on `BACKGROUND_REMOVAL`; `IMAGE_CLEANUP=skip` bypasses the step entirely                                                                  |
-| Generation -- Stable3DGen                    | 30-90 sec      | Normal prediction then geometry generation; estimate for this pipeline                                                                            |
-| Generation -- TRELLIS.2                      | 30-120 sec     | Published: roughly 3 sec at 512-cubed to 60 sec at 1536-cubed on an H100                                                                          |
-| Generation -- TripoSR                        | 5-30 sec       | Published: sub-second inference on an A100; the range here includes model load                                                                    |
-| Generation -- Step1X-3D                      | 2-6 min        | Two-stage geometry then texture synthesis; estimate for this pipeline                                                                             |
-| Generation -- Hunyuan3D-2                    | 3-8 min        | Flow-matching shape stage then a multi-view paint stage; estimate for this pipeline                                                               |
-| Generation -- Blender agent                  | 20-60 min      | An agentic build-render-compare loop bounded by `BLENDERAGENT_MAX_MINUTES`; cost is model tokens, not GPU time                                    |
-| Generation -- Blender refit                  | 1-5 min        | Estimate for this pipeline: a fixed Blender chain on an existing mesh, with no model call; a metaball rebuild and QuadriFlow are the slow options |
-| Generation -- SAM 3D Objects                 | 1-4 min        | Estimate for this pipeline                                                                                                                        |
-| Mesh cleanup and print gate                  | 20 sec - 5 min | Scales with `TARGET_FACE_COUNT` and the number of `REPAIR_BACKENDS` rungs reached                                                                 |
-| Export + Amazon S3 upload                    | < 1 min        | GLB, OBJ set and STL are typically a few MB to a few tens of MB                                                                                   |
-| **Total (weights cached)**                   | **~8-20 min**  | Including cold start and container pull; estimate for this pipeline                                                                               |
+| Phase                                        | Duration       | Notes                                                                                                                                                      |
+| -------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cold start (instance launch)                 | 4-8 min        | AWS Batch scales to zero between jobs, so every execution pays an instance launch                                                                          |
+| Container image pull                         | 3-6 min        | Cached after the first pull on an instance                                                                                                                 |
+| Model weight restore (Amazon EFS)            | < 1 min        | First run per model: 10-40 min while weights download from HuggingFace                                                                                     |
+| Preprocess (validation + background removal) | 5-30 sec       | Depends on `BACKGROUND_REMOVAL`; `IMAGE_CLEANUP=skip` bypasses the step entirely                                                                           |
+| Generation -- Stable3DGen                    | 30-90 sec      | Normal prediction then geometry generation; estimate for this pipeline                                                                                     |
+| Generation -- TRELLIS.2                      | 30-120 sec     | Published: roughly 3 sec at 512-cubed to 60 sec at 1536-cubed on an H100                                                                                   |
+| Generation -- TripoSR                        | 5-30 sec       | Published: sub-second inference on an A100; the range here includes model load                                                                             |
+| Generation -- Step1X-3D                      | 2-6 min        | Two-stage geometry then texture synthesis; estimate for this pipeline                                                                                      |
+| Generation -- Hunyuan3D-2                    | 3-8 min        | Flow-matching shape stage then a multi-view paint stage; estimate for this pipeline                                                                        |
+| Generation -- Blender agent                  | 20-60 min      | An agentic build-render-compare loop bounded by `BLENDERAGENT_MAX_MINUTES`; cost is model tokens plus a CPU instance, because it runs on its own CPU queue |
+| Generation -- Blender refit                  | 1-5 min        | Estimate for this pipeline: a fixed Blender chain on an existing mesh, with no model call; a metaball rebuild and QuadriFlow are the slow options          |
+| Generation -- SAM 3D Objects                 | 1-4 min        | Estimate for this pipeline                                                                                                                                 |
+| Mesh cleanup and print gate                  | 20 sec - 5 min | Scales with `TARGET_FACE_COUNT` and the number of `REPAIR_BACKENDS` rungs reached                                                                          |
+| Export + Amazon S3 upload                    | < 1 min        | GLB, OBJ set and STL are typically a few MB to a few tens of MB                                                                                            |
+| **Total (weights cached)**                   | **~8-20 min**  | Including cold start and container pull; estimate for this pipeline                                                                                        |
 
 :::note[Published benchmarks versus pipeline estimates]
 The TRELLIS.2 and TripoSR generation figures are the models' published inference characteristics on data-center GPUs. Every other duration in the table is an estimate for this pipeline's own end-to-end run on the recommended instance types, and includes container startup, Amazon S3 transfer and mesh post-processing.
@@ -48,7 +48,7 @@ The TRELLIS.2 and TripoSR generation figures are the models' published inference
 
 ## Architecture
 
-The pipeline runs each model in a dedicated container on a GPU-enabled AWS Batch compute environment. Every enabled model has its own container image and its own AWS Batch job definition; the configuration template applied to an execution names the model, and the pipeline state machine routes the run to that model's job definition. Model weights are cached on a shared Amazon EFS file system and backed up to Amazon S3, so that only the first run of a model downloads from HuggingFace. The HuggingFace token is held in AWS Secrets Manager and reaches the container as a job secret. The Blender agent reasons with a foundation model on Amazon Bedrock, which the job invokes with its task role.
+The pipeline runs each model in a dedicated container on a GPU-enabled AWS Batch compute environment; the Blender agent, which needs no GPU, runs on a CPU compute environment of its own. Every container runs as a non-root user (uid 10000). Every enabled model has its own container image and its own AWS Batch job definition; the configuration template applied to an execution names the model, and the pipeline state machine routes the run to that model's job definition. Model weights are cached on a shared Amazon EFS file system and backed up to Amazon S3, so that only the first run of a model downloads from HuggingFace. The HuggingFace token is held in AWS Secrets Manager and reaches the container as a job secret. The Blender agent reasons with a foundation model on Amazon Bedrock, which the job invokes with its task role.
 
 ```mermaid
 flowchart LR
@@ -151,7 +151,7 @@ aws codebuild batch-get-builds --ids <build-id>
 ```
 
 :::warning[Docker Hub rate limiting]
-Builds pull their base images (`nvidia/cuda`, and `mambaorg/micromamba` for `sam3d`) from Docker Hub without credentials, so they are subject to Docker Hub's anonymous pull rate limits and can fail with "429 Too Many Requests". Neither the CodeBuild project nor `buildspec.yml` takes registry credentials. Rerun a failed build with `aws codebuild start-build --project-name <ImageTo3d CodeBuild project>`, or mirror the base images into a private Amazon ECR repository and point the `FROM` line of each affected Dockerfile at the mirror.
+Builds pull their base images (`nvidia/cuda`, and `mambaorg/micromamba` for `sam3d`) from Docker Hub without credentials, so they are subject to Docker Hub's anonymous pull rate limits and can fail with "429 Too Many Requests". Neither the CodeBuild project nor `buildspec.yml` takes registry credentials. Rerun a failed build with `aws codebuild start-build --project-name <ImageTo3d CodeBuild project>`, or mirror the base images into a private Amazon ECR repository and point the `FROM` line of each affected Dockerfile at the mirror. Each `FROM` pins its image by digest (`@sha256:...`), so copy the image with its digest preserved (for example `crane copy` or `skopeo copy --all`, which keep the multi-platform index), or replace the `@sha256:` value with the digest the mirror reports. A `docker pull` and `docker push` of the tag gives the mirror a different digest from the one pinned, and the build then fails to find it.
 :::
 
 ### Local Docker asset
@@ -160,7 +160,9 @@ When `useCodeBuild: false`, the images are built locally during `cdk deploy` and
 
 ## Model weights
 
-Model weights are never baked into the container image. Each model has its own cache directory on a shared Amazon EFS file system mounted at `/mnt/efs/imageto3d-models`, with the HuggingFace cache for a model under `hf_cache/<modelKey>`. The same layout is mirrored into the model cache Amazon S3 bucket under the `imageTo3d/hf_cache/<modelKey>` prefix.
+Model weights are never baked into the container image. Each model has its own cache directory on a shared Amazon EFS file system mounted at `/mnt/efs/imageto3d-models`, with the HuggingFace cache for a model under `hf_cache/<modelKey>`. The same layout is mirrored into the model cache Amazon S3 bucket under the `imageTo3d/hf_cache/<modelKey>` prefix. When `modelCacheGeneration` is above `0`, both paths gain a `gN/` segment: `hf_cache/gN/<modelKey>` and `imageTo3d/hf_cache/gN/<modelKey>`.
+
+Every HuggingFace repository the pipeline loads, including the ones the model libraries load on their own, is read at a fixed commit listed in the container (`hfguard/hf_pins.py`). A download of a repository with no listed commit, or of any other revision, is refused, and the job fails with an error that names the repository. The cache is checked for that commit, so a cache written before a commit changed is topped up with the files that differ rather than used as it is.
 
 On startup the container resolves weights in this order:
 
@@ -168,7 +170,7 @@ On startup the container resolves weights in this order:
 2. **Amazon S3 restore** -- If Amazon EFS is empty or incomplete, the cache is restored from the Amazon S3 backup prefix, which is faster and more reliable than a HuggingFace download and needs no HuggingFace availability.
 3. **HuggingFace download** -- If neither cache is populated, the weights are downloaded from HuggingFace using the configured token, then written to Amazon EFS and backed up to Amazon S3 for later runs.
 
-Setting the `INVALIDATE_MODEL_CACHE` parameter to `true` clears both the Amazon EFS cache and the Amazon S3 backup for the selected model and forces a fresh download. Because the file system is shared across AWS Batch instances, the container also clears stale partial-download and lock files on startup so that an interrupted earlier attempt cannot block later runs.
+A run cannot clear the cache, because every run of a model shares it. To start every model on an empty cache, raise `app.pipelines.useImageTo3d.modelCacheGeneration` by one and deploy; see [Starting on an empty model cache](#starting-on-an-empty-model-cache). Because the file system is shared across AWS Batch instances, the container also clears stale partial-download and lock files on startup so that an interrupted earlier attempt cannot block later runs.
 
 :::info[Amazon EFS costs]
 The Amazon EFS file system stores model weights and incurs standard Amazon EFS storage costs for as long as the cache exists. The file system uses General Purpose performance mode with elastic throughput. Monitor storage growth as models are enabled, and consider Amazon EFS lifecycle policies for long-term cost optimization.
@@ -282,7 +284,8 @@ Add the following to your `config.json` under `app.pipelines`:
 | `autoRegisterWithVAMS`                         | `true`                            | Register the pipeline, workflow and configuration templates with VAMS at deploy time.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `autoTriggerOnFileExtensionsUpload`            | `""`                              | Enables the workflow's file-upload trigger when set to any non-empty value. The extensions that actually match are the workflow's input file filters (`*.png`, `*.jpg`, `*.jpeg`), not this string.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `instanceTypes`                                | Nine `g6e`, `g6` and `g5` types   | EC2 GPU instance types for the AWS Batch compute environment (`BEST_FIT_PROGRESSIVE`). The templates list `g6e.xlarge` through `g5.8xlarge`, as in the example above.                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `maxVCpus`                                     | `48`                              | Maximum vCPUs for the AWS Batch compute environment. Each job requests 4 vCPUs, about 26 GB of memory and 1 GPU.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `maxVCpus`                                     | `48`                              | Maximum vCPUs for each AWS Batch compute environment. A GPU model's job requests 4 vCPUs, about 26 GB of memory and 1 GPU; the Blender agent's job requests 4 vCPUs and about 26 GB on the CPU environment.                                                                                                                                                                                                                                                                                                                                                                            |
+| `modelCacheGeneration`                         | `0`                               | Selects the shared model weight cache. Raise it by one and deploy to start every model on an empty cache; see [Starting on an empty model cache](#starting-on-an-empty-model-cache).                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `models.stable3dgen.enabled`                   | `true`                            | Build and register the Stable-X Stable3DGen model. This is the model the default configuration template selects. It produces geometry without texture.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `models.trellis2.enabled`                      | `false`                           | Build and register the Microsoft TRELLIS.2 model, kept available as a quality comparison. Its image needs a different Python and CUDA toolchain from the rest of the pipeline, and it pulls NVIDIA-licensed rendering components whose redistribution terms need review before distribution.                                                                                                                                                                                                                                                                                           |
 | `models.sam3d.enabled`                         | `false`                           | Build and register the Meta SAM 3D Objects model. Review the Meta SAM License before enabling.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -297,7 +300,7 @@ At least one model must be enabled when the pipeline is enabled, and `instanceTy
 
 ## GPU Instance Recommendations
 
-Every enabled model shares one compute environment and one job queue, so the configured instance types must satisfy the most demanding model you enable.
+Every enabled GPU model shares one compute environment and one job queue, so the configured instance types must satisfy the most demanding model you enable. The Blender agent runs on a separate CPU compute environment and queue, created only when it is enabled, whose instance types AWS Batch chooses (`optimal`).
 
 | Model                | Minimum VRAM | Recommended instance        | Notes                                                                                                                                                                            |
 | -------------------- | ------------ | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -309,7 +312,7 @@ Every enabled model shares one compute environment and one job queue, so the con
 | Tencent Hunyuan3D-2  | 16 GB        | g6.8xlarge (1x L4 22 GB)    | The lightest of the textured models: about 6 GB for the shape stage and about 16 GB with the paint stage, because the shape pipeline is released before the paint pipeline loads |
 
 :::tip[Sizing for the whole model set]
-A single 48 GB GPU instance covers all seven paths; the Blender agent needs no GPU memory of its own. Enable only the models you intend to use -- each additional model adds a container image build, an Amazon ECR repository and its own weight download on first run.
+A single 48 GB GPU instance covers all six GPU models; the Blender agent runs on CPU instances. Enable only the models you intend to use -- each additional model adds a container image build, an Amazon ECR repository and its own weight download on first run.
 :::
 
 ## Print-readiness mesh cleanup
@@ -549,7 +552,6 @@ These parameters are set in the configuration template's body and can be overrid
 | `HUNYUAN3D_GENERATE_TEXTURE`   | `true`                                   | Hunyuan3D-2 only. Whether its multi-view paint stage runs. `false` returns geometry in roughly half the time and drops the run from about 16 GB of GPU memory to about 6 GB.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `HUNYUAN3D_POSTPROCESS`        | `off`                                    | Hunyuan3D-2 only. Upstream's own tidy-up steps applied to the shape before it is painted: `floaters` discards disconnected fragments, `degenerate` drops zero-area faces, and both may be named together. Face reduction is deliberately not offered -- `TARGET_FACE_COUNT` decimates once, after the repair ladder.                                                                                                                                                                                                                                                                                                                                 |
 | `HUNYUAN3D_REMOVE_BG`          | `auto`                                   | Hunyuan3D-2 only. Whether the model runs its own background removal. It reads the alpha channel as the object mask and recentres the subject from it, so an image without alpha is never cropped to the subject and the whole composition is reconstructed instead. `auto` runs it only when the image reaching the model carries no transparency.                                                                                                                                                                                                                                                                                                   |
-| `INVALIDATE_MODEL_CACHE`       | `false`                                  | Clear the Amazon EFS cache and the Amazon S3 backup for the selected model and re-download the weights from HuggingFace.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ## Troubleshooting
 
@@ -570,16 +572,16 @@ If the job fails while resolving model weights:
 3. For gated repositories, confirm the access request has been approved -- a pending request behaves like a denied one.
 4. Check the AWS Batch job logs in Amazon CloudWatch for the specific repository that failed.
 
-### Invalidating the model cache
+### Starting on an empty model cache
 
-If a model has been updated upstream or the cached weights on Amazon EFS are incomplete, force a fresh download:
+If the cached weights on Amazon EFS are damaged or incomplete, start every model on an empty cache:
 
-1. Run the pipeline with `INVALIDATE_MODEL_CACHE` set to `true` in the configuration body.
-2. The cached weights for the selected model are deleted from Amazon EFS and from the Amazon S3 backup prefix, then re-downloaded from HuggingFace.
-3. Return the parameter to `false` after a successful run so that later executions use the fast Amazon EFS path.
+1. Raise `app.pipelines.useImageTo3d.modelCacheGeneration` by one in the deployment configuration and deploy.
+2. The next run of each model downloads its weights from HuggingFace into the new generation's directory (`hf_cache/gN/<modelKey>`) and backs them up to the new prefix (`imageTo3d/hf_cache/gN/<modelKey>`). A job that was already running keeps the cache it started with.
+3. Once no job uses the previous generation, delete its Amazon EFS directory and its Amazon S3 prefix yourself; the pipeline does not delete them. For generation `0` these are `hf_cache/<modelKey>` and `imageTo3d/hf_cache/<modelKey>/`.
 
 :::warning
-Invalidating the cache adds the full weight download to the execution time and requires HuggingFace availability and a valid token.
+A new generation adds the full weight download to the first run of each model and requires HuggingFace availability and a valid token.
 :::
 
 ### Amazon EFS mount failures

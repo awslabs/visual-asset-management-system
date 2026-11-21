@@ -13,7 +13,8 @@ payload size limits) plus the small deploy-time values — resolved resource ids
 bus arn), optional id overrides, and the deploy-time trigger-enable flag. The CR fetches + merges +
 parses the bundle, then upserts. An optional ``executionConfigOverrides`` property (waitForCallback,
 taskTimeout, taskHeartbeatTimeout, lambdaName) lets a deployment register a bundle with a different
-execution config; the pipeline service then redeploys every workflow referencing the pipeline. The CR is also invocable outside CloudFormation (a direct invoke with
+execution config; the pipeline service then redeploys every workflow referencing the pipeline. The CR
+is also invocable outside CloudFormation (a direct invoke with
 an ``inlineBundle`` or ``bundleS3Keys`` payload) so external solutions can self-register.
 
 Idempotent re-register: on redeploy an existing built-in pipeline/workflow is UPDATED (and re-enabled —

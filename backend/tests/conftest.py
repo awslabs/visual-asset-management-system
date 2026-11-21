@@ -88,6 +88,9 @@ sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test
 # test_request_to_claims_authMethod.py pins the real module's values to these.
 sys.modules['handlers.auth'].AUTH_METHOD_JWT = "jwt"
 sys.modules['handlers.auth'].AUTH_METHOD_API_KEY = "apiKey"
+# The claims key request_to_claims sets when the custom claims check raised (pinned to the real
+# module's value in tests/handlers/auth/test_init.py).
+sys.modules['handlers.auth'].CLAIMS_CHECK_FAILED = "claimsCheckFailed"
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()
@@ -412,6 +415,17 @@ _cw_pkg = __import__('types').ModuleType('common.workflows')
 _cw_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'workflows')]
 sys.modules['common.workflows'] = _cw_pkg
 sys.modules['common'].workflows = _cw_pkg
+# The REAL common.compliance package, for the same reason: the workflow execute handler and assetFiles
+# import common.compliance.quarantineGuard at module level, and the handlers suites that import them
+# outside the directories registering it (assets, zipDownloads, compliance; each registers it only when
+# absent, so they share this object) would otherwise fail collection with "'common' is not a package".
+if 'common.compliance' not in sys.modules:
+    _cc_pkg = __import__('types').ModuleType('common.compliance')
+    _cc_pkg.__path__ = [os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common',
+                                     'compliance')]
+    _cc_pkg.__package__ = 'common.compliance'
+    sys.modules['common.compliance'] = _cc_pkg
+sys.modules['common'].compliance = sys.modules['common.compliance']
 # executionRecords is pure helpers (no AWS deps), so load the REAL module by path
 # rather than a MagicMock (same approach as s3MetadataKeys above).
 _execrec_spec = _s3mk_importlib_util.spec_from_file_location(

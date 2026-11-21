@@ -57,13 +57,13 @@ RUN apt-get update && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies from the hash-locked set into a virtual environment the runtime stage
-# copies whole. requirements.txt lists the direct dependencies; requirements.lock is generated from it
-# (command in its header) and pins every package, transitive ones included, by version and hash, so two
-# builds of the same commit install the same packages.
-COPY requirements.lock /build/requirements.lock
-RUN chmod a+r /build/requirements.lock && \
+# copies whole. requirements.txt is exported from uv.lock (command in its header; direct dependencies are
+# in pyproject.toml) and pins every package, transitive ones included, by version and hash, so two builds
+# of the same commit install the same packages.
+COPY requirements.txt /build/requirements.txt
+RUN chmod a+r /build/requirements.txt && \
     python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=imagecodecs,av,tifffile -r /build/requirements.lock && \
+    /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=imagecodecs,av,tifffile -r /build/requirements.txt && \
     chmod -R a+rX /opt/venv
 
 # Node.js for the PlayCanvas splat-transform CLI, which converts .spz/.sog/.ksplat/.lcc/.compressed.ply

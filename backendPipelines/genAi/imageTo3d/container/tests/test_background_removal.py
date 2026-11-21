@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import preprocess
+from hfguard import hf_pins
 
 TEMPLATE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -289,4 +290,16 @@ class TestTheBackendReachesItsSettings:
         preprocess._remove_background_sam(
             _photo(tmp_path), str(tmp_path / "cut.png"), {"SAM_MODEL_REPO": "facebook/sam-vit-base"})
 
-        transformers.SamModel.from_pretrained.assert_called_once_with("facebook/sam-vit-base")
+        transformers.SamModel.from_pretrained.assert_called_once_with(
+            "facebook/sam-vit-base", revision=hf_pins.HF_REVISIONS["facebook/sam-vit-base"])
+
+    def test_a_repository_that_is_not_a_pinned_sam_checkpoint_is_refused(self, tmp_path, monkeypatch):
+        """The setting is part of a run's configuration, so it may only name the checkpoints that are pinned."""
+        import numpy as np
+
+        transformers = _fake_sam(monkeypatch, [np.ones((4, 4), bool)], [0.9])
+
+        with pytest.raises(preprocess.PreprocessError, match="SAM_MODEL_REPO 'someone/sam-lookalike'"):
+            preprocess._remove_background_sam(
+                _photo(tmp_path), str(tmp_path / "cut.png"), {"SAM_MODEL_REPO": "someone/sam-lookalike"})
+        transformers.SamModel.from_pretrained.assert_not_called()
