@@ -149,6 +149,18 @@ _s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
 _s3pp_spec.loader.exec_module(_s3pp_module)
 sys.modules['common.s3PathPatterns'] = _s3pp_module
+# assetLocations holds the location-key rules (they import common.s3PathPatterns, registered above)
+# and the location-index reads. It builds no client at import (index reads take the caller's table
+# handle; the readiness check builds its SSM client on first use), so load the REAL module by path.
+# It must come before downloadEligibility below, which imports it.
+_alc_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.assetLocations',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'assetLocations.py')
+)
+_alc_module = _s3mk_importlib_util.module_from_spec(_alc_spec)
+_alc_spec.loader.exec_module(_alc_module)
+sys.modules['common.assetLocations'] = _alc_module
+sys.modules['common'].assetLocations = _alc_module
 # validators is pure (re + json + common.s3PathPatterns, registered above; no AWS
 # deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
 # strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which

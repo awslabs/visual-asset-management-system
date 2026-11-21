@@ -172,7 +172,7 @@ interface storageResources {
         appFeatureEnabledStorageTable;
         assetLinksStorageTableV2;
         assetLinksMetadataStorageTable;
-        assetStorageTable;
+        assetStorageTable; // GSIs include AssetLocationGSI (PK locationBucket, SK locationKey, INCLUDE bucketId): the location index, read only after the assetLocationIndex migration marker exists (test/storage/assetLocationIndex.test.ts). An existing table accepts one new GSI per update, so add no second GSI to it in the same release
         assetUploadsStorageTable;
         assetVersionsStorageTable;
         assetFileVersionsStorageTable;

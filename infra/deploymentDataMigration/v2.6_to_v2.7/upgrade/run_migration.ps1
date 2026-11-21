@@ -1,6 +1,6 @@
-# PowerShell script to run the VAMS v2.6 to v2.7 migration (orphaned trigger cleanup, vector index
-# backfill, system-pipeline retirement report)
-# Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-ClearVectors] [-Async]
+# PowerShell script to run the VAMS v2.6 to v2.7 migration (asset location folder keys, orphaned trigger
+# cleanup, vector index backfill, system-pipeline retirement report, asset location index backfill)
+# Usage: .\run_migration.ps1 [-ConfigFile <path>] [-Execute] [-Resume] [-ClearVectors] [-Async]
 #                            [-GenerateMetadataForExistingFiles]
 #                            [-Steps <step>] [-Limit <n>] [-Profile <name>] [-Region <name>]
 #                            [-LogLevel <level>] [-ConfirmAccount <id>]
@@ -15,10 +15,11 @@
 param(
     [string]$ConfigFile = "v2.6_to_v2.7_migration_config.json",
     [switch]$Execute,
+    [switch]$Resume,
     [switch]$ClearVectors,
     [switch]$Async,
     [switch]$GenerateMetadataForExistingFiles,
-    [ValidateSet("all", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement")]
+    [ValidateSet("all", "assetLocationFolderKeys", "orphanedTriggers", "vectorBackfill", "metadataBackfill", "systemPipelineRetirement", "assetLocationIndex")]
     [string]$Steps,
     [int]$Limit,
     [string]$Profile,
@@ -81,6 +82,7 @@ if ($RealRun) {
 } else {
     Write-Host "Mode: DRY RUN (no changes will be made; pass -Execute for a real run)" -ForegroundColor Yellow
 }
+if ($Resume)       { $ExtraArgs += "--resume";        Write-Host "Mode: RESUME (assetLocationFolderKeys continues from its saved checkpoint)" -ForegroundColor Yellow }
 if ($ClearVectors) { $ExtraArgs += "--clear-vectors"; Write-Host "Mode: CLEAR VECTORS (every stored vector is deleted before re-embedding)" -ForegroundColor Yellow }
 if ($Async)        { $ExtraArgs += "--async";         Write-Host "Mode: ASYNCHRONOUS (reindexer results in CloudWatch Logs)" -ForegroundColor Yellow }
 if ($GenerateMetadataForExistingFiles) { $ExtraArgs += "--generate-metadata-for-existing-files"; Write-Host "Mode: GENERATE METADATA FOR EXISTING FILES (metadataBackfill, vector search off)" -ForegroundColor Yellow }
@@ -123,6 +125,8 @@ try {
             Write-Host "  3. Confirm the trigger cleanup took effect: re-run with -Steps orphanedTriggers (without -Execute)"
             Write-Host "     and check the summary reads 'Rows that would be deleted' = 0 with 'Trigger rows examined' > 0"
             Write-Host "     (the live workflows' triggers, e.g. the system workflow's own fileUpload trigger)"
+            Write-Host "  4. Read the asset location index report (asset_location_index_report.json) and check the summary"
+            Write-Host "     says 'Completion marker written'; if not, run -Steps assetLocationIndex -Execute again"
         } else {
             Write-Host "This was a dry run: no rows were deleted and no executions were launched." -ForegroundColor Yellow
             Write-Host "Review the summaries above, then set `"dry_run`": false in the config and re-run with -Execute to apply them."
