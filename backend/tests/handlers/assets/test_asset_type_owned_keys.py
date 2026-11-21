@@ -66,6 +66,9 @@ class _Table(AttributionAssetTable):
 
 @pytest.fixture(autouse=True)
 def _ready(monkeypatch):
+    # Load the shared bucket-sync module before patching: loaded first while `index_ready` is patched, it
+    # would bind the patch for good, and every later test on the worker would see an index that is ready
+    _load_bucket_sync()
     al.clear_nested_locations_cache()
     monkeypatch.setattr(al, "index_ready", lambda name: True)
     yield

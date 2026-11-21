@@ -28,6 +28,9 @@ from tests.common.fileAttributionFakes import AttributionAssetTable, asset_row  
 from tests.handlers.assets.test_assetService_unarchive_deleted_database import _request  # noqa: E402
 from tests.handlers.assets.test_assetService_history import _load as _load_service  # noqa: E402
 from tests.handlers.indexing import test_sqsBucketSync_location_attribution as bs  # noqa: E402
+# The bucket-sync module is loaded once and shared; this autouse fixture puts back every attribute the
+# bucket-sync tests below replace, so a later test file on the same worker sees the real functions
+from tests.handlers.indexing.test_sqsBucketSync_location_attribution import _restore_module_attrs  # noqa: E402,F401
 
 al = sys.modules['common.assetLocations']
 # Read with a fallback so the behaviour tests also run (and fail) on code without the rule
@@ -51,6 +54,9 @@ class _Table(AttributionAssetTable):
 
 @pytest.fixture(autouse=True)
 def _ready(monkeypatch):
+    # Load the shared bucket-sync module before patching: loaded first while `index_ready` is patched, it
+    # would bind the patch for good, and every later test on the worker would see an index that is ready
+    bs._load()
     monkeypatch.setattr(al, "index_ready", lambda name: True)
     yield
 
