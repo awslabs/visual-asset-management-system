@@ -3428,7 +3428,8 @@ if CONFIG.enable_writes:
     def get_zip_download_url(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
         """Use only when the user asked to download a SUCCEEDED zip job: a presigned `url` with
         `expiresIn`. The URL is a bearer credential for the whole archive and lands in the
-        transcript: keep this tool out of `autoApprove` and treat a URL as disclosed."""
+        transcript: keep this tool out of `autoApprove` and treat a URL as disclosed. An error
+        "could not be checked right now. Try again in a moment." means call it again."""
         return CLIENT.api.get_zip_download_url(database_id, asset_id, request_id)
     # --- Compliance (write) ----------------------------------------------
 
