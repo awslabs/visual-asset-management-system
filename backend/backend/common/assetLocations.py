@@ -238,6 +238,12 @@ SHARED_PATH_REFUSAL = "This file is also held by another asset and is not archiv
 SHARED_LOCATION_WRITE_REFUSAL = ("This asset shares its storage location with another asset, so no file can be added "
                                  "or changed here until one of them is archived. See \"Bucket Sync Rejected-Record "
                                  "Queue Holds Messages\" in the VAMS troubleshooting guide.")
+# The answer to an asset unarchive while another live asset holds a stored location that shares a key with
+# the asset's own (the create-time conflict rule): unarchiving it would recreate the overlap. Names the
+# condition, never the other asset.
+UNARCHIVE_LOCATION_IN_USE_REFUSAL = ("This asset cannot be unarchived while another asset holds a storage location "
+                                     "that overlaps its own. See \"Bucket Sync Rejected-Record Queue Holds "
+                                     "Messages\" in the VAMS troubleshooting guide.")
 
 OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
                            "Write the output under another file name or folder.")
@@ -798,10 +804,12 @@ def resolve_owner(table, bucket: str, object_key: str, include_archived: bool = 
     return Resolution(RESOLVED_NOT_FOUND)
 
 
-def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int = MAX_PAGES_PER_LOOKUP
-                   ) -> List[LocationEntry]:
+def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int = MAX_PAGES_PER_LOOKUP,
+                   accept: Optional[Callable[[LocationEntry], bool]] = None) -> List[LocationEntry]:
     """Index rows, live and archived, that share a key with `location` in `bucket`
-    (`locations_share_key`). An empty list means no conflict.
+    (`locations_share_key`). An empty list means no conflict. `accept` keeps only the rows it admits (an
+    unarchive asks for the live rows of other assets); a descendant lookup then pages past the rows it
+    refuses.
 
     Two locations share a key when one contains the other's own key, and in one more case: a single
     file `S` and the single file `S.previewFile` or `S.previewFile.` hold a common preview key that
@@ -833,23 +841,53 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
             f"Location has {len(candidates)} candidate locations, more than {MAX_CANDIDATE_LOCATIONS}")
     exact = candidates + [p for p in _preview_partner_locations(location) if p not in candidates]
     lookups = _lookup_all(table, bucket, exact, use_cache=False)
+    admit = accept or (lambda entry: True)
     conflicts: List[LocationEntry] = []
     for candidate in exact:
         for entry in lookups.get(candidate, ()):
-            if locations_share_key(entry.location, location) and entry not in conflicts:
+            if locations_share_key(entry.location, location) and admit(entry) and entry not in conflicts:
                 conflicts.append(entry)
     client, table_name = table.meta.client, table.name
     folder_form = location if location.endswith('/') else location + '/'
-    inside = [_first_under(client, table_name, bucket, folder_form, lambda entry: True,
-                           page_size=1, max_pages=max_descendant_pages)]
+    inside = [_first_under(client, table_name, bucket, folder_form, admit,
+                           page_size=1 if accept is None else PREVIEW_LOOKUP_PAGE_SIZE,
+                           max_pages=max_descendant_pages)]
     if not location.endswith('/'):
         inside.append(_first_under(client, table_name, bucket, location + PREVIEW_FILE_PATTERN,
-                                   lambda entry: locations_share_key(location, entry.location),
+                                   lambda entry: locations_share_key(location, entry.location) and admit(entry),
                                    page_size=PREVIEW_LOOKUP_PAGE_SIZE, max_pages=max_descendant_pages))
     for entry in inside:
         if entry is not None and entry not in conflicts:
             conflicts.append(entry)
     return conflicts
+
+
+def live_conflicts(table, bucket: str, location: str, owner: Tuple[str, str]) -> List[LocationEntry]:
+    """The live index rows of assets other than `owner` (`(databaseId, assetId)`, archived or live) whose
+    stored locations share a key with `location`: the create-time conflict rule, for an asset that comes back
+    from the archive. Raises like `find_conflicts`; callers must not act on it before `index_ready()`."""
+    owner_identity = _live_identity(*owner)
+    return find_conflicts(table, bucket, location,
+                          accept=lambda entry: not entry.archived
+                          and _live_identity(entry.database_id, entry.asset_id) != owner_identity)
+
+
+def unarchive_conflicts(table, asset: Optional[Dict[str, Any]], bucket: str, location: Optional[str] = None, *,
+                        asset_table_name: Optional[str] = None) -> List[LocationEntry]:
+    """The other live assets whose stored locations overlap `asset`'s (`live_conflicts`), which an unarchive of
+    `asset` (the API route or bucket sync's restore) would share keys with; empty when there are none. Read from
+    the location index once it is ready; before, or when the index cannot answer for the location (too many
+    candidates, a lookup past its page limit), the answer is empty and the unarchive goes ahead as before."""
+    row = asset or {}
+    loc = normalize_location(location if location is not None else (row.get('assetLocation') or {}).get('Key'))
+    table_name = asset_table_name or getattr(table, 'name', '')
+    if not bucket or not loc or not row.get('assetId') or not index_ready(table_name):
+        return []
+    try:
+        return live_conflicts(table, bucket, loc, (str(row.get('databaseId') or ''), str(row.get('assetId'))))
+    except (LocationTooDeepError, RuntimeError) as e:
+        logger.warning(f"The location index cannot check {loc} for an unarchive ({e}); unarchiving as before")
+        return []
 
 
 class BucketLocations:

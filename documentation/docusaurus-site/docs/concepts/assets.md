@@ -75,7 +75,9 @@ one of them leaves the shared files, and every version of them, to the other ass
 or moving one of those files through either asset is refused. No file is written into such a location: an
 upload, a workflow output, a new folder, a copy into either asset, and a revert, unarchive or primary-file change
 of a file there are refused until one of the assets is archived (see "Bucket Sync Rejected-Record Queue Holds
-Messages" in the troubleshooting guide). Until the `assetLocationIndex` migration step
+Messages" in the troubleshooting guide). An archived asset is not unarchived, through the API or by a file
+written into its folder, while another live asset holds a location that overlaps its own (the same location,
+one inside it or one around it), so the overlap does not come back. Until the `assetLocationIndex` migration step
 has run after an upgrade, only archiving, unarchiving and permanently deleting an asset, and deleting,
 archiving or moving a file or folder, look for nested or shared assets; writes behave as before.
 

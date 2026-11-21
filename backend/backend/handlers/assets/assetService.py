@@ -33,8 +33,8 @@ from common.s3MetadataKeys import (
 )
 from common.assetProvenance import asset_edit_provenance
 from common.assetLocations import (
-    NestedLocations, contains, fill_location_attributes, held_objects, is_folder_location, normalize_base_prefix,
-    relative_path_in,
+    UNARCHIVE_LOCATION_IN_USE_REFUSAL, NestedLocations, contains, fill_location_attributes, held_objects,
+    is_folder_location, normalize_base_prefix, relative_path_in, unarchive_conflicts,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.assetHistory import (
@@ -1611,6 +1611,16 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     # Get bucket details for asset
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
+
+    # Not while another live asset holds a location that overlaps this asset's (the create-time conflict
+    # rule): the unarchive would recreate the overlap, and bucket sync could not attribute a new file in a
+    # location two live assets share. Read from the location index once it is ready, before anything is
+    # written; the response names neither asset.
+    conflicts = unarchive_conflicts(asset_table, asset, bucket_name, asset_table_name=asset_database)
+    if conflicts:
+        logger.info(f"Not unarchiving asset {assetId} in database {original_db_id}: {len(conflicts)} other live "
+                    "asset(s) hold a location that overlaps its own")
+        raise VAMSGeneralErrorResponse(UNARCHIVE_LOCATION_IN_USE_REFUSAL)
 
     # Unarchive the asset record; file restoration is opt-in
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
