@@ -4,27 +4,18 @@
  */
 
 /**
- * The bucket-sync created-events function opts out of Lambda recursive-loop detection, and every
- * dead-letter queue on the path from an S3 event to the search index is alarmed: both bucket-sync
- * directions and both indexers, and with vector search on the vector indexer, the
- * `vector.embedding.ready` rule target, the system-workflow launcher and the vector reindexer's
- * asynchronous continuations. A dropped create leaves a file missing from search; a dropped delete
- * leaves a stale search entry; a dropped reindex continuation stops the rebuild part-way.
+ * Neither bucket-sync function opts out of Lambda recursive-loop detection, and every dead-letter queue
+ * on the path from an S3 event to the search index is alarmed: both bucket-sync directions and both
+ * indexers, and with vector search on the vector indexer, the `vector.embedding.ready` rule target, the
+ * system-workflow launcher and the vector reindexer's asynchronous continuations. A dropped create
+ * leaves a file missing from search; a dropped delete leaves a stale search entry; a dropped reindex
+ * continuation stops the rebuild part-way.
  *
- * `sqsBucketSync`'s created handler stamps an unstamped object by copying it onto itself, and the copy
- * re-enters the same queue. The handler ends that chain after one echo, but under sustained parallel
- * writes Lambda's detection counted the chain across shared SQS batches and stopped invocations before
- * the handler ran, dead-lettering whole batches of unrelated files with `Errors` at zero. Measured on
- * live deployments: files present in S3 and missing from search, `RecursiveInvocationsDropped` above
- * zero, and the DLQ holding the dropped batches with nothing alerting on it.
+ * Bucket sync writes no object back to the bucket that triggers it (it tags the synced version, and no
+ * bucket notification subscribes to tagging events), so both directions keep the detection on in every
+ * partition.
  *
- * The opt-out is scoped as narrowly as the cause. Only the created-events function writes back to its
- * own trigger; the deleted-events function and every other function keep the default, and the property
- * is emitted only in the partitions where the detection exists: commercial and EU Sovereign. GovCloud
- * documents it as not available and gets no property. The opt-out is a stopgap until the self-write is
- * removed (#1207).
- *
- * The two vector functions that continue their own work opt out too: the vector reindexer continues a
+ * The two vector functions that continue their own work opt out: the vector reindexer continues a
  * run by asynchronous self-invocation every 15-minute window, and the vector indexer continues an asset-
  * or file-wide rule by sending a `vector.indexer.continue` message to the queue it consumes. The detection
  * would stop either chain after about 16 hops. Each handler caps its chain itself (`MAX_RUN_INVOCATIONS`,
@@ -53,13 +44,9 @@ const VECTOR_SELF_CONTINUING_HANDLERS = [REINDEXER_HANDLER, INDEXER_HANDLER, LAU
 const COMPLIANCE_TRIGGER_HANDLER = "handlers.compliance.complianceTrigger.lambda_handler";
 const COMPLIANCE_JOBS_HANDLER = "handlers.compliance.complianceJobs.lambda_handler";
 /** The functions that opt out of recursive-loop detection where the partition has it. */
-const OPTED_OUT = new Set([
-    CREATED_HANDLER,
-    COMPLIANCE_JOBS_HANDLER,
-    ...VECTOR_SELF_CONTINUING_HANDLERS,
-]);
+const OPTED_OUT = new Set([COMPLIANCE_JOBS_HANDLER, ...VECTOR_SELF_CONTINUING_HANDLERS]);
 
-/** The created-events function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
+/** An opted-out function's `RecursiveLoop` per template: `Allow` where the partition has detection. */
 const EXPECTED_RECURSIVE_LOOP: Record<TemplateName, "Allow" | undefined> = {
     commercial: "Allow",
     eusovereign: "Allow",
@@ -175,12 +162,14 @@ describe.each(TEMPLATES)("%s: bucket-sync recursive-loop setting", (templateName
         expect(functionsWithHandler(synth, DELETED_HANDLER).length).toBeGreaterThan(0);
     });
 
-    test("the created-events function allows recursion in commercial and EU Sovereign only", () => {
-        const expected = EXPECTED_RECURSIVE_LOOP[templateName];
-        for (const fn of functionsWithHandler(synth, CREATED_HANDLER)) {
-            expect(fn.properties.RecursiveLoop).toBe(expected);
+    test.each([CREATED_HANDLER, DELETED_HANDLER])(
+        "%s keeps the detection on: no RecursiveLoop property",
+        (handler) => {
+            for (const fn of functionsWithHandler(synth, handler)) {
+                expect("RecursiveLoop" in fn.properties).toBe(false);
+            }
         }
-    });
+    );
 
     test.each(VECTOR_SELF_CONTINUING_HANDLERS)(
         "%s allows recursion where it is deployed and the partition has detection",

@@ -27,7 +27,7 @@ _PATCHED_ATTRS = (
     "asset_bucket_name", "asset_bucket_prefix", "RESERVED_S3_PREFIX_FOLDERS", "get_bucket_id",
     "validate_asset_id", "lookup_asset", "lookup_archived_asset", "restore_archived_asset",
     "get_or_create_database_for_bucket", "create_new_asset", "object_still_exists",
-    "update_s3_metadata", "update_asset_type", "s3_client", "asset_file_version_history_table",
+    "tag_version", "update_asset_type", "s3_client", "asset_file_version_history_table",
     "resolve_owner", "index_ready", "find_conflicts", "sqs_client", "rejected_queue_url",
     "sns_client", "file_indexer_sns_topic_arn", "events_client", "orchestration_bus_name",
     "orchestration_event_source_prefix", "dynamodb", "is_versioning_enabled", "delete_s3_object",
@@ -36,6 +36,11 @@ _PATCHED_ATTRS = (
     "delete_file_metadata_on_s3_delete", "determine_asset_type", "_update_asset_type_attribute",
     "SNS_MESSAGE_MAX_BYTES", "EVENTBRIDGE_ENTRY_MAX_BYTES", "PUBLISH_SIZE_MARGIN_BYTES",
 )
+
+
+def _tagged(m):
+    """(bucket, key, databaseId, assetId) of each VAMS tag write bucket sync asked for."""
+    return [(c.args[1], c.args[2], c.args[4], c.args[5]) for c in m.tag_version.call_args_list]
 
 
 @pytest.fixture(autouse=True)
@@ -80,7 +85,7 @@ def _wire(m, live=None, resolve=(NOT_FOUND,), ready=False, conflicts=()):
     m.get_or_create_database_for_bucket = MagicMock(return_value="db1")
     m.create_new_asset = MagicMock(return_value="a1")
     m.object_still_exists = MagicMock(return_value=True)
-    m.update_s3_metadata = MagicMock(return_value=True)
+    m.tag_version = MagicMock(return_value=None)
     m.update_asset_type = MagicMock(return_value=True)
     m.is_versioning_enabled = MagicMock(return_value=True)
     m.delete_s3_object = MagicMock(return_value=True)
@@ -155,7 +160,7 @@ class TestNormalAssetParity:
 
         assert response["batchItemFailures"] == []
         m.resolve_owner.assert_not_called()
-        m.update_s3_metadata.assert_any_call(BUCKET, "a1/sub/model.glb", "db1", "a1")
+        assert (BUCKET, "a1/sub/model.glb", "db1", "a1") in _tagged(m)
         assert m.update_asset_type.call_args.args == ("bucket-1", "a1", BUCKET, "a1/")
         [row] = _history_rows(m)
         assert row["databaseId:assetId:filePath"] == "db1:a1:/sub/model.glb"
@@ -186,7 +191,7 @@ class TestCustomRootLocation:
         assert m.process_s3_record(_record(self.KEY, "v7"), binding_out=binding)[:2] == (True, True)
         assert binding == {"databaseId": "db1", "assetId": "owner-1", "bucketId": "bucket-1",
                            "relativePath": "/sub/x.glb", "resolvedBy": "locationIndex"}
-        m.update_s3_metadata.assert_any_call(BUCKET, self.KEY, "db1", "owner-1")
+        assert (BUCKET, self.KEY, "db1", "owner-1") in _tagged(m)
         assert m.update_asset_type.call_args.args == ("bucket-1", "owner-1", BUCKET, "projects/alpha/")
         [row] = _history_rows(m)
         assert (row["filePath"], row["versionId"], row["resolvedBy"]) == ("/sub/x.glb", "v7", "locationIndex")
@@ -214,7 +219,7 @@ class TestCustomRootLocation:
         assert body["candidateAssets"] == ["db1:o1", "db2:o2"]
         assert body["record"]["s3"]["object"]["key"] == self.KEY
         assert binding == {}
-        m.update_s3_metadata.assert_not_called()
+        m.tag_version.assert_not_called()
         m.update_asset_type.assert_not_called()
         m.asset_file_version_history_table.put_item.assert_not_called()
 
@@ -232,7 +237,7 @@ class TestCustomRootLocation:
         _wire(m, resolve=[_found(_entry())])
         assert m.process_s3_record(_record("projects/alpha/init"), binding_out={})[:2] == (True, True)
         m.delete_s3_object.assert_not_called()
-        assert m.update_s3_metadata.called
+        assert m.tag_version.called
 
     def test_an_init_marker_restoring_a_first_level_asset_through_the_index_is_still_deleted(self):
         m = _load()

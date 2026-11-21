@@ -19,7 +19,7 @@ _PATCHED_ATTRS = (
     # Replaced by TestReservedSegmentIsPrefixAware. Omitting it left a MagicMock on the module
     # that _load() caches, so a LATER file asserting the real stamp behaviour saw the mock and
     # passed for the wrong reason.
-    "update_s3_metadata",
+    "tag_version",
     # Replaced by TestAutoCreateNeverReachesASystemFolder.
     "get_or_create_database_for_bucket", "object_still_exists", "create_new_asset",
 )
@@ -218,7 +218,7 @@ class TestReservedPipelinePrefixIsExcluded:
         m.validate_asset_id = MagicMock(return_value=True)
         m.lookup_asset = MagicMock(return_value={"databaseId": "db1", "assetId": "a1"})
         m.update_asset_type = MagicMock(return_value=True)
-        m.update_s3_metadata = MagicMock(return_value=True)
+        m.tag_version = MagicMock(return_value=None)
         m.publish_to_file_indexer_sns = MagicMock()
         m.publish_to_orchestration_bus = MagicMock()
 
@@ -301,10 +301,8 @@ class TestReservedSegmentIsPrefixAware:
         there, so the narrow test never ran and the record fell through the "asset id unresolvable"
         branch instead of the system-data branch.
 
-    Why it matters beyond wasted work: `update_s3_metadata` re-stamps anything it treats as an asset
-    file by copying the object ONTO ITSELF, and that copy re-enters the same `s3:ObjectCreated:*`
-    notification that triggered the handler. So mis-classifying system data adds an S3 write, another
-    event, and another hop of the lineage depth AWS's recursive-loop detection counts.
+    Why it matters beyond wasted work: anything treated as an asset file is attributed, typed, tagged
+    and forwarded, so mis-classified system data would reach the indexers and the fileUpload trigger.
     """
 
     def _created_record(self, key, bucket="asset-bucket"):
@@ -322,7 +320,7 @@ class TestReservedSegmentIsPrefixAware:
         m.validate_asset_id = MagicMock(return_value=True)
         m.lookup_asset = MagicMock(return_value={"databaseId": "db1", "assetId": "a1"})
         m.update_asset_type = MagicMock(return_value=True)
-        m.update_s3_metadata = MagicMock(return_value=True)
+        m.tag_version = MagicMock(return_value=None)
         m.publish_to_file_indexer_sns = MagicMock()
         m.publish_to_orchestration_bus = MagicMock()
 
@@ -343,8 +341,8 @@ class TestReservedSegmentIsPrefixAware:
         m.lambda_handler_created({"Records": [self._created_record(key)]}, MagicMock())
         m.publish_to_file_indexer_sns.assert_not_called(), label
         m.publish_to_orchestration_bus.assert_not_called(), label
-        # And it is never re-stamped, which is the write that re-enters the notification.
-        m.update_s3_metadata.assert_not_called(), label
+        # And it is never tagged as an asset file.
+        m.tag_version.assert_not_called(), label
 
     @pytest.mark.parametrize("prefix,key", [
         ("myprefix/", "myprefix/a1/model.glb"),
@@ -416,7 +414,7 @@ class TestAutoCreateNeverReachesASystemFolder:
         m.object_still_exists = MagicMock(return_value=True)
         m.create_new_asset = MagicMock(return_value="a1")
         m.update_asset_type = MagicMock(return_value=True)
-        m.update_s3_metadata = MagicMock(return_value=True)
+        m.tag_version = MagicMock(return_value=None)
         m.publish_to_file_indexer_sns = MagicMock()
         m.publish_to_orchestration_bus = MagicMock()
 

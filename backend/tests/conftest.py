@@ -169,6 +169,16 @@ _fat_module = _s3mk_importlib_util.module_from_spec(_fat_spec)
 _fat_spec.loader.exec_module(_fat_module)
 sys.modules['common.fileAttribution'] = _fat_module
 sys.modules['common'].fileAttribution = _fat_module
+# vamsObjectTags writes the two VAMS object tags through the S3 client its caller passes and builds no
+# client of its own, so load the REAL module by path.
+_vot_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.vamsObjectTags',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'vamsObjectTags.py')
+)
+_vot_module = _s3mk_importlib_util.module_from_spec(_vot_spec)
+_vot_spec.loader.exec_module(_vot_module)
+sys.modules['common.vamsObjectTags'] = _vot_module
+sys.modules['common'].vamsObjectTags = _vot_module
 # validators is pure (re + json + common.s3PathPatterns, registered above; no AWS
 # deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
 # strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which

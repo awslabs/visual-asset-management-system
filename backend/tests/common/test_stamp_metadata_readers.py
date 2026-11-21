@@ -31,8 +31,6 @@ REVIEWED_READERS = {
     "handlers/indexing/crReindexer.py":
         "fallback behind the helper: the HeadObject stamp read runs only when the location index is not "
         "ready; once it is, the bucket's index partition attributes every key",
-    "handlers/indexing/sqsBucketSync.py":
-        "the echo check of the metadata self-copy: it compares the current stamp before writing one",
 }
 
 # file -> what it writes (not enforced)

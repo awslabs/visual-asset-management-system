@@ -25,8 +25,6 @@ from boto3.dynamodb.conditions import Key
 from common.validators import validate
 from common.eventLogSummary import event_log_summary
 from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_USER_ID_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
@@ -41,7 +39,8 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
-from common.s3 import is_object_version_archived, region_routing_s3_client, region_routing_s3_resource
+from common.s3 import is_object_version_archived, region_routing_s3_client
+from common.vamsObjectTags import tag_synced_version, tagging_enabled
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
     build_asset_snapshot,
@@ -79,7 +78,6 @@ retry_config = BotoConfig(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 sns_client = boto3.client('sns', config=retry_config)
 s3_client = region_routing_s3_client()
-s3_resource = region_routing_s3_resource()
 lambda_client = boto3.client('lambda', config=retry_config)
 # Bounded timeouts on the EventBridge client so an unreachable endpoint (e.g. an isolated-subnet
 # deployment missing the events VPC endpoint) fails fast rather than blocking the ingestion hot
@@ -117,10 +115,10 @@ except Exception as e:
 if not database_id:
     raise Exception('databaseId not configured')
 
-# This function's own name, used to recognize the ObjectCreated event that THIS handler's
-# metadata stamp produces (see is_vams_metadata_stamp_echo). The Lambda runtime always sets it;
-# an empty value simply disables the recognition, which degrades to the pre-existing behaviour of
-# treating the echo as a content change rather than to anything unsafe.
+# This function's own name, used to recognize the ObjectCreated event of a metadata stamp copy an
+# earlier release of this handler made (see is_vams_metadata_stamp_echo). The Lambda runtime always
+# sets it; an empty value simply disables the recognition, which treats such an echo as a content
+# change rather than anything unsafe.
 self_function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME', '')
 
 # Initialize metadata tables
@@ -411,8 +409,7 @@ def object_still_exists(bucket_name: str, object_key: str) -> bool:
     is gone. On any other/unexpected error, fail open (return True) so a transient
     S3 error never suppresses legitimate ingestion of a genuinely new file.
 
-    On a 404, retry with the alternative encoding (decoded <-> raw) — the same
-    tolerance update_s3_metadata applies — so a genuinely new upload whose
+    On a 404, retry with the alternative encoding (decoded <-> raw), so a genuinely new upload whose
     filename contains a '+' (e.g. BACC66K41F158AM+---.CATPart) is not mistaken
     for a deleted object when the event pipeline delivered the other shape.
     """
@@ -1141,7 +1138,7 @@ def decode_s3_event_key(raw_key: str) -> str:
     (indicating the event WAS encoded); otherwise return the raw key.
     Callers that make an S3 API call with this key should additionally
     fall back to the raw key if the decoded-first attempt 404s — see
-    ``update_s3_metadata`` for the template.
+    ``object_still_exists`` for the template.
     """
     if not raw_key:
         return raw_key
@@ -1149,48 +1146,26 @@ def decode_s3_event_key(raw_key: str) -> str:
     return decoded if decoded != raw_key else raw_key
 
 
-# The notification names of this handler's metadata stamp: boto3's managed copy() issues a single
-# CopyObject below its 8 MiB multipart threshold and a multipart copy at or above it.
+# The notification names of the metadata stamp copy earlier releases made: boto3's managed copy()
+# issues a single CopyObject below its 8 MiB multipart threshold and a multipart copy at or above it.
 _METADATA_STAMP_EVENT_NAMES = ('ObjectCreated:Copy', 'ObjectCreated:CompleteMultipartUpload')
 
 
 def is_vams_metadata_stamp_echo(record: Dict) -> bool:
-    """Return True when this record is the echo of THIS handler's own metadata stamp.
+    """Return True when this record is the echo of a metadata stamp copy this function made.
 
-    ``update_s3_metadata`` stamps ``databaseid`` / ``assetid`` / ``vams-changesource`` onto an object
-    by copying it onto itself. That copy is an object write, so Amazon S3 raises a *second*
-    notification — ``ObjectCreated:Copy``, or ``ObjectCreated:CompleteMultipartUpload`` for an object
-    at or above the 8 MiB managed-copy multipart threshold — for a file that only ever changed once,
-    and every consumer downstream of this handler treated it as a new file. Measured consequences:
-
-    *   the file indexers re-indexed the file a second time;
-    *   ``asset.file.uploaded`` was published a second time, so a ``fileUpload`` workflow trigger
-        fired TWICE for one written file;
-    *   ``update_asset_type`` re-listed the asset's prefix and ``write_file_version_history``
-        re-wrote its row, on identical content.
-
-    The history row itself does not duplicate — the second pass reads the same ``VersionId`` (no
-    further copy is made), so the ``put_item`` overwrites the same PK+SK. The cost there is a
-    redundant ``head_object`` plus write, not a phantom version. Measured on the deployment; do not
-    upgrade this to "a duplicate version row" without re-measuring.
-
-    Note this only arises for an object that arrives WITHOUT the stamp — a direct S3 write, a folder
-    marker written outside VAMS or before VAMS wrote markers stamped, or a pipeline output landing on
-    an asset path. A VAMS upload is already stamped by ``uploadFile``, and a VAMS folder marker by
-    ``folder_marker_metadata``, so ``update_s3_metadata`` takes its "metadata already matches"
-    branch, makes no copy, and raises no echo. Verified both ways live: a CLI upload produced one notification, a
-    direct ``s3 cp`` of the same content produced two.
-
-    The doubling on that path is what pushes a burst into AWS Lambda's
-    recursive-loop detector: at 16 hops the invocation is DROPPED before the handler runs, so its
-    SQS messages are never deleted and cycle until the queue's retention expires, with ``Errors``
-    and ``Throttles`` both zero and no log line written.
+    Earlier releases stamped ``databaseid`` / ``assetid`` / ``vams-changesource`` onto a directly
+    written object by copying it onto itself, which raised a second ``ObjectCreated`` notification for
+    a file that changed once. This handler no longer copies anything (it writes the VAMS object tags
+    instead, which raise no event it subscribes to), but echoes of copies made before an upgrade may
+    still be queued, so they are still recognized and dropped: forwarding one would index the file
+    again and fire its ``fileUpload`` triggers a second time.
 
     Two conditions, and both are required:
 
     *   ``eventName`` is ``ObjectCreated:Copy`` or ``ObjectCreated:CompleteMultipartUpload``. The
-        stamp copy is the only way this handler writes, and it completes as a multipart upload at or
-        above 8 MiB.
+        stamp copy was the only object write this handler made, and it completed as a multipart
+        upload at or above 8 MiB.
     *   the copy was performed by **this function**. ``userIdentity.principalId`` on an S3 event is
         ``AWS:<roleId>:<roleSessionName>``, and for a Lambda the session name is the function name.
 
@@ -1214,88 +1189,6 @@ def is_vams_metadata_stamp_echo(record: Dict) -> bool:
     # would also match a different function whose name merely contains this one's.
     return self_function_name in principal_id.split(':')
 
-
-def update_s3_metadata(bucket_name: str, object_key: str, database_id: str, asset_id: str) -> bool:
-    """
-    Update S3 object metadata
-    
-    Args:
-        bucket_name: The S3 bucket name
-        object_key: The S3 object key
-        database_id: The database ID
-        asset_id: The asset ID
-        
-    Returns:
-        bool: True if updated successfully, False otherwise
-    """
-    # S3 event keys may arrive form-encoded ('+' for space, %XX for other
-    # specials) or as literal text depending on the source. Try the key
-    # as-given first; on 404, try the alternative (decoded <-> raw) so we
-    # tolerate both shapes. This prevents uploads with special characters
-    # like '+' in the filename (e.g., BACC66K41F158AM+---.CATPart) from
-    # failing when the event pipeline delivered one shape but the object
-    # was stored with the other.
-    def _head_with_fallback():
-        try:
-            return s3_client.head_object(Bucket=bucket_name, Key=object_key), object_key
-        except ClientError as e:
-            if e.response.get("Error", {}).get("Code") not in ("404", "NoSuchKey"):
-                raise
-            # 404 path — try the alternative encoding
-            alt_key = urllib.parse.unquote_plus(object_key)
-            if alt_key == object_key:
-                # Try re-encoding instead (raw key that should have been encoded)
-                alt_key = urllib.parse.quote(object_key, safe="/+")
-            if alt_key == object_key:
-                raise  # nothing else to try
-            logger.info(
-                f"head_object 404 for key {object_key!r}; retrying with "
-                f"alternative encoding {alt_key!r}"
-            )
-            return s3_client.head_object(Bucket=bucket_name, Key=alt_key), alt_key
-
-    try:
-        response, effective_key = _head_with_fallback()
-
-        # Check if metadata already matches
-        current_metadata = response.get('Metadata', {})
-
-        # Keep a change source already stamped by a VAMS action; objects arriving
-        # without one were changed outside VAMS, so stamp "direct".
-        desired_change_source = current_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or VAMS_CHANGE_SOURCE_DIRECT
-
-        if (current_metadata.get(DATABASE_ID_METADATA_KEY) == database_id
-                and current_metadata.get(ASSET_ID_METADATA_KEY) == asset_id
-                and current_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) == desired_change_source):
-            logger.info(f"Metadata already matches for {effective_key}")
-            return True
-
-        # Copy the object to itself with updated metadata
-        metadata = {
-            **current_metadata,
-            DATABASE_ID_METADATA_KEY: database_id,
-            ASSET_ID_METADATA_KEY: asset_id,
-            VAMS_CHANGE_SOURCE_METADATA_KEY: desired_change_source,
-        }
-
-        # Use boto3 resource copy() which automatically handles multipart for large files
-        copy_source = {
-            'Bucket': bucket_name,
-            'Key': effective_key
-        }
-        s3_resource.Object(bucket_name, effective_key).copy(
-            copy_source,
-            ExtraArgs={
-                'Metadata': metadata,
-                'MetadataDirective': 'REPLACE'
-            }
-        )
-
-        logger.info(f"Updated metadata for {effective_key}")
-        return True
-    except Exception as e:
-        logger.exception(f"Error updating S3 metadata: {e}")
-        return False
 
 def is_init_marker(object_key: str) -> bool:
     """
@@ -1776,16 +1669,29 @@ def _put_file_uploaded_entry(detail):
         return
     logger.info(f"Published asset.file.uploaded event ({len(publishable_records)} record(s)) to the orchestration bus")
 
+def tag_version(bucket_id: str, bucket_name: str, object_key: str, version_id: str, database_id: str,
+                asset_id: str):
+    """Write the VAMS tags on an attributed version (`common.vamsObjectTags`), unless the bucket
+    registration turns tagging off (`tagSyncedObjects` false; a registration without the field has it
+    on). Returns the outcome for the ledger row, or None when tagging is off."""
+    if not tagging_enabled(get_bucket_info_from_bucket_id(bucket_id)):
+        return None
+    return tag_synced_version(s3_client, bucket_name, object_key, version_id, database_id, asset_id)
+
+
 def build_history_record(database_id, asset_id, relative_file_path, version_id,
-                         s3_metadata, s3_last_modified, etag=None, size=None, resolved_by=None):
+                         s3_metadata, s3_last_modified, etag=None, size=None, resolved_by=None,
+                         vams_tags=None):
     """Build an asset-file change-history item from an ingested object's S3 metadata.
 
     No vams-changesource present means the file was changed outside VAMS (e.g. a
     direct S3 upload): record changeSource="direct" with no provenance columns.
     Otherwise map the vams-change* metadata to flat columns (skipping blanks).
 
-    The row is also the sync ledger entry of that version: `etag` and `size` of the version, and
-    `resolvedBy`, how bucket sync found its asset. Each is written only when known.
+    The row is also the sync ledger entry of that version: `etag` and `size` of the version,
+    `resolvedBy`, how bucket sync found its asset, and `vamsTags` (`written`, `already` or
+    `skipped`) with `vamsTagsReason` when a tag was skipped or left off. Each is written only when
+    known; a registration with `tagSyncedObjects` off records no `vamsTags`.
     """
     change_source = s3_metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or VAMS_CHANGE_SOURCE_DIRECT
     relative_file_path = normalize_history_file_path(relative_file_path)
@@ -1806,6 +1712,10 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
         record["size"] = int(size)
     if resolved_by:
         record["resolvedBy"] = resolved_by
+    if vams_tags is not None:
+        record["vamsTags"] = vams_tags.status
+        if vams_tags.reason:
+            record["vamsTagsReason"] = vams_tags.reason
     if change_source != VAMS_CHANGE_SOURCE_DIRECT:
         col_map = {
             VAMS_CHANGE_USER_ID_METADATA_KEY: "changeUserId",
@@ -1824,7 +1734,8 @@ def build_history_record(database_id, asset_id, relative_file_path, version_id,
 
 
 def write_file_version_history(database_id, asset_id, relative_file_path, version_id,
-                               s3_metadata, s3_last_modified, etag=None, size=None, resolved_by=None):
+                               s3_metadata, s3_last_modified, etag=None, size=None, resolved_by=None,
+                               vams_tags=None):
     """Write a single change-history record for an ingested object version.
 
     Best-effort: no-op when the table is not configured, and never raises -- a
@@ -1837,6 +1748,7 @@ def write_file_version_history(database_id, asset_id, relative_file_path, versio
         record = build_history_record(
             database_id, asset_id, relative_file_path, version_id,
             s3_metadata, s3_last_modified, etag=etag, size=size, resolved_by=resolved_by,
+            vams_tags=vams_tags,
         )
         asset_file_version_history_table.put_item(Item=record)
     except Exception as e:
@@ -1886,9 +1798,7 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         # Extract bucket name and object key. S3 event notifications deliver
         # the key URL-encoded per AWS spec (spaces → '+', specials → '%XX');
         # decode it here so downstream comparisons, prefix checks, and S3
-        # API calls operate on the actual object key. The update_s3_metadata
-        # helper has an additional fallback to the raw form in case this
-        # particular event source delivered the key literally.
+        # API calls operate on the actual object key.
         bucket_name = record['s3']['bucket']['name']
         raw_object_key = record['s3']['object']['key']
         object_key = decode_s3_event_key(raw_object_key)
@@ -1947,9 +1857,7 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         # workflowTriggerDispatch. The previous form tested only the extracted asset id -- the first
         # segment after the configured prefix -- which missed a reserved folder nested below an asset
         # id, and could not run at all for a key that does not start with the configured prefix
-        # (extraction returns None above). Treating pipeline output as an asset file is not merely
-        # wasted work: update_s3_metadata below re-stamps it by copying the object onto itself, and
-        # that copy re-enters the same s3:ObjectCreated notification that triggered this handler.
+        # (extraction returns None above).
         if _is_system_key(object_key, prefix):
             logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
             return False, False, f"Key {object_key} contains a reserved VAMS folder segment"
@@ -1958,11 +1866,11 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         # any other stored location is found through the location index whatever its first folder is.
         first_folder_valid = validate_asset_id(asset_id)
 
-        # 1.e Determine WHAT HAPPENED before doing anything: an ObjectCreated event this handler
-        # caused itself, by stamping metadata in step 4 below, describes no change a consumer needs
-        # to see. Everything after this point — asset lookup/creation, the metadata stamp, the asset
-        # type recomputation, the version-history row — has already run for the write that preceded
-        # the stamp, and every one of them would run a second time on identical content.
+        # 1.e Determine WHAT HAPPENED before doing anything: the ObjectCreated event of a metadata stamp
+        # copy an earlier release of this handler made describes no change a consumer needs to see.
+        # Everything after this point — asset lookup/creation, the VAMS tags, the asset type
+        # recomputation, the version-history row — has already run for the write that preceded the
+        # copy, and every one of them would run a second time on identical content.
         #
         # Returns processed-successfully so the SQS message is deleted, and should_index False so
         # neither the indexers nor the fileUpload trigger see it. This is the ONE case where a
@@ -2128,18 +2036,14 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
             # Processed successfully but skip indexing
             return True, False, f"Deleted init object {object_key}"
         
-        # 4. Check if file has S3 metadata attributes that match databaseid and assetid
-        update_result = update_s3_metadata(bucket_name, object_key, database_id_to_use, owner_asset_id)
-        if not update_result:
-            logger.error(f"Failed to update metadata for {object_key}")
-            return False, True, f"Failed to update metadata for {object_key}"
-        
-        # 5. Update asset type from the files at the asset's stored location
+        # 4. Update asset type from the files at the asset's stored location. The object itself is
+        # never rewritten: a directly written file keeps its version, ETag, LastModified, headers,
+        # storage class, tags and owner.
         update_asset_type(owner_bucket_id, owner_asset_id, bucket_name, asset_location, asset_data=asset_data)
 
-        # Record the change history row of the version this event names (best-effort; never fails
-        # the sync), which is also that version's sync ledger entry. Skip folder markers (no
-        # version/content). head_object returns 'null' for VersionId on buckets without versioning.
+        # 5. Tag the version and record its change history row, which is also that version's sync
+        # ledger entry (best-effort; never fails the sync). Skip folder markers (no version/content).
+        # head_object returns 'null' for VersionId on buckets without versioning.
         object_metadata = None
         if not object_key.endswith('/'):
             try:
@@ -2150,16 +2054,20 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                 head = s3_client.head_object(**head_kwargs)
                 object_metadata = head.get('Metadata', {}) or {}
                 last_modified = head.get('LastModified')
+                version_id = head.get('VersionId') or event_version_id or 'null'
+                tags = tag_version(owner_bucket_id, bucket_name, object_key, version_id,
+                                   database_id_to_use, owner_asset_id)
                 write_file_version_history(
                     database_id_to_use,
                     owner_asset_id,
                     relative_path,
-                    head.get('VersionId') or event_version_id or 'null',
+                    version_id,
                     object_metadata,
                     last_modified.isoformat() if last_modified else "",
                     etag=head.get('ETag'),
                     size=head.get('ContentLength'),
                     resolved_by=resolved_by,
+                    vams_tags=tags,
                 )
             except Exception as e:
                 logger.exception(f"History write skipped for {object_key}: {e}")
