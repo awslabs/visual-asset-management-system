@@ -5,13 +5,17 @@
 
 POST .../download/zip/{requestId}/url signs a finished archive only after every member file is
 confirmed still downloadable. An archive of more than HEAD_CHECK_MAX_FILES members is confirmed from
-listings of the folders that hold its members, current objects only, so the asset's other files
-and its old versions are not listed. When the check cannot finish within its time bound, the route
-answers 503 "try again" and signs nothing, instead of saying that a file was archived or deleted.
+listings of its sorted member keys in runs of 1,000, current objects only, in parallel. Each run
+starts just below its first member and skips the unselected files between members a page at a time,
+so the call count follows the archive's size, not its folders, its gaps or its old versions. When the
+check cannot finish within its time bound, the route answers 503 "try again" and signs nothing,
+instead of saying that a file was archived or deleted.
 
 - a 2,001-member archive on an asset with a deep version history and a large unrelated folder
   downloads within a bound that a listing of every version under the asset root cannot meet;
-- only the members' own folders are listed, and no version listing runs;
+- only runs of the members' own keys are listed, current objects only, and no version listing runs;
+- many small folders, one folder larger than a page, and a large unselected folder between or before
+  the members' folders each cost a bounded number of calls;
 - an archived, deleted, cold-storage or blocked member still refuses it with the archived-or-deleted
   refusal (400);
 - members in several folders and a folder listed over several pages are confirmed;
@@ -166,9 +170,10 @@ def test_members_in_several_folders_and_a_folder_over_several_pages_are_confirme
         {"type": "asset", "relativePath": "/"}]})
     monkeypatch.setattr(env.svc, "SHARED_RECHECK_HEAD_MAX_FILES", 0)
     assert _url(env, request_id)["statusCode"] == 200
-    # 2,503 members in sorted runs of 1,000: one call each for the first two, three for the last, which
-    # reads past the 1,500 files that sort between file02499.glb and top.glb.
-    assert len(env.s3.list_calls) == 5
+    # 2,503 members in sorted runs of 1,000: one call each for the first two, two for the last, whose
+    # first page ends among the 1,500 files that sort between file02499.glb and top.glb, so the second
+    # starts just below top.glb.
+    assert len(env.s3.list_calls) == 4
     env.s3.add("xasset1/a/b/two.glb", version="vdm", delete_marker=True)
     assert _url(env, request_id)["statusCode"] == 400
 
@@ -203,6 +208,46 @@ def test_one_folder_larger_than_a_page_is_split_across_the_pool(env, monkeypatch
     assert response["statusCode"] == 200, h.body_of(response)
     assert len(env.s3.list_calls) == 12
     assert env.s3.max_clock() - started <= 2 * PAGE_SECONDS
+
+
+def _gap_archive(env, monkeypatch, selected, gap_folder, gap_files):
+    """Members in the selected {folder: count} folders, and gap_files unselected files in gap_folder."""
+    members = [f"/{folder}/f{n:05d}.glb" for folder, count in selected.items() for n in range(count)]
+    for rel in members:
+        env.s3.add("xasset1" + rel)
+    for n in range(gap_files):
+        env.s3.add(f"xasset1/{gap_folder}/g{n:05d}.e57")
+    request_id = _finished(env, members, selection={"selection": [
+        {"type": "folder", "relativePath": f"/{folder}/"} for folder in selected]})
+    h.use_clock(env, monkeypatch, PAGE_SECONDS)
+    return request_id
+
+
+def test_an_unselected_folder_between_two_selected_folders_is_skipped(env, monkeypatch):
+    # /a/ and /c/ are selected, 60,000 files in /b/ are not. The run that spans /a/ and /c/ reads one page
+    # into /b/, then restarts just below /c/'s first member: 4 calls, not 60 pages on one thread.
+    request_id = _gap_archive(env, monkeypatch, {"a": 1500, "c": 1500}, "b", 60000)
+    started = env.s3.max_clock()
+    response = _url(env, request_id)
+    assert response["statusCode"] == 200, h.body_of(response)
+    assert len(env.s3.list_calls) == 4
+    assert env.s3.max_clock() - started <= 2 * PAGE_SECONDS
+    # The first member after the gap archived: the restarted listing finds the next key past it.
+    env.s3.add("xasset1/c/f00000.glb", version="vdm", delete_marker=True)
+    response = _url(env, request_id)
+    assert response["statusCode"] == 400
+    assert h.body_of(response)["message"] == env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE
+
+
+def test_an_unselected_folder_before_a_run_that_spans_two_folders_is_skipped(env, monkeypatch):
+    # /b/ and /d/ are selected, 60,000 files in /a/ sort before both. The first run (all of /b/ and part
+    # of /d/) is listed under the asset root but starts just below its first member: 3 calls.
+    request_id = _gap_archive(env, monkeypatch, {"b": 500, "d": 1600}, "a", 60000)
+    started = env.s3.max_clock()
+    response = _url(env, request_id)
+    assert response["statusCode"] == 200, h.body_of(response)
+    assert len(env.s3.list_calls) == 3
+    assert env.s3.max_clock() - started <= PAGE_SECONDS
 
 
 def test_member_keys_with_special_characters_are_confirmed_and_refused(env, monkeypatch):

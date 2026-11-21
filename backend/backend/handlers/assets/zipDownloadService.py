@@ -1304,39 +1304,48 @@ def _current_member_ok(bucket, key):
     return bool(validateUnallowedFileExtensionAndContentType(key, head.get("ContentType", "")))
 
 
-def _member_run_ok(bucket, members, start_after, deadline) -> bool:
+def _member_run_ok(bucket, members, deadline) -> bool:
     """Whether every member in one run of sorted member keys is still downloadable, from a listing of
     current objects (ListObjectsV2 without a delimiter, so old versions are not read) under the run's
-    longest common prefix, from just after ``start_after`` (the previous run's last member) and stopped
-    past the run's last member. Python orders keys by code point, which is the UTF-8 byte order S3 lists
-    in. Each member must be listed (an archived or deleted file's current version is a delete marker,
-    which is not), not in an archive storage class and not a blocked type. Raises MemberCheckIncomplete
-    when the deadline passes between pages."""
-    wanted, last = set(members), members[-1]
-    found = set()
-    kwargs = {"Bucket": bucket, "Prefix": os.path.commonprefix([members[0], last]), "MaxKeys": 1000}
-    if start_after:
-        kwargs["StartAfter"] = start_after
+    longest common prefix. Python orders keys by code point, which is the UTF-8 byte order S3 lists in.
+
+    The listing starts just below the run's first member (StartAfter = the key without its last
+    character). At a page boundary, when the page ended before the next unconfirmed member, it restarts
+    just below that member instead of continuing, so a run of unselected files between members costs at
+    most one page. Each member must be listed (an archived or deleted file's current version is a delete
+    marker, which is not), not in an archive storage class and not a blocked type; a listed key that
+    sorts past an unconfirmed member means that member is missing. Raises MemberCheckIncomplete when the
+    deadline passes between pages."""
+    position = 0  # the next member still to confirm
+    kwargs = {"Bucket": bucket, "Prefix": os.path.commonprefix([members[0], members[-1]]), "MaxKeys": 1000,
+              "StartAfter": members[0][:-1]}
     while True:
         if time.monotonic() > deadline:
             raise MemberCheckIncomplete()
         response = s3.list_objects_v2(**kwargs)
-        past_last = False
-        for obj in response.get("Contents", []) or []:
+        contents = response.get("Contents", []) or []
+        for obj in contents:
             key = obj.get("Key", "")
-            if key > last:
-                past_last = True
-                break
-            if key not in wanted:
+            if key < members[position]:
                 continue
+            if key > members[position]:
+                return False
             if obj.get("StorageClass") in ARCHIVED_STORAGE_CLASSES:
                 return False
             if not validateUnallowedFileExtensionAndContentType(key, ""):
                 return False
-            found.add(key)
-        if past_last or len(found) == len(wanted) or not response.get("IsTruncated"):
-            return len(found) == len(wanted)
-        kwargs["ContinuationToken"] = response.get("NextContinuationToken", "")
+            position += 1
+            if position == len(members):
+                return True
+        if not response.get("IsTruncated"):
+            return False
+        below_next = members[position][:-1]
+        if contents and contents[-1].get("Key", "") < below_next:
+            kwargs.pop("ContinuationToken", None)
+            kwargs["StartAfter"] = below_next
+        else:
+            kwargs.pop("StartAfter", None)
+            kwargs["ContinuationToken"] = response.get("NextContinuationToken", "")
 
 
 def _all_true_within(check, items, deadline) -> bool:
@@ -1386,12 +1395,10 @@ def _recheck_members(asset, row) -> bool:
     if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
         return _all_true_within(lambda key: _current_member_ok(bucket, key), keys, deadline)
     ordered = sorted(set(keys))
-    # shortcut: a run also reads the current non-member files that sort between its members (an
-    # unselected folder between two selected ones); split runs at such gaps if that cost shows up.
+    # A run skips the unselected files that sort between its members a page at a time (_member_run_ok),
+    # so a gap costs at most one page per gap, not one per 1,000 files in it.
     runs = [ordered[i:i + SHARED_RECHECK_LIST_RUN] for i in range(0, len(ordered), SHARED_RECHECK_LIST_RUN)]
-    return _all_true_within(
-        lambda n: _member_run_ok(bucket, runs[n], runs[n - 1][-1] if n else None, deadline),
-        range(len(runs)), deadline)
+    return _all_true_within(lambda run: _member_run_ok(bucket, run, deadline), runs, deadline)
 
 
 def get_job(event, database_id, asset_id, request_id):
