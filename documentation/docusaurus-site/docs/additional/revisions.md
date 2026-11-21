@@ -69,6 +69,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Slow first keyword search after idle time** — The first keyword search after idle time returns its page when its first Amazon OpenSearch answer is slow, instead of an empty page: the page's results are checked for up to 5 seconds after that answer, until 26.5 seconds after Amazon API Gateway received the request, inside the API's 29-second timeout. When a search does not finish and no results are on screen, the Search page says so above the results instead of loading without end. (issues #1763, #1791)
 -   **Checked search results kept when a larger fetch runs late** — When a keyword search fetches more candidates to fill its page and that fetch ends after the search time limit, the page lists the records already checked, in order, instead of none, and reports its total as a minimum. (issue #1773)
 -   **Credentials on standard input in the docs site** — The Isaac Sim and ArcGIS Pro connector pages and the CLI sign-in and troubleshooting pages pass passwords, override tokens and API keys on standard input instead of as command-line arguments, as the connector READMEs and the CLI's authentication guide already do. (issue #1687)
+-   **Resource-name lookups under Parameter Store throttling** — A resource-name lookup is time-bounded and backs off after a failed attempt, so a burst of Lambda cold starts no longer keeps the account throttled or stalls the API after an idle period. (issue #1187)
 
 **Other changes:**
 
