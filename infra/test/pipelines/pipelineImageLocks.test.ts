@@ -331,9 +331,13 @@ describe("the GR00T image", () => {
     });
 
     it("locks Isaac-GR00T's base dependencies and the image's own, a hash on every pin", () => {
+        // The hashed uv export of uv.lock (audited: regenerated from this header and required to match). The
+        // project depends on `gr00t[base]` from Isaac-GR00T's own pyproject.toml, so the export leaves out
+        // `gr00t` itself, which the Dockerfile installs from the clone without dependencies.
         expect(lock).toMatch(
-            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements-image\.txt --generate-hashes /m
+            /^#\s+uv export --frozen .*--no-emit-package gr00t -o requirements\.lock$/m
         );
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
         const entries = lockEntries(lock);
         expect(entries.length).toBeGreaterThan(100);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
@@ -350,7 +354,28 @@ describe("the GR00T image", () => {
         }
     });
 
+    it("resolves Isaac-GR00T at the commit the Dockerfile checks out", () => {
+        const dockerfile = fs.readFileSync(path.join(root, "Dockerfile"), "utf-8");
+        const pinned = /^ARG STABLE_COMMIT=([0-9a-f]{40})$/m.exec(dockerfile);
+        expect(pinned).not.toBeNull(); // [control] the Dockerfile's pin was found
+        const pyproject = fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8");
+        const source =
+            /^gr00t = \{ git = "https:\/\/github\.com\/NVIDIA\/Isaac-GR00T", rev = "([0-9a-f]{40})" \}$/m.exec(
+                pyproject
+            );
+        expect(source).not.toBeNull();
+        expect(source![1]).toBe(pinned![1]);
+        // And the lock records the same revision.
+        const uvLock = fs.readFileSync(path.join(root, "uv.lock"), "utf-8");
+        expect(uvLock).toContain(
+            `https://github.com/NVIDIA/Isaac-GR00T?rev=${pinned![1]}#${pinned![1]}`
+        );
+    });
+
     it("builds with the same tool versions the main lock holds", () => {
+        expect(buildLock).toMatch(
+            /^#\s+uv export --frozen .*--only-group build -o requirements-build\.lock$/m
+        );
         const main = versions(lock);
         const build = versions(buildLock);
         expect(build.size).toBeGreaterThan(0);

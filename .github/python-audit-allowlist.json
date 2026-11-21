@@ -1,3 +1,910 @@
 {
-    "entries": []
+    "entries": [
+        {
+            "id": "PYSEC-2026-3804",
+            "package": "accelerate",
+            "reason": "Isaac-GR00T pins accelerate 1.2.1, and the advisory has no fixed release.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-537c-gmf6-5ccf",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2141",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-35",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3552",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3553",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3554",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-36",
+            "package": "cryptography",
+            "reason": "The fixed cryptography releases need typing-extensions 4.13.2 or newer on Python 3.10, which Isaac-GR00T pins at 4.12.2. cryptography is reached only through google-auth, tensorboard and tensorflow.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2446",
+            "package": "diffusers",
+            "reason": "Isaac-GR00T pins diffusers 0.30.2 in its base extra; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-40",
+            "package": "diffusers",
+            "reason": "Isaac-GR00T pins diffusers 0.30.2 in its base extra; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-41",
+            "package": "diffusers",
+            "reason": "Isaac-GR00T pins diffusers 0.30.2 in its base extra; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112906",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112907",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112908",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112909",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112910",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112911",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112912",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112913",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112914",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112915",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112934",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112935",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112937",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112938",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112939",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112940",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112941",
+            "package": "filelock",
+            "reason": "The fixed release (filelock 4.2.1) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3850",
+            "package": "hydra-core",
+            "reason": "Isaac-GR00T pins hydra-core 1.3.2; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4221",
+            "package": "hydra-core",
+            "reason": "Isaac-GR00T pins hydra-core 1.3.2; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2025-12060",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-121",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-76",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1487",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2324",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2547",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3629",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3630",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3631",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3632",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3633",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3634",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3856",
+            "package": "keras",
+            "reason": "keras 2.15.0 is required by tensorflow 2.15.0, which Isaac-GR00T's base extra pins; the fixed keras releases are 3.x, which tensorflow 2.15 does not accept.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115919",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115920",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115921",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115922",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-148",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-103",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-104",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2239",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2240",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2241",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2689",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3587",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3876",
+            "package": "onnx",
+            "reason": "Isaac-GR00T pins onnx 1.17.0; the fixed releases need a newer pin than STABLE_COMMIT validated. The container does not load untrusted ONNX files.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-qr4w-53vh-m672",
+            "package": "opencv-python",
+            "reason": "Isaac-GR00T pins opencv_python 4.8.0.74 in its base extra; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2023-183",
+            "package": "opencv-python",
+            "reason": "Isaac-GR00T pins opencv_python 4.8.0.74 in its base extra; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-78g4-xqwv-q3g8",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4328",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4333",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4336",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4339",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4342",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "reason": "The fixed release (pillow 13.0.0) requires Python 3.11 or newer; the image runs Python 3.10, which Isaac-GR00T's pinned torch and the flash-attn wheel target (cp310).",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1805",
+            "package": "protobuf",
+            "reason": "Isaac-GR00T pins protobuf 3.20.3, and tensorflow 2.15.0 (also pinned) requires protobuf below 5; the fixed releases are 4.25.8 and newer.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1806",
+            "package": "protobuf",
+            "reason": "Isaac-GR00T pins protobuf 3.20.3, and tensorflow 2.15.0 (also pinned) requires protobuf below 5; the fixed releases are 4.25.8 and newer.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2024-161",
+            "package": "pyarrow",
+            "reason": "Isaac-GR00T pins pyarrow 14.0.1; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-23",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2271",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2272",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2273",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-517",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-518",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-520",
+            "package": "ray",
+            "reason": "Isaac-GR00T pins ray 2.40.0; moving it means a new STABLE_COMMIT validated on a GPU. The container does not start a Ray cluster or dashboard.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1872",
+            "package": "requests",
+            "reason": "Isaac-GR00T pins Requests 2.32.3; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2275",
+            "package": "requests",
+            "reason": "Isaac-GR00T pins Requests 2.32.3; moving it means a new STABLE_COMMIT validated on a GPU.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-189",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-190",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-191",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-192",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-193",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-195",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-198",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-203",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-204",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-205",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-206",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-207",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-208",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-209",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-41",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-139",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1856",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1970",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2286",
+            "package": "torch",
+            "reason": "Isaac-GR00T pins torch 2.5.1 and the image's prebuilt flash-attn wheel is built for torch 2.5; moving torch means a new STABLE_COMMIT validated on a GPU. The GR00T container loads only checkpoints it downloads from the configured model sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-211",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-212",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-213",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1977",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1980",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1981",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1983",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1986",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1988",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4174",
+            "package": "transformers",
+            "reason": "Isaac-GR00T pins transformers 4.51.3 (its Qwen3 backbone); moving it means a new STABLE_COMMIT validated on a GPU. The container loads only models it downloads from the configured sources.",
+            "reviewBy": "2027-02-28"
+        }
+    ]
 }
