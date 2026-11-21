@@ -36,6 +36,18 @@ dev = [
     "pytest-asyncio>=0.21.0",
 ]
 
+# uv is a development, CI and audit tool only: the published package keeps its ranged dependencies and
+# its setuptools build, and `pip install vams-mcp` never needs uv. uv.lock records one resolution of
+# those ranges. vamscli is resolved from the sibling checkout, as the CI job installs it
+# (`pip install -e ../VamsCLI`), so the lock covers the CLI's own dependencies too; this setting lives
+# in [tool.uv] and is not part of the published metadata.
+[tool.uv]
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+
+[tool.uv.sources]
+vamscli = { path = "../VamsCLI", editable = true }
+
 [project.scripts]
 # `vams-mcp` runs the server; `vams-mcp setup-remote` writes a remote server's auth configuration.
 vams-mcp = "vams_mcp.cli:main"

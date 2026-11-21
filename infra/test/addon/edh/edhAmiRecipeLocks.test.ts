@@ -114,13 +114,15 @@ describe("the VAMS CLI lock", () => {
         ...requirements(fs.readFileSync(path.join(CLI_DIR, "requirements-build.txt"), "utf-8")),
     ];
 
-    it("is generated from requirements.txt and requirements-build.txt with a hash on every pin", () => {
+    it("is exported from tools/VamsCLI/uv.lock with a hash on every pin", () => {
         // [control] the parser found the pins at all.
         expect(entries.length).toBeGreaterThan(10);
-        // Python 3.12 is what both recipes build the environment with; manylinux_2_34 is Amazon Linux
-        // 2023's glibc, the older of the two images.
+        // The export carries the runtime dependencies and the `build` dependency group (the build backend
+        // of pyproject.toml), and no project or dev packages. Its pins are marker-gated where they differ by
+        // platform or Python; the recipes install it with `--only-binary :all:` on Python 3.12, and the
+        // CI python-dependency-audit job regenerates it from uv.lock and fails when it is stale.
         expect(lock).toMatch(
-            /^#\s+uv pip compile requirements\.txt requirements-build\.txt --generate-hashes --only-binary :all: --python-version 3\.12 --python-platform x86_64-manylinux_2_34 -o requirements\.lock$/m
+            /^#\s+uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements\.lock$/m
         );
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
     });
@@ -158,6 +160,16 @@ describe("the VAMS CLI lock", () => {
             .filter(Boolean)
             .sort();
         expect(build).toEqual(declared);
+        // The `build` dependency group of uv.lock is what requirements.lock exports for the build backend.
+        const group = /\[dependency-groups\][^[]*?build\s*=\s*\[([^\]]*)\]/.exec(pyproject);
+        expect(group).not.toBeNull();
+        expect(
+            group![1]
+                .split(",")
+                .map((s) => s.trim().replace(/^"|"$/g, ""))
+                .filter(Boolean)
+                .sort()
+        ).toEqual(declared);
     });
 });
 
