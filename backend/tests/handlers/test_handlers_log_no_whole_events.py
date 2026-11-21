@@ -169,9 +169,9 @@ def _scan_tree(root):
 # Reviewed sites the scan flags that are acceptable. Key: (module, function, digest of the call's
 # source); changing the call changes the digest and sends it back through review.
 ALLOWED_SITES = {
-    ("common/compliance/quarantineGuard.py", "quarantine_refusal", "363afb32"):
-        "passes the event to a route helper that returns the concrete path of a refused download "
-        "(an identifier); no request text is logged",
+    ("common/compliance/quarantineGuard.py", "quarantine_refusal", "11648e92"):
+        "passes the event to a route helper that returns the method and concrete path of a refused "
+        "download, copy or workflow launch (identifiers); no request text is logged",
     ("handlers/indexing/sqsBucketSync.py", "parse_event", "c072afb1"):
         "the Message field of an SQS or SNS wrapper around an S3 event notification (bucket and key "
         "names), logged when its JSON cannot be parsed; not typed user text",

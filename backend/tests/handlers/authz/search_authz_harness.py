@@ -72,14 +72,20 @@ class FakeClock:
 
     The defaults are a fast runner's: 10 ms a fetch and 0.1 ms a decision, so 2,020 candidates are
     fetched and checked in well under a second of the 10 s bound and every window grows the full
-    SEARCH_FILL_GROWTH_FACTOR. A test about the time bound sets its own with ``costs``."""
+    SEARCH_FILL_GROWTH_FACTOR. A test about the time bound sets its own with ``costs``.
+
+    ``time()`` is the wall clock (epoch seconds) moving with ``monotonic()``, for a test that sets when
+    API Gateway received the request (``requestContext.requestTimeEpoch``, #1763)."""
 
     FETCH_SECONDS = 0.01
     FETCH_SECONDS_PER_HIT = 0.0
     DECISION_SECONDS = 0.0001
+    # The wall clock when the monotonic clock reads its start
+    WALL_START = 1_763_600_000.0
 
     def __init__(self):
         self.now = 1000.0
+        self._wall_offset = self.WALL_START - self.now
         self.costs(self.FETCH_SECONDS, self.FETCH_SECONDS_PER_HIT, self.DECISION_SECONDS)
 
     def costs(self, fetch_seconds, fetch_seconds_per_hit, decision_seconds):
@@ -91,6 +97,13 @@ class FakeClock:
 
     def monotonic(self):
         return self.now
+
+    def time(self):
+        return self.now + self._wall_offset
+
+    def epoch_ms(self, seconds_ago=0.0):
+        """``requestTimeEpoch`` for a request API Gateway received ``seconds_ago`` before now."""
+        return int(round((self.time() - seconds_ago) * 1000))
 
 
 def install_fake_clock(module, monkeypatch):

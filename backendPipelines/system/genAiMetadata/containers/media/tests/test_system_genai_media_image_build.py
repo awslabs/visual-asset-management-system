@@ -3,7 +3,7 @@
 
 """Build-source properties of the media Lambda image that a green `docker build` cannot show: the base image
 is digest-pinned (a tag is a moving reference), every direct requirement is an exact pin and the image installs
-a hash lock of the transitive closure generated from them, every third-party import in the runtime code has a
+the hashed uv.lock export of the transitive closure of them, every third-party import in the runtime code has a
 pinned distribution, every runtime file the
 handler imports is COPYed, the image drops root after the last COPY, the bundled ffmpeg is named through
 IMAGEIO_FFMPEG_EXE, and the vendored logger is byte-identical to the pipeline copy it was taken from.
@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import sys
+import tomllib
 
 import pytest
 
@@ -22,13 +23,14 @@ _CONTAINER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REPO_ROOT = os.path.abspath(os.path.join(_CONTAINER_DIR, *([".."] * 5)))
 _DOCKERFILE = os.path.join(_CONTAINER_DIR, "Dockerfile")
 _DOCKERIGNORE = os.path.join(_CONTAINER_DIR, ".dockerignore")
-_REQUIREMENTS = os.path.join(_CONTAINER_DIR, "requirements.txt")
-_LOCK = os.path.join(_CONTAINER_DIR, "requirements.lock")
+_PYPROJECT = os.path.join(_CONTAINER_DIR, "pyproject.toml")
+# The hashed export of uv.lock that the image installs.
+_LOCK = os.path.join(_CONTAINER_DIR, "requirements.txt")
 _LOGGER_SOURCE = os.path.join(_REPO_ROOT, "backendPipelines", "preview", "3dThumbnail", "lambda", "customLogging", "logger.py")
 _LOGGER_COPY = os.path.join(_CONTAINER_DIR, "customLogging", "logger.py")
 
 # Files in the build context that are not runtime code and therefore need no COPY.
-_NOT_RUNTIME = {"Dockerfile", ".dockerignore", "requirements.txt", "requirements.lock", "tests", "__pycache__",
+_NOT_RUNTIME = {"Dockerfile", ".dockerignore", "requirements.txt", "pyproject.toml", "uv.lock", "tests", "__pycache__",
                 ".pytest_cache"}
 # Import name -> distribution name for every third-party package the runtime code may import.
 _IMPORT_TO_DISTRIBUTION = {
@@ -78,22 +80,20 @@ def _instruction_lines():
 
 def _requirements():
     pins = {}
-    with open(_REQUIREMENTS, encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.split("#", 1)[0].strip()
-            if not line:
-                continue
-            match = _PIN.match(line)
-            assert match, f"requirement is not an exact pin: {raw.strip()!r}"
-            pins[_normalise(match.group(1))] = match.group(2)
+    with open(_PYPROJECT, "rb") as handle:
+        dependencies = tomllib.load(handle)["project"]["dependencies"]
+    for raw in dependencies:
+        match = _PIN.match(raw.strip())
+        assert match, f"requirement is not an exact pin: {raw.strip()!r}"
+        pins[_normalise(match.group(1))] = match.group(2)
     return pins
 
 
 def _locked():
-    """{normalised package name: (version, hash count)} of requirements.lock."""
+    """{normalised package name: (version, hash count)} of the requirements.txt export."""
     with open(_LOCK, encoding="utf-8") as handle:
         text = handle.read()
-    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text,
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+)(?: ; [^\\\n]*)? \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text,
                          re.MULTILINE)
     return {_normalise(name): (version, block.count("--hash=")) for name, version, block in entries}
 
@@ -160,13 +160,12 @@ class TestDependencyLock:
         assert len(installs) == 1, installs
         assert "--require-hashes" in installs[0]
         assert "--only-binary=:all:" in installs[0]
-        assert re.search(r"-r \$\{LAMBDA_TASK_ROOT\}/requirements\.lock$", installs[0]), installs[0]
+        assert re.search(r"-r \$\{LAMBDA_TASK_ROOT\}/requirements\.txt$", installs[0]), installs[0]
 
     def test_the_lock_header_names_the_command_that_regenerates_it(self):
         with open(_LOCK, encoding="utf-8") as handle:
             header = handle.read().split("\n")[:3]
-        assert any("uv pip compile requirements.txt --generate-hashes --python-version 3.12" in line
-                   for line in header), header
+        assert any("uv export --frozen" in line and "--no-hashes" not in line for line in header), header
 
     def test_every_lock_entry_is_pinned_and_hashed(self):
         locked = _locked()
@@ -210,7 +209,7 @@ class TestRuntimeStage:
         sources = {source for line in copies for source in line.split()[1:-1]}
         runtime_entries = {name for name in os.listdir(_CONTAINER_DIR) if name not in _NOT_RUNTIME}
         assert runtime_entries <= sources, runtime_entries - sources
-        assert {"requirements.txt", "requirements.lock"} <= sources
+        assert "requirements.txt" in sources
 
     def test_drops_root_after_the_last_copy_and_before_the_entrypoint(self):
         lines = _instruction_lines()

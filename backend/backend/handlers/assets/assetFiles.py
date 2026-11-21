@@ -44,8 +44,8 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    contains, fill_location_attributes, folder_listing_prefix, in_folder, is_folder_location,
-    names_own_object, object_key_for, relative_path_in,
+    aux_file_prefix, aux_owner_filter, aux_scope, contains, fill_location_attributes, folder_listing_prefix,
+    in_folder, is_folder_location, is_location_object, names_own_object, object_key_for, relative_path_in,
 )
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
@@ -73,6 +73,9 @@ from models.assetsV3 import (
     DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
 from handlers.assets.assetVersions import validate_asset_version_exists, get_all_asset_versions
+from common.compliance.quarantineGuard import (
+    QUARANTINE_COPY_BLOCK_MESSAGE, QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
@@ -604,24 +607,46 @@ def _single_file_location_prefixes(location: str) -> List[str]:
     (``{key}.previewFile.``) and its companion folder (``{key}/``)."""
     return [location + PREVIEW_FILE_PATTERN, location + '/']
 
+# The continuation token of a single-file location's first page when the object fills it: the next
+# request lists the companion folder {key}/ from its start. It is never passed to Amazon S3, and it names
+# no prefix (':' is in no S3 continuation token), so it cannot select keys outside the location.
+COMPANION_FOLDER_START_TOKEN = "vams:companion-folder-start"
+
 def _list_single_file_location_page(bucket: str, location: str, list_params: Dict) -> Dict:
     """One listing page of a single-file location, in the shape of a ListObjectsV2 response.
 
     The first page (no continuation token) holds the object, read with a one-key listing of its own
-    key, and its previews; then, every page, the companion folder ``{key}/``, whose S3 continuation
-    token is the page's token. The first page asks the companion folder for fewer keys by the number
-    already listed, so a page keeps its size.
+    key, and its own previews ``{key}.previewFile.{ext}`` (VAMS writes one per preview image format). The file
+    list attaches previews to their file rather than listing them, so they take no place on the page;
+    reading them with the object keeps the object's preview on the page that lists it. The rest of the
+    page lists the companion folder ``{key}/``. When the object fills the page, the page lists no
+    companion entry: if the folder holds a key (a one-key probe), the page's token is
+    COMPANION_FOLDER_START_TOKEN, which the next request maps to a listing of ``{key}/`` from its start.
+    Later pages list ``{key}/`` with Amazon S3's own continuation token. Every listing names a prefix
+    derived from the location, never from the token, so no page holds more than ``MaxKeys`` files and no
+    token reaches outside the location.
     """
+    size = max(1, int(list_params['MaxKeys']))
+    token = list_params.get('ContinuationToken')
+    folder_prefix = location + '/'
     contents: List[Dict] = []
-    if not list_params.get('ContinuationToken'):
+    if not token:
         head = s3_client.list_objects_v2(Bucket=bucket, Prefix=location, MaxKeys=1)
         contents.extend(obj for obj in head.get('Contents', []) if obj['Key'] == location)
         previews = s3_client.get_paginator('list_objects_v2').paginate(
-            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN)
+            Bucket=bucket, Prefix=location + PREVIEW_FILE_PATTERN, Delimiter='/')
         for preview_page in previews:
             contents.extend(preview_page.get('Contents', []))
-    folder_params = dict(list_params, Prefix=location + '/',
-                         MaxKeys=max(1, int(list_params['MaxKeys']) - len(contents)))
+    room = size - sum(1 for obj in contents if obj['Key'] == location)
+    if room <= 0:
+        page = {'Contents': contents}
+        probe = s3_client.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
+        if probe.get('Contents'):
+            page['NextContinuationToken'] = COMPANION_FOLDER_START_TOKEN
+        return page
+    folder_params = {'Bucket': bucket, 'Prefix': folder_prefix, 'MaxKeys': room}
+    if token and token != COMPANION_FOLDER_START_TOKEN:
+        folder_params['ContinuationToken'] = token
     folder = s3_client.list_objects_v2(**folder_params)
     contents.extend(folder.get('Contents', []))
     page = {'Contents': contents}
@@ -631,18 +656,11 @@ def _list_single_file_location_page(bucket: str, location: str, list_params: Dic
 
 def _is_location_object(location: str, object_key: str) -> bool:
     """Whether a key is the object of a single-file location (the location key itself)."""
-    return bool(location) and not is_folder_location(location) and \
-        (object_key or "").lstrip('/') == location.lstrip('/')
+    return is_location_object(location, object_key)
 
 def aux_file_base(database_id: str, location: str, object_key: str) -> str:
-    """Auxiliary-bucket prefix of one file's derived data, scoped to that file.
-
-    The object of a single-file location keeps its data in the ``preview`` subfolder of
-    ``{databaseId}/{key}/``; the rest of that base holds the data of the entries in its
-    companion folder ``{key}/``, so the object's prefix stops at ``preview/``.
-    """
-    base = aux_bucket_asset_file_base(database_id, object_key)
-    return base + "preview/" if _is_location_object(location, object_key) else base
+    """Auxiliary-bucket prefix of one file's own derived data (``common.assetLocations.aux_file_prefix``)."""
+    return aux_file_prefix(database_id, location, object_key)
 
 def aux_file_bases(source_db: str, source_location: str, source_key: str,
                    dest_db: str, dest_location: str, dest_key: str) -> Tuple[str, str]:
@@ -655,35 +673,9 @@ def aux_file_bases(source_db: str, source_location: str, source_key: str,
         return source + "preview/", dest + "preview/"
     return source, dest
 
-def aux_owner_filter(database_id: str, location: str, target_key: str,
-                     aux_prefix: str) -> Optional[Callable[[str], bool]]:
-    """None, or which auxiliary keys under ``aux_prefix`` belong to ``target_key`` in a single-file location.
-
-    The object's data and the data of companion entries in ``{key}/preview/`` share
-    ``{databaseId}/{key}/preview/``: a key there whose rest has a ``/preview/`` segment
-    (``{entry}/preview/...``) belongs to a companion entry, any other key to the object. The predicate
-    keeps the object's keys for the object and the companion entries' keys for any other target, so
-    neither reaches the other's viewer data.
-    """
-    if not location or is_folder_location(location):
-        return None
-    shared = aux_bucket_asset_file_base(database_id, location) + "preview/"
-    if not (aux_prefix or "").startswith(shared):
-        return None
-    is_object = _is_location_object(location, target_key)
-
-    def keep(aux_key: str) -> bool:
-        return ("/preview/" in aux_key[len(shared):]) != is_object
-    return keep
-
 def _call_with_keep(operation: Callable, *args, keep: Optional[Callable[[str], bool]] = None):
     """Call an auxiliary-data operation, passing ``keep`` only when there is one (folder assets need none)."""
     return operation(*args) if keep is None else operation(*args, keep=keep)
-
-def aux_scope(database_id: str, location: str, object_key: str) -> Tuple[str, Optional[Callable[[str], bool]]]:
-    """``(prefix, keep)`` of one file's auxiliary data: ``aux_file_base`` and ``aux_owner_filter``."""
-    prefix = aux_file_base(database_id, location, object_key)
-    return prefix, aux_owner_filter(database_id, location, object_key, prefix)
 
 def delete_assetAuxiliary_files(prefix, keep: Optional[Callable[[str], bool]] = None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
@@ -1487,6 +1479,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         
         if single_object:
             page = _list_single_file_location_page(bucket, location, list_params)
+        elif list_params.get('ContinuationToken') == COMPANION_FOLDER_START_TOKEN:
+            # A single-file location's token means nothing for a folder location; it never reaches S3
+            raise VAMSGeneralErrorResponse("Invalid pagination token.")
         else:
             # Single S3 list call
             page = s3_client.list_objects_v2(**list_params)
@@ -2784,6 +2779,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         # Validate cross-asset permissions
         if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
             raise VAMSAuthorizationDeniedResponse()
+
+        # A copy to another asset takes the file's bytes out of the source asset, so the quarantine
+        # block applies to it as to a download (a no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD
+        # is on). Checked after both assets are authorized, so a refused caller never learns the
+        # source's state. A copy within the asset keeps the bytes where the block still applies.
+        check_quarantine_block(databaseId, assetId, message=QUARANTINE_COPY_BLOCK_MESSAGE)
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -4301,6 +4302,8 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSAuthorizationDeniedResponse:
         return authorization_error(event=event)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

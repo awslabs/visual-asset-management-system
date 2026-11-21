@@ -1,0 +1,22 @@
+[project]
+name = "pipeline-test-runner"
+version = "0.1.0"
+description = "Packages installed first into every pipeline test environment (pipeline_tests.py)"
+requires-python = ">=3.12"
+# pytest, plus the packages the pipeline Lambdas take from the common base layer
+# (backend/lambdaLayers/base), at that layer's versions. A pipeline's own requirements are installed
+# after requirements-common.txt, so its pins win.
+dependencies = [
+    "pytest==9.2.0",
+    "aws-lambda-powertools==2.36.0",
+    "boto3==1.43.126",
+    "botocore==1.43.126",
+    "requests==2.34.2",
+]
+
+# requirements-common.txt is exported from uv.lock; pipeline_tests.py installs it with uv. This project
+# is never built or published.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"

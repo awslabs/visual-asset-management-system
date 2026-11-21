@@ -53,6 +53,26 @@ dev = [
     "mypy>=1.0.0",
 ]
 
+# The build tools [build-system] requires. They are a group of their own so that uv.lock covers them and
+# requirements.lock (exported from uv.lock) can install them for the offline --no-build-isolation build.
+[dependency-groups]
+build = [
+    "setuptools>=61.0",
+    "wheel",
+]
+
+# uv is a development, CI and audit tool only: the published package keeps its ranged dependencies and
+# its setuptools build, and installing the package with pip never needs uv. uv.lock records one resolution of those
+# ranges, and requirements.lock is exported from it (see CLAUDE.md, Updating Python Dependencies).
+[tool.uv]
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+# boto3 and botocore 1.44.6 were published on 2026-11-18, inside the 7-day window, and the AMI's
+# requirements.lock already installs them. The cutoff is lifted for those two packages only, up to the day
+# after their release so a later `uv lock --upgrade-package` cannot pick a newer one. Remove this entry on
+# or after 2026-11-25, when the release is older than 7 days.
+exclude-newer-package = { boto3 = "2026-11-19T00:00:00Z", botocore = "2026-11-19T00:00:00Z" }
+
 [project.scripts]
 vamscli = "vamscli.main:main"
 

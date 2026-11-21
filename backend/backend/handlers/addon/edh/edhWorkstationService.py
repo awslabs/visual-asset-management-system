@@ -96,6 +96,7 @@ from .common.edhSessionState import (
     CONNECTION_CHECKED_AT_FIELD, CONNECTION_UNAVAILABLE_DESKTOP_ERROR, CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED,
     CONNECTION_UNAVAILABLE_REASON_FIELD, DESKTOP_ERROR_MESSAGE,
     DISPLAY_SESSION_ENDED_MESSAGE,
+    LAST_ERROR_LAUNCH_STALLED,
     LAST_ERROR_LEASE_EXPIRED,
     LAST_ERROR_RESERVATION_FULL,
     START_ACCEPTED_FIELD, START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
@@ -269,11 +270,14 @@ def _workstation_auth_object(image_id, os_family, instance_type):
     }
 
 
-def _image_auth_object(image_id, os_family):
-    """The edhImage enforcement dict: exactly the matrix fields, as strings."""
+def _image_auth_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict for a catalog image: exactly the matrix fields, as strings. The stack id
+    and name are the image's own; ``edhRecipeId`` names an AMI recipe and is empty here."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
         "edhImageId": str(image_id),
+        "edhStackName": str(stack_name if stack_name is not None else ""),
+        "edhRecipeId": "",
         "edhOsFamily": str(os_family),
     }
 
@@ -748,7 +752,7 @@ def list_catalog_images(event):
             # A stack whose family cannot be determined is not offered; it is never Linux by default.
             continue
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
-        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
+        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["name"], item["osFamily"]), "GET"):
             items.append((item, stack))
     recipe_builds = _recipe_builds_by_stack("catalog images listed as baseline") if items else {}
     items = [_categorized(item, recipe_builds.get(item["imageId"]), stack) for item, stack in items]
@@ -826,8 +830,8 @@ def _desktop_for_row(row, desktops):
 
 def _start_return(row, changed):
     """What a start EDH accepted that ended stopped records (``start_returned_to_stopped``): the code its instance's
-    EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``); nothing for a shutdown a user or
-    the instance initiated, or for any other change. A read of the instance that fails is logged by the error's type
+    EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``); nothing for a stop or hibernation
+    a user or the instance initiated, or for any other change. A read of the instance that fails is logged by the error's type
     and records the start failed without an AWS error code."""
     if not start_returned_to_stopped(row, changed):
         return {}
@@ -1375,6 +1379,18 @@ def _deleted_start_response(event):
     return general_error(status_code=409, body={'message': 'A deleted workstation cannot be started'}, event=event)
 
 
+def _launch_stalled(row):
+    """Whether the row is a new launch the session sweep recorded LAUNCH_STALLED and that is still CREATING."""
+    return row.get('state') == STATE_CREATING and row.get('lastError') == LAST_ERROR_LAUNCH_STALLED
+
+
+def _launch_stalled_stop_response(event):
+    """The 409 for a stop of a new launch EDH has not placed: the desktop never ran and EDH refuses to stop it,
+    so the owner's way out is a delete."""
+    return general_error(status_code=409, event=event, body={
+        'message': 'EDH has not placed this new workstation, so it cannot be stopped; delete it instead'})
+
+
 def _start_in_progress_response(event):
     """The 409 for a start of a desktop another start may yet start."""
     return general_error(status_code=409, event=event,
@@ -1478,6 +1494,12 @@ def stop_workstation(event, path):
         return _no_session_response(event)
     edh_uid = _caller_edh_uid()
     client = EdhClient(profile="api")
+    # A stored stall is checked against EDH's view first, so a launch EDH has placed since the sweep is stopped
+    # as any other; one EDH still has not placed is refused before the stop reaches EDH.
+    if _launch_stalled(row):
+        _merge_edh_state([row], _desktop_states(event, client, [row], edh_uid, "workstationStop"))
+        if _launch_stalled(row):
+            return _launch_stalled_stop_response(event)
     try:
         _call_edh(event, client, "stop_desktop", "workstationStop", edh_uid, edh_uid, session_id)
     except EdhOutcomeUnknownError as lost:

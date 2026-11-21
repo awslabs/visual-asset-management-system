@@ -458,3 +458,80 @@ class TestStartWait:
         assert stalled("x", STALLED).json_fields == {
             "waitOutcome": "stalled", "state": "CREATING", "activity": None,
             "lastError": "START_STALLED", "startFailure": STALLED["startFailure"]}
+
+
+# --- A new launch EDH never places (LAUNCH_STALLED) ------------------------------------------------
+
+# A launch EDH still lists pending 3 hours after it was accepted: the sweep records LAUNCH_STALLED on
+# the CREATING row, which has a session id and never had a start, and the service derives no activity.
+LAUNCH_STALLED = {**BASE, "sessionId": "s-1", "state": "CREATING", "edhState": "pending", "activity": None,
+                  "lastError": "LAUNCH_STALLED", "startFailure": {"observedAt": "2026-11-18T13:00:00Z"},
+                  "connectionAvailable": False, "instanceType": "g5.16xlarge"}
+LAUNCH_STALLED_SENTENCE = (
+    "EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may "
+    "still place it.")
+
+
+class TestLaunchStalled:
+    def test_the_state_column_reads_stalled_and_last_error_names_the_code(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].list_edh_workstations.return_value = {'Items': [LAUNCH_STALLED]}
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'list'])
+            assert result.exit_code == 0, result.output
+            assert _state_cell(result.output) == "STALLED"
+            assert "LAUNCH_STALLED" in result.output
+
+    def test_get_prints_the_sentence_and_the_delete_command_with_no_aws_line(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation.return_value = LAUNCH_STALLED
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1'])
+            assert result.exit_code == 0, result.output
+            lines = result.output.splitlines()
+            assert "  State:           STALLED" in lines
+            assert "  Activity:        none" in lines
+            last_error = lines.index("  Last Error:      LAUNCH_STALLED")
+            assert lines[last_error + 1] == f"  Start Failure:   {LAUNCH_STALLED_SENTENCE}"
+            assert lines[last_error + 2] == (
+                "                   To delete it: vamscli edh workstation delete s-1 --confirm")
+            assert not any(line.strip().startswith("AWS:") for line in lines)
+            # A launch stall is not a start: nothing tells the reader to stop and start it.
+            assert "Stop it, then start it again" not in result.output
+
+    def test_get_json_output_keeps_the_record(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation.return_value = LAUNCH_STALLED
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == LAUNCH_STALLED
+
+    def test_a_row_that_reports_an_activity_again_is_not_stalled(self, cli_runner, generic_command_mocks):
+        # Control: the code alone does not make a row STALLED; one EDH is moving again reads its phase.
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation.return_value = {**LAUNCH_STALLED, "activity": "starting"}
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1'])
+            assert result.exit_code == 0, result.output
+            assert "  State:           STARTING" in result.output.splitlines()
+            assert "Start Failure" not in result.output
+            assert "To delete it" not in result.output
+
+    def test_the_start_stall_still_has_no_delete_line(self, cli_runner, generic_command_mocks):
+        # Control: the delete line belongs to a launch stall; a start stall keeps stop-then-start.
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].get_edh_workstation.return_value = STALLED
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'get', 's-1'])
+            assert result.exit_code == 0, result.output
+            assert f"  Start Failure:   {STALLED_SENTENCE}" in result.output.splitlines()
+            assert "To delete it" not in result.output
+
+    @pytest.mark.parametrize("command", ['list', 'get', 'stop', 'create', 'delete'])
+    def test_the_help_names_the_launch_stall(self, cli_runner, command):
+        result = cli_runner.invoke(cli, ['edh', 'workstation', command, '--help'])
+        assert result.exit_code == 0
+        assert 'LAUNCH_STALLED' in ' '.join(result.output.split()), command
+
+    @pytest.mark.parametrize("command", ['list', 'stop', 'create'])
+    def test_the_help_gives_delete_as_the_way_out(self, cli_runner, command):
+        result = cli_runner.invoke(cli, ['edh', 'workstation', command, '--help'])
+        assert 'delete it' in ' '.join(result.output.split()), command

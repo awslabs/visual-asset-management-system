@@ -73,6 +73,10 @@ from common.workflows import outputPathExtension as ope
 from common.workflows import executionLocks as el
 from common.workflows import systemPipelines as sp
 from common.workflows import workflowAsl
+from common.compliance.quarantineGuard import (
+    QUARANTINE_WORKFLOW_INPUT_BLOCK_MESSAGE, QuarantineBlockedResponse, check_quarantine_block,
+    quarantine_refusal,
+)
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.workflows.defaultBucket import (
     resolve_default_bucket,
@@ -3220,6 +3224,21 @@ def execute_workflow(event, workflow_database_id, workflow_id, request_model):
             selected_inputs, output_asset_id, output_database_id)
     if err:
         return err
+
+    # 5a) A run reads its input files' bytes, and its outputs can land in another asset or leave the
+    #     deployment, so the quarantine block applies to the input assets of a caller's run as to a
+    #     download (a no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD is on). Checked after every
+    #     asset is authorized, so a refused caller never learns an input's state. A run VAMS launches
+    #     itself as SYSTEM_USER (a file-upload trigger, a compliance pipeline rule, a system pipeline)
+    #     is not refused: a pipeline rule must still run on a quarantined asset to re-evaluate it.
+    if not _is_system_cross_call(event):
+        try:
+            for input_database_id, input_asset_id in dict.fromkeys(
+                    (i["databaseId"], i["assetId"]) for i in selected_inputs):
+                check_quarantine_block(input_database_id, input_asset_id,
+                                       message=QUARANTINE_WORKFLOW_INPUT_BLOCK_MESSAGE)
+        except QuarantineBlockedResponse as refusal:
+            return quarantine_refusal(refusal, event)
 
     # 5b) Resolve + authorize the metadata-source entities (asset GET, database GET per database). Their
     #     assets join asset_records so the envelope builder finds their assetData, but never

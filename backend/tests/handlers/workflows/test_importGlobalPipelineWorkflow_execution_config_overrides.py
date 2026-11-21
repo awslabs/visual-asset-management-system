@@ -97,6 +97,12 @@ class TestBuilderAppliesTheOverride:
             execution_config_overrides={"taskHeartbeatTimeout": ""})
         assert _update_config(request)["taskHeartbeatTimeout"] == ""
 
+    def test_an_empty_task_timeout_clears_the_bundle_value(self):
+        request = _pipeline_request(
+            _bundle(taskTimeout="3600"),
+            execution_config_overrides={"taskTimeout": ""})
+        assert _update_config(request)["taskTimeout"] == ""
+
     def test_the_override_lambda_name_wins_over_the_injected_resource(self):
         request = _pipeline_request(
             _bundle(), execution_config_overrides={"lambdaName": "vams-other-fn"})
