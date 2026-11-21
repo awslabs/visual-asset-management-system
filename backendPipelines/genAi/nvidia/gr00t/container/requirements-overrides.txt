@@ -1,0 +1,35 @@
+# Versions that replace Isaac-GR00T's own exact pins (its pyproject.toml at the Dockerfile's STABLE_COMMIT)
+# when requirements.lock is compiled (`--override`; the lock's header holds the command). Each moves a pinned
+# package to the lowest release that clears the advisories pip-audit reports for the upstream pin, within
+# what the image's Python 3.10 and its prebuilt flash-attn wheel allow. Not installed itself: an input of
+# requirements.lock only. An override also replaces what OTHER packages require of the same package, so after a
+# change install the lock into a clean Python 3.10 environment (`uv pip install --require-hashes`), which
+# resolves every pin against every requirement and fails on a version an override let through.
+#
+# torch, torchvision: upstream `base` pins 2.5.1 / 0.20.1. 2.8.0 / 0.23.0 is the newest pair a prebuilt
+# flash-attn wheel exists for (requirements-image.txt), and the pair upstream's own `orin` extra pins.
+torch==2.8.0
+torchvision==0.23.0
+# transformers stays at upstream's 4.51.3: 4.52 and later remove names the GR00T model code imports
+# (`transformers.image_utils.VideoInput`, `image_processing_utils_fast.BASE_IMAGE_PROCESSOR_FAST_DOCSTRING`,
+# `trainer.ALL_LAYERNORM_LAYERS`), so the Eagle processor and the training runner no longer import.
+# onnx: upstream pins 1.17.0. 1.22.0 needs protobuf>=4.25.1, ml_dtypes>=0.5.4 and typing-extensions>=4.15.0.
+onnx==1.22.0
+# typing-extensions: upstream pins 4.12.2. An override replaces every requirement on the package, so this is
+# the version that meets all of them: onnx 1.22.0 needs >=4.15.0 and anyio (through diffusers' httpx) >=4.16.0.
+typing-extensions==4.16.0
+# protobuf: upstream pins 3.20.3.
+protobuf==5.29.6
+# ray, diffusers, pyarrow, hydra-core, requests, opencv-python: upstream exact pins, each moved to its lowest
+# release with no reported advisory.
+ray==2.56.0
+diffusers==0.38.0
+pyarrow==23.0.1
+hydra-core==1.3.8
+requests==2.33.0
+opencv-python==4.8.1.78
+# tensorflow: upstream `base` pins 2.15.0, which caps keras below 2.16, protobuf below 5 and ml-dtypes at 0.2,
+# so onnx and protobuf could not move with it installed. Nothing the pipeline runs imports tensorflow or keras
+# (tensorboard, which the fine-tune reports to, stays through tianshou), so the marker below, which no
+# platform matches, leaves it out of the image.
+tensorflow ; sys_platform == "never"
