@@ -30,16 +30,6 @@
             "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
         },
         {
-            "path": "backendPipelines/3dRecon/splatToolbox/container/requirements.txt",
-            "reason": "GPU image requirements without a lock.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
-        },
-        {
-            "path": "backendPipelines/3dRecon/splatToolbox/container/vams_utils/requirements.txt",
-            "reason": "Requirements of the splat toolbox utils package; folded into the image's lock.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
-        },
-        {
             "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",
             "reason": "Installed into Isaac Sim's bundled Python, which a lock must target explicitly.",
             "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
