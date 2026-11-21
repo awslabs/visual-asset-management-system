@@ -291,6 +291,13 @@ jobs:
               run: |
                   pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
 
+            - name: Run permissionsSetup pytest tests
+              run: pytest -q --tb=short -p no:cacheprovider tools/permissionsSetup/tests
+
+            - name: Run Isaac Sim connector pytest tests
+              working-directory: tools/ExternalIntegrations/isaacsim_vams_integration
+              run: pytest -q --tb=short
+
             - name: Upload VamsCLI test results
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
               # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
