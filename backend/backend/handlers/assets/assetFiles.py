@@ -44,7 +44,8 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations, aux_file_prefix, aux_owner_filter, aux_scope, contains,
+    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations, aux_file_prefix,
+    aux_owner_filter, aux_scope, contains,
     fill_location_attributes, folder_listing_prefix, in_folder, is_folder_location, is_location_object,
     names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
 )
@@ -378,22 +379,34 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
-def nested_locations_for(asset: Dict, bucket: str, base_key: str, destructive: bool = False) -> NestedLocations:
+def nested_locations_for(asset: Dict, bucket: str, base_key: str, destructive: bool = False,
+                         include_shared: bool = False) -> NestedLocations:
     """The stored locations of other assets nested in this asset's location: the files they hold belong to
     those assets, so this asset's file operations leave them alone (``fileAttribution.nested_locations_of_asset``;
-    ``destructive`` for a folder delete or archive)."""
+    ``destructive`` for a delete, archive or move, ``include_shared`` for a write, which also names another live
+    asset on the same location)."""
     return nested_locations_of_asset(asset_table, buckets_table, asset, bucket, base_key, destructive=destructive,
-                                     asset_table_name=asset_database_table_name)
+                                     include_shared=include_shared, asset_table_name=asset_database_table_name)
 
 
-def refuse_nested_key(nested: Optional[NestedLocations], key: str, message: str) -> None:
-    """Answer a path that resolves to a nested asset's file as the operation answers a missing file, and a
-    destructive operation on a key another live asset's location also holds with SHARED_PATH_REFUSAL."""
+def refuse_nested_key(nested: Optional[NestedLocations], key: str, message: str,
+                      shared_message: str = SHARED_PATH_REFUSAL) -> None:
+    """Answer a path that resolves to a nested asset's file as the operation answers a missing file, and an
+    operation on a key another live asset's location also holds with `shared_message` (SHARED_PATH_REFUSAL for
+    a destructive operation, SHARED_LOCATION_WRITE_REFUSAL for a write)."""
     if nested is None or nested.holder(key) is None:
         return
     if nested.is_shared_key(key):
-        raise VAMSGeneralErrorResponse(SHARED_PATH_REFUSAL)
+        raise VAMSGeneralErrorResponse(shared_message)
     raise VAMSGeneralErrorResponse(message)
+
+
+def refuse_unwritable_key(asset: Dict, bucket: str, base_key: str, key: str, message: str) -> None:
+    """Refuse a write of `key` through this asset before anything is written: a nested asset's key with
+    `message`, a key of a location another live asset also holds with SHARED_LOCATION_WRITE_REFUSAL (bucket
+    sync could not attribute the written file to either asset)."""
+    refuse_nested_key(nested_locations_for(asset, bucket, base_key, include_shared=True), key, message,
+                      shared_message=SHARED_LOCATION_WRITE_REFUSAL)
 
 
 def _keep_aux(keep: Optional[Callable[[str], bool]], nested: Optional[NestedLocations],
@@ -2621,8 +2634,8 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    nested = nested_locations_for(asset, bucket, base_key)
-    refuse_nested_key(nested, full_key, "File not found.")
+    nested = nested_locations_for(asset, bucket, base_key, include_shared=True)
+    refuse_nested_key(nested, full_key, "File not found.", shared_message=SHARED_LOCATION_WRITE_REFUSAL)
     
     # Find the delete marker and the most recent content version to restore.
     # S3 returns versions newest-first per key, so the latest delete marker and
@@ -2847,7 +2860,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     dest_key = resolve_asset_file_path(dest_base_key, dest_path)
     refuse_nested_key(nested_locations_for(source_asset, source_bucket, source_base_key), source_key,
                       "Source file not found.")
-    refuse_nested_key(nested_locations_for(dest_asset, dest_bucket, dest_base_key), dest_key, NESTED_PATH_REFUSAL)
+    refuse_unwritable_key(dest_asset, dest_bucket, dest_base_key, dest_key, NESTED_PATH_REFUSAL)
 
     # The request model bounded destinationPath; the resolved key carries the destination asset's prefix
     # as well and is what S3 measures. Refuse it here, before the source is even looked up, so an
@@ -3121,7 +3134,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    refuse_nested_key(nested_locations_for(asset, bucket, base_key), full_key, "File not found.")
+    refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found.")
     
     # Check if file exists
     try:
@@ -3422,8 +3435,7 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
 
     # Normalize the path by combining asset base key with the relative folder path
     normalized_key_path = resolve_asset_file_path(asset_base_key, request_model.relativeKey)
-    refuse_nested_key(nested_locations_for(asset, asset_bucket, asset_base_key), normalized_key_path,
-                      NESTED_PATH_REFUSAL)
+    refuse_unwritable_key(asset, asset_bucket, asset_base_key, normalized_key_path, NESTED_PATH_REFUSAL)
 
     # The request model bounded relativeKey; the resolved key carries the asset prefix as well and is
     # what S3 measures. Refuse it here, before put_object, so an over-long folder key is a plain 400
@@ -3481,7 +3493,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
-    refuse_nested_key(nested_locations_for(asset, bucket, base_key), full_key, "File not found")
+    refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found")
     
     # Check if file exists and is not archived
     try:

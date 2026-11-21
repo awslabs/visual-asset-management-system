@@ -436,14 +436,16 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
 
 def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[str, Any]], bucket_name: str,
                               location: Optional[str] = None, *, destructive: bool = False,
+                              include_shared: bool = False,
                               asset_table_name: Optional[str] = None) -> NestedLocations:
     """The stored locations of other assets nested in `asset`'s location (`location`, else its stored one) in
     `bucket_name`: the files they hold are theirs, and `asset`'s own file operations leave them alone.
 
     See `assetLocations.nested_locations_of`. Before the location index is ready a `destructive` operation
     walks the rows of every registration of the bucket (the asset's own registration first); the
-    registrations are read only when that walk runs. A destructive answer also names the other live assets
-    stored at `asset`'s own location, whose keys are left alone too."""
+    registrations are read only when that walk runs. A destructive answer, and a read with `include_shared`
+    (a write into the location), also names the other live assets stored at `asset`'s own location, whose
+    keys are left alone too."""
     row = asset or {}
     if location is None:
         location = (row.get('assetLocation') or {}).get('Key')
@@ -459,7 +461,8 @@ def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[s
 
     owner = (str(row.get('databaseId') or ''), str(row.get('assetId') or '')) if row.get('assetId') else None
     return nested_locations_of(asset_table, bucket_name, location, asset_table_name=asset_table_name,
-                               destructive=destructive, bucket_ids=bucket_ids(), owner=owner)
+                               destructive=destructive, bucket_ids=bucket_ids(), owner=owner,
+                               include_shared=include_shared)
 
 
 def nested_locations_for_asset_type(asset_table, asset: Optional[Dict[str, Any]], bucket_name: str,

@@ -62,7 +62,9 @@ class TestTheOwnFileRefusalReachesTheRun:
         assert "pipelines/x/y" not in kw["execution_error"]
 
     def test_the_refusal_text_is_the_one_the_upload_completion_answers(self):
-        from common.assetLocations import NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL
+        from common.assetLocations import NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL
         assert OWN_FILE_OUTPUT_REFUSAL == REFUSAL
-        # An output into the location of an asset nested in the target asset is refused the same way
-        assert po.USER_CORRECTABLE_WRITE_BACK_REFUSALS == frozenset({REFUSAL, NESTED_PATH_REFUSAL})
+        # An output into the location of an asset nested in the target asset, or into a location another live
+        # asset also holds, is refused the same way
+        assert po.USER_CORRECTABLE_WRITE_BACK_REFUSALS == frozenset(
+            {REFUSAL, NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL})

@@ -231,6 +231,13 @@ NESTED_PATH_REFUSAL = "This path is not available in this asset"
 # The answer to a destructive file operation on a key another live asset's location also holds (two assets
 # on one location): the key is left alone, for the other asset.
 SHARED_PATH_REFUSAL = "This file is also held by another asset and is not archived or deleted through this asset"
+# The answer to a write (an upload, a workflow output, a new folder, a copy into the asset, a revert, an unarchive
+# or a primary-file change) into a location another live asset also holds: bucket sync cannot tell which asset
+# the written file is for and sends it to the rejected-record queue, so nothing is written. Names the condition,
+# never the other asset, and points to the troubleshooting section that resolves it.
+SHARED_LOCATION_WRITE_REFUSAL = ("This asset shares its storage location with another asset, so no file can be added "
+                                 "or changed here until one of them is archived. See \"Bucket Sync Rejected-Record "
+                                 "Queue Holds Messages\" in the VAMS troubleshooting guide.")
 
 OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
                            "Write the output under another file name or folder.")
@@ -1066,7 +1073,7 @@ def clear_nested_locations_cache() -> None:
 
 def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_table_name: Optional[str] = None,
                         destructive: bool = False, bucket_ids: Iterable[str] = (),
-                        owner: Optional[Tuple[str, str]] = None,
+                        owner: Optional[Tuple[str, str]] = None, include_shared: bool = False,
                         clock: Callable[[], float] = time.monotonic) -> NestedLocations:
     """The locations of other assets nested in one asset's ``location`` in ``bucket``: the keys they hold are
     not that asset's files.
@@ -1076,8 +1083,10 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     rows of ``bucket_ids``, the registrations of the bucket; any other operation finds none, as before the
     index. A location the index cannot answer for within ``MAX_NESTED_LOCATION_PAGES`` takes the same
     pre-index rule. A destructive answer also names the other live assets stored at the same location
-    (``shared``; ``owner`` identifies the asset itself), whose keys it leaves alone. A non-destructive answer
-    is reused for NESTED_LOCATIONS_TTL_SECONDS in this container; a destructive one is always read fresh.
+    (``shared``; ``owner`` identifies the asset itself), whose keys it leaves alone. A write into the asset's
+    location asks for those too with ``include_shared`` (a read: once the index is ready, from the index only).
+    A non-destructive answer is reused for NESTED_LOCATIONS_TTL_SECONDS in this container; a destructive one is
+    always read fresh.
     Other read errors are raised.
 
     The lookup has two backends, the location index and the registration walk, and the rule (``NestedLocations``)
@@ -1090,8 +1099,8 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     ready = index_ready(table_name)
     if not ready and not (destructive and bucket_ids):
         return NestedLocations(loc)
-    shared = destructive and owner is not None
-    cache_key = (table_name, bucket, loc)
+    shared = (destructive or include_shared) and owner is not None
+    cache_key = (table_name, bucket, loc, owner if shared else None)
     if not destructive:
         with _nested_cache_lock:
             cached = _nested_cache.get(cache_key)

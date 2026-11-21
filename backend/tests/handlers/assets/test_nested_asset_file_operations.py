@@ -183,8 +183,8 @@ class TestDownloadAndUpload:
         al.clear_nested_locations_cache()
         monkeypatch.setattr(up, "asset_table", AttributionAssetTable(ROWS))
         monkeypatch.setattr(up, "buckets_table", AttributionBucketsTable([]))
-        assert up.nested_path_refused(OUTER, BUCKET, OUTER_LOCATION, "p/outer/inner/new.txt") is True
-        assert up.nested_path_refused(OUTER, BUCKET, OUTER_LOCATION, "p/outer/new.txt") is False
+        assert up.upload_path_refusal(OUTER, BUCKET, OUTER_LOCATION, "p/outer/inner/new.txt") == al.NESTED_PATH_REFUSAL
+        assert up.upload_path_refusal(OUTER, BUCKET, OUTER_LOCATION, "p/outer/new.txt") is None
 
 
 @pytest.mark.unit

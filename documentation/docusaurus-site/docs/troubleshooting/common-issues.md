@@ -512,10 +512,13 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 
 -   The Amazon CloudWatch alarm `<configuration name>-<app.baseStackName>-bucketSyncRejected` is in the `ALARM` state.
 -   A file written directly to an asset bucket is in no asset and not in search, and the bucket-sync function logged `Bucket sync rejected key ... (ambiguousLocation)` at `ERROR`.
+-   An upload, a new folder, a copy into an asset, a file revert, unarchive or primary-file change, or a workflow output is refused with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.`
 
 **Cause:** two live assets hold the same stored location in the bucket, so bucket sync cannot tell which one the file belongs to. It attributes the file to neither and sends the S3 notification to the deployment's bucket-sync rejected-record queue. Each message carries `reason`, `bucket`, `key`, `candidateAssets` (the `databaseId:assetId` of each asset that claims the location) and the original S3 `record`. Messages are kept for 14 days.
 
 **What archive and permanent delete do to a shared location:** the files of a location two live assets share belong to both, so neither asset's destructive operations change them. Archiving one asset archives its asset record and leaves every shared file live. Permanently deleting one asset removes its records and leaves every shared file and every version of it in place; viewer data in the auxiliary bucket stays when both assets are in one database. Deleting, archiving or moving a shared file through either asset is refused with `This file is also held by another asset and is not archived or deleted through this asset`. Do not move or delete the shared objects in Amazon S3 directly: they are the remaining asset's files.
+
+**What VAMS refuses on a shared location:** once the `assetLocationIndex` migration step has run, VAMS writes no file into a location another live asset also holds, because bucket sync could not attribute the file to either asset. An upload, a new folder, a copy into either asset, a file revert, unarchive or primary-file change, and a workflow output that would land there are refused before anything is written, with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.` The refusal names neither asset. Writes work again once you have followed the resolution below.
 
 **Resolution:**
 

@@ -46,8 +46,8 @@ from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, contains, held_objects, is_folder_location, names_own_object,
-    normalize_base_prefix, object_key_for,
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, contains, held_objects,
+    is_folder_location, names_own_object, normalize_base_prefix, object_key_for,
 )
 from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
@@ -828,12 +828,16 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
 OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
 
 
-def nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key) -> bool:
-    """Whether an upload's key lies in the location of another asset nested in this asset's location: the
-    key is that asset's, so neither a user upload nor a workflow output writes it through this asset."""
+def upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key) -> Optional[str]:
+    """Why neither a user upload nor a workflow output may write `final_s3_key` through this asset, or None.
+    A key in the location of another asset nested in this asset's is that asset's (NESTED_PATH_REFUSAL); a key
+    of a location another live asset also holds belongs to neither for bucket sync, which sends its record to
+    the rejected-record queue (SHARED_LOCATION_WRITE_REFUSAL). Read from the location index once it is ready."""
     nested = nested_locations_of_asset(asset_table, buckets_table, asset, bucket_name, asset_base_key,
-                                       asset_table_name=asset_storage_table_name)
-    return nested.holder(final_s3_key) is not None
+                                       include_shared=True, asset_table_name=asset_storage_table_name)
+    if nested.holder(final_s3_key) is None:
+        return None
+    return SHARED_LOCATION_WRITE_REFUSAL if nested.is_shared_key(final_s3_key) else NESTED_PATH_REFUSAL
 
 
 def normalize_s3_path(asset_base_key, file_path):
@@ -1435,8 +1439,9 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
-            if nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key):
-                raise VAMSGeneralErrorResponse(NESTED_PATH_REFUSAL)
+            refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+            if refusal:
+                raise VAMSGeneralErrorResponse(refusal)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
@@ -1745,12 +1750,13 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                     has_failures = True
                     continue
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
-                if nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key):
+                refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+                if refusal:
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
                         uploadIdS3="external",  # External uploads don't have S3 upload IDs
                         success=False,
-                        error=NESTED_PATH_REFUSAL
+                        error=refusal
                     ))
                     has_failures = True
                     continue
@@ -2342,12 +2348,13 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
-                if nested_path_refused(asset, bucket_name, asset_base_key, final_s3_key):
+                refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+                if refusal:
                     file_results.append(FileCompletionResult(
                         relativeKey=file.relativeKey,
                         uploadIdS3=file.uploadIdS3,
                         success=False,
-                        error=NESTED_PATH_REFUSAL
+                        error=refusal
                     ))
                     has_failures = True
                     if file.uploadIdS3 != "zero-byte":
