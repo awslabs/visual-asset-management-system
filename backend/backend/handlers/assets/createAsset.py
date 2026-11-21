@@ -524,15 +524,21 @@ def assert_location_not_owned_by_index(bucket_name, resolved_s3_key):
     of that bucket, so this replaces the BucketIdGSI walk once the backfill marker exists: the
     ancestor lookups and one descendant query cost O(depth) instead of O(assets in the bucket).
 
+    Returns:
+        True when the index answered; False when it cannot answer for this location (more
+        candidate locations than it checks, or a lookup that does not finish within its page
+        limit), and the caller checks the location with the BucketIdGSI walk instead.
+
     Raises:
         VAMSGeneralErrorResponse: with the same refusal as the walk when an asset owns a key the
             location covers, and the generic validation error when the index cannot be read.
     """
     try:
         conflicts = find_conflicts(asset_table, bucket_name, resolved_s3_key)
-    except LocationTooDeepError as e:
-        logger.error(f"Location {resolved_s3_key} cannot be checked against the location index: {e}")
-        raise VAMSGeneralErrorResponse("Error validating S3 location")
+    except (LocationTooDeepError, RuntimeError) as e:
+        logger.warning(f"Location {resolved_s3_key} cannot be checked against the location index ({e}); "
+                       "checking the asset records instead")
+        return False
     except Exception as e:
         logger.exception(f"Error validating location ownership against the location index: {e}")
         raise VAMSGeneralErrorResponse("Error validating S3 location")
@@ -542,15 +548,16 @@ def assert_location_not_owned_by_index(bucket_name, resolved_s3_key):
         logger.warning(f"Location {resolved_s3_key} conflicts with existing asset {holder}")
         raise AssetLocationInUseError(
             "The specified bucketExistingKey is already in use by another asset", owner=holder)
+    return True
 
 
 def assert_existing_key_not_owned(bucket_ids, resolved_s3_key, bucket_name=None):
     """Ensure no existing asset already points at the resolved S3 key.
 
     Once the location index is ready for this deployment (``index_ready``) and the bucket name is
-    known, the check reads the index (``assert_location_not_owned_by_index``). Until then it walks
-    the colocated BucketIdGSI partitions as described below, because an index without the
-    backfill would miss the assets created before it.
+    known, the check reads the index (``assert_location_not_owned_by_index``). Until then, and for a
+    location the index cannot answer for, it walks the colocated BucketIdGSI partitions as described
+    below, because an index without the backfill would miss the assets created before it.
 
     Because multiple databases can share one bucket and prefix root, an asset's
     S3 location is only unambiguously owned when a single asset record maps to it.
@@ -580,8 +587,8 @@ def assert_existing_key_not_owned(bucket_ids, resolved_s3_key, bucket_name=None)
         return
 
     if bucket_name and index_ready(asset_storage_table_name):
-        assert_location_not_owned_by_index(bucket_name, target)
-        return
+        if assert_location_not_owned_by_index(bucket_name, target):
+            return
 
     try:
         for bucket_id in bucket_ids:

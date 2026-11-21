@@ -8,6 +8,7 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
+from botocore.exceptions import ClientError
 
 from tests.handlers.assets.test_createAsset_conditional_put import _load as _load_create_asset
 
@@ -62,13 +63,35 @@ class TestOwnershipCheckUsesTheIndexOnlyWhenReady:
         m.find_conflicts.assert_not_called()
         m.asset_table.query.assert_called_once()
 
-    @pytest.mark.parametrize("error", [al.LocationTooDeepError("too deep"), RuntimeError("throttled")])
-    def test_an_unreadable_index_refuses_with_the_generic_error(self, error):
+    def test_an_unreadable_index_refuses_with_the_generic_error(self):
         m = _load_create_asset(fresh=True)
-        _wire_check(m, ready=True, conflict_error=error)
+        throttled = ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "Query")
+        _wire_check(m, ready=True, conflict_error=throttled)
         with pytest.raises(m.VAMSGeneralErrorResponse) as raised:
             m.assert_existing_key_not_owned(["b1"], "projects/alpha/", "vams-assets")
         assert "Error validating S3 location" in str(raised.value)
+        m.asset_table.query.assert_not_called()
+
+    UNANSWERED = [al.LocationTooDeepError("Location has 70 candidate locations, more than 64"),
+                  RuntimeError("Location index query did not finish within 5 pages")]
+
+    @pytest.mark.parametrize("error", UNANSWERED)
+    def test_a_location_the_index_cannot_answer_for_is_checked_by_the_bucket_walk(self, error):
+        m = _load_create_asset(fresh=True)
+        _wire_check(m, ready=True, conflict_error=error)
+        m.asset_table.query.return_value = {"Items": [{
+            "databaseId": "other-db", "assetId": "owner-1", "assetLocation": {"Key": "projects/alpha/"}}]}
+        with pytest.raises(m.VAMSGeneralErrorResponse) as raised:
+            m.assert_existing_key_not_owned(["b1"], "projects/alpha/sub/", "vams-assets")
+        assert IN_USE in str(raised.value)
+        assert m.asset_table.query.call_args.kwargs["IndexName"] == "BucketIdGSI"
+
+    @pytest.mark.parametrize("error", UNANSWERED)
+    def test_a_free_location_the_index_cannot_answer_for_passes_the_bucket_walk(self, error):
+        m = _load_create_asset(fresh=True)
+        _wire_check(m, ready=True, conflict_error=error)
+        m.assert_existing_key_not_owned(["b1"], "projects/alpha/", "vams-assets")
+        m.asset_table.query.assert_called_once()
 
 
 @pytest.mark.unit

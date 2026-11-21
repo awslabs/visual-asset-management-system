@@ -147,6 +147,30 @@ class TestLocationIndex:
 
 
 @pytest.mark.unit
+class TestAKeyTheIndexCannotAnswerFor:
+    """A key with more candidate locations than the index resolves, or one whose lookup does not finish
+    within its page limit, is attributed as before the index (stamp, then first folder), also once the
+    index is ready."""
+
+    DEEP_KEY = 'a1/' + 'd/' * 40 + 'scan.e57'
+
+    def test_a_key_with_too_many_candidate_locations_is_attributed_by_its_first_folder(self, monkeypatch):
+        assert len(al.candidate_locations(self.DEEP_KEY)) > al.MAX_CANDIDATE_LOCATIONS
+        result, _, stamp_reads = _attribute([NORMAL], self.DEEP_KEY, ready=True, monkeypatch=monkeypatch)
+        assert (result.database_id, result.asset_id) == ('db1', 'a1')
+        assert result.resolved_by == fa.RESOLVED_BY_FIRST_FOLDER
+        assert stamp_reads == [self.DEEP_KEY]
+
+    def test_a_lookup_past_its_page_limit_is_attributed_by_its_first_folder(self, monkeypatch):
+        def unfinished(*args, **kwargs):
+            raise RuntimeError('Location index query did not finish within 5 pages')
+        monkeypatch.setattr(fa, 'resolve_owner', unfinished)
+        result, _, _ = _attribute([NORMAL], 'a1/m.glb', ready=True, monkeypatch=monkeypatch)
+        assert (result.database_id, result.asset_id, result.relative_path) == ('db1', 'a1', '/m.glb')
+        assert result.resolved_by == fa.RESOLVED_BY_FIRST_FOLDER
+
+
+@pytest.mark.unit
 class TestSingleFileLocation:
     @pytest.mark.parametrize('key,relative', [
         ('projects/model.glb', '/model.glb'),

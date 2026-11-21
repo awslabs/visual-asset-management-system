@@ -12,7 +12,9 @@ same bucket. ``attribute_object`` answers it in this order:
    event's bucket, the asset row exists (strongly consistent read) in that registration, and the row's
    stored location contains the key. A binding that fails a check is logged and not used.
 2. The location index (``assetLocations.resolve_owner``). A hit is used at any time; a miss is final
-   only once ``index_ready()`` is True.
+   only once ``index_ready()`` is True. A key the index cannot answer for (more candidate locations
+   than it resolves, or a lookup that does not finish within its page limit) goes on to step 3, as
+   before the index.
 3. Before the index is ready: the stamp metadata (``databaseid``/``assetid``) the caller read from the
    object, then the first folder under a registered prefix (``assetIdGSI``), each accepted only when
    the asset row's registration is in the event's bucket and its stored location contains the key. A
@@ -36,6 +38,8 @@ from common.assetLocations import (
     ARCHIVED_DATABASE_SUFFIX,
     RESOLVED_AMBIGUOUS,
     RESOLVED_FOUND,
+    RESOLVED_TOO_DEEP,
+    Resolution,
     derive_location,
     index_ready,
     normalize_base_prefix,
@@ -390,8 +394,13 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
         logger.warning(f"The binding of {key} in bucket {bucket_name} to "
                        f"{binding.get('databaseId')}:{binding.get('assetId')} was not accepted; resolving again")
 
-    resolution = resolve_owner(asset_table, bucket_name, key, include_archived=include_archived,
-                               use_cache=use_index_cache)
+    try:
+        resolution = resolve_owner(asset_table, bucket_name, key, include_archived=include_archived,
+                                   use_cache=use_index_cache)
+    except RuntimeError as e:
+        logger.warning(f"The location index cannot resolve {key} in bucket {bucket_name} ({e}); "
+                       "attributing it as before the index")
+        resolution = Resolution(RESOLVED_TOO_DEEP)
     if resolution.status == RESOLVED_AMBIGUOUS:
         logger.error(f"Key {key} in bucket {bucket_name} is in a location several assets claim; "
                      "nothing is attributed")
@@ -403,7 +412,7 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
         if attribution is not None:
             return attribution
 
-    if index_ready(asset_table_name or asset_table.name):
+    if resolution.status != RESOLVED_TOO_DEEP and index_ready(asset_table_name or asset_table.name):
         return NOT_ATTRIBUTED_RESULT
 
     stamp = read_stamp() if read_stamp else None
