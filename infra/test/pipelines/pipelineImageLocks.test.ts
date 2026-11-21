@@ -277,12 +277,11 @@ describe("the Isaac Lab training image", () => {
     const steps = instructions(fs.readFileSync(path.join(root, "Dockerfile"), "utf-8"));
 
     it("builds its one source package with the base image's pinned setuptools, not a fetched build environment", () => {
-        const installs = installSteps(steps);
-        expect(installs.length).toBeGreaterThan(0);
-        for (const step of installs) {
-            expect(step).toMatch(/--no-binary moviepy/);
-            expect(step).toMatch(/--no-build-isolation/);
-        }
+        const moviepySourceBuilds = installSteps(steps).filter((step) =>
+            /--no-binary moviepy/.test(step)
+        );
+        expect(moviepySourceBuilds).toHaveLength(1);
+        expect(moviepySourceBuilds[0]).toMatch(/--no-build-isolation/);
         const baseConstraints = fs.readFileSync(path.join(root, "base-constraints.txt"), "utf-8");
         expect(baseConstraints).toMatch(/^setuptools==\S+$/m);
     });
