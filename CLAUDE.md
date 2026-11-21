@@ -107,7 +107,7 @@ Cognito/External OAuth → ID Token → Custom Lambda Authorizer
 
 ```
 React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
-  → Feature switches from /api/secure-config → conditional UI rendering
+  → Feature switches from GET /secure-config → conditional UI rendering
 ```
 
 ### **Configuration Flow**
@@ -115,7 +115,7 @@ React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
 ```
 CDK config (infra/config/config.json)
   → deploys to DynamoDB (feature switches, app settings)
-    → Frontend reads from /api/secure-config at runtime
+    → Frontend reads from GET /secure-config at runtime
 ```
 
 ### **Pipeline Architecture**
@@ -682,7 +682,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 2. Add config option in `infra/config/config.ts` `ConfigPublic` interface
 3. Add validation in `getConfig()`
 4. Push to `enabledFeatures` array in `infra/lib/core-stack.ts`
-5. Read in frontend from `/api/secure-config` response and gate UI with a feature check
+5. Read in frontend from the `GET /secure-config` response and gate UI with a feature check
 6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm `infra/test/config/configBuilderSync.test.ts` passes. The sync test covers only `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts` or `derived.ts`, so when `getConfig()` validation logic changes you must hand-port the matching rule into `validation.ts`, and when `getConfig()` adds, changes, or **removes** an auto-mutation (an assignment that rewrites the operator's config, including any feature list that implies such a state) you must mirror that in `derived.ts`. Both rely on review, not the test, to stay in sync. A removed `getConfig()` auto-mutation left in `derived.ts` makes the builder keep rewriting the downloaded `config.json`.
 
 ### **Adding a New DynamoDB Table**

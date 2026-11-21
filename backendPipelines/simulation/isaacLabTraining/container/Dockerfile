@@ -1,9 +1,12 @@
 # IsaacLab Training Container for VAMS
-# Base: NVIDIA Isaac Lab pre-built container (headless)
+# Base: NVIDIA Isaac Lab pre-built container (headless), pinned by digest: the tag records which release
+# the digest resolves to, and a re-pointed tag cannot change what a rebuild of this commit pulls. Move the
+# version and the digest together.
 ARG ISAAC_LAB_VERSION=2.3.0
-ARG BASE_IMAGE=nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}
+ARG ISAAC_LAB_DIGEST=sha256:1b204053c9facaa168b9aacd014061b479dabc0569f35f626dd60ea9d667188a
+ARG BASE_IMAGE=nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}@${ISAAC_LAB_DIGEST}
 
-# checkov:skip=CKV_DOCKER_7: BASE_IMAGE defaults to the versioned isaac-lab:${ISAAC_LAB_VERSION} tag; checkov does not resolve build args
+# checkov:skip=CKV_DOCKER_7: BASE_IMAGE defaults to the digest-pinned isaac-lab:${ISAAC_LAB_VERSION} image; checkov does not resolve build args
 FROM ${BASE_IMAGE}
 
 # NVIDIA EULA acceptance - must be explicitly set to "Y" at build time
@@ -18,9 +21,11 @@ ENV PYTHONUNBUFFERED=1
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
-# Install additional dependencies using Isaac Sim's Python
-COPY requirements.txt /tmp/requirements.txt
-RUN /isaac-sim/kit/python/bin/python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+# Install additional dependencies using Isaac Sim's Python: every package at the version and hash in the
+# lock (generated from requirements.txt for Isaac Sim's Python 3.11; its header holds the command).
+COPY requirements.lock /tmp/requirements.lock
+RUN /isaac-sim/kit/python/bin/python3 -m pip install --no-cache-dir --require-hashes --only-binary :all: \
+    -r /tmp/requirements.lock
 
 # Create directories (issue #327: /mnt/efs/checkpoints is mounted via EFS access point, owned by 10000:10000)
 RUN mkdir -p /app /tmp/assets

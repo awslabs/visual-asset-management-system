@@ -9,25 +9,32 @@
 # textured peers this image pulls NO nvdiffrast: the texture stage ships its own rasteriser, so nothing here
 # carries the NVIDIA Source Code License's research-or-evaluation-only restriction.
 
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:24c8e3581ea6330038b0d374920721983312627f8adbfcf390bdb4b399d280ed
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value clones the
-# default branch, which makes the build non-reproducible. This commit is the one the adapter's driver was
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible; the clone below fails the
+# build if HEAD is anything else. This commit is the one the adapter's driver was
 # written against: from_pretrained takes (repo, subfolder, variant, use_safetensors, device), the shape
 # pipeline's __call__ has no seed parameter and takes a generator, and the paint pipeline is called as
 # (mesh, image=...).
 # pragma: allowlist nextline secret
-ARG HUNYUAN3D_COMMIT="f8db63096c8282cb27354314d896feba5ba6ff8a"
+ARG HUNYUAN3D_COMMIT=f8db63096c8282cb27354314d896feba5ba6ff8a
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
 # rungs it walks through the template's REPAIR_BACKENDS setting.
 ARG ENABLE_GPL_MESH_REPAIR=true
 
 # Install system dependencies. The GL/EGL libraries back the texture stage's own rasteriser; cmake and
 # ninja build the two CUDA/C++ extensions it ships.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     build-essential \
     cmake \
     curl \
@@ -50,9 +57,13 @@ RUN apt-get update && apt-get install -y \
 
 RUN git lfs install
 
-# Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
@@ -63,20 +74,20 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# CUDA 12.8 torch stack. The texture stage's extensions compile against this torch, so it comes first.
+# CUDA 12.8 torch stack, at fixed versions. The texture stage's extensions compile against this torch, so
+# it comes first.
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
-    torch torchvision
+    torch==2.11.0 torchvision==0.26.0
 
 # Shared pipeline dependencies
 COPY requirements.txt /opt/ml/code/requirements.txt
 RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
 
 RUN git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git /opt/hunyuan3d && \
-    if [ -n "$HUNYUAN3D_COMMIT" ]; then \
-        git -C /opt/hunyuan3d checkout "$HUNYUAN3D_COMMIT"; \
-    else \
-        echo "WARNING: HUNYUAN3D_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
-    fi
+    cd /opt/hunyuan3d && \
+    git checkout --detach ${HUNYUAN3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${HUNYUAN3D_COMMIT}" && \
+    git rev-parse HEAD > /opt/hunyuan3d/VAMS_UPSTREAM_COMMIT
 WORKDIR /opt/hunyuan3d
 
 # Every GPU family the pipeline can schedule onto has to be in this list, or an extension compiles for the
@@ -130,7 +141,7 @@ RUN set -eux; \
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix pymeshlab; \
+        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -150,19 +161,33 @@ RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt && python -c "im
 # download entirely -- for this pipeline's own segmentation stage and for upstream's BackgroundRemover,
 # which the driver reaches for when an image arrives without an alpha channel.
 ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
 RUN mkdir -p /opt/rembg && \
     curl -fsSL -o /opt/rembg/u2net.onnx \
     https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
-    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
-assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
 
 # VAMS container code
 COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
 COPY models /opt/ml/code/models
 COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working tree;
 # otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
-RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may
+# create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
+# sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
+RUN chgrp vams /opt/hunyuan3d && chmod 1775 /opt/hunyuan3d && chown -R vams:vams /home/vams
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
 
 WORKDIR /opt/ml/code
+USER 10000:10000
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]

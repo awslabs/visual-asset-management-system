@@ -73,6 +73,12 @@ def recipe_path(recipe_id="al2023-desktop", *rest):
     return "/".join([RECIPES_PATH, recipe_id, *rest])
 
 
+def _recipe_object(recipe_id, os_family):
+    """The edhImage enforcement dict of an AMI recipe route: the recipe id, no stack id or name."""
+    return {"object__type": "edhImage", "edhImageId": "", "edhStackName": "", "edhRecipeId": recipe_id,
+            "edhOsFamily": os_family}
+
+
 @pytest.mark.unit
 class TestTierOne:
     def test_a_tier1_denial_is_403(self, monkeypatch):
@@ -90,12 +96,12 @@ class TestTierOne:
 @pytest.mark.unit
 class TestRecipes:
     def test_list_filters_by_tier2_and_returns_views(self, monkeypatch):
-        fakes = install(monkeypatch, enforce=lambda obj, act: obj["edhImageId"] == "al2023-desktop" and act == "GET")
+        fakes = install(monkeypatch, enforce=lambda obj, act: obj["edhRecipeId"] == "al2023-desktop" and act == "GET")
         response = service.lambda_handler(make_event("GET", RECIPES_PATH), {})
         items = response_body(response)["Items"]
         assert response["statusCode"] == 200 and items[0]["latestBuild"] == BUILD
         fakes.enforcer.enforce.assert_called_with(
-            {"object__type": "edhImage", "edhImageId": "al2023-desktop", "edhOsFamily": "linux"}, "GET")
+            _recipe_object("al2023-desktop", "linux"), "GET")
 
     def test_create_answers_201_with_the_view(self, monkeypatch):
         fakes = install(monkeypatch, recipe=None)
@@ -153,7 +159,7 @@ class TestRecipes:
             make_event("PUT", recipe_path(), body={**RECIPE_BODY, "recipeId": "ignored"}, path_params={"recipeId": "al2023-desktop"}), {})
         assert response["statusCode"] == 200
         fakes.enforcer.enforce.assert_called_with(
-            {"object__type": "edhImage", "edhImageId": "al2023-desktop", "edhOsFamily": "linux"}, "PUT")
+            _recipe_object("al2023-desktop", "linux"), "PUT")
         existing, model, user = fakes.recipes.update_admin_recipe.call_args.args
         assert model.recipeId == "al2023-desktop"
 
@@ -199,8 +205,8 @@ class TestDuplicate:
         assert response["statusCode"] == 201
         fakes.store.get_recipe.assert_called_once_with("al2023-desktop")
         assert [call.args for call in fakes.enforcer.enforce.call_args_list] == [
-            ({"object__type": "edhImage", "edhImageId": "al2023-copy", "edhOsFamily": "linux"}, "POST"),
-            ({"object__type": "edhImage", "edhImageId": "al2023-desktop", "edhOsFamily": "windows"}, "GET"),
+            (_recipe_object("al2023-copy", "linux"), "POST"),
+            (_recipe_object("al2023-desktop", "windows"), "GET"),
         ]
         model, user = fakes.recipes.create_admin_recipe.call_args.args
         assert model.duplicateOf == "al2023-desktop" and user == ADMIN

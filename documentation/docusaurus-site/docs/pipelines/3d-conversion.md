@@ -170,14 +170,14 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                 | Default | Description                                                                                                     |
-| ---------------------- | ------- | --------------------------------------------------------------------------------------------------------------- |
-| `enabled`              | `true`  | Deploy the 3D basic conversion pipeline. This is the only built-in pipeline enabled by default.                 |
-| `autoRegisterWithVAMS` | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                         |
-| `enableStepInput`      | `false` | Read STEP (`.step`, `.stp`) input; adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the image. |
+| Option                 | Default | Description                                                                                                                                      |
+| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `enabled`              | `true`  | Deploy the 3D basic conversion pipeline. All three templates enable it; the commercial template also enables SYSTEM - GenAI Metadata Generation. |
+| `autoRegisterWithVAMS` | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                                                          |
+| `enableStepInput`      | `false` | Read STEP (`.step`, `.stp`) input; adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the image.                                  |
 
 :::tip[Enabled by Default]
-Unlike other built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
+Unlike most built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
 :::
 
 ## Input Parameters

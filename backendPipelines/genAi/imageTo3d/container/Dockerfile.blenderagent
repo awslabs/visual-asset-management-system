@@ -18,18 +18,26 @@
 # code and weights, with a vendored DINOv2 under Apache-2.0; utils3d is MIT and PyTorch BSD-3-Clause. No
 # nvdiffrast and no other NVIDIA-licensed source is built here.
 
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04@sha256:ac55d124da4882b497f732d8dfd9a702d5447a5f29d08d56da6f64f0a1eb34bc
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
 
 # Pinned so the image is reproducible and so the agent's instructions match the Blender API they were
 # written against. 4.5 is the LTS series; the tools use bpy.ops.wm.obj_import / stl_import and the glTF
 # exporter's export_image_format, which are the 4.x names.
 ARG BLENDER_VERSION="4.5.13"
 ARG BLENDER_SERIES="4.5"
-# The Codex CLI release, as a static musl binary. bwrap ships in the same release and backs the sandbox on
-# a kernel where Landlock is not available.
+# The Codex CLI release, as a static musl binary. bwrap ships in the same release; the job does not use it:
+# it needs a user namespace the unprivileged job does not get, so Codex runs its Landlock + seccomp sandbox
+# (models/blenderagent.py).
 ARG CODEX_RELEASE="rust-v0.153.4"
 # The bridge that turns the Responses API Codex speaks into Bedrock Converse calls on the task role.
 ARG LITELLM_VERSION="1.100.0"
@@ -39,7 +47,7 @@ ARG ENABLE_GPL_MESH_REPAIR=true
 
 # System dependencies. The X/GL libraries are what Blender's binary links against even in background mode;
 # without them it fails to start rather than to render.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     ca-certificates \
     curl \
     git \
@@ -66,11 +74,13 @@ RUN apt-get update && apt-get install -y \
 # ripgrep is what Codex reaches for to list and search files; without it the agent's first look at its
 # workspace ends in "rg: command not found".
 
-# Install AWS CLI v2. The installer URL carries the version, so a rebuild installs the CLI this image
-# was built with rather than whatever is current. Override with --build-arg to move it.
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
 ARG AWS_CLI_VERSION=2.36.39
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
@@ -85,9 +95,12 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 COPY requirements.txt /opt/ml/code/requirements.txt
 RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
 
-# Blender, unpacked to /opt/blender and put on PATH. The primary download host is tried first and a
-# public mirror second, because the primary has refused automated clients before. The version in the
-# tarball's own name is asserted so a mirror serving a different build cannot pass silently.
+# Blender, unpacked to /opt/blender and put on PATH. The primary download host is tried first and two
+# public mirrors after it, because the primary has refused automated clients before. Whichever host
+# answers, the tarball must match the SHA-256 Blender publishes for this release
+# (blender-${BLENDER_VERSION}.sha256), so a mirror serving any other file fails the build; the version in
+# the binary's own banner is asserted as well.
+ARG BLENDER_SHA256=da4e69b06b75b9e642d106496c50e7e240218b411d2f6e18271c1d1d819cef91
 RUN set -eux; \
     TARBALL="blender-${BLENDER_VERSION}-linux-x64.tar.xz"; \
     for base in "https://download.blender.org/release/Blender${BLENDER_SERIES}" \
@@ -95,18 +108,22 @@ RUN set -eux; \
                 "https://mirrors.dotsrc.org/blender/blender-release/Blender${BLENDER_SERIES}"; do \
         if curl -fsSL -A "Mozilla/5.0" -o "/tmp/${TARBALL}" "${base}/${TARBALL}"; then break; fi; \
     done; \
-    test -s "/tmp/${TARBALL}"; \
+    echo "${BLENDER_SHA256}  /tmp/${TARBALL}" | sha256sum -c -; \
     mkdir -p /opt/blender; \
     tar -xJf "/tmp/${TARBALL}" -C /opt/blender --strip-components=1; \
     rm -f "/tmp/${TARBALL}"; \
     ln -sf /opt/blender/blender /usr/local/bin/blender; \
     blender --version | head -1 | grep -F "Blender ${BLENDER_VERSION}"
 
-# Codex CLI and bwrap, from the pinned GitHub release. Static binaries; nothing to compile.
+# Codex CLI and bwrap, from the pinned GitHub release, each checked against the SHA-256 the release
+# publishes for it. Static binaries; nothing to compile.
+ARG CODEX_SHA256=f479424eca092484dc40d87ae28c44f4cc40234a60045d6131e493800d814a30
+ARG BWRAP_SHA256=e7d65c75e05637e42b93f6abf9222fa0d26b537648a7a34c122b75021d41756d
 RUN set -eux; \
     BASE="https://github.com/openai/codex/releases/download/${CODEX_RELEASE}"; \
     curl -fsSL -o /tmp/codex.tar.gz "${BASE}/codex-x86_64-unknown-linux-musl.tar.gz"; \
     curl -fsSL -o /tmp/bwrap.tar.gz "${BASE}/bwrap-x86_64-unknown-linux-musl.tar.gz"; \
+    printf '%s  %s\n' "${CODEX_SHA256}" /tmp/codex.tar.gz "${BWRAP_SHA256}" /tmp/bwrap.tar.gz | sha256sum -c -; \
     mkdir -p /tmp/codex /tmp/bwrap; \
     tar -xzf /tmp/codex.tar.gz -C /tmp/codex; \
     tar -xzf /tmp/bwrap.tar.gz -C /tmp/bwrap; \
@@ -115,8 +132,9 @@ RUN set -eux; \
     rm -rf /tmp/codex /tmp/bwrap /tmp/codex.tar.gz /tmp/bwrap.tar.gz; \
     codex --version
 
-# The Responses-to-Converse bridge, and the OpenAI client the adapter uses to check it.
-RUN pip install --no-cache-dir "litellm[proxy]==${LITELLM_VERSION}" openai boto3 && \
+# The Responses-to-Converse bridge, and the OpenAI client the adapter uses to check it, at the versions
+# litellm's own constraints resolve to.
+RUN pip install --no-cache-dir "litellm[proxy]==${LITELLM_VERSION}" openai==2.54.0 boto3==1.44.5 && \
     litellm --version
 
 # The scripted refit's depth model, MoGe-2, and the CUDA 12.8 torch it runs on. MoGe is cloned at a
@@ -137,7 +155,7 @@ RUN git clone "$MOGE_REPO_URL" /opt/moge && \
     git rev-parse HEAD > /opt/moge/VAMS_UPSTREAM_COMMIT && \
     pip install --no-cache-dir --no-deps /opt/moge
 RUN pip install --no-cache-dir "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@${UTILS3D_COMMIT}" \
-        opencv-python-headless huggingface_hub && \
+        opencv-python-headless==5.1.0.95 huggingface_hub==2.4.0 && \
     python -c "from moge.model.v2 import MoGeModel; import utils3d, cv2, huggingface_hub" && \
     echo "MoGe $(cat /opt/moge/VAMS_UPSTREAM_COMMIT)"
 
@@ -145,7 +163,7 @@ RUN pip install --no-cache-dir "utils3d @ git+https://github.com/EasternJournali
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix pymeshlab; \
+        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -154,11 +172,12 @@ RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
 # home directory nothing carries between jobs. Pointing the variable at a baked-in copy removes the
 # download entirely.
 ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
 RUN mkdir -p /opt/rembg && \
     curl -fsSL -o /opt/rembg/u2net.onnx \
     https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
-    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
-assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
 
 # The agent's workspace root. Outside /tmp deliberately: the sandbox carves /tmp out as writable by default
 # and the pipeline's own directories live there, so the root sits elsewhere and the carve-outs are switched
@@ -170,11 +189,22 @@ ENV BLENDERAGENT_ROOT=/var/agent
 COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
 COPY models /opt/ml/code/models
 COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
 # The Blender-side tools and the agent's instructions, copied into every workspace at run time.
 COPY blenderagent_tools /opt/ml/code/blenderagent_tools
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working tree;
 # otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
-RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The runtime user owns every directory it writes: HOME and the agent's workspace root.
+RUN chown -R vams:vams /home/vams /var/agent
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
 
 WORKDIR /opt/ml/code
+USER 10000:10000
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
