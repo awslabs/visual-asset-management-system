@@ -90,7 +90,12 @@ function directDependencies(text: string): string[] {
     expect(block).not.toBeNull(); // [control] the dependency list was found
     return block![1]
         .split(/\r?\n/)
-        .map((l) => l.replace(/#.*/, "").trim().replace(/^"|",?$/g, ""))
+        .map((l) =>
+            l
+                .replace(/#.*/, "")
+                .trim()
+                .replace(/^"|",?$/g, "")
+        )
         .filter(Boolean)
         .map((l) => normalize(/^[A-Za-z0-9][A-Za-z0-9._-]*/.exec(l)![0]));
 }

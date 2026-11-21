@@ -241,7 +241,8 @@ describe("Python dependency lock coverage (control)", () => {
             "layer/requirements-dev.txt": "idna==2.0\n",
             // A hashed export a Dockerfile installs: covered with the header, reported without it.
             "layer/requirements.lock":
-                UV_EXPORT_HEADER + "\n#    uv export -o requirements.lock\nidna==3.0 \\\n    --hash=sha256:00\n",
+                UV_EXPORT_HEADER +
+                "\n#    uv export -o requirements.lock\nidna==3.0 \\\n    --hash=sha256:00\n",
             "layer/requirements-pip-compile.lock": "idna==3.0 \\\n    --hash=sha256:00\n",
             "layer/requirements-extra.txt": "jinja2==2.10\n",
             "unlocked/requirements.txt": "idna==2.0\n",
