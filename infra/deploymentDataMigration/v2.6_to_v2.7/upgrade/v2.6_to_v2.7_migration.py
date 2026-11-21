@@ -1789,14 +1789,52 @@ def _is_preview_of(base_key: str, object_key: str) -> bool:
     return bool(extension) and '/' not in extension
 
 
-def location_contains(location: str, object_key: str) -> bool:
-    """Whether a stored location holds a key (common.assetLocations.contains): a folder holds every key
-    under it; a single file holds its object, everything under `{key}/` and its own previews."""
-    if not location or not object_key:
-        return False
+def _location_key_sets(location: str) -> List[Tuple[str, str]]:
+    """The key sets a non-empty location holds (common.assetLocations._held_sets): a folder is one prefix;
+    a single file is its key, its companion folder `{key}/` and its preview stem `{key}.previewFile.`."""
     if location.endswith('/'):
-        return object_key.startswith(location)
-    return object_key == location or object_key.startswith(location + '/') or _is_preview_of(location, object_key)
+        return [('prefix', location)]
+    return [('key', location), ('prefix', location + '/'), ('previews', location + ASSET_LOCATION_PREVIEW_FILE_PATTERN)]
+
+
+def _key_set_holds(held: Tuple[str, str], key: str) -> bool:
+    kind, text = held
+    if kind == 'key':
+        return key == text
+    if not key.startswith(text):
+        return False
+    rest = key[len(text):]
+    return kind == 'prefix' or (bool(rest) and '/' not in rest)
+
+
+def _key_sets_meet(first: Tuple[str, str], second: Tuple[str, str]) -> bool:
+    if first[0] == 'key':
+        return _key_set_holds(second, first[1])
+    if second[0] == 'key':
+        return _key_set_holds(first, second[1])
+    (shorter_kind, shorter), (_, longer) = sorted((first, second), key=lambda held: len(held[1]))
+    if not longer.startswith(shorter):
+        return False
+    return shorter_kind == 'prefix' or '/' not in longer[len(shorter):]
+
+
+def locations_share_key(first: Optional[str], second: Optional[str]) -> bool:
+    """Whether two locations hold a key in common (common.assetLocations.locations_share_key). This is more
+    than one containing the other: `a/x` and `a/x.previewFile` both hold `a/x.previewFile.previewFile.z`."""
+    a, b = normalize_location(first), normalize_location(second)
+    if not a or not b:
+        return False
+    return any(_key_sets_meet(x, y) for x in _location_key_sets(a) for y in _location_key_sets(b))
+
+
+def _preview_partner_below(location: str) -> List[str]:
+    """For a single file named `{S}.previewFile` or `{S}.previewFile.`, the single file `S` it shares preview
+    keys with though neither contains the other (common.assetLocations._preview_partner_locations)."""
+    if not location or location.endswith('/'):
+        return []
+    stem = ASSET_LOCATION_PREVIEW_FILE_PATTERN[:-1]
+    return [location[:-len(suffix)] for suffix in (stem, ASSET_LOCATION_PREVIEW_FILE_PATTERN)
+            if location.endswith(suffix) and len(location) > len(suffix)]
 
 
 def candidate_locations(object_key: str) -> List[str]:
@@ -1866,12 +1904,13 @@ def find_location_overlaps(entries: List[Dict]) -> Dict[str, List[Dict]]:
     """Shared and nested locations among the indexed rows, per bucket.
 
     `sharedLocation`: one location held by two or more assets (`ambiguous` when two of them are live:
-    the resolver attributes nothing there). `nestedLocation`: a row whose location another asset's
-    location holds: under its folder, or in a single file's companion folder `{key}/` or among its own
-    previews `{key}.previewFile.{ext}` (so `x` and `x/` are a nested pair too). Two locations share a
-    key exactly when one holds the other, so every overlapping pair is listed once. Live and archived
-    rows both count, as for an ownership check; the live and archived copies of one asset are one
-    asset."""
+    the resolver attributes nothing there). `nestedLocation`: a row whose location shares a key with a
+    shorter location of another asset (`locations_share_key`): under its folder, in a single file's
+    companion folder `{key}/` or among its own previews `{key}.previewFile.{ext}` (so `x` and `x/` are a
+    nested pair too), or a single file `{key}.previewFile` or `{key}.previewFile.`, which shares preview
+    keys with `{key}` without either holding the other. Each such pair is listed once, under the longer
+    location. Live and archived rows both count, as for an ownership check; the live and archived copies
+    of one asset are one asset."""
     by_location: Dict[Tuple[str, str], List[Dict]] = {}
     for entry in entries:
         by_location.setdefault((entry['bucket'], entry['location']), []).append(entry)
@@ -1884,9 +1923,10 @@ def find_location_overlaps(entries: List[Dict]) -> Dict[str, List[Dict]]:
     nested = []
     for entry in entries:
         location = entry['location']
-        owners = [r for candidate in candidate_locations(location) if candidate != location
+        shorter = candidate_locations(location) + _preview_partner_below(location)
+        owners = [r for candidate in dict.fromkeys(shorter) if candidate != location
                   for r in by_location.get((entry['bucket'], candidate), [])
-                  if _asset_of(r) != _asset_of(entry) and location_contains(r['location'], location)]
+                  if _asset_of(r) != _asset_of(entry) and locations_share_key(r['location'], location)]
         if owners:
             nested.append({'bucket': entry['bucket'], 'location': location,
                            'asset': dict(_entry_identity(entry), archived=entry['archived']),

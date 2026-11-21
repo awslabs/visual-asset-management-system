@@ -45,7 +45,8 @@ when the asset is created and by the v2.6-to-v2.7 `assetLocationIndex` migration
 registration carry no attributes. Until the backfill has written its completion marker the index
 does not cover every row whose location holds keys, so no decision may depend on it before
 ``index_ready()`` answers True; until then callers keep the checks that do not use it. Which
-asset owns a key, and which locations conflict, are decided with ``contains`` above.
+asset owns a key is decided with ``contains`` above, and which locations conflict with
+``locations_share_key``.
 
 Depth limit. A key has about two candidate locations per folder level (the folder ``X/`` and the
 single file ``X``), plus the key and its preview bases. A key or location with more than
@@ -511,6 +512,26 @@ def candidate_locations(object_key: Optional[str]) -> List[str]:
     return sorted(candidates, key=lambda c: (-len(c), c))
 
 
+def _preview_partner_locations(location: Optional[str]) -> List[str]:
+    """The single-file locations that share a key with `location` although neither contains the other.
+
+    For a single file `S` they are `S.previewFile` above it (both hold `S.previewFile.previewFile.z`),
+    and the single file whose `.previewFile` or `.previewFile.` partner `S` is (`a/x` for
+    `a/x.previewFile` and for `a/x.previewFile.`). `S.previewFile.` itself sits under the preview stem
+    `S.previewFile.`, which `find_conflicts` reads with a prefix lookup. A folder has none: it holds
+    no preview set, and every location that shares a key with it contains it or lies under it.
+    """
+    loc = normalize_location(location)
+    if not loc or loc.endswith('/'):
+        return []
+    stem = PREVIEW_FILE_PATTERN[:-1]                     # ".previewFile"
+    partners = [loc + stem]
+    for suffix in (stem, PREVIEW_FILE_PATTERN):
+        if loc.endswith(suffix) and len(loc) > len(suffix):
+            partners.append(loc[:-len(suffix)])
+    return partners
+
+
 class LocationTooDeepError(ValueError):
     """A key or location has more candidate locations than MAX_CANDIDATE_LOCATIONS."""
 
@@ -716,20 +737,26 @@ def resolve_owner(table, bucket: str, object_key: str, include_archived: bool = 
 
 def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int = MAX_PAGES_PER_LOOKUP
                    ) -> List[LocationEntry]:
-    """Index rows, live and archived, that share a key with `location` in `bucket`. An empty list
-    means no conflict.
+    """Index rows, live and archived, that share a key with `location` in `bucket`
+    (`locations_share_key`). An empty list means no conflict.
 
-    Two locations share a key exactly when one contains the other's own key (`contains(stored,
-    location)` or `contains(location, stored)`), so this reads:
+    Two locations share a key when one contains the other's own key, and in one more case: a single
+    file `S` and the single file `S.previewFile` or `S.previewFile.` hold a common preview key that
+    neither location key names (`S.previewFile.previewFile.z`). So this reads, keeping every row
+    where `locations_share_key` holds:
 
     - the stored locations that contain the new one: exact lookups of `candidate_locations(location)`
-      (uncached), kept where `contains` holds. For a single file `S` that is a folder above it, a
-      single file whose companion folder or previews hold it, and `S` itself;
+      (uncached). For a single file `S` that is a folder above it, a single file whose companion
+      folder or previews hold it, and `S` itself;
+    - the preview partners of a single file (`_preview_partner_locations`): `S.previewFile` above
+      it and, for an `S` that ends in `.previewFile` or `.previewFile.`, the single file it is the
+      partner of; one exact lookup each;
     - one stored location inside the new one: the first row under its folder form (`F/`, or the
-      companion folder `S/` of a single file) and, for a single file, the first of its own previews
-      `S.previewFile.{ext}` stored as a location. So a new folder conflicts with a single file whose
-      object, companion folder or previews fall under it, and a new single file with anything under
-      `S/` or at one of its preview keys.
+      companion folder `S/` of a single file) and, for a single file, the first stored location
+      under its preview stem `S.previewFile.` that shares a key with it (its own previews, and
+      `S.previewFile.` itself). So a new folder conflicts with a single file whose object, companion
+      folder or previews fall under it, and a new single file with anything under `S/` or at one of
+      its preview keys.
 
     A location with more than MAX_CANDIDATE_LOCATIONS candidates raises LocationTooDeepError, so a
     caller refuses it. Callers must not act on the answer before `index_ready()` is True.
@@ -741,11 +768,12 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
     if len(candidates) > MAX_CANDIDATE_LOCATIONS:
         raise LocationTooDeepError(
             f"Location has {len(candidates)} candidate locations, more than {MAX_CANDIDATE_LOCATIONS}")
-    lookups = _lookup_all(table, bucket, candidates, use_cache=False)
+    exact = candidates + [p for p in _preview_partner_locations(location) if p not in candidates]
+    lookups = _lookup_all(table, bucket, exact, use_cache=False)
     conflicts: List[LocationEntry] = []
-    for candidate in candidates:
+    for candidate in exact:
         for entry in lookups.get(candidate, ()):
-            if contains(entry.location, location) and entry not in conflicts:
+            if locations_share_key(entry.location, location) and entry not in conflicts:
                 conflicts.append(entry)
     client, table_name = table.meta.client, table.name
     folder_form = location if location.endswith('/') else location + '/'
@@ -753,7 +781,7 @@ def find_conflicts(table, bucket: str, location: str, max_descendant_pages: int 
                            page_size=1, max_pages=max_descendant_pages)]
     if not location.endswith('/'):
         inside.append(_first_under(client, table_name, bucket, location + PREVIEW_FILE_PATTERN,
-                                   lambda entry: contains(location, entry.location),
+                                   lambda entry: locations_share_key(location, entry.location),
                                    page_size=PREVIEW_LOOKUP_PAGE_SIZE, max_pages=max_descendant_pages))
     for entry in inside:
         if entry is not None and entry not in conflicts:

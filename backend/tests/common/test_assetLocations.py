@@ -835,6 +835,12 @@ class TestFindConflicts:
         ("projects/model.glb", "projects/"),                  # a single file under it
         ("projects/model.glb", "projects/model.glb/sub/"),     # inside a single file's companion
         ("projects/sub/model.glb", "projects/sub/"),           # a single file whose companion is under it
+        # two single files whose preview stems share keys that neither location names (L2, D8)
+        ("a/x", "a/x.previewFile"),
+        ("a/x.previewFile", "a/x"),
+        ("a/x", "a/x.previewFile."),
+        ("a/x.previewFile.", "a/x"),
+        ("a/x.previewFile", "a/x.previewFile.previewFile"),
     ])
     def test_conflict(self, existing, target):
         table = FakeLocationTable([_row("db1", "a1", existing)])
@@ -928,31 +934,36 @@ class TestFindConflicts:
             "projects/model.glb", "projects/model.glb/", "projects/model.glb/sub/",
             "projects/model.glb/sub/n.glb", "projects/model.glb/model.glb", "projects/model.glb.previewFile.png",
             "projects/model.glb.previewFile.x/", "projects/model.glb.bak", "projects/model.glbx/",
-            "projects/beta", "projects/beta/", "projects", "shared/x/", "shared/x/y.glb", "z", "zz/"]
+            "projects/beta", "projects/beta/", "projects", "shared/x/", "shared/x/y.glb", "z", "zz/",
+            # names ending in `.previewFile`: they share a preview key with `a/x` without holding it
+            "a/x", "a/x.previewFile", "a/x.previewFile.", "projects/model.glb.previewFile"]
 
-    @staticmethod
-    def _shared_key(a, b):
-        """A key both locations hold, searched over keys built from the grid, or None."""
-        sample = set()
-        for location in TestFindConflicts.GRID:
-            for key in (location, location + "f", location + "/f", location + ".previewFile.png",
-                        location + ".previewFile.q/r", location.rstrip("/"), location + "/model.glb"):
-                sample.add(key)
-        return next((k for k in sorted(sample) if al.contains(a, k) and al.contains(b, k)), None)
-
-    def test_two_locations_share_a_key_exactly_when_one_contains_the_other(self):
+    def test_the_grid_holds_pairs_that_share_a_key_without_either_containing_the_other(self):
+        # The shared-key rule is not "one contains the other": `a/x` and `a/x.previewFile` both hold
+        # `a/x.previewFile.previewFile.z`. Brute force over keys built from both locations.
+        not_containing = []
         for a in self.GRID:
             for b in self.GRID:
-                expected = al.contains(a, b) or al.contains(b, a)
-                assert (a, b, self._shared_key(a, b) is not None) == (a, b, expected)
+                assert (a, b, _brute_force_share(a, b)) == (a, b, al.locations_share_key(a, b))
+                if al.locations_share_key(a, b) and not (al.contains(a, b) or al.contains(b, a)):
+                    not_containing.append((a, b))
+        assert {("a/x", "a/x.previewFile"), ("a/x", "a/x.previewFile."),
+                ("projects/model.glb", "projects/model.glb.previewFile")} <= set(not_containing)
 
     def test_matches_the_shared_key_rule_on_every_pair(self):
         for existing in self.GRID:
             table = FakeLocationTable([_row("db1", "a1", existing)])
             for target in self.GRID:
-                expected = al.contains(existing, target) or al.contains(target, existing)
                 found = bool(al.find_conflicts(table, BUCKET, target))
-                assert (existing, target, found) == (existing, target, expected)
+                assert (existing, target, found) == (existing, target, al.locations_share_key(existing, target))
+
+    @pytest.mark.parametrize("existing", GRID_LOCATIONS)
+    def test_matches_the_shared_key_rule_on_the_overlap_grid(self, existing):
+        # The grid locations_share_key is checked on (names ending in or containing `.previewFile`).
+        table = FakeLocationTable([_row("db1", "a1", existing)])
+        wrong = [target for target in GRID_LOCATIONS
+                 if bool(al.find_conflicts(table, BUCKET, target)) is not al.locations_share_key(existing, target)]
+        assert wrong == []
 
     def test_agrees_with_the_create_paths_ownership_rule_on_every_pair(self):
         # createAsset.keys_conflict decides the same shared-key rule on the stored rows it walks; the
