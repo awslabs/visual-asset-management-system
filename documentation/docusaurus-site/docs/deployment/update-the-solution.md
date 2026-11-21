@@ -921,6 +921,7 @@ A v2.5 deployment can deploy v2.7 directly. Follow the [v2.5 to v2.6](#v25-to-v2
 -   **The Amazon Rekognition VPC interface endpoint is removed.** A Bedrock Runtime interface endpoint is created instead when `app.useGlobalVpc.useForAllLambdas` is `true` and either new feature calls Amazon Bedrock (the SYSTEM GenAI metadata pipeline with its `useGenAiAnalysis` layer on, or vector search), or when vector search is enabled and the search Lambdas are placed in the VPC. A deployment that supplies its own endpoints (`app.useGlobalVpc.addVpcEndpoints: false`) must add a `bedrock-runtime` interface endpoint and allow the DynamoDB service hostnames for the search Lambdas. See [Configuration reference](configuration-reference.md).
 -   **Two new DynamoDB tables and two new auto-named Amazon SQS queue pairs.** `VectorEmbeddingsStorageTable` (created on every deployment; its vector index only when `app.vectorSearch.enabled`) and `WorkflowExecutionLocksStorageTable` are added with `RETAIN`; the vector indexer and system-workflow launch queues, each with a dead-letter queue, exist only when vector search is enabled. Back up the new tables like every other table before later updates.
 -   **The system workflow uses `concurrencyRestriction: perInputFileVersion`.** Executing it twice for the same file version answers `400 A conflicting execution of this workflow is already running for this file version.`; a newer version of the same file runs concurrently. The value is available to your own workflows as well.
+-   **Isaac Lab training and evaluation move to Isaac Lab 3.0.0 on Isaac Sim 6.2, and a run that names no physics engine runs on Newton.** v2.6.x ran every Isaac Lab job on PhysX. Earlier results, `rsl_rl` checkpoints, custom environment packages and the two built-in Isaac Lab bundles are affected; see [Isaac Lab 3.0 training and evaluation](#isaac-lab-30-training-and-evaluation).
 
 **Required migration steps:**
 
@@ -1183,6 +1184,47 @@ during inference instead. Each pipeline now has its own directory, so the first 
 restore from its S3 backup and every run after that finds the cache warm. Nothing is lost; the S3 backups
 are unchanged.
 
+#### Isaac Lab 3.0 training and evaluation
+
+This section applies when `app.pipelines.useIsaacLabTraining.enabled` is `true`. v2.6.x ran Isaac Lab 2.x,
+and every Isaac Lab job ran on PhysX. v2.7 runs Isaac Lab 3.0.0 on Isaac Sim 6.2 (Python 3.12) and adds a
+physics engine setting, `trainingConfig.physics`: `newton_mjwarp` (Newton, the default) or `isaacsim_physx`
+(PhysX on Isaac Sim). The update builds the new training image; its base image is about 34 GB, so the first
+build and the first run on each GPU instance take longer. A job already running keeps the image it started
+with.
+
+1. **Set `physics: isaacsim_physx` to reproduce v2.6.x results.** A run that names no engine runs on
+   Newton: saved configurations, the built-in templates, template bodies edited without the field, JSON
+   input files and Isaac Sim connector launches all do. Results differ from the PhysX runs of v2.6.x, and a
+   checkpoint trained on v2.6.x was trained on PhysX. An evaluation of such a checkpoint on Newton runs and
+   records a `physicsNote` in `evaluate-config.json`.
+2. **Retrain `rsl_rl` policies.** `rsl_rl` is the default `rlLibrary`, and the checkpoints it wrote on
+   Isaac Lab 2.x do not load on 3.0. An evaluation of one stops before Isaac Sim starts, with a message that
+   the checkpoint was written by Isaac Lab 2.x. Retrain those policies on v2.7. `rl_games` and `skrl`
+   checkpoints load.
+3. **Rebuild custom environment packages for Python 3.12.** A custom environment wheel built for another
+   Python, such as a `cp311` wheel, is refused at the start of the run; rebuild it for `cp312` or supply a
+   source package. A custom environment that offers physics presets but not Newton fails at the start with
+   a message naming its options until `physics` is `isaacsim_physx`. One that lists no presets runs on the
+   physics it registers.
+4. **Check saved task ids.** Isaac Lab 3.0 task ids carry no `-v0` suffix. The pipeline maps
+   `Isaac-Cartpole-v0`, `Isaac-Cartpole-Direct-v0`, `Isaac-Lift-Cube-Franka-v0` and
+   `Isaac-Velocity-Rough-Anymal-D-v0` to their 3.0 ids and passes any other id through as written, so
+   change other saved 2.x ids to their 3.0 ids. The mapping table is in the
+   [Isaac Lab CLI reference](https://github.com/awslabs/visual-asset-management-system/blob/main/backendPipelines/simulation/isaacLabTraining/ISAACLAB_CLI_REFERENCE.md).
+5. **Expect both built-in Isaac Lab bundles to re-register.** With
+   `app.pipelines.useIsaacLabTraining.autoRegisterWithVAMS` on (the default), the first v2.7 deployment
+   re-registers the built-in Isaac Lab RL Training and Isaac Lab RL Evaluation pipelines, their templates
+   and their workflows from the shipped bundles, because both bundles changed. The templates carry the
+   `PHYSICS` tag and the 3.0 task ids, and the evaluation pipeline's `taskTimeout` is 32400 seconds (9
+   hours; it was 2 hours). The shipped records replace edits made to them on v2.6.x, including a template
+   body an operator edited. Note those edits before you update and apply them again afterwards, with the
+   `physics` field added. A pipeline you registered yourself keeps the task timeout it was registered with;
+   set its `taskTimeout` to `32400` to give an evaluation 9 hours.
+
+See [NVIDIA Isaac Lab](../pipelines/nvidia-isaac-lab.md#physics-engine) for the physics setting and the
+checkpoint rules.
+
 #### Updating a stack that runs a pre-release v2.7 build
 
 The notes in this section apply only to a stack deployed from a `development` build made before the v2.7.0 release, such as an evaluation stack. An update from a released v2.6 stack does not meet them: there, the compliance tables and their indexes are new and are built together, and the configuration keys below never existed.
@@ -1226,6 +1268,7 @@ Use this checklist to determine if additional actions are needed after updating.
 | Workflow execution locks                                        | v2.6 to v2.7 (workflows with a concurrency restriction)                                                             | Handle the `400` a launch on a held scope answers. Executions running at the update hold no lock: let them finish, or abort them, first where two runs on one scope must not overlap. See [Concurrency restriction](../api/workflows.md#concurrency-restriction).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Audit records echo a short request                              | v2.6 to v2.7 (SIEM parsers of the audit logs)                                                                       | Read request fields from the action record of the same `request.requestId`, and the checked HTTP method from `legacy.action` or `request.method`. See [Authorization Events](../developer/audit-logging.md#authorization-events).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | GPU Batch compute environments replaced                         | v2.6 to v2.7 (GPU pipelines only)                                                                                   | Let in-flight GPU jobs finish first — the old environments are deleted and their instances terminated. No configuration change and no flags: one `cdk deploy` replaces them, queues are re-pointed automatically, and later deploys update them in place.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Isaac Lab 3.0 and the Newton default                            | v2.6 to v2.7 (`app.pipelines.useIsaacLabTraining` enabled)                                                          | Set `physics: isaacsim_physx` to reproduce v2.6.x results, retrain `rsl_rl` policies, rebuild custom environment packages for Python 3.12 (`cp312`), and re-apply any edits to the two built-in Isaac Lab bundles, which re-register. See [Isaac Lab 3.0 training and evaluation](#isaac-lab-30-training-and-evaluation).                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Compliance access for non-admin roles                           | v2.6 to v2.7                                                                                                        | Apply `compliance-admin.json`, `compliance-readonly.json` or `compliance-global-admin.json` to roles that need compliance access, or re-import `database-admin.json` / `database-user.json`, which now include compliance for their database; only the seeded `admin` role receives it. Saving a pipeline rule also needs the right to run its workflow: `compliance-admin.json` 2.1 and `compliance-global-admin.json` 1.1 include it. For a role built from an earlier copy, add only the new constraints (5 and 3) with the commands in [Adding the pipeline-rule run rights to an existing role](../user-guide/compliance.md#adding-the-pipeline-rule-run-rights-to-an-existing-role); importing the template again duplicates the role's existing constraints. |
 | API 403 log level                                               | v2.6 to v2.7                                                                                                        | A 403 refusal from the shared `authorization_error()` helper logs at WARNING instead of ERROR, as the other 4xx helpers do. Adjust log queries, metric filters and alarms that count ERROR lines.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Replace-all metadata update that removes keys                   | v2.6 to v2.7                                                                                                        | A `replace_all` metadata update that removes stored keys also requires the `DELETE` method on the same route; without it the request answers `403` and nothing is written. A `replace_all` that only adds or updates keys is unchanged. Roles built from `database-user.json` lack `DELETE` on the asset and file metadata routes; grant it on those routes to roles that should remove keys this way.                                                                                                                                                                                                                                                                                                                                                              |

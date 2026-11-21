@@ -43,10 +43,12 @@ ENV ISAAC_LAB_VERSION=${ISAAC_LAB_VERSION}
 # then the lock. boto3 is
 # not in the base image; MoviePy 1.x with imageio-ffmpeg is what Isaac Lab's --video recording needs
 # (MoviePy 2.x fails to import there). MoviePy 1.0.3 publishes no wheel, so it is the one package built
-# from its source archive (--no-binary moviepy); its hash is still checked.
+# from its source archive (--no-binary moviepy); its hash is still checked. --no-build-isolation builds it
+# with the setuptools the base image ships (pinned in base-constraints.txt) instead of a build environment
+# fetched from PyPI without hashes, so the build tool is fixed by the digest too.
 COPY requirements.lock /tmp/requirements.lock
 RUN /opt/isaaclab-venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary :all: --no-binary moviepy \
-    -r /tmp/requirements.lock
+    --no-build-isolation -r /tmp/requirements.lock
 
 # Create directories (issue #327: /mnt/efs/checkpoints is mounted via EFS access point, owned by 10000:10000)
 RUN mkdir -p /app /tmp/assets

@@ -53,9 +53,11 @@ DEFAULT_STEPS_PER_EPISODE = 1000
 
 # Seconds the run's workflow step may take, per mode: the bound for the state machine's batch task and
 # for the AWS Batch attempt (executeBatchJob.py). Each equals that mode's vamsSchema bundle taskTimeout
-# (training/pipeline.json, evaluation/pipeline.json), so the internal task fires at the parent's
-# deadline and its Catch reports a readable failure. infra/test/pipelines/isaacLabTimeoutChain.test.ts
-# and lambda/tests/test_vams_schema_bundles.py assert the copies agree.
+# (training/pipeline.json, evaluation/pipeline.json). The parent workflow's clock starts first (vamsExecute,
+# this function and the Pass state run before the batch task is entered), so at the bound the parent's
+# step timeout fires first and is what the execution records; the workflow's error handler then stops the
+# registered sub-processes (this pipeline's state machine and its Batch job). infra/test/pipelines/
+# isaacLabTimeoutChain.test.ts and lambda/tests/test_vams_schema_bundles.py assert the copies agree.
 TASK_TIMEOUT_SECONDS = {"train": 28800, "evaluate": 32400}
 
 # The RL libraries the container has an Isaac Lab script for. A third copy of the list held in
