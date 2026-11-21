@@ -34,7 +34,7 @@ import {
 import { RouteRegistry, attachFunctionToApi } from "../../apiLambda/apiRouteRegistry";
 import { storageResources } from "../../storage/storageBuilder-nestedStack";
 import { addonDynamoDbTableDefaults, publishAddonResourceName } from "../addonStackHelpers";
-import { populateHuggingFaceTokenSecret } from "../../pipelines/genAi/nvidia/customResources/populateHuggingFaceTokenSecret";
+import { populateMirisViewerKeySecret } from "./customResources/populateMirisViewerKeySecret";
 import { DynamoDbMetadataSchemaMirisConstruct } from "./constructs/dynamodb-metadataschema-miris-construct";
 import {
     buildGetMirisAssetStatusFunction,
@@ -73,15 +73,14 @@ export class MirisBuilderNestedStack extends NestedStack {
 
         // Static mode: the deployment viewer key, in a secret created empty and filled at deploy
         // time by a custom resource that carries the key in its code asset, so the key is in
-        // neither the template nor a Lambda environment. The populate helper stores one plain
-        // string and is not specific to its pipeline.
+        // neither the template nor a Lambda environment.
         let viewerKeySecret: secretsmanager.Secret | undefined;
         if (!perView) {
             viewerKeySecret = new secretsmanager.Secret(this, "MirisViewerKeySecret", {
                 description: "Miris viewer key returned by the VAMS Miris add-on in static mode.",
                 encryptionKey: kmsKey,
             });
-            populateHuggingFaceTokenSecret(
+            populateMirisViewerKeySecret(
                 this,
                 "MirisViewerKeySecretPopulate",
                 viewerKeySecret,
