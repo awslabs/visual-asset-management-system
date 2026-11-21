@@ -175,7 +175,7 @@ def emit_bucket_sync_count(metric_name: str, reason: str) -> None:
             METRIC_DIMENSION: reason,
             metric_name: 1,
         }) + "\n")
-    except Exception:  # A metric line must never fail the sync.
+    except Exception:  # nosec B110 - a metric line is best-effort and must never fail the sync
         pass
 
 
