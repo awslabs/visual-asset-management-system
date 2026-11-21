@@ -49,7 +49,8 @@ ALLOWED_EXPORT_FLAGS = {
 ALLOWED_EXPORT_VALUE_FLAGS = {"--group", "--only-group", "--no-group", "--extra", "--no-extra"}
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Top-level files in a locked directory that must be uv exports.
-REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\.txt$")
+REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\.(txt|lock)$")
+EXEMPTIONS_PATH = ".github/python-lock-exemptions.json"
 PIP_AUDIT_STRICT_ARGS = ["--no-deps", "--disable-pip", "--strict", "--progress-spinner", "off"]
 
 
@@ -184,6 +185,27 @@ def load_allowlist(root, today):
     return entries
 
 
+def load_ranged_inputs(root):
+    """Paths of hand-written, ranged requirements files that may sit beside a uv.lock without an export header.
+
+    `rangedInputs` in the exemptions file lists them, each with a reason. They are the inputs of a
+    published package (its ranges are the product), so they stay ranged; the lock beside them resolves
+    the same ranges and is what the audit checks.
+    """
+    try:
+        with open(os.path.join(root, EXEMPTIONS_PATH), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise AuditError(f"{EXEMPTIONS_PATH} is not readable JSON: {exc}")
+    entries = data.get("rangedInputs", []) if isinstance(data, dict) else []
+    paths = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or not str(entry.get("path", "")).strip() or not str(entry.get("reason", "")).strip():
+            raise AuditError(f"{EXEMPTIONS_PATH}: every rangedInputs entry needs a path and a reason")
+        paths.add(entry["path"])
+    return paths
+
+
 def audit_export(root, rel_path, pip_audit):
     """Findings for one requirements file: list of (package, version, [ids])."""
     command = pip_audit + ["-r", rel_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
@@ -241,6 +263,12 @@ def audit():
         return 1
     print(f"Found {len(lock_dirs)} uv.lock project(s): {', '.join(lock_dirs)}")
 
+    try:
+        ranged_inputs = load_ranged_inputs(root)
+    except AuditError as exc:
+        error("Python lock exemptions", exc)
+        return 1
+
     all_findings = []  # (project, package, version, ids)
     for project in lock_dirs:
         project_dir = os.path.join(root, project)
@@ -250,6 +278,8 @@ def audit():
             exports = []
             for path in tracked_files(project_dir):
                 if "/" in path or not REQUIREMENTS_FILE.match(path):
+                    continue
+                if os.path.join(project, path).replace(os.sep, "/") in ranged_inputs:
                     continue
                 flags = read_export_command(os.path.join(project_dir, path))
                 if flags is None:
@@ -284,6 +314,7 @@ def audit():
                         "--frozen",
                         "--no-hashes",
                         "--no-emit-project",
+                        "--no-emit-local",
                         "--no-annotate",
                         "--all-groups",
                         "-o",
