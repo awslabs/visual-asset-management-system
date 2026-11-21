@@ -2125,7 +2125,7 @@ paths:
                         - Version parameters are not allowed for assetPreview downloads.
                         - No download URLs could be generated for the requested files (bulk request where every path was invalid).
                         - Ambiguous alias: multiple versions share this alias.
-                        - Asset, asset version, or file not found (also when no asset version carries the specified alias).
+                        - Asset version or file not found (also when no asset version carries the specified alias).
                         - Asset not distributable.
                         - Asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`.
                     content:
@@ -2133,7 +2133,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Not authorized to download this asset, whether or not it exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found (`Asset not found`); answered only to a caller allowed to download the asset."
                     content:
                         application/json:
                             schema:
@@ -2371,7 +2377,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
         post:
             summary: "Issue a short-lived download URL for a finished zip download."
-            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, and the archive object exists. For the caller's own job that is all. Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route) and every file in the archive is still present, not archived and not a blocked type at the time of the request; otherwise it answers 404 (not permitted) or 400 (a file is no longer downloadable, the same message as a refused create). Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, 'A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.'). Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "A download URL for the archive."
@@ -2380,7 +2386,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or (another user's job) a file in the archive is no longer downloadable ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.')."
+                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or a file in the archive is no longer downloadable ('A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.')."
                     content:
                         application/json:
                             schema:
@@ -2913,14 +2919,14 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to stream this asset or asset not distributable.
+                    description: Not authorized to stream this asset, whether or not it exists; or, for a caller allowed to stream it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: |
-                        Not found. Possible reasons:
+                        Not found, answered only to a caller allowed to stream the asset. Possible reasons:
                         - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
@@ -3036,14 +3042,14 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to access this asset or asset not distributable.
+                    description: Not authorized to access this asset, whether or not it exists; or, for a caller allowed to access it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: |
-                        Not found. Possible reasons:
+                        Not found, answered only to a caller allowed to access the asset. Possible reasons:
                         - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
@@ -3183,13 +3189,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to stream this asset.
+                    description: Not authorized to stream this asset, whether or not it exists; or, for a caller allowed to stream it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or file not found.
+                    description: Asset or file not found; answered only to a caller allowed to stream the asset.
                     content:
                         application/json:
                             schema:
@@ -3278,13 +3284,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to access this asset.
+                    description: Not authorized to access this asset, whether or not it exists; or, for a caller allowed to access it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or file not found.
+                    description: Asset or file not found; answered only to a caller allowed to access the asset.
                     content:
                         application/json:
                             schema:
@@ -3540,7 +3546,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400. With app.compliance.quarantineBlocksDownload, a copy to another asset or database of a file whose asset is quarantined without an exception answers "Asset is quarantined and its files cannot be copied to another asset".
                     content:
                         application/json:
                             schema:
@@ -4767,9 +4773,13 @@ paths:
                         execution holds on one of the selected assets, files, or file versions; the
                         message is "A conflicting execution of this workflow is already running for this
                         asset.", "... for this file." or "... for this file version." and names no
-                        execution, asset or file), and a recorded
+                        execution, asset or file), a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
-                        metadata-source entities). A template-resolution failure returns
+                        metadata-source entities), and an input file's asset that is quarantined
+                        without an exception when the deployment sets
+                        app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files
+                        cannot be used as workflow input"; a run VAMS starts itself is not refused).
+                        A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
                         one carrying executionValidationErrors — so the 400 body's message is an object
                         holding a list of strings rather than a string on those two paths.
@@ -9087,7 +9097,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
-                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
+                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, a deployment in which re-run is not available, or an input file's asset that is quarantined without an exception when the deployment sets app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files cannot be used as workflow input", as on the execute route).
                     content:
                         application/json:
                             schema:
@@ -10106,7 +10116,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The launch has not received a session id."
+                    description: "The launch has not received a session id (`Workstation has no EDH session`), or it is a new launch recorded `LAUNCH_STALLED` that EDH, read before the stop, still has not placed (`EDH has not placed this new workstation, so it cannot be stopped; delete it instead`); nothing reaches EDH's stop and the record is unchanged."
                     content:
                         application/json:
                             schema:
@@ -10130,7 +10140,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   type: string
         post:
             summary: "Start a stopped EDH workstation."
-            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a workstation launched into a capacity reservation that has since ended (EC2 reports it `expired`, `cancelled` or `failed`, or no longer holds it) is first moved to on-demand capacity, and its record then reads `capacityReservationFallback` true with `capacityReservationFallbackReason` `ended`; when EC2 refuses that move, EDH's start is not sent and the record stays `STOPPED` with `lastError` `RESERVATION_ENDED`; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH accepted whose instance Amazon EC2 then returns to stopped is recorded `STOPPED` again with `lastError` `CAPACITY_UNAVAILABLE` for EC2's state reason `Server.InsufficientInstanceCapacity` (`RESERVATION_FULL` on a workstation launched into a capacity reservation) or `START_FAILED` for any other state reason or one VAMS could not read, and a `startFailure` naming that state reason code and the Availability Zone, while a shutdown a user or the instance initiated records nothing; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a workstation launched into a capacity reservation that has since ended (EC2 reports it `expired`, `cancelled` or `failed`, or no longer holds it) is first moved to on-demand capacity, and its record then reads `capacityReservationFallback` true with `capacityReservationFallbackReason` `ended`; when EC2 refuses that move, EDH's start is not sent and the record stays `STOPPED` with `lastError` `RESERVATION_ENDED`; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "202":
                     description: "The start was handed over: the workstation record (`state` STOPPED, `activity` starting) plus `sessionBootstrap`, the outcome of placing a session key, as for a launch. A `lastError` and `startFailure` an earlier start left stay until this start is accepted."
@@ -10665,7 +10675,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /addon/edh/admin/instances/stale:
         get:
             summary: "List idle or missing sessions (administration)."
-            description: "Lists sessions whose state is `STOPPED` or `ORPHANED` (EDH reports them stopped, interrupted or in error) and whose record last changed at least `idleMinutes` ago (such a session VAMS never launched is listed at once), plus sessions recorded by VAMS but no longer listed by EDH; each item carries `stale` and a `staleReason` of `stopped` or `missingInEdh`. Filtered per item through object-tier authorization on edhWorkstation. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Lists sessions whose state is `STOPPED` or `ORPHANED` (EDH reports them stopped or interrupted, or a new launch in error; a workstation that has run and that EDH reports in error keeps its stored state, so it is listed only while it is stored `STOPPED`) and whose record last changed at least `idleMinutes` ago (such a session VAMS never launched is listed at once), plus sessions recorded by VAMS but no longer listed by EDH; each item carries `stale` and a `staleReason` of `stopped` or `missingInEdh`. Filtered per item through object-tier authorization on edhWorkstation. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             parameters:
                 - name: idleMinutes
                   in: query
@@ -11625,11 +11635,25 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/schemas:
         get:
             summary: "List compliance schemas."
-            description: "Returns the latest version of every registered compliance schema the caller may read. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
+            description: "Returns one page of the latest version of each registered compliance schema the caller may read, ordered by name; only each schema's latest version is read. `NextToken` is present while more schemas remain; a page can be short, or empty, while a `NextToken` is present, because the schemas the caller may not read are left out. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
             parameters:
                 - name: databaseId
                   in: query
                   description: "Restrict the listing to GLOBAL schemas plus the schemas scoped to this database; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
+                  required: false
+                  schema:
+                      type: string
+                - name: maxItems
+                  in: query
+                  description: "Schemas per page (default 100, at most 200)."
+                  required: false
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 200
+                - name: startingToken
+                  in: query
+                  description: "The previous page's `NextToken`."
                   required: false
                   schema:
                       type: string
@@ -11641,7 +11665,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listComplianceSchemasResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters: an invalid `databaseId`, `maxItems must be an integer`, or `Invalid pagination token` (a malformed token, or one of another listing)."
                     content:
                         application/json:
                             schema:
@@ -11677,7 +11701,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A caller who may not run that rule's workflow gets the 403 instead."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, the name exists, the request moves it to a database scope and it is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`), or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A caller who may not run that rule's workflow gets the 403 instead."
                     content:
                         application/json:
                             schema:
@@ -11764,7 +11788,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
+                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, the new `databaseId` is a database and the schema is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`) (a move to GLOBAL is always allowed), or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
                     content:
                         application/json:
                             schema:
@@ -12078,7 +12102,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Evaluates an asset against its bound schema. When the body names a schema the caller needs `GET` on it in its scope (a name no scope uses is checked as GLOBAL) and it must be GLOBAL or scoped to the asset's database, both decided before the asset is read; a named schema other than the bound one is a dry run: the response carries `dryRun: true`, the rule results and the verdict, `pipelineRulesNotRun` (pipeline rules do not run in a dry run), and no `evaluationId`, and nothing is recorded (no evaluation record, state change, audit entry or cascade). A schema with a rule that cannot be read, or whose `extends` parent is not found, gives verdict `error` and launches no pipeline rule. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
@@ -12106,13 +12130,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/evaluateAssetResponse"
                 "400":
-                    description: Invalid parameters, the asset does not exist, no schema is named or bound, or the evaluation could not run.
+                    description: "Invalid parameters, the asset does not exist, no schema is named or bound, the named schema does not exist (`Evaluation could not run: Schema not found`) or is not available to the asset's database (`The schema is not available to the asset's database`), the asset's binding changed after the request read it, or the evaluation could not run."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: Not authorized.
+                    description: Not authorized, or the caller may not read the named schema.
                     content:
                         application/json:
                             schema:
@@ -12134,7 +12158,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}:
         post:
             summary: "Evaluate every tracked asset of a database."
-            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds. While assets remain the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate: send the token as `startingToken` and the call evaluates only the assets not evaluated since the evaluation started, until no token is returned. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
+            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). The records are read a page at a time (within a page, assets in `pending_evaluation` first, then the least recently evaluated), at most 200 evaluations per call, and a call stops reading and launching after about 20 seconds. While anything is left to read the response carries `NextToken`: send it as `startingToken` and the call goes on from there, evaluating only the assets not evaluated since the evaluation started, until no token is returned. `assetsRemaining` counts the assets of the pages the call read and did not reach, so it can be 0 while a `NextToken` is present. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
             parameters:
                 - name: databaseId
                   in: path
@@ -12184,7 +12208,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. While assets remain the response carries `NextToken`; a call with it as `startingToken` evaluates only the assets not evaluated since the sweep started, so repeated calls finish. `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets still to evaluate."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate, reading a page at a time (the bound databases' asset rows to register unrecorded assets, then the schema's records; within a page, assets in `pending_evaluation` first, then the least recently evaluated), at most 200 evaluations per call, and a call stops reading and launching after about 20 seconds so that it returns within the API Gateway integration window. While anything is left to read the response carries `NextToken`; a call with it as `startingToken` goes on from there and evaluates only the assets not evaluated since the sweep started, so repeated calls finish. A token from a sweep of another schema is refused (`Invalid pagination token`). `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets of the pages the call read and did not reach (it can be 0 while a `NextToken` is present)."
             parameters:
                 - name: schemaName
                   in: path
@@ -12709,7 +12733,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}:
         get:
             summary: "Get a cascade."
-            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a long cascade runs in more than one executor run and stays `executing` meanwhile, and one whose run stopped before it finished (no progress for 20 minutes) is aborted by the next read (`abortReason` `The cascade stopped before it finished; start it again`); a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: cascadeId
                   in: path
@@ -12946,7 +12970,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /audit/log-groups:
         get:
             summary: "List the audit log groups the caller may search."
-            description: "The /audit routes exist only while app.auditLogging.search.enabled is true (the default; false in the EU Sovereign template, where Amazon CloudWatch Logs Insights is not available); otherwise API Gateway answers them as unknown routes. Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. Core capability with no feature switch."
+            description: "The /audit routes exist only while app.auditLogging.search.enabled is true (the default; false in the EU Sovereign template, where Amazon CloudWatch Logs Insights is not available); otherwise API Gateway answers them as unknown routes. Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. The routes carry the `AUDITLOGSEARCH` feature switch, so `GET /auth/routes/api` lists them only while search is on."
             responses:
                 "200":
                     description: Log groups retrieved successfully.
@@ -14131,7 +14155,7 @@ components:
                 lastError:
                     type: string
                     nullable: true
-                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full), `RESERVATION_ENDED` (the capacity reservation it was launched into has ended, and VAMS could not move it to on-demand capacity, so the start was not sent; ask an administrator) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). Null otherwise."
+                    description: "Why a launch ended ORPHANED, why a running workstation was stopped (`LEASE_EXPIRED`), or why the last start of a `STOPPED` workstation did not happen: `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone, the one zone a stopped workstation starts in), `RESERVATION_FULL` (the capacity reservation it was launched into is full), `RESERVATION_ENDED` (the capacity reservation it was launched into has ended, and VAMS could not move it to on-demand capacity, so the start was not sent; ask an administrator) or `START_FAILED` (EDH refused the start for another reason, or still reported the workstation stopped 10 minutes after the start). A start EDH accepted that Amazon EC2 then returned to stopped is read from the instance's EC2 state reason: `Server.InsufficientInstanceCapacity` records `CAPACITY_UNAVAILABLE` (`RESERVATION_FULL` for a workstation launched into a capacity reservation), any other code, or a reason VAMS could not read, `START_FAILED`, and a stop or hibernation a user or the instance initiated (`Client.UserInitiatedShutdown`, `Client.InstanceInitiatedShutdown`, `Client.UserInitiatedHibernate`) records nothing. A start code stays while the workstation stays stopped and is cleared once a start is accepted. `START_STALLED` on a `CREATING` workstation: EDH accepted the start of the stopped workstation but still reports it `pending` or `placing` 30 minutes later; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state or the owner stops it (stop it, then start it again). `LAUNCH_STALLED` on a `CREATING` workstation: EDH still reports a new launch `pending` or `placing` 3 hours after it; `activity` is then null, the workstation is not stopped, deleted or orphaned for it, and the code stays until EDH reports the workstation in another state (delete it, or wait). A stalled launch EDH then reports in `error` never ran, so it becomes `ORPHANED` with `LAUNCH_ERROR`, never `DESKTOP_ERROR`. Null otherwise."
                     enum:
                         - USER_NOT_PROVISIONED
                         - QUOTA_EXCEEDED
@@ -14145,6 +14169,7 @@ components:
                         - RESERVATION_ENDED
                         - START_FAILED
                         - START_STALLED
+                        - LAUNCH_STALLED
                         - null
                 launchAttempts:
                     type: integer
@@ -14200,12 +14225,12 @@ components:
                         - starting
                         - stopping
                         - null
-                    description: "What the workstation is doing between two states, derived when the record is read so every client shows the same: `starting` while a start handed over less than 7 minutes ago is unresolved (`state` STOPPED), while EDH boots a desktop it has accepted (`state` CREATING), or while a running desktop is not yet connectable (`state` ACTIVE); `stopping` while EDH reports the desktop stopping, or for 5 minutes after a stop through VAMS while EDH still reports it running; null otherwise. Clients show it in place of `state`."
+                    description: "What the workstation is doing between two states, derived when the record is read so every client shows the same: `starting` while a start handed over less than 7 minutes ago is unresolved (`state` STOPPED), while EDH boots a desktop it has accepted (`state` CREATING, unless `lastError` is `START_STALLED` or `LAUNCH_STALLED`), or while a running desktop is not yet connectable (`state` ACTIVE); `stopping` while EDH reports the desktop stopping, or for 5 minutes after a stop through VAMS while EDH still reports it running; null otherwise. Clients show it in place of `state`."
                 startFailure:
                     allOf:
                         - $ref: "#/components/schemas/edhStartFailure"
                     nullable: true
-                    description: "What the last start that did not happen recorded, beside its `lastError`, while the workstation stays `STOPPED`; null otherwise."
+                    description: "What the last start that did not happen recorded, beside its `lastError`, while the workstation stays `STOPPED`, or beside `START_STALLED` or `LAUNCH_STALLED` while it stays `CREATING`; null otherwise."
                 imageName:
                     type: string
                     nullable: true
@@ -14232,14 +14257,14 @@ components:
                     description: "`true` when `recipeVersion` equals `latestRecipeVersion`; `false` only when a newer AVAILABLE build of the recipe exists (`latestRecipeVersion` greater than `recipeVersion`) -- the workstation keeps the image it was launched from, and a new launch gets the newer build; null whenever either version is null or `recipeVersion` is the greater."
         edhStartFailure:
             type: object
-            description: "What VAMS recorded when a start of a stopped workstation did not happen. EDH's text is never returned."
+            description: "What VAMS recorded when a start of a stopped workstation did not happen, or, with `observedAt` only, when the session sweep recorded a start or a new launch stalled (`START_STALLED`, `LAUNCH_STALLED`). EDH's text is never returned."
             required:
                 - observedAt
             properties:
                 errorCode:
                     type: string
                     pattern: "^[A-Za-z][A-Za-z0-9.]{0,63}$"
-                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`, or, for `RESERVATION_ENDED`, the one EC2 answered VAMS's move of the workstation to on-demand capacity with, such as `UnauthorizedOperation`; absent when it names none."
+                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`; for `RESERVATION_ENDED`, the one EC2 answered VAMS's move of the workstation to on-demand capacity with, such as `UnauthorizedOperation`; for a start Amazon EC2 accepted and then returned to stopped, the instance's EC2 state reason code, such as `Server.InsufficientInstanceCapacity`. Absent when none is known."
                 availabilityZone:
                     type: string
                     description: "The Availability Zone of the workstation's instance, the one zone a stopped workstation starts in, such as `us-west-2b`; absent when it could not be read."
@@ -22200,7 +22225,10 @@ components:
                     type: array
                     items:
                         type: string
-                    description: "Without `databaseId` only: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
+                    description: "Without `databaseId` only, on every page: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
+                NextToken:
+                    type: string
+                    description: "Present while more schemas remain: pass it back as `startingToken`."
             required:
                 - schemas
 
@@ -22277,7 +22305,7 @@ components:
 
         complianceSchemaSaveWarning:
             type: object
-            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and a missing or non-vams-rules-v1 parent leaves the schema evaluated with its own rules only."
+            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and an evaluation under a schema whose parent is missing or not vams-rules-v1 reaches no verdict."
             properties:
                 code:
                     type: string
@@ -22660,9 +22688,16 @@ components:
             properties:
                 message:
                     type: string
+                dryRun:
+                    type: boolean
+                    description: "`true` for an evaluation against a named schema other than the bound one: nothing was recorded and there is no `evaluationId`."
+                pipelineRulesNotRun:
+                    type: integer
+                    description: "Dry run only: the pipeline rules that did not run (each is a rule result with `status` `error`)."
                 evaluationId:
                     type: string
                     format: uuid
+                    description: "Absent from a dry run."
                 schemaName:
                     type: string
                 schemaVersion:
@@ -22692,11 +22727,11 @@ components:
                     description: "`true` when an active quarantine exception held the asset released while the verdict was computed."
                 notApplied:
                     type: string
-                    enum: [released, exceptionGranted]
-                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                    enum: [released, exceptionGranted, bindingChanged]
+                    description: "Present when something made after the evaluation began outranked its outcome: a release (`released`) or an exception grant (`exceptionGranted`), recorded but not changing the asset's state, quarantine fields or exception fields; or a change of the asset's schema binding (`bindingChanged`), which leaves the record as the binding change left it."
                 notAppliedMessage:
                     type: string
-                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, `Not applied: an exception was granted after this evaluation began`, `Not applied: the asset's compliance schema binding changed after this evaluation began`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`; the verdict was computed from the remaining rules and an `evaluation_error` audit entry names the errored rules."
@@ -22738,7 +22773,7 @@ components:
                                 type: boolean
                 assetsRemaining:
                     type: integer
-                    description: "Tracked assets still to evaluate after this call (not evaluated since the evaluation started); above 0, `NextToken` is present."
+                    description: "Assets of the pages this call read that it did not reach. A lower bound: it can be 0 while a `NextToken` is present, which is what says that more remain."
                 NextToken:
                     type: string
                     description: "Present while assets remain: send it as `startingToken` to continue this evaluation."
@@ -22804,7 +22839,7 @@ components:
                                 description: "Present and `true` on a `superseded` entry."
                 assetsRemaining:
                     type: integer
-                    description: "Bound assets still to evaluate after this call (not evaluated since the sweep started); above 0, `NextToken` is present."
+                    description: "Bound assets of the pages this call read that it did not reach. A lower bound: it can be 0 while a `NextToken` is present, which is what says that more remain."
                 NextToken:
                     type: string
                     description: "Present while assets remain: send it as `startingToken` to continue this sweep."
@@ -22866,11 +22901,11 @@ components:
                     description: "`true` when the evaluation ran while a quarantine exception against this schema version was active: the violations are recorded as computed, but the asset state stayed released (`exception` on a failing verdict, never `quarantined`)."
                 notApplied:
                     type: string
-                    enum: [released, exceptionGranted]
-                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                    enum: [released, exceptionGranted, bindingChanged, notRecorded]
+                    description: "Present when something made after the evaluation began outranked its outcome: a release (`released`) or an exception grant (`exceptionGranted`), recorded but not changing the asset's state, quarantine fields or exception fields; or a change of the asset's schema binding (`bindingChanged`), which leaves the record as the binding change left it. `notRecorded`: the outcome could not be written to the asset (an AWS error before any pipeline rule started); the next evaluation decides the asset, the automatic one after a change included."
                 notAppliedMessage:
                     type: string
-                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, `Not applied: an exception was granted after this evaluation began`, `Not applied: the asset's compliance schema binding changed after this evaluation began`, or `Not applied: the outcome could not be written to the asset`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`. The verdict was computed from the remaining rules; when every rule errored the evaluation's `status` is `error` and the asset's state was left unchanged."

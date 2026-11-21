@@ -182,7 +182,7 @@
                     "modelId": "",
                     "apiKeySecretArn": ""
                 },
-                "allowInternetResearch": true,
+                "allowInternetResearch": false,
                 "bedrockGuardrail": {
                     "guardrailId": "",
                     "guardrailVersion": ""
@@ -394,6 +394,7 @@
                     "g5.8xlarge"
                 ],
                 "maxVCpus": 48,
+                "modelCacheGeneration": 0,
                 "models": {
                     "sam3d": {
                         "enabled": false

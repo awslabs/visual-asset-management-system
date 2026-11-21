@@ -42,6 +42,12 @@ CAPTURED_OS_FAMILY_FIELD = "os_family"
 CAPTURED_ARCHITECTURE_FIELD = "ami_arch"
 
 
+def _image_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict of a catalog image: the stack id and name, no recipe id."""
+    return {"object__type": "edhImage", "edhImageId": image_id, "edhStackName": stack_name,
+            "edhRecipeId": "", "edhOsFamily": os_family}
+
+
 def _stack(stack_id, name, base_os, root_size=100, description=None, architecture=None):
     """A dcv stack as EDH lists it; ``architecture`` None leaves the record without one."""
     stack = {
@@ -100,7 +106,7 @@ class TestImageCatalog:
         assert [(item["imageId"], item["architecture"]) for item in response_body(response)["Items"]] == [
             ("48", None)]
         fakes.enforcer.enforce.assert_called_once_with(
-            {"object__type": "edhImage", "edhImageId": "48", "edhOsFamily": "linux"}, "GET")
+            _image_object("48", "Legacy image", "linux"), "GET")
 
     def test_each_item_is_enforced_as_an_edh_image_with_get(self, monkeypatch):
         fakes = install_service_fakes(monkeypatch, edh=FakeEdhClient(list_software_stacks=_stacks()))
@@ -108,8 +114,8 @@ class TestImageCatalog:
         fakes.module.lambda_handler(make_event("GET", IMAGES_PATH), {})
 
         assert [call.args for call in fakes.enforcer.enforce.call_args_list] == [
-            ({"object__type": "edhImage", "edhImageId": "42", "edhOsFamily": "linux"}, "GET"),
-            ({"object__type": "edhImage", "edhImageId": "43", "edhOsFamily": "windows"}, "GET"),
+            (_image_object("42", "Ubuntu 22 GPU", "linux"), "GET"),
+            (_image_object("43", "Windows Server 2022", "windows"), "GET"),
         ]
 
     def test_a_denied_item_is_dropped_and_an_allowed_one_kept(self, monkeypatch):
@@ -132,7 +138,7 @@ class TestImageCatalog:
 
         assert [item["osFamily"] for item in response_body(response)["Items"]] == ["linux"]
         fakes.enforcer.enforce.assert_called_once_with(
-            {"object__type": "edhImage", "edhImageId": "45", "edhOsFamily": "linux"}, "GET")
+            _image_object("45", "Relabelled", "linux"), "GET")
 
     def test_a_stack_with_neither_classification_nor_base_os_is_not_listed(self, monkeypatch):
         fakes = install_service_fakes(
@@ -345,9 +351,11 @@ class TestImageCategories:
         assert [item["imageId"] for item in items] == ["36", "9", "22", "30", "20"]
         assert fakes.enforcer.enforce.call_args_list
         assert [call.args for call in fakes.enforcer.enforce.call_args_list] == [
-            ({"object__type": "edhImage", "edhImageId": image_id, "edhOsFamily": os_family}, "GET")
-            for image_id, os_family in (("20", "windows"), ("36", "linux"), ("22", "linux"), ("30", "linux"),
-                                        ("35", "linux"), ("9", "linux"))
+            (_image_object(image_id, name, os_family), "GET")
+            for image_id, name, os_family in (
+                ("20", "Windows Server 2022", "windows"), ("36", "VAMS Isaac Sim v10", "linux"),
+                ("22", "ubuntu 22 GPU", "linux"), ("30", "VAMS Isaac Sim v9", "linux"),
+                ("35", "VAMS AL2023 Desktop v5", "linux"), ("9", "Ubuntu 9", "linux"))
         ]
 
     def test_a_catalog_with_nothing_to_offer_reads_no_recipe_builds(self, monkeypatch):

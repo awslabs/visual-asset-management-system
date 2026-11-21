@@ -361,8 +361,8 @@ and each row adds `requestedBy`, `isOwn` and the API's `canDownload` /
 `canRemove` decisions. Jobs on assets the caller can no longer read, and expired
 jobs, are left out.
 `get_zip_download_url` (a write-tier tool) also signs another user's archive
-when the caller may download from the asset and every archived file is still
-downloadable.
+when the caller may download from the asset. Every archive, the caller's own or
+another user's, is signed only while every file in it is still downloadable.
 `get_zip_download` reads one job's `status` (QUEUED, RUNNING, SUCCEEDED, FAILED,
 CANCELLED), `progress` and, on failure, `errorMessage`. On a deployment without
 zip downloads (no `ZIPDOWNLOADS` feature switch in the vamscli profile, or the
@@ -410,8 +410,8 @@ asset held before it. `get_database_compliance_overview` counts only assets
 that have a compliance record, with an `exception` bucket in its `summary` and an
 `error` count that overlays the state buckets (assets whose last evaluation
 errored) rather than adding to them.
-`list_compliance_schemas` returns its whole list in one response under `Items`
-and takes no paging parameters.
+`list_compliance_schemas` (in name order; a page leaves out the schemas the caller
+may not read, so it can be short or empty while a `NextToken` remains),
 `list_compliance_cascades` (pending approval unless `state` names another; each
 row carries `databaseId` / `assetId` / `assetName` of the trigger asset, and an
 automatically opened cascade is not duplicated while one for the same parent is
@@ -818,23 +818,32 @@ narrowed by the schema's file type restriction and the rule's `includePaths` /
 `metadataSchemaRef` must name a schema of the scope's entity type — a missing or
 mismatched schema records an `error` result, never a pass. Registering an
 existing name writes the next version, and `update_compliance_schema` replaces the
-body wholesale rather than merging. `bind_compliance_schema` binds a database (or,
+body wholesale rather than merging. Moving a schema to a database scope (`database_id`
+on an update, or on a create that registers an existing name) is refused while the
+schema is bound (a database binding or an asset override) in another database; moving
+it to GLOBAL is not refused for that reason. `bind_compliance_schema` binds a database (or,
 with `asset_id`, one asset as an override); only a GLOBAL schema or one scoped to
 that database can be bound, a `legacy` schema is refused, and `auto_eval` is sent on
 the database binding only because the asset route does not read it.
 `unbind_compliance_schema` on a database
 deletes the compliance record of every asset that inherited the binding
 (`removedComplianceRecords`) — evaluation history and the audit trail stay.
-`evaluate_asset_compliance` with `schema_name` evaluates against that schema without
-changing the asset's binding; its response carries `schemaVersion`,
-`exceptionApplied` and `hasRuleErrors`, and when every rule errored the asset's
-state is left unchanged with `lastEvaluationStatus` `error`. `sweep_compliance_schema` returns `assetsTriggered` plus
+`evaluate_asset_compliance` evaluates against the asset's bound schema; its response
+carries `schemaVersion`, `exceptionApplied`, `hasRuleErrors` and `dryRun`, and when
+every rule errored the asset's state is left unchanged with `lastEvaluationStatus`
+`error`. A `schema_name` other than the bound one runs a dry run (`dryRun: true`, no
+`evaluationId`): the rule results and verdict are returned and nothing is recorded
+(no evaluation record, no state change, no audit entry, no workflow launch, no
+cascade); pipeline rules do not run and are counted in `pipelineRulesNotRun`. The
+caller needs read access to the named schema, and it must be GLOBAL or available to
+the asset's database. `sweep_compliance_schema` returns `assetsTriggered` plus
 `skipped` (bound assets not evaluated: `skippedNotAuthorized` those the caller may not
 evaluate or read, counted but never listed, and `skippedArchived` the archived assets the caller may see;
 an archived asset the caller may not see is counted nowhere) and
-`assetsRemaining` (still to evaluate); while assets remain the response carries
-`NextToken`, and calling again with it as `starting_token` continues the sweep until no
-token is returned. `evaluate_database_compliance` evaluates
+`assetsRemaining` (the assets this call read and did not reach; a call reads under a
+time budget, so it can be 0 while more remain). While the response carries
+`NextToken`, calling again with it as `starting_token` continues the sweep; it is done
+when no token is returned. `evaluate_database_compliance` evaluates
 the tracked assets of one database, each against its own bound schema, with the same
 bounds and continuation, and adds `registered` and `withoutSchema`. Both remove,
 rather than evaluate, the compliance record of an asset that no longer exists
@@ -930,7 +939,9 @@ deletion is written to the audit trail as `schema_deleted`.
     exactly the permissions of the user whose token the request carries: the server never decides a
     permission, and the VAMS API's authorizer and Casbin policy check every call.
 -   Remote mode: the server verifies every token itself, accepts only tokens issued to the clients in
-    its auth configuration (not the web application's client), never reads a profile, never logs or
+    its auth configuration (not the web application's client), sends each token on only to the VAMS
+    API in that configuration for the same request (by design it forwards the token rather than
+    exchanging it; see the Remote MCP Server page), never reads a profile, never logs or
     returns a token, and writes no CLI request log (one process serves many users). It logs one line
     per request and per tool call: user, client, tool, outcome and duration. Bind beyond `127.0.0.1`
     only inside a container or private network behind an HTTPS front end, and keep the write and
@@ -1079,9 +1090,16 @@ null otherwise; and `startFailure`, why the last start left a STOPPED row stoppe
 `START_FAILED`), as `{errorCode, availabilityZone, observedAt}`, null when it did not.
 A CREATING row with `activity` null and `lastError` `START_STALLED` is a start EDH
 accepted and has not finished after 30 minutes: EDH never reported the desktop
-ready, and VAMS does not stop it, so stop it with `stop_edh_workstation`, then
+ready, and VAMS does not stop it, so stop it with `stop_edh_workstation` (with
+`confirm=True`, once the user agrees), then
 start it again. Its `startFailure` carries `observedAt` (and `availabilityZone`
 when read) but no `errorCode`.
+A CREATING row with a `sessionId`, `activity` null and `lastError`
+`LAUNCH_STALLED` is a new launch EDH has not placed 3 hours after it was
+accepted. It never ran, so it is not a start to stop: `stop_edh_workstation`
+returns an `EdhOperationError` (HTTP 409) that says to delete it. Delete it with
+`delete_edh_workstation`, or wait, since EDH may still place it. Its
+`startFailure` carries `observedAt` only.
 They also name the image the workstation was launched from: `imageName` (the EDH
 image name), `recipeId` (the AMI recipe whose build produced it, null for a
 baseline image), `recipeDisplayName`, `recipeVersion` (the build it runs),
@@ -1165,7 +1183,11 @@ is billed until the desktop is stopped or deleted; `stop_edh_workstation` and
 form on ANOTHER user's); `renew_edh_workstation` extends a leased workstation's
 `leaseExpiresAt` to the full policy window from now, thereby extending the runtime
 of a GPU desktop. Keep all five out of `autoApprove` and confirm each with the user
-first, as for `execute_workflow`. `update_edh_admin_settings` is a partial patch of
+first, as for `execute_workflow`. `stop_edh_workstation` also takes `confirm`
+(default false): without `confirm=True` it returns an error (`error_type`
+`ValueError`) telling the agent to confirm with the user and call again, and
+stops nothing. Stopping closes the desktop's open applications; the disk is kept.
+`update_edh_admin_settings` is a partial patch of
 the lease policy: only the arguments you pass are changed.
 `create_edh_workstation` returns the record with `state` CREATING and `sessionId`
 null (HTTP 202), plus `sessionBootstrap` (`provisioned`, `skipped`, `unavailable`

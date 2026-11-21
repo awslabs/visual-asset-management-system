@@ -34,6 +34,12 @@ import {
 import { kmsKeyPolicyStatementGenerator } from "../../../../../helper/security";
 import { grantExternalAssetBucketKmsKeys } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
+import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    TaggedBatchSubmitJob,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
 import { assertRecordedPinPosture } from "./dockerfilePinAudit";
 import { execFileSync } from "child_process";
 import * as fs from "fs";
@@ -319,7 +325,8 @@ export class SplatToolboxConstruct extends Construct {
         });
 
         // batch job Splat Toolbox
-        const splatToolboxBatchJob = new tasks.BatchSubmitJob(this, "SplatToolboxBatchJob", {
+        const splatToolboxBatchJob = new TaggedBatchSubmitJob(this, "SplatToolboxBatchJob", {
+            jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.splatToolbox),
             jobName: sfn.JsonPath.stringAt("$.jobName"),
             jobDefinitionArn: splatToolboxBatchPipeline.batchJobDefinition.attrJobDefinitionArn,
             jobQueueArn: splatToolboxBatchPipeline.batchJobQueue.ref,
@@ -386,6 +393,7 @@ export class SplatToolboxConstruct extends Construct {
             }
         );
 
+        suppressBatchJobTaggingNag(pipelineStateMachine);
         // Stopping the state machine cancels the .sync Batch task, which requires terminating the
         // running job; the BatchSubmitJob task grants only batch:SubmitJob. Batch job ids are
         // generated at submit time and carry no deployment-specific prefix to scope on, so the

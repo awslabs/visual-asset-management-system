@@ -20,6 +20,7 @@ import RadioGroup from "@cloudscape-design/components/radio-group";
 import Badge from "@cloudscape-design/components/badge";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import Pagination from "@cloudscape-design/components/pagination";
+import Alert from "@cloudscape-design/components/alert";
 import { usePageTitle } from "../hooks/usePageTitle";
 import Synonyms from "../synonyms";
 import {
@@ -54,6 +55,9 @@ export const DATABASE_LIST_API_ROUTE = "/database";
 export const GLOBAL_SCOPE = "GLOBAL";
 export const schemaScope = (schema: ComplianceSchema): string => schema.databaseId || GLOBAL_SCOPE;
 const ALL_SCOPES_OPTION: SelectProps.Option = { value: "*", label: "Any availability" };
+
+/** What the editor says when an existing schema is moved to one database other than its own. */
+export const SCOPE_NARROWING_WARNING = `Making this schema available to fewer ${Synonyms.databases} is refused while it is bound in a ${Synonyms.database} outside the new choice. Remove those bindings first, or choose GLOBAL.`;
 
 /**
  * Width (px) of the Actions column: the Edit and Sweep inline links side by side (about 85 px of
@@ -435,7 +439,8 @@ const DEFAULT_TEMPLATE_BODY = JSON.stringify(SCHEMA_TEMPLATES[DEFAULT_TEMPLATE_K
 
 /**
  * The flash a sweep raises: how many assets it evaluated, how many it skipped (assets in databases
- * the caller may not evaluate, and archived assets) and how many it did not reach (run it again for
+ * the caller may not evaluate, and archived assets) and how many it did not reach, or, when it
+ * ended before counting them (`NextToken` with no count), that more remain (run it again for
  * those).
  */
 export const sweepMessage = (schemaName: string, result: any): string => {
@@ -456,7 +461,9 @@ export const sweepMessage = (schemaName: string, result: any): string => {
         parts.push(`${result.skippedArchived} archived, not evaluated`);
     }
     if (result?.assetsRemaining) {
-        parts.push(`${result.assetsRemaining} not reached yet; run the sweep again`);
+        parts.push(`at least ${result.assetsRemaining} not reached yet; run the sweep again`);
+    } else if (result?.NextToken) {
+        parts.push(`more ${Synonyms.assets} remain; run the sweep again`);
     }
     return parts.join("; ") + ".";
 };
@@ -626,6 +633,13 @@ export default function ComplianceSchemas() {
               )
                   .sort()
                   .map((id) => ({ value: id, label: id }));
+    // An existing schema moved to one database other than its own: the API refuses the save while
+    // the schema is bound in a database outside the new choice, so the form says so beforehand.
+    const scopeNarrowed =
+        !!editingSchema &&
+        !!formDatabaseId &&
+        formDatabaseId !== GLOBAL_SCOPE &&
+        formDatabaseId !== schemaScope(editingSchema);
 
     const handleTemplateChange = (option: any) => {
         setSelectedTemplate(option);
@@ -1106,6 +1120,9 @@ export default function ComplianceSchemas() {
                                             )
                                         }
                                     />
+                                )}
+                                {scopeNarrowed && (
+                                    <Alert type="warning">{SCOPE_NARROWING_WARNING}</Alert>
                                 )}
                             </SpaceBetween>
                         </FormField>

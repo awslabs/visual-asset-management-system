@@ -38,6 +38,11 @@ import {
 } from "../../../../../helper/security";
 import { VamsSchemaRegistration } from "../../../constructs/vamsSchemaRegistration-construct";
 import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
+import {
     StateTimeoutBatchSubmitJob,
     grantBatchStateTimeoutCleanup,
 } from "../../../constructs/stateTimeoutBatchSubmitJob";
@@ -159,6 +164,35 @@ const HIGH_GPU_MEMORY_INSTANCE_TYPES = [
     "g6e.24xlarge",
 ];
 
+/**
+ * Models that need no GPU. Their job definition carries no GPU requirement and goes to the CPU queue,
+ * created only when one of them is enabled.
+ *
+ * The Blender agent: its adapter asks for no GPU memory (`MIN_VRAM_GB = 0`), its MoGe-2 refit uses
+ * CUDA only when a card is visible, every Blender tool renders with Cycles on the CPU or falls back to
+ * it, and the rest of the run is foundation-model calls on Amazon Bedrock. On the GPU queue it held a GPU
+ * instance for its whole 20 to 60 minute loop.
+ */
+const CPU_MODEL_KEYS: ReadonlySet<string> = new Set(["blenderagent"]);
+
+/**
+ * Models whose job definition gets no HuggingFace token. The Blender agent downloads only ungated
+ * weights (MoGe-2), and its agent runs model-written commands, so the token stays out of its environment.
+ */
+const MODELS_WITHOUT_HF_TOKEN: ReadonlySet<string> = new Set(["blenderagent"]);
+
+/**
+ * The model cache prefix for one model, under the model cache bucket. Generation 0 is the layout every
+ * deployment has used (`imageTo3d/hf_cache/<model>`), so an upgrade keeps its cache; a higher
+ * `modelCacheGeneration` is `imageTo3d/hf_cache/g<N>/<model>`. The container composes the matching EFS
+ * directory by the same rule (`model_manager.model_cache_path`) and stops a run whose prefix disagrees.
+ */
+export function imageTo3dModelCachePrefix(modelKey: string, generation: number): string {
+    return generation === 0
+        ? `imageTo3d/hf_cache/${modelKey}`
+        : `imageTo3d/hf_cache/g${generation}/${modelKey}`;
+}
+
 /** Container memory, in MiB, for a model whose run needs more than the shared default. */
 const DEFAULT_MEMORY_MIB = 26000;
 const MODEL_MEMORY_MIB: Record<string, number> = {
@@ -173,6 +207,11 @@ const MODEL_MEMORY_MIB: Record<string, number> = {
 
 /** EFS mount path on both the Batch host and inside the container. */
 const EFS_MOUNT_PATH = "/mnt/efs/imageto3d-models";
+/**
+ * The uid and gid every Image to 3D image runs as (`USER 10000:10000` in each Dockerfile), the account the
+ * #327 design uses for the NVIDIA images. Instance user data gives the shared model cache to it.
+ */
+const IMAGE_TO_3D_CONTAINER_UID = 10000;
 
 /** Host/container volume name for the shared model cache. */
 const EFS_VOLUME_NAME = "imageto3d-models";
@@ -213,6 +252,11 @@ export class ImageTo3dConstruct extends Construct {
         const enabledModelKeys = MODEL_KEYS.filter(
             (modelKey) => imageTo3dConfig.models?.[modelKey]?.enabled === true
         );
+
+        // Raising it starts every model on an empty cache at its next run; see imageTo3dModelCachePrefix.
+        const modelCacheGeneration = imageTo3dConfig.modelCacheGeneration ?? 0;
+        const modelCachePrefix = (modelKey: string): string =>
+            imageTo3dModelCachePrefix(modelKey, modelCacheGeneration);
 
         /**
          * HuggingFace Token stored in Secrets Manager
@@ -262,7 +306,8 @@ export class ImageTo3dConstruct extends Construct {
         const nfsSecurityGroup = props.efsSecurityGroup;
 
         /**
-         * IAM Policies for Batch container roles
+         * IAM Policies for the Batch job role. The container reads and writes objects but deletes none:
+         * its outputs go to new keys, and the model cache backup is an `aws s3 sync` without --delete.
          */
         const inputBucketPolicy = new iam.PolicyDocument({
             statements: [
@@ -279,7 +324,6 @@ export class ImageTo3dConstruct extends Construct {
                             "s3:PutObject",
                             "s3:GetObject",
                             "s3:ListBucket",
-                            "s3:DeleteObject",
                             "s3:GetObjectVersion",
                         ],
                         resources: [
@@ -291,7 +335,7 @@ export class ImageTo3dConstruct extends Construct {
                 // Model weight cache bucket access
                 new iam.PolicyStatement({
                     effect: iam.Effect.ALLOW,
-                    actions: ["s3:PutObject", "s3:GetObject", "s3:ListBucket", "s3:DeleteObject"],
+                    actions: ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
                     resources: [modelCacheBucket.bucketArn, `${modelCacheBucket.bucketArn}/*`],
                 }),
             ],
@@ -300,7 +344,7 @@ export class ImageTo3dConstruct extends Construct {
         const outputBucketPolicy = new iam.PolicyDocument({
             statements: [
                 new iam.PolicyStatement({
-                    actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    actions: ["s3:GetObject", "s3:PutObject"],
                     resources: [
                         props.storageResources.s3.assetAuxiliaryBucket.bucketArn,
                         `${props.storageResources.s3.assetAuxiliaryBucket.bucketArn}/*`,
@@ -323,23 +367,39 @@ export class ImageTo3dConstruct extends Construct {
             );
         }
 
+        // The execution role is the ECS agent's: it pulls the image, writes the log stream and reads the
+        // token secret, and nothing the container itself does. The job's data policies are on the job
+        // role only.
         const containerExecutionRole = new iam.Role(this, "ImageTo3dContainerExecutionRole", {
             assumedBy: Service("ECS_TASKS").Principal,
-            inlinePolicies: {
-                InputBucketPolicy: inputBucketPolicy,
-                OutputBucketPolicy: outputBucketPolicy,
-            },
             managedPolicies: [
                 iam.ManagedPolicy.fromAwsManagedPolicyName(
                     "service-role/AmazonECSTaskExecutionRolePolicy"
                 ),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
             ],
         });
 
         // The ECS agent, not the container, fetches the secret, so the read grant belongs on the
         // execution role.
         hfTokenSecret.grantRead(containerExecutionRole);
+        // grantRead adds no KMS permission for a key imported by ARN (the ViaService grant it derives
+        // has no policy to land on), so under a customer managed key the agent's GetSecretValue was
+        // refused "Access to KMS is not allowed" and no job started. Decrypt with that key, only
+        // through Secrets Manager and only for this secret.
+        if (props.storageResources.encryption.kmsKey) {
+            containerExecutionRole.addToPolicy(
+                new iam.PolicyStatement({
+                    actions: ["kms:Decrypt"],
+                    resources: [props.storageResources.encryption.kmsKey.keyArn],
+                    conditions: {
+                        StringEquals: {
+                            "kms:ViaService": Service("SECRETSMANAGER", false).Endpoint,
+                            "kms:EncryptionContext:SecretARN": hfTokenSecret.secretArn,
+                        },
+                    },
+                })
+            );
+        }
 
         const efsClientPolicy = new iam.PolicyDocument({
             statements: [
@@ -361,12 +421,7 @@ export class ImageTo3dConstruct extends Construct {
                 OutputBucketPolicy: outputBucketPolicy,
                 EfsClientPolicy: efsClientPolicy,
             },
-            managedPolicies: [
-                iam.ManagedPolicy.fromAwsManagedPolicyName(
-                    "service-role/AmazonECSTaskExecutionRolePolicy"
-                ),
-                iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess"),
-            ],
+            managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AWSXrayWriteOnlyAccess")],
         });
 
         // Grant access to any external asset bucket customer managed KMS keys so the
@@ -541,6 +596,12 @@ if mountpoint -q ${EFS_MOUNT_PATH}; then
 else
     echo "MODEL CACHE NOT MOUNTED: ${EFS_MOUNT_PATH} is local disk, so every job on this instance will restore its weights from S3 instead of reading them from the shared cache"
 fi
+
+# The containers run as uid/gid ${IMAGE_TO_3D_CONTAINER_UID} (the image's USER), so the cache belongs to that
+# account, recursively: a cache written by an earlier release's containers, which ran as root, is root-owned,
+# and the non-root job could neither add a snapshot nor take a download lock in it. Run after the mount
+# and on local disk alike, which is what a job sees when the mount failed.
+chown -R ${IMAGE_TO_3D_CONTAINER_UID}:${IMAGE_TO_3D_CONTAINER_UID} ${EFS_MOUNT_PATH}
 
 # The log goes to the model cache bucket, and stays on the serial console besides. An instance is gone
 # by the time a slow run is noticed, so a channel that outlives it is the difference between reading a
@@ -762,8 +823,62 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             );
         }
 
-        /** The queue whose fleet can run this model, by its GPU memory requirement. */
+        /**
+         * A CPU environment and queue for the models that need no GPU (CPU_MODEL_KEYS), created only when
+         * one is enabled. Same launch template, so its instances mount the shared model cache and give it
+         * to the containers' account like the GPU instances do; the standard ECS AMI rather than the
+         * NVIDIA one. `optimal` lets Batch pick current general-purpose instance families in whichever
+         * Region and partition the stack is in. minvCpus 0, so it holds no instance while idle.
+         */
+        let cpuJobQueue: batch.CfnJobQueue | undefined;
+        if (enabledModelKeys.some((modelKey) => CPU_MODEL_KEYS.has(modelKey))) {
+            const cpuEnvironment = new batch.CfnComputeEnvironment(this, "ImageTo3dCpuComputeEnv", {
+                type: "MANAGED",
+                state: "ENABLED",
+                // No serviceRole, BEST_FIT_PROGRESSIVE, replaceComputeEnvironment false and
+                // updateToLatestImageVersion: the four conditions for updating it in place, as for the GPU
+                // environments above.
+                replaceComputeEnvironment: false,
+                computeResources: {
+                    type: "EC2",
+                    allocationStrategy: "BEST_FIT_PROGRESSIVE",
+                    updateToLatestImageVersion: true,
+                    minvCpus: 0,
+                    maxvCpus: imageTo3dConfig.maxVCpus,
+                    desiredvCpus: 0,
+                    instanceTypes: ["optimal"],
+                    ec2Configuration: [
+                        {
+                            imageType: "ECS_AL2023",
+                        },
+                    ],
+                    subnets: props.pipelineSubnets.map((subnet) => subnet.subnetId),
+                    securityGroupIds: [batchSecurityGroup.securityGroupId],
+                    instanceRole: instanceProfile.attrArn,
+                    launchTemplate: {
+                        launchTemplateId: launchTemplate.ref,
+                        version: launchTemplate.attrLatestVersionNumber,
+                    },
+                },
+            });
+
+            cpuJobQueue = new batch.CfnJobQueue(this, "ImageTo3dCpuBatchJobQueue", {
+                state: "ENABLED",
+                priority: 1,
+                computeEnvironmentOrder: [
+                    {
+                        order: 1,
+                        computeEnvironment: cpuEnvironment.ref,
+                    },
+                ],
+            });
+        }
+
+        /** The queue whose fleet can run this model: CPU, or by its GPU memory requirement. */
         const queueForModel = (modelKey: string): string => {
+            if (CPU_MODEL_KEYS.has(modelKey) && cpuJobQueue) {
+                return cpuJobQueue.ref;
+            }
             if (MODEL_MIN_GPU_MEMORY_GIB[modelKey] !== undefined && highGpuMemoryJobQueue) {
                 return highGpuMemoryJobQueue.ref;
             }
@@ -794,17 +909,24 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             props.pipelineSecurityGroups,
             props.storageResources.encryption.kmsKey
         );
-        // After a Batch state's own bound fires, pipelineEnd ends the run's job on either queue.
+        // After a Batch state's own bound fires, pipelineEnd ends the run's job on any of the queues.
         grantBatchStateTimeoutCleanup(pipelineEndFunction, [
             batchJobQueue.ref,
             ...(highGpuMemoryJobQueue ? [highGpuMemoryJobQueue.ref] : []),
+            ...(cpuJobQueue ? [cpuJobQueue.ref] : []),
         ]);
 
         /**
-         * Per-model Batch job definition. They differ only by model key, image, container memory, and
-         * the model key's weight-cache prefix.
+         * Per-model Batch job definition. They differ only by model key, image, container memory, the
+         * model key's weight-cache prefix, and -- for the models that need none -- the GPU.
+         *
+         * Not privileged, and no device list: the GPU resource requirement is what gives a job its card,
+         * through the ECS GPU AMI's NVIDIA runtime, which maps the devices of the card Batch assigned. A
+         * fixed /dev/nvidia0 mapping named the first card whichever one the job was given. The image's
+         * USER (uid 10000) is what runs.
          */
         const createModelJobDefinition = (modelKey: string): batch.CfnJobDefinition => {
+            const usesGpu = !CPU_MODEL_KEYS.has(modelKey);
             const containerProperties: batch.CfnJobDefinition.ContainerPropertiesProperty = {
                 image: modelImageUris[modelKey],
                 vcpus: 4,
@@ -813,38 +935,25 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                 executionRoleArn: containerExecutionRole.roleArn,
                 // Overridden at runtime with the pipeline definition built by constructPipeline
                 command: ["python", "__main__.py"],
-                privileged: true,
-                resourceRequirements: [
-                    {
-                        type: "GPU",
-                        value: "1",
-                    },
-                ],
+                resourceRequirements: usesGpu
+                    ? [
+                          {
+                              type: "GPU",
+                              value: "1",
+                          },
+                      ]
+                    : undefined,
                 linuxParameters: {
                     sharedMemorySize: 16384,
-                    devices: [
-                        {
-                            hostPath: "/dev/nvidia0",
-                            containerPath: "/dev/nvidia0",
-                            permissions: ["READ", "WRITE", "MKNOD"],
-                        },
-                        {
-                            hostPath: "/dev/nvidiactl",
-                            containerPath: "/dev/nvidiactl",
-                            permissions: ["READ", "WRITE", "MKNOD"],
-                        },
-                        {
-                            hostPath: "/dev/nvidia-uvm",
-                            containerPath: "/dev/nvidia-uvm",
-                            permissions: ["READ", "WRITE", "MKNOD"],
-                        },
-                    ],
                 },
                 environment: [
                     { name: "MODEL", value: modelKey },
                     { name: "AWS_REGION", value: region },
                     { name: "S3_MODEL_BUCKET", value: modelCacheBucket.bucketName },
-                    { name: "S3_MODEL_PREFIX", value: `imageTo3d/hf_cache/${modelKey}` },
+                    // The container composes the same path under the EFS mount from MODEL and
+                    // MODEL_CACHE_GENERATION, and stops a run whose prefix disagrees with it.
+                    { name: "S3_MODEL_PREFIX", value: modelCachePrefix(modelKey) },
+                    { name: "MODEL_CACHE_GENERATION", value: String(modelCacheGeneration) },
                     // Age past which entrypoint.sh removes a partial download or lock from the shared
                     // weight cache: longer than any live job, whose attempt is bounded here.
                     {
@@ -874,12 +983,16 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                         value: "compute,utility,graphics",
                     },
                 ],
-                secrets: [
-                    {
-                        name: "HF_TOKEN",
-                        valueFrom: hfTokenSecret.secretArn,
-                    },
-                ],
+                // A model with no gated weights gets no token: the Blender agent fetches only ungated
+                // MoGe-2 weights, and its agent runs model-written commands.
+                secrets: MODELS_WITHOUT_HF_TOKEN.has(modelKey)
+                    ? undefined
+                    : [
+                          {
+                              name: "HF_TOKEN",
+                              valueFrom: hfTokenSecret.secretArn,
+                          },
+                      ],
                 mountPoints: [
                     {
                         sourceVolume: EFS_VOLUME_NAME,
@@ -999,6 +1112,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
 
             const batchJob = new StateTimeoutBatchSubmitJob(this, `ImageTo3dBatchJob-${modelKey}`, {
                 stateTimeout: IMAGE_TO_3D_BATCH_STATE_TIMEOUT,
+                jobTags: pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.imageTo3d),
                 jobName: sfn.JsonPath.stringAt("$.jobName"),
                 jobDefinitionArn: jobDefinition.attrJobDefinitionArn,
                 jobQueueArn: queueForModel(modelKey),
@@ -1062,6 +1176,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             tracingEnabled: true,
         });
 
+        suppressBatchJobTaggingNag(pipelineStateMachine);
         // Step Functions cancels the submitted Batch job when the execution stops, which needs
         // TerminateJob. Without it an abort leaves the GPU job running to its attempt limit and the
         // execution reports stopped while the compute is still billing. DescribeJobs is granted
@@ -1272,7 +1387,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
                 },
                 {
                     id: "AwsSolutions-IAM5",
-                    reason: "ECS Containers require access to objects in asset buckets and the model weight cache bucket for image-to-3D generation",
+                    reason: "The ECS agent's image pull calls ecr:GetAuthorizationToken, which has no resource-level permission, so the pull grant names it on '*'. The role carries nothing the container itself uses.",
                 },
             ],
             true
@@ -1283,7 +1398,7 @@ aws s3 cp /var/log/imageto3d-efs-mount.log s3://${modelCacheBucket.bucketName}/m
             [
                 {
                     id: "AwsSolutions-IAM4",
-                    reason: NAG_REASON_ECS_TASK_EXECUTION_MANAGED,
+                    reason: "AWSXrayWriteOnlyAccess grants X-Ray segment write only. The job role carries no ECS execution policy: image pull and log write are the execution role's.",
                 },
                 {
                     id: "AwsSolutions-IAM5",

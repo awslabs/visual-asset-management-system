@@ -22,6 +22,7 @@ import pytest
 
 import model_manager
 import preprocess
+from hfguard import hf_pins
 
 pytestmark = pytest.mark.unit
 
@@ -36,8 +37,9 @@ def _write(path, size=WEIGHT):
     return path
 
 
-def _hf_cache(root, repo, weight="model.safetensors", revision="abc123"):
-    """A HuggingFace-shaped cache holding one repo's snapshot, and its blobs beside it."""
+def _hf_cache(root, repo, weight="model.safetensors", revision=None):
+    """A HuggingFace-shaped cache holding one repo's snapshot at its pinned commit, and its blobs beside it."""
+    revision = revision or hf_pins.HF_REVISIONS.get(repo, "abc123")
     repo_dir = root / "hub" / ("models--" + repo.replace("/", "--"))
     snapshot = repo_dir / "snapshots" / revision
     snapshot.mkdir(parents=True, exist_ok=True)
@@ -276,7 +278,8 @@ class TestTheBackendsNameTheirSession:
         assert preprocess.backend_session("rmbg2") == () and preprocess.backend_session(None) == ()
 
     @pytest.mark.parametrize("backend, session", [("rembg", "u2net"), ("birefnet", "birefnet-general")])
-    def test_the_backend_runs_the_session_the_cache_stage_fetched(self, fake_rembg, tmp_path, backend, session):
+    def test_the_backend_runs_the_session_the_cache_stage_fetched(self, fake_rembg, tmp_path, backend, session,
+                                                                  monkeypatch):
         """rembg's default session is whichever the library picks; the backend names its own so the file
         fetched into the cache is the file read."""
         image = tmp_path / "photo.png"
@@ -284,12 +287,31 @@ class TestTheBackendsNameTheirSession:
         if isinstance(Image, mock.MagicMock):
             pytest.skip("needs a real PIL to open the photograph")
         Image.new("RGB", (4, 4), (200, 100, 50)).save(image)
+        monkeypatch.setattr(preprocess, "NVIDIA_DEVICE", str(_write(str(tmp_path / "nvidiactl"), 1)))
 
         preprocess.remove_background(str(image), str(tmp_path / "work"), backend)
 
         fake_rembg.module.new_session.assert_called_once_with(session)
         _, kwargs = fake_rembg.module.remove.call_args
         assert kwargs["session"].session_name == session
+        assert fake_rembg.saved, "the cutout was written"
+
+    @pytest.mark.parametrize("backend, session", [("rembg", "u2net"), ("birefnet", "birefnet-general")])
+    def test_a_host_without_a_gpu_holds_the_session_to_the_cpu_provider(self, fake_rembg, tmp_path, backend,
+                                                                        session, monkeypatch):
+        """onnxruntime-gpu's default providers segfault on a host with no NVIDIA device (the Blender agent's
+        CPU queue, exit 139); there the session is created with the CPU provider alone."""
+        image = tmp_path / "photo.png"
+        from PIL import Image
+        if isinstance(Image, mock.MagicMock):
+            pytest.skip("needs a real PIL to open the photograph")
+        Image.new("RGB", (4, 4), (200, 100, 50)).save(image)
+        monkeypatch.setattr(preprocess, "NVIDIA_DEVICE", str(tmp_path / "no-such-device"))
+        fake_rembg.module.new_session.side_effect = lambda name, **kw: SimpleNamespace(session_name=name)
+
+        preprocess.remove_background(str(image), str(tmp_path / "work"), backend)
+
+        fake_rembg.module.new_session.assert_called_once_with(session, providers=["CPUExecutionProvider"])
         assert fake_rembg.saved, "the cutout was written"
 
 

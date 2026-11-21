@@ -158,6 +158,7 @@ const IMAGE_TO_3D_DEFAULT = {
         "g5.8xlarge",
     ],
     maxVCpus: 48,
+    modelCacheGeneration: 0,
     models: {
         sam3d: { enabled: false },
         stable3dgen: { enabled: true },
@@ -346,7 +347,7 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterAutoTriggerOnFileUpload: false,
                 bedrockModelId: "global.anthropic.claude-sonnet-5-5",
                 openAi: { modelId: "", apiKeySecretArn: "" },
-                allowInternetResearch: true,
+                allowInternetResearch: false,
                 bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
                 agentCore: {
                     warmSessionSlots: 0,

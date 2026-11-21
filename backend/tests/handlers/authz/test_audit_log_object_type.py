@@ -27,7 +27,10 @@ USER_ID = "audit-user"
 ACTIONS = ("GET", "PUT", "POST", "DELETE")
 READER_ACTIONS = ("GET",)
 TEMPLATE = "audit-reader.json"
-AUDIT_API_ROUTES = ("/audit", "/audit/search", "/audit/saved/abc")
+# The registered audit routes (common/apiRoutes.py, CORE_FEATURE_AUDIT_LOG_SEARCH), with an id
+# in place of {queryId}.
+AUDIT_API_ROUTES = ("/audit/log-groups", "/audit/queries", "/audit/queries/q-1",
+                    "/audit/queries/q-1/export")
 AUDIT_WEB_ROUTE = "/auth/audit-log-search"
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 TEMPLATES_DIR = REPO_ROOT / "documentation" / "permissionsTemplates"

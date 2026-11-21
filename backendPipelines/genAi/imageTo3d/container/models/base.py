@@ -25,6 +25,9 @@ logger = log.get_logger()
 MESH_EXTENSIONS = (".glb", ".gltf", ".obj", ".ply", ".stl")
 # Sidecars that belong to an OBJ/glTF file set and must travel with the mesh.
 SIDECAR_EXTENSIONS = (".mtl", ".png", ".jpg", ".jpeg", ".ktx2", ".bin")
+# Holds the pin guard and the sitecustomize that installs it, and nothing else, so putting it first on an
+# upstream process's PYTHONPATH shadows no upstream module.
+HF_GUARD_DIR = str(Path(__file__).resolve().parent.parent / "hfguard")
 
 
 @dataclass
@@ -69,12 +72,15 @@ def run_upstream(
     """Invoke an upstream model entrypoint, raising a legible error on a non-zero exit.
 
     The upstream repo root is the working directory so the repo's own relative imports and asset
-    paths resolve, and HF_HOME points at this model's slice of the EFS cache.
+    paths resolve, and HF_HOME points at this model's slice of the EFS cache. The pin guard's directory
+    leads PYTHONPATH, so every HuggingFace download the upstream code makes -- including the ones it makes
+    on its own, for repositories this pipeline never names -- uses its pinned commit (hfguard/hf_pins.py).
     """
     env = os.environ.copy()
     env["HF_HOME"] = hf_home
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (HF_GUARD_DIR, env.get("PYTHONPATH", "")) if p)
     # The xet transport has deadlocked mid-download on the shared EFS cache; the standard HF
     # transport is used instead.
     env.setdefault("HF_HUB_DISABLE_XET", "1")
@@ -235,13 +241,16 @@ class ModelAdapter:
             return recorded
 
         # ensure_ready pre-fetches every repo before generation, so arriving here means it has not
-        # run on this instance. Resolve from the cache alone: a network fetch would mask a missing
-        # pre-fetch as a download failure.
+        # run on this instance. Resolve from the cache alone, at the pinned commit: a network fetch
+        # would mask a missing pre-fetch as a download failure.
         from huggingface_hub import snapshot_download
+
+        from hfguard import hf_pins
 
         path = snapshot_download(
             repo_id=repo,
             cache_dir=str(Path(os.environ.get("HF_HOME", "")) / "hub"),
+            revision=hf_pins.revision_for(repo),
             local_files_only=True,
         )
         self._snapshot_dirs[repo] = path

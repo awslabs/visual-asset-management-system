@@ -6,7 +6,7 @@
 /**
  * Where focus goes when a dialog of My Workstations closes. The launch wizard returns to the Launch
  * Workstation button, and once a launch is sent to the search box, since the list gains a row. The
- * Delete confirmation and the desktop sign-in, opened from a row's menu in the table or on a card,
+ * Stop and Delete confirmations and the desktop sign-in, opened from a row's menu in the table or on a card,
  * return to that row's actions, and a delete that removes the row hands focus to the search box; a
  * confirmation opened again on a row the last delete left listed returns to the row's actions.
  */
@@ -407,6 +407,33 @@ describe("focus when the Delete confirmation closes", () => {
             await waitFor(() => expect(control("Actions for Dev box")).toHaveFocus());
         }
     );
+});
+
+describe("focus when the Stop confirmation closes", () => {
+    it.each(["Escape", "Cancel"])("returns to the row's actions after %s", async (how) => {
+        const user = userEvent.setup({ delay: null });
+        renderPage();
+        await openFromMenu(user, "Stop");
+        await dismiss(user, how);
+        await waitFor(() => expect(control("Actions for Dev box")).toHaveFocus());
+        expect(mutations.stopWorkstation.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("keeps focus on Stopping... and the confirmation open while the stop is in flight", async () => {
+        const answer = holdRequest(mutations.stopWorkstation);
+        const user = userEvent.setup({ delay: null });
+        renderPage();
+        const dialog = await openFromMenu(user, "Stop");
+
+        await pressAndHold(user, dialog, "Stop", "Stopping...");
+        await expectHeldOpen(user, dialog);
+        expect(mutations.stopWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
+
+        await answer();
+        await closed();
+        // The stopped workstation stays listed, so focus returns to its actions.
+        await waitFor(() => expect(control("Actions for Dev box")).toHaveFocus());
+    });
 });
 
 describe("focus when the desktop sign-in closes", () => {

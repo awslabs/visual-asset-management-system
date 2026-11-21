@@ -126,6 +126,18 @@ class TestCheckWebRoutes:
         response = lambda_handler(event, {})
         assert response['statusCode'] == 403
 
+    @patch('backend.backend.handlers.auth.routes.request_to_claims')
+    @patch('backend.backend.handlers.auth.routes.CasbinEnforcer')
+    def test_failed_claims_check_returns_403(self, mock_casbin, mock_claims):
+        """Claims marked by a raising custom claims check are refused before any route is checked;
+        this route has no Tier-1 check of its own to refuse them."""
+        mock_claims.return_value = {**_CLAIMS, "roles": [], "claimsCheckFailed": True}
+        mock_casbin.return_value.service_object.enforce.return_value = True
+        event = _make_event(body={'routes': [{'method': 'GET', 'route__path': '/assets'}]})
+        response = lambda_handler(event, {})
+        assert response['statusCode'] == 403
+        mock_casbin.return_value.service_object.enforce.assert_not_called()
+
 
 @pytest.mark.unit
 class TestGetApiRoutes:

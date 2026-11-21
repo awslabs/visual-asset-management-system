@@ -1,11 +1,9 @@
 # Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0 as build
+FROM --platform=linux/amd64 condaforge/mambaforge:24.9.2-0@sha256:3b5f55c0b2f447cf94b8f67ca9094f9d2a9d316a4506fd5aa915faaf37ae29d4 as build
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
-
-RUN conda create -n pdal -y
 
 # v2.10.2 (tag 2.10.2, released 2026-06-12). 2.10.0 updated the vendored libE57Format from 2.0.1 to
 # 3.3.0; 2.0.1 rejects every CompressedVector index packet, which current E57 writers emit (#1203).
@@ -15,6 +13,13 @@ ARG PDAL_VERSION="2.10.2"
 ARG GITHUB_REPOSITORY="PDAL/PDAL"
 ARG GITHUB_SERVER_URL="https://github.com"
 
+# The build environment, created from an explicit lock: every package at a fixed build, checked against
+# its SHA-256 as it is installed, with no solve. The file's header holds the command that regenerates
+# it. The toolchain and the dependencies are the ones the comment below explains; the lock records
+# what that resolution produced.
+COPY pdal-build.explicit.txt /tmp/pdal-build.explicit.txt
+RUN conda create -n pdal -y --file /tmp/pdal-build.explicit.txt && rm -f /tmp/pdal-build.explicit.txt
+
 SHELL ["conda", "run", "-n", "pdal", "/bin/bash", "-c"]
 
 # The conda-forge toolchain is pinned to the 1.x `compilers` generation (GCC 13/14). `compilers` 2.x
@@ -23,20 +28,11 @@ SHELL ["conda", "run", "-n", "pdal", "/bin/bash", "-c"]
 #
 # The build dependencies come from conda-forge's own PDAL ${PDAL_VERSION} packages. Since 2.8 conda-forge
 # splits PDAL into libpdal-core plus one package per plugin, and the `pdal` package is a metapackage that
-# pulls them all in as binaries, so `pdal=X --only-deps` would install a prebuilt PDAL under the one built
-# here. Naming the core and exactly the plugins enabled below with --only-deps installs their
-# dependencies (GDAL, PROJ, GeoTIFF, Xerces-C for E57, HDF5, TileDB, NITRO, libpq) at the versions that
-# PDAL release was built against, and none of the named packages themselves.
-RUN mamba install -c conda-forge git "compilers<2" conda-pack cmake make ninja boto3 sysroot_linux-64=2.17 && \
-    mamba install --yes -c conda-forge --only-deps \
-        "libpdal-core=${PDAL_VERSION}" \
-        "libpdal-e57=${PDAL_VERSION}" \
-        "libpdal-hdf=${PDAL_VERSION}" \
-        "libpdal-icebridge=${PDAL_VERSION}" \
-        "libpdal-nitf=${PDAL_VERSION}" \
-        "libpdal-pgpointcloud=${PDAL_VERSION}" \
-        "libpdal-tiledb=${PDAL_VERSION}" && \
-    if conda list -n pdal | grep -E '^(libpdal|pdal|python-pdal)(-[a-z0-9]+)? '; then \
+# pulls them all in as binaries, so a prebuilt PDAL would sit under the one built here. The lock was
+# resolved with the core and exactly the plugins enabled below, then had those packages removed: it
+# carries their dependencies (GDAL, PROJ, GeoTIFF, Xerces-C for E57, HDF5, TileDB, NITRO, libpq) at the
+# versions that PDAL release was built against, and none of the PDAL packages themselves.
+RUN if conda list -n pdal | grep -E '^(libpdal|pdal|python-pdal)(-[a-z0-9]+)? '; then \
         echo "a prebuilt PDAL package was installed; the source build below would be shadowed" >&2; exit 1; \
     fi
 
@@ -82,7 +78,11 @@ RUN conda-pack -n pdal --dest-prefix=/opt/conda/envs/pdal -o  /tmp/env.tar && \
     rm /tmp/env.tar
 
 # Runtime stage platform must match the build stage: the PDAL binaries are copied from /venv
-FROM --platform=linux/amd64 condaforge/miniforge3:26.5.3-0
+FROM --platform=linux/amd64 condaforge/miniforge3:26.5.3-0@sha256:66f4b7d5dd07883181ef5370f44b43857008a61e8f5b9bcc07f3f3ee027f7e63
+
+# The digest pin fixes the Ubuntu packages at the day the base was built; this applies the security
+# updates published since.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 ENV CONDAENV="/opt/conda/envs/pdal"
 COPY --from=build /venv "/opt/conda/envs/pdal"
@@ -100,8 +100,10 @@ ENV OAMS_TRADITIONAL_GIS_ORDER=TRUE
 # copy python scripts app to container
 COPY ./ ./pc_pipeline
 
-# Install requirements (boto3, etc.) from conda-forge; conda-deps.txt is not covered by uv.lock
-RUN conda install -c conda-forge --file ./pc_pipeline/conda-deps.txt
+# Install requirements (boto3, botocore) into the interpreter the entrypoint runs: every package at the
+# version and hash in the lock (generated from requirements.txt for the base image's Python; its header
+# holds the command that regenerates it), as wheels only.
+RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary :all: -r ./pc_pipeline/requirements.lock
 
 # Create the runtime user. This stage needs its own: a user created in the `build` stage above is
 # discarded with it, and uncommenting it there would fail this stage's USER with "unable to find user".

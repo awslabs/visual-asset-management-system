@@ -11,16 +11,19 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sns from "aws-cdk-lib/aws-sns";
+import * as events from "aws-cdk-lib/aws-events";
 import { LayerVersion, Code, Runtime, Function } from "aws-cdk-lib/aws-lambda";
 import { Template } from "aws-cdk-lib/assertions";
 import { storageResources } from "../../lib/nestedStacks/storage/storageBuilder-nestedStack";
 import {
     buildAssetExportService,
+    buildAssetFiles,
     buildDownloadAssetFunction,
     buildStreamAssetFunction,
     buildStreamAuxiliaryPreviewAssetFunction,
     buildZipDownloadServiceFunction,
 } from "../../lib/lambdaBuilder/assetFunctions";
+import { buildExecuteWorkflowV2Function } from "../../lib/lambdaBuilder/workflowFunctions";
 import * as Config from "../../config/config";
 import * as Service from "../../lib/helper/service-helper";
 import * as fs from "fs";
@@ -56,7 +59,7 @@ const createMockConfig = (quarantineBlocksDownload: boolean): Config.Config => {
     return config;
 };
 
-/** The five Lambdas the quarantine guard runs in, keyed by the CDK function id each builder uses. */
+/** The Lambdas the quarantine guard runs in, keyed by the CDK function id each builder uses. */
 const GUARDED_FUNCTIONS = [
     "downloadAsset",
     "streamAsset",
@@ -64,6 +67,10 @@ const GUARDED_FUNCTIONS = [
     "streamAuxiliaryPreviewAsset",
     // Download as Zip hands out the asset's file bytes as an archive (#1125 D35).
     "zipDownloadService",
+    // A copy to another asset takes the file's bytes out of the source asset.
+    "assetFiles",
+    // A caller's workflow run reads its input files' bytes.
+    "executeWorkflow",
 ] as const;
 
 const buildFixture = (quarantineBlocksDownload: boolean) => {
@@ -101,6 +108,10 @@ const buildFixture = (quarantineBlocksDownload: boolean) => {
         cloudWatchAuditLogGroups: lazy(logGroup),
         sns: lazy((id: string) => new sns.Topic(stack, id)),
         encryption: { kmsKey },
+        eventBridge: {
+            orchestrationBus: new events.EventBus(stack, "OrchestrationBus"),
+            eventSourcePrefix: "vams-test",
+        },
     } as unknown as storageResources;
 
     // Lambda layers reject inline code, so the asset points at a real, TRACKED directory.
@@ -110,11 +121,13 @@ const buildFixture = (quarantineBlocksDownload: boolean) => {
     });
     const vpc = new ec2.Vpc(stack, "Vpc");
     const subnets = vpc.privateSubnets;
-    const assetLinksFunction = new Function(stack, "AssetLinksStub", {
-        runtime: Runtime.PYTHON_3_12,
-        handler: "index.handler",
-        code: Code.fromInline("def handler(e, c): pass"),
-    });
+    const stubFunction = (id: string) =>
+        new Function(stack, id, {
+            runtime: Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: Code.fromInline("def handler(e, c): pass"),
+        });
+    const assetLinksFunction = stubFunction("AssetLinksStub");
 
     const functions = {
         downloadAsset: buildDownloadAssetFunction(stack, layer, resources, config, vpc, subnets),
@@ -140,6 +153,25 @@ const buildFixture = (quarantineBlocksDownload: boolean) => {
             stack,
             layer,
             resources,
+            config,
+            vpc,
+            subnets
+        ),
+        assetFiles: buildAssetFiles(
+            stack,
+            layer,
+            resources,
+            stubFunction("SendEmailStub"),
+            config,
+            vpc,
+            subnets
+        ),
+        executeWorkflow: buildExecuteWorkflowV2Function(
+            stack,
+            layer,
+            resources,
+            stubFunction("MetadataServiceStub"),
+            logGroup("WorkflowsLogGroup"),
             config,
             vpc,
             subnets
@@ -202,7 +234,7 @@ const roleReadsStateTable = (fixture: Fixture, id: (typeof GUARDED_FUNCTIONS)[nu
     return false;
 };
 
-describe("quarantineBlocksDownload wiring on the five asset download Lambdas", () => {
+describe("quarantineBlocksDownload wiring on the Lambdas the quarantine guard runs in", () => {
     describe("with app.compliance.quarantineBlocksDownload: true", () => {
         let fixture: Fixture;
         beforeAll(() => {
@@ -223,7 +255,7 @@ describe("quarantineBlocksDownload wiring on the five asset download Lambdas", (
         });
 
         test("the state-table grant is read-only", () => {
-            // The guard performs one GetItem; none of the five Lambdas writes compliance state.
+            // The guard performs one GetItem; none of these Lambdas writes compliance state.
             for (const type of ["AWS::IAM::Policy", "AWS::IAM::ManagedPolicy"]) {
                 for (const policy of Object.values(fixture.template.findResources(type)) as any[]) {
                     for (const statement of policy.Properties?.PolicyDocument?.Statement ?? []) {
@@ -266,10 +298,16 @@ describe("quarantineBlocksDownload wiring on the five asset download Lambdas", (
         );
 
         test("positive control: the env-var lookup sees the variables the builders always set", () => {
-            // PRESIGNED_URL_TIMEOUT_SECONDS is set on all five regardless of the flag, so an empty
-            // environment above would be a lookup failure rather than a passing negative.
+            // Each builder sets one of these regardless of the flag, so an empty environment above
+            // would be a lookup failure rather than a passing negative.
+            const alwaysSet: Partial<Record<(typeof GUARDED_FUNCTIONS)[number], string>> = {
+                assetFiles: "SEND_EMAIL_FUNCTION_NAME",
+                executeWorkflow: "METADATA_SERVICE_LAMBDA_FUNCTION_NAME",
+            };
             for (const id of GUARDED_FUNCTIONS) {
-                expect(environmentOf(fixture, id)).toHaveProperty("PRESIGNED_URL_TIMEOUT_SECONDS");
+                expect(environmentOf(fixture, id)).toHaveProperty(
+                    alwaysSet[id] ?? "PRESIGNED_URL_TIMEOUT_SECONDS"
+                );
             }
         });
     });

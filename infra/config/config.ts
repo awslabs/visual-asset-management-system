@@ -1342,6 +1342,24 @@ export function applyZipDownloadsDefaults(config: ConfigPublic): void {
 }
 
 /**
+ * Reject an app.pipelines.useImageTo3d.modelCacheGeneration that is not a whole number of 0 or more. The
+ * value becomes a path segment of the model cache's EFS directory and S3 prefix (`hf_cache/g<N>/<model>`),
+ * which the container composes by the same rule and refuses to run when they disagree.
+ */
+export function validateImageTo3dModelCacheGeneration(
+    block: ConfigPublic["app"]["pipelines"]["useImageTo3d"]
+): void {
+    const generation = block.modelCacheGeneration;
+    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) {
+        const shown = JSON.stringify(generation);
+        throw new Error(
+            `Configuration Error: useImageTo3d.modelCacheGeneration must be a whole number of 0 or ` +
+                `more, not ${shown}. Raise it by one to start every model on an empty weight cache.`
+        );
+    }
+}
+
+/**
  * app.pipelines.useConversion3dBasic.enableStepInput: absent or null is false, so a config.json written
  * before the key keeps an image without Open CASCADE; any other value must be a JSON boolean.
  */
@@ -2456,6 +2474,7 @@ export function getConfig(app: cdk.App): Config {
                 "g5.8xlarge",
             ],
             maxVCpus: 48,
+            modelCacheGeneration: 0,
             models: {
                 sam3d: { enabled: false },
                 // Stable3DGen is the default model: it builds from wheels alone, carries no
@@ -2499,6 +2518,9 @@ export function getConfig(app: cdk.App): Config {
     }
     if (config.app.pipelines.useImageTo3d.enabled == undefined) {
         config.app.pipelines.useImageTo3d.enabled = false;
+    }
+    if (config.app.pipelines.useImageTo3d.modelCacheGeneration == undefined) {
+        config.app.pipelines.useImageTo3d.modelCacheGeneration = 0;
     }
 
     // Deadline Cloud pipeline execution-type support (workflow createJob task states +
@@ -2657,7 +2679,7 @@ export function getConfig(app: cdk.App): Config {
             autoRegisterAutoTriggerOnFileUpload: false,
             bedrockModelId: GENAI_DEFAULT_BEDROCK_MODEL_ID,
             openAi: { modelId: "", apiKeySecretArn: "" },
-            allowInternetResearch: true,
+            allowInternetResearch: false,
             bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
             agentCore: {
                 warmSessionSlots: 0,
@@ -2675,7 +2697,8 @@ export function getConfig(app: cdk.App): Config {
         if (cad.openAi == undefined) cad.openAi = { modelId: "", apiKeySecretArn: "" };
         if (cad.openAi.modelId == undefined) cad.openAi.modelId = "";
         if (cad.openAi.apiKeySecretArn == undefined) cad.openAi.apiKeySecretArn = "";
-        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = true;
+        // Off unless the operator turns it on: research sends queries to third-party search engines.
+        if (cad.allowInternetResearch == undefined) cad.allowInternetResearch = false;
         if (cad.bedrockGuardrail == undefined)
             cad.bedrockGuardrail = { guardrailId: "", guardrailVersion: "" };
         if (cad.bedrockGuardrail.guardrailId == undefined) cad.bedrockGuardrail.guardrailId = "";
@@ -3674,6 +3697,8 @@ export function getConfig(app: cdk.App): Config {
             );
         }
 
+        validateImageTo3dModelCacheGeneration(config.app.pipelines.useImageTo3d);
+
         // The Blender agent reasons with a Bedrock foundation model, and which models an account may invoke
         // differs by partition and by entitlement -- the same position as the labeling pipeline's model id,
         // handled the same way: the commercial template carries a model id, the restricted-partition
@@ -4011,6 +4036,24 @@ export function getConfig(app: cdk.App): Config {
                     JSON.stringify(maxTotalDurationMinutes)
             );
         }
+    }
+
+    // GenAI CAD STEP agent internet research sends search queries, written by the model from a run's
+    // design prompt, to third-party web search engines and fetches public web pages, so the data
+    // leaves AWS and the partition. It is always off in the GovCloud and EU Sovereign partitions (and
+    // the ISO partitions), whether or not the pipeline is enabled yet, so a value set here cannot turn
+    // live later. Like the partition checks above, it does not depend on app.govCloud.enabled.
+    if (
+        config.app.pipelines.useGenAiCadStepAgent?.allowInternetResearch === true &&
+        (resolvedPartition === "aws-us-gov" || resolvedPartition === "aws-eusc" || isIsoPartition)
+    ) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useGenAiCadStepAgent.allowInternetResearch is true " +
+                `while deploying to the '${resolvedPartition}' partition. Internet research sends the ` +
+                "agent's search queries to third-party web search engines and fetches public web " +
+                "pages, outside AWS and outside the partition, so it is always off in the GovCloud " +
+                "and EU Sovereign partitions. Set it to false."
+        );
     }
 
     // GenAI CAD STEP agent pipeline. The AgentCore runtime exists only in the commercial partition
@@ -6757,6 +6800,10 @@ export interface ConfigPublic {
                 autoTriggerOnFileExtensionsUpload: string;
                 instanceTypes: string[];
                 maxVCpus: number;
+                // Raise by one to start every model on an empty weight cache at its next run: generation N
+                // reads and writes `hf_cache/gN/<model>` on EFS and `imageTo3d/hf_cache/gN/<model>/` in S3,
+                // and 0 uses `hf_cache/<model>` and `imageTo3d/hf_cache/<model>/`. Running jobs keep theirs.
+                modelCacheGeneration: number;
                 models: {
                     sam3d: { enabled: boolean };
                     stable3dgen: { enabled: boolean };

@@ -15,8 +15,10 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY ./requirements.txt ./requirements.txt
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Every package at the version and hash in the lock (generated from requirements.txt; its header holds
+# the command that regenerates it), as wheels only.
+COPY ./requirements.lock ./requirements.lock
+RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r requirements.lock
 
 # The archive engine streams from S3 to S3 and never writes to disk.
 COPY ./zip_archive_pipeline/ ./zip_archive_pipeline/

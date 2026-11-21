@@ -8,12 +8,21 @@ is in the `executing` state. Discovers the trigger asset's downstream descendant
 asset-link DAG, orders them topologically (parents before children) and evaluates each against
 its bound schema, recording per-node progress on the cascade row. The row always ends in a
 terminal state: `completed` with `completedAt` and `results`, or `aborted` with `abortReason`.
+
+A run stops before its Lambda deadline (RUN_DEADLINE_MARGIN_MS) and hands the cascade to a new
+asynchronous invocation of this function (`{"cascadeId", "run": n}`), which goes on with the nodes
+not done yet; the row's `runNumber` names the run that holds it, so a superseded or repeated event
+does nothing. Lambda does not retry the invocation (the function's asynchronous invoke
+configuration), so a run that ends without a terminal write is never restarted from the first
+node; a cascade whose run stopped that way is aborted by the next read once its progress
+(`heartbeatAt`) is older than `store.CASCADE_RUN_STALE_SECONDS`.
 """
 
 import json
+import os
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import boto3
 from botocore.config import Config
@@ -38,6 +47,17 @@ CASCADE_STATE_ABORTED = "aborted"
 
 # Recorded as `abortReason` when the run raises out of execute_cascade.
 EXECUTION_FAILED_ABORT_REASON = "Cascade execution failed"
+# Recorded as `abortReason` when a run could not hand the cascade to the next one.
+CONTINUATION_FAILED_ABORT_REASON = "The cascade could not continue; start it again"
+
+# A run hands over to the next one when less than this is left before its Lambda deadline: one
+# node's evaluation (a pipeline rule's launch included) fits in it.
+RUN_DEADLINE_MARGIN_MS = 120_000
+# The cascade row's attributes a run keeps: the run that holds it, its last progress, and the
+# results of the nodes done so far (never returned by the cascade service).
+RUN_NUMBER_FIELD = "runNumber"
+HEARTBEAT_FIELD = store.CASCADE_HEARTBEAT_FIELD
+PARTIAL_RESULTS_FIELD = "partialResults"
 
 NODE_STATE_PENDING = "pending"
 NODE_STATE_EVALUATING = "evaluating"
@@ -70,6 +90,7 @@ except Exception as e:
     raise e
 
 cascade_table = dynamodb.Table(cascade_table_name)
+lambda_client = boto3.client("lambda", config=retry_config)
 
 
 #######################
@@ -96,12 +117,15 @@ def lambda_handler(event, context) -> Dict[str, Any]:
     rejected without a write; a run that raises leaves the row `aborted` rather than `executing`."""
     cascade_id = _cascade_id_from_event(event)
     (valid, message) = validate({"cascadeId": {"value": cascade_id, "validator": "UUID"}})
+    run = event.get("run", 0) if isinstance(event, dict) else 0
+    if valid and (isinstance(run, bool) or not isinstance(run, int) or run < 0):
+        valid, message = False, "run must be a non-negative integer"
     if not valid:
         logger.error(f"Cascade executor event rejected: {message}")
         return {"error": "Invalid cascade executor event"}
 
     try:
-        return execute_cascade(cascade_id)
+        return execute_cascade(cascade_id, run=run, remaining_ms=_remaining_ms(context))
     except Exception as e:
         logger.exception(f"Cascade {cascade_id} execution failed: {e}")
         abort_cascade(cascade_id, EXECUTION_FAILED_ABORT_REASON)
@@ -110,6 +134,15 @@ def lambda_handler(event, context) -> Dict[str, Any]:
                 details={"abortReason": EXECUTION_FAILED_ABORT_REASON})
         return {"cascadeId": cascade_id, "status": CASCADE_STATE_ABORTED,
                 "error": EXECUTION_FAILED_ABORT_REASON}
+
+
+def _remaining_ms(context) -> Callable[[], Optional[int]]:
+    """A reader of the milliseconds the invocation has left (None when the context gives none)."""
+    def read() -> Optional[int]:
+        reader = getattr(context, "get_remaining_time_in_millis", None)
+        value = reader() if callable(reader) else None
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+    return read
 
 
 def _cascade_id_from_event(event) -> Any:
@@ -208,79 +241,107 @@ def _parent_keys(database_id: str, asset_id: str) -> List[str]:
     return parents
 
 
-def execute_cascade(cascade_id: str) -> Dict[str, Any]:
+def execute_cascade(cascade_id: str, run: int = 0,
+                    remaining_ms: Optional[Callable[[], Optional[int]]] = None) -> Dict[str, Any]:
     """Execute an approved cascade: evaluate the source's descendants in topological order and
-    record progress and results on the cascade row."""
-    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}).get("Item")
+    record progress and results on the cascade row.
+
+    Run 0 discovers the descendants and records the order; a later run (`run`, handed over by the
+    one before it) goes on from the order and the node states the row holds. A run that is not the
+    one the row names (`runNumber`, 0 when absent) does nothing. Before each node, a run with less
+    than RUN_DEADLINE_MARGIN_MS left (`remaining_ms`) hands the cascade to the next run
+    (`_hand_over`) and returns."""
+    cascade = cascade_table.get_item(Key={"cascadeId": cascade_id}, ConsistentRead=True).get("Item")
     if not cascade:
         logger.error(f"Cascade {cascade_id} not found")
         return {"cascadeId": cascade_id, "error": "Cascade not found"}
     if cascade.get("state") != CASCADE_STATE_EXECUTING:
         logger.info(f"Cascade {cascade_id} is not in the executing state")
         return {"cascadeId": cascade_id, "error": "Cascade not in executing state"}
+    if _run_number(cascade) != run:
+        logger.info(f"Cascade {cascade_id}: run {run} is not the run that holds it "
+                    f"({_run_number(cascade)}); nothing is done")
+        return {"cascadeId": cascade_id, "error": "Cascade held by another run"}
 
     source_db = cascade["triggeredByDatabaseId"]
     source_asset = cascade["triggeredByAssetId"]
 
     started_by = _started_by(cascade)
-    descendants = discover_all_descendants(source_db, source_asset)
-    if not descendants:
-        _complete_cascade(cascade_id, [])
-        _record("complianceCascadeRun", database_id=source_db, asset_id=source_asset,
-                cascadeId=cascade_id, item_count=0, on_behalf_of=started_by,
-                changes={"state": CASCADE_STATE_COMPLETED})
-        return {"cascadeId": cascade_id, "status": CASCADE_STATE_COMPLETED, "evaluated": 0,
-                "results": []}
-
-    execution_order = topological_sort(source_db, source_asset, descendants)
-    nodes = {_node_key(n["databaseId"], n["assetId"]): NODE_STATE_PENDING for n in execution_order}
     authorized = _authorized_database_ids(cascade)
     authorized_assets = _authorized_asset_keys(cascade)
 
-    # Each node's compliance record is read up front, so the names are recorded with the nodes; the
-    # evaluation loop reads it again, consistently, right before the node's evaluation, so a binding
-    # changed since the cascade started decides the schema. A node outside the starting caller's
-    # reach (its database, or, for a caller whose asset rules read asset fields, the asset itself)
-    # is not read: it is neither evaluated nor named.
-    records = {}
+    def reachable(node_key: str, database_id: str) -> bool:
+        return database_id in authorized and (
+            authorized_assets is None or node_key in authorized_assets)
+
+    if run:
+        execution_order = [_node_of(key) for key in _json_field(cascade.get("executionOrder"), [])]
+        nodes = _json_field(cascade.get("nodes"), {})
+        results = _json_field(cascade.get(PARTIAL_RESULTS_FIELD), [])
+    else:
+        descendants = discover_all_descendants(source_db, source_asset)
+        if not descendants:
+            _complete_cascade(cascade_id, [])
+            _record("complianceCascadeRun", database_id=source_db, asset_id=source_asset,
+                    cascadeId=cascade_id, item_count=0, on_behalf_of=started_by,
+                    changes={"state": CASCADE_STATE_COMPLETED})
+            return {"cascadeId": cascade_id, "status": CASCADE_STATE_COMPLETED, "evaluated": 0,
+                    "results": []}
+
+        execution_order = topological_sort(source_db, source_asset, descendants)
+        nodes = {_node_key(n["databaseId"], n["assetId"]): NODE_STATE_PENDING
+                 for n in execution_order}
+        results = []
+
+        # Each node's compliance record is read up front, so the names are recorded with the
+        # nodes; the evaluation loop reads it again, consistently, right before the node's
+        # evaluation, so a binding changed since the cascade started decides the schema. A node
+        # outside the starting caller's reach (its database, or, for a caller whose asset rules
+        # read asset fields, the asset itself) is not read: it is neither evaluated nor named.
+        node_names = {}
+        for node in execution_order:
+            node_key = _node_key(node["databaseId"], node["assetId"])
+            if reachable(node_key, node["databaseId"]):
+                record = store.get_compliance_record(node["databaseId"], node["assetId"]) or {}
+                node_names[node_key] = record.get("assetName") or ""
+
+        cascade_table.update_item(
+            Key={"cascadeId": cascade_id},
+            UpdateExpression=("SET executionOrder = :order, nodes = :nodes, totalNodes = :total,"
+                              " nodeNames = :names, #hb = :now"),
+            ExpressionAttributeNames={"#hb": HEARTBEAT_FIELD},
+            ExpressionAttributeValues={
+                ":order": json.dumps(list(nodes.keys())),
+                ":nodes": json.dumps(nodes),
+                ":total": len(execution_order),
+                ":names": json.dumps(node_names),
+                ":now": _now(),
+            },
+        )
+
     for node in execution_order:
         node_key = _node_key(node["databaseId"], node["assetId"])
-        if (node["databaseId"] in authorized
-                and (authorized_assets is None or node_key in authorized_assets)):
-            records[node_key] = store.get_compliance_record(node["databaseId"], node["assetId"]) or {}
-    node_names = {key: record.get("assetName") or "" for key, record in records.items()}
-
-    cascade_table.update_item(
-        Key={"cascadeId": cascade_id},
-        UpdateExpression=("SET executionOrder = :order, nodes = :nodes, totalNodes = :total,"
-                          " nodeNames = :names"),
-        ExpressionAttributeValues={
-            ":order": json.dumps(list(nodes.keys())),
-            ":nodes": json.dumps(nodes),
-            ":total": len(execution_order),
-            ":names": json.dumps(node_names),
-        },
-    )
-
-    results = []
-    for node in execution_order:
-        node_key = _node_key(node["databaseId"], node["assetId"])
-        if node_key not in records:
+        if nodes.get(node_key, NODE_STATE_PENDING) not in (NODE_STATE_PENDING, NODE_STATE_EVALUATING):
+            continue
+        left = remaining_ms() if remaining_ms is not None else None
+        if left is not None and left < RUN_DEADLINE_MARGIN_MS:
+            return _hand_over(cascade_id, run, nodes, results)
+        if not reachable(node_key, node["databaseId"]):
             nodes[node_key] = NODE_STATE_SKIPPED_NOT_AUTHORIZED
-            _write_nodes(cascade_id, nodes)
             results.append({"node": node_key, "status": NODE_STATE_SKIPPED_NOT_AUTHORIZED})
+            _write_nodes(cascade_id, nodes, results)
             continue
         current = store.get_compliance_record(
             node["databaseId"], node["assetId"], consistent_read=True) or {}
         schema_name = current.get("schemaName", "")
         if not schema_name:
             nodes[node_key] = NODE_STATE_SKIPPED
-            _write_nodes(cascade_id, nodes)
             results.append({"node": node_key, "status": NODE_STATE_SKIPPED})
+            _write_nodes(cascade_id, nodes, results)
             continue
 
         nodes[node_key] = NODE_STATE_EVALUATING
-        _write_nodes(cascade_id, nodes)
+        _write_nodes(cascade_id, nodes, results)
         try:
             # Decided now, not when the cascade started: a descendant archived, or deleted, since
             # discovery (or since approval) is not evaluated.
@@ -314,7 +375,7 @@ def execute_cascade(cascade_id: str) -> Dict[str, Any]:
             logger.exception(f"Cascade evaluation failed for {node_key}: {e}")
             nodes[node_key] = NODE_STATE_ERROR
             results.append({"node": node_key, "status": NODE_STATE_ERROR})
-        _write_nodes(cascade_id, nodes)
+        _write_nodes(cascade_id, nodes, results)
 
     _complete_cascade(cascade_id, results)
     # One record of the run, with its counts by node status (never the other databases' node ids).
@@ -398,21 +459,94 @@ def _node_state_for(evaluation: Dict[str, Any]) -> str:
     return evaluation.get("verdict", NODE_STATE_ERROR)
 
 
-def _write_nodes(cascade_id: str, nodes: Dict[str, str]) -> None:
-    """Store the per-node state map on the cascade row."""
+def _write_nodes(cascade_id: str, nodes: Dict[str, str], results: List[Dict[str, Any]]) -> None:
+    """Store the per-node state map on the cascade row, with the results so far (for the next run)
+    and the time of this progress (`heartbeatAt`)."""
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
-        UpdateExpression="SET nodes = :nodes",
-        ExpressionAttributeValues={":nodes": json.dumps(nodes)},
+        UpdateExpression="SET nodes = :nodes, #pr = :results, #hb = :now",
+        ExpressionAttributeNames={"#pr": PARTIAL_RESULTS_FIELD, "#hb": HEARTBEAT_FIELD},
+        ExpressionAttributeValues={":nodes": json.dumps(nodes), ":results": json.dumps(results),
+                                   ":now": _now()},
     )
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _run_number(cascade: Dict[str, Any]) -> int:
+    """The run that holds the cascade (`runNumber`; 0 for the first run, and for a row without one)."""
+    value = cascade.get(RUN_NUMBER_FIELD, 0)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _node_of(node_key: str) -> Dict[str, str]:
+    database_id, asset_id = node_key.split(":", 1)
+    return {"databaseId": database_id, "assetId": asset_id}
+
+
+def _json_field(raw: Any, default: Any) -> Any:
+    """A JSON-encoded cascade attribute decoded, or `default` when absent or unreadable."""
+    if raw is None:
+        return default
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return default
+    return value if isinstance(value, type(default)) else default
+
+
+def _hand_over(cascade_id: str, run: int, nodes: Dict[str, str],
+               results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Hand the cascade to the next run before this one's deadline: record its progress and the
+    next run's number, conditional on the cascade still executing under this run (so of two runs
+    of one number only one hands over), then invoke this function again asynchronously. A cascade
+    whose next run could not be invoked is aborted with CONTINUATION_FAILED_ABORT_REASON."""
+    next_run = run + 1
+    try:
+        cascade_table.update_item(
+            Key={"cascadeId": cascade_id},
+            UpdateExpression="SET nodes = :nodes, #pr = :results, #hb = :now, #rn = :next",
+            ConditionExpression="#s = :executing AND (attribute_not_exists(#rn) OR #rn = :run)",
+            ExpressionAttributeNames={"#s": "state", "#pr": PARTIAL_RESULTS_FIELD,
+                                      "#hb": HEARTBEAT_FIELD, "#rn": RUN_NUMBER_FIELD},
+            ExpressionAttributeValues={":nodes": json.dumps(nodes), ":results": json.dumps(results),
+                                       ":now": _now(), ":next": next_run, ":run": run,
+                                       ":executing": CASCADE_STATE_EXECUTING},
+        )
+    except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.info(f"Cascade {cascade_id}: run {run} no longer holds it; it stops")
+        return {"cascadeId": cascade_id, "status": CASCADE_STATE_EXECUTING, "continued": False}
+    try:
+        lambda_client.invoke(
+            FunctionName=os.environ["AWS_LAMBDA_FUNCTION_NAME"],
+            InvocationType="Event",
+            Payload=json.dumps({"cascadeId": cascade_id, "run": next_run}),
+        )
+    except Exception as e:
+        logger.exception(f"Cascade {cascade_id}: run {next_run} could not be invoked: {e}")
+        abort_cascade(cascade_id, CONTINUATION_FAILED_ABORT_REASON)
+        return {"cascadeId": cascade_id, "status": CASCADE_STATE_ABORTED,
+                "error": CONTINUATION_FAILED_ABORT_REASON}
+    done = sum(1 for state in nodes.values() if state not in (NODE_STATE_PENDING,
+                                                               NODE_STATE_EVALUATING))
+    logger.info(f"Cascade {cascade_id}: run {run} handed over to run {next_run} after "
+                f"{done} of {len(nodes)} nodes")
+    return {"cascadeId": cascade_id, "status": CASCADE_STATE_EXECUTING, "continued": True,
+            "run": next_run}
+
+
 def _complete_cascade(cascade_id: str, results: List[Dict[str, Any]]) -> None:
-    """Mark the cascade completed with its results."""
+    """Mark the cascade completed with its results. The earlier runs' `partialResults` are part of
+    `results` and are removed, so the row does not carry them twice."""
     cascade_table.update_item(
         Key={"cascadeId": cascade_id},
-        UpdateExpression="SET #s = :state, completedAt = :now, results = :results",
-        ExpressionAttributeNames={"#s": "state"},
+        UpdateExpression="SET #s = :state, completedAt = :now, results = :results REMOVE #pr",
+        ExpressionAttributeNames={"#s": "state", "#pr": PARTIAL_RESULTS_FIELD},
         ExpressionAttributeValues={
             ":state": CASCADE_STATE_COMPLETED,
             ":now": datetime.now(timezone.utc).isoformat(),

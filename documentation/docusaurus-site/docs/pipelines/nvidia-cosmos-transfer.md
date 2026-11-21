@@ -206,7 +206,7 @@ NVIDIA Cosmos Transfer is a video transformation model that applies style transf
 
 The pipeline accepts two inputs:
 
-1. **Source Video (Required)** -- The main video file the pipeline runs on. Supported formats: `.mp4`, `.mov`. This is the file selected when executing the pipeline in VAMS.
+1. **Source Video (Required)** -- The main video file the pipeline runs on. Supported formats: `.mp4`, `.mov`, `.avi`. This is the file selected when executing the pipeline in VAMS.
 
 2. **Control Signal (Optional)** -- A control signal file that guides the transformation. The control signal path is set via the `COSMOS_TRANSFER_CONTROL_PATH` file metadata key. If not provided, the pipeline auto-computes the control signal from the source video based on the `COSMOS_TRANSFER_CONTROL_TYPE` metadata key.
 

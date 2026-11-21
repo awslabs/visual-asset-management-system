@@ -274,6 +274,9 @@ Install a container's dependencies so that two builds of one commit ship the sam
     -   Debian packages are the exception to "the same code": the upgrade layer takes what Debian has published on the build day, so two builds of one commit can differ in Debian patch level, and the build log's `apt-get upgrade` lines list what moved.
     -   A deployed image takes later Debian updates only when the container directory changes and the build runs on a cold cache: `ecs.AssetImage.fromAsset` skips the build when the directory's asset hash is already in the CDK bootstrap ECR repository, and Docker reuses the cached upgrade layer, whose instruction and digest-pinned parent do not change and which comes before every `COPY`. To take new updates deliberately, move the digest, or rebuild with `--no-cache` after a change to the container directory.
 -   A package manager used only to install a tool is removed in the builder stage, in the `RUN` that used it, so the runtime image does not ship it: npm, npx and corepack arrive with the Node.js tarball and are deleted after `npm ci` installs `splat-transform`, because the pipeline runs only `node`. The same test file holds the Dockerfile to it.
+-   A conda environment comes from conda's explicit format (one package build per line with its SHA-256, `conda list --explicit --sha256`), created with `conda create --file`, which installs without a solve: `preview/pcPotreeViewer/container/pdal-build.explicit.txt`, whose header holds the command that regenerates it. `infra/test/pipelines/pipelineImageLocks.test.ts` holds the pip-locked and conda-locked images to their locks.
+-   Every base image is pinned by digest, whatever its registry (Docker Hub, `public.ecr.aws`, `nvcr.io`), and every `git clone` checks out a 40-hex `ARG` with `git checkout --detach`, verifies it with `test "$(git rev-parse HEAD)" = "${ARG}"` and records `VAMS_UPSTREAM_COMMIT`, in one instruction. `infra/test/pipelines/containerBuildSources.test.ts` (the build-pin guard) asserts the digest for every Dockerfile under `backendPipelines/` (each `FROM`, `COPY --from=<image>` and `ARG`-supplied base) save the exemptions it names with their reasons, the clone pin for the images it names, and that every download in the Image to 3D images is checked with `sha256sum -c` in the same instruction.
+-   HuggingFace repositories (Image to 3D) are pinned too: `genAi/imageTo3d/container/hfguard/hf_pins.py` maps every repository a model, a background-removal backend or an upstream library loads to a commit, and its guard holds `huggingface_hub`'s `hf_hub_download` and `snapshot_download` to those commits in the container process and, through the `sitecustomize` beside it that `run_upstream` puts first on `PYTHONPATH`, in every upstream process. A call with no revision or `main` gets the pin; a repository with no pin, or a request for another revision, is refused. The guard is what covers the loads VAMS does not write, such as a library fetching an encoder's configuration. A new model or backend adds its repositories, and the ones its library loads on its own, to that table; `tests/test_hf_pins.py` fails for a declared repository with no pin, and a run fails naming any other. `trust_remote_code` runs the pinned commit's code, so read a new commit's code files before moving its pin.
 
 ## Files a Model Input References
 
@@ -1036,7 +1039,10 @@ inference. Audit a new copy against these.
     segment of its own `S3_HF_CACHE_PREFIX`, so the two cannot drift apart. **This lay dormant while the
     mount was broken** -- an unmounted path is an empty local directory, so the check correctly reported
     a miss -- and fixing the mount is what activates it. Image to 3D keys its cache per model
-    (`hf_cache/{model_key}`), which is the pattern to follow.
+    (`hf_cache/{model_key}`), which is the pattern to follow. Clearing a shared cache is a deployment
+    decision, never a run setting: a run that cleared it would pull weights from under the runs reading
+    it. Image to 3D's `modelCacheGeneration` moves every model to a new directory and prefix
+    (`hf_cache/g{N}/{model_key}`) instead, so nothing is deleted under a running job.
 
     **Weights a library keeps outside the HuggingFace layout belong under the same directory.** rembg
     stores its session ONNX files under `U2NET_HOME` and downloads them on first use, so a run that
@@ -1485,6 +1491,20 @@ machine's own `ABORTED` / `TIMED_OUT` / `FAILED` status changes invokes the hand
 EventBridge's delivery; a handler that returns an error body has succeeded as far as Lambda is concerned,
 so `lambda_handler` raises for a 5xx `EXECUTION_END_CLEANUP` result (never for its 400/403 rejections)
 and the construct pins Lambda's asynchronous retries with `configureAsyncInvoke` (no destination).
+
+## Tagging the Jobs a Pipeline Submits
+
+A Lambda that submits an AWS Batch job itself (`executeBatchJob.py` in coordinate transform, the CAD STEP agent's `fargate` runtime, Isaac Lab and zipArchive) reads the pipeline's job tags (`vams:stackname`, `vams:pipeline`) from `PIPELINE_JOB_TAGS`, a JSON object its construct sets with `configureLambdaBatchJobTagging` (which also grants the scoped `batch:TagResource` that tagging on submit needs), and passes them on every submit:
+
+```python
+PIPELINE_JOB_TAGS = json.loads(os.environ.get("PIPELINE_JOB_TAGS") or "{}")
+...
+if PIPELINE_JOB_TAGS:
+    submit_params["tags"] = PIPELINE_JOB_TAGS
+response = batch.submit_job(**submit_params)
+```
+
+The Lambda that builds a Kubernetes Job (RapidPipeline EKS `consolidated_handler.py`) spreads `PIPELINE_JOB_LABELS` (`vams/pipeline`) into the Job's and the pod template's `labels`, next to the labels it finds its own job by. A later release scopes each pipeline role's terminate and stop permissions to these tags, so a new submit site carries them too: `infra/test/pipelines/pipelineJobTags.test.ts` fails on a `submit_job(` without `PIPELINE_JOB_TAGS` and on a `create_namespaced_job(` without the label. The CDK side is `infra/lib/nestedStacks/pipelines/CLAUDE.md` "Every Job a Pipeline Starts Carries the Pipeline Job Tags".
 
 ## Every boto3 Client Carries the Adaptive Retry Configuration
 
