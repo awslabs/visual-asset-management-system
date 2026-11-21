@@ -22,6 +22,7 @@ _PATCHED_ATTRS = (
     "get_or_create_database_for_bucket", "create_new_asset",
     "object_still_exists", "update_s3_metadata", "update_asset_type",
     "dynamodb", "update_asset_count", "asset_cache",
+    "write_file_version_history", "write_asset_history_record",
 )
 
 
@@ -100,6 +101,31 @@ class TestProcessRecordRestoresArchivedAsset:
         assert success is True and should_index is True
         m.restore_archived_asset.assert_not_called()
 
+    def test_a_cached_image_of_a_permanently_deleted_asset_is_not_restored(self):
+        """#1799: the archived lookup returns a cached image of an asset that was permanently deleted
+        since. The restore writes nothing into the asset table, and the key is handled like any other
+        key with no asset: the bucket's database and a new asset."""
+        m = _load()
+        _wire(m)
+        table = TestRestoreArchivedAsset._routed_table(None)
+        m.dynamodb = MagicMock()
+        m.dynamodb.Table.return_value = table
+        m.update_asset_count = MagicMock()
+        m.asset_cache = MagicMock()
+        m.write_file_version_history = MagicMock()
+        m.write_asset_history_record = MagicMock()
+        m.get_or_create_database_for_bucket = MagicMock(return_value="bucket-db")
+        m.create_new_asset = MagicMock(return_value="x-asset-1")
+
+        success, should_index, message = m.process_s3_record(_record())
+
+        assert (success, should_index) == (True, True), message
+        table.put_item.assert_not_called()
+        table.delete_item.assert_not_called()
+        m.write_asset_history_record.assert_not_called()
+        assert m.create_new_asset.call_args.args == ("bucket-1", "bucket-db", "x-asset-1")
+        assert m.update_s3_metadata.call_args.args[2] == "bucket-db"
+
     def test_restore_failure_reports_error_but_forwards(self):
         m = _load()
         _wire(m)
@@ -113,14 +139,17 @@ class TestProcessRecordRestoresArchivedAsset:
 @pytest.mark.unit
 class TestRestoreArchivedAsset:
     @staticmethod
-    def _routed_table(archived_row):
-        """One handle for both tables: the database read and the archived row's consistent re-read
-        are told apart by their key. `archived_row` None means the archived row is already gone."""
+    def _routed_table(archived_row, live_row=None):
+        """One handle for both tables: the database read, the archived row's consistent re-read and
+        the live row's read are told apart by their key. `archived_row` None means the archived row
+        is already gone; `live_row` None means the asset has no live row."""
         mock_table = MagicMock()
 
         def get_item(Key, **kwargs):
             if Key.get("databaseId") == "db1#deleted":
                 return {"Item": archived_row} if archived_row is not None else {}
+            if "assetId" in Key:
+                return {"Item": live_row} if live_row is not None else {}
             return {"Item": {"databaseId": "db1"}}
 
         mock_table.get_item.side_effect = get_item
@@ -166,19 +195,44 @@ class TestRestoreArchivedAsset:
         assert put_item["locationKey"] == "x-asset-1/"
         assert put_item["databaseId"] == "db1"
 
-    def test_restore_falls_back_to_the_callers_image_when_the_archived_row_is_gone(self):
+    def test_a_permanently_deleted_asset_is_not_restored_from_the_callers_image(self):
+        # #1799: the caller's image can outlive the archived row by up to the 60-second cache
+        # lifetime. With no archived row and no live row, nothing is written or deleted.
         m = _load()
         mock_table = self._routed_table(None)
         m.dynamodb = MagicMock()
         m.dynamodb.Table.return_value = mock_table
         m.update_asset_count = MagicMock()
+        m.asset_cache = MagicMock()
+
+        result = m.restore_archived_asset("bucket-1", "x-asset-1", _archived_asset())
+
+        assert result is m.ARCHIVED_RECORD_GONE
+        mock_table.put_item.assert_not_called()
+        mock_table.delete_item.assert_not_called()
+        m.update_asset_count.assert_not_called()
+        dropped = {c.args[0] for c in m.asset_cache.delete.call_args_list}
+        assert dropped == {"bucket-1:x-asset-1", "bucket-1:x-asset-1:archived"}
+        live_reads = [c for c in mock_table.get_item.call_args_list
+                      if c.kwargs["Key"] == {"databaseId": "db1", "assetId": "x-asset-1"}]
+        assert len(live_reads) == 1 and live_reads[0].kwargs.get("ConsistentRead") is True
+
+    def test_a_concurrently_restored_asset_reports_its_live_database(self):
+        # The archived row is gone because another event in the batch restored it: same outcome as
+        # the conditional write losing the race, and nothing is written again.
+        m = _load()
+        live = {**_archived_asset(), "databaseId": "db1"}
+        mock_table = self._routed_table(None, live_row=live)
+        m.dynamodb = MagicMock()
+        m.dynamodb.Table.return_value = mock_table
+        m.update_asset_count = MagicMock()
+        m.asset_cache = MagicMock()
 
         result = m.restore_archived_asset("bucket-1", "x-asset-1", _archived_asset())
 
         assert result == "db1"
-        put_item = mock_table.put_item.call_args.kwargs["Item"]
-        assert put_item["assetName"] == "x-asset-1"
-        assert put_item["databaseId"] == "db1"
+        mock_table.put_item.assert_not_called()
+        mock_table.delete_item.assert_not_called()
 
     def test_concurrent_restore_is_idempotent(self):
         m = _load()
