@@ -54,8 +54,10 @@ ENV PYTHONUNBUFFERED=1
 # copy python scripts app to container
 COPY ./ ./pc_pipeline
 
-# install python app and deps
-RUN pip3 install -r ./pc_pipeline/requirements.txt
+# install python app and deps: every package at the version and hash in requirements.lock, as wheels only.
+# The lock is the one Dockerfile_PDAL installs; each package in it is a pure-Python wheel, so it serves this
+# image's Python 3.11 on Alpine as well.
+RUN pip3 install --no-cache-dir --require-hashes --only-binary :all: -r ./pc_pipeline/requirements.lock
 
 # Create the runtime user and the two paths it has to write.
 #

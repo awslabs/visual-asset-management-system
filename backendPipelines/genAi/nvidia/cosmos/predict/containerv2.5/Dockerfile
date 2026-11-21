@@ -2,7 +2,9 @@
 # Based on the official NVIDIA Cosmos-Predict2.5 Dockerfile pattern
 # https://github.com/nvidia-cosmos/cosmos-predict2.5/blob/main/Dockerfile
 
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+# Base pinned by digest: the tag records which release the digest resolves to, and a re-pointed tag
+# cannot change what a rebuild of this commit pulls. Move the tag and the digest together.
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:24c8e3581ea6330038b0d374920721983312627f8adbfcf390bdb4b399d280ed
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -41,7 +43,7 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION
     rm -rf aws awscliv2.zip
 
 # Install uv package manager
-COPY --from=ghcr.io/astral-sh/uv:0.8.12 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.8.12@sha256:f64ad69940b634e75d2e4d799eb5238066c5eeda49f76e782d4873c3d014ea33 /uv /uvx /usr/local/bin/
 
 # Clone cosmos-predict2.5, pinned to a commit. A clone with no ref makes the framework version part of
 # WHEN the image was built rather than of what VAMS commit built it, and two things here depend on the

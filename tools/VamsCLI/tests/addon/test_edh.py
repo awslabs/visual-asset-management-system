@@ -495,6 +495,9 @@ class TestWorkstationCreate:
 
 
 class TestWorkstationGetStartStop:
+    # `stop` asks before it stops; these tests pass --yes so they reach the API call.
+    EXTRA = {"get": [], "start": [], "stop": ['--yes']}
+
     @pytest.mark.parametrize(
         "command,method,message",
         [("get", "get_edh_workstation", "Workstation retrieved"),
@@ -505,7 +508,7 @@ class TestWorkstationGetStartStop:
             self, cli_runner, generic_command_mocks, command, method, message):
         with generic_command_mocks('addon.edh') as mocks:
             getattr(mocks['api_client'], method).return_value = WORKSTATION
-            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1'])
+            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1'] + self.EXTRA[command])
             assert result.exit_code == 0
             getattr(mocks['api_client'], method).assert_called_once_with('s-1')
             assert message in result.output
@@ -517,7 +520,8 @@ class TestWorkstationGetStartStop:
     def test_json_output_is_the_raw_record(self, cli_runner, generic_command_mocks, command, method):
         with generic_command_mocks('addon.edh') as mocks:
             getattr(mocks['api_client'], method).return_value = WORKSTATION
-            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1', '--json-output'])
+            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1', '--json-output']
+                                       + self.EXTRA[command])
             assert result.exit_code == 0
             assert json.loads(result.output) == WORKSTATION
 
@@ -594,10 +598,62 @@ class TestWorkstationGetStartStop:
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].stop_edh_workstation.side_effect = EdhOperationError(
                 "Workstation stop refused (409): Workstation has no EDH session")
-            result = cli_runner.invoke(cli, ['edh', 'workstation', 'stop', 'b-1'])
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'stop', 'b-1', '--yes'])
             assert result.exit_code != 0
             assert 'EDH Error' in result.output
             assert 'no EDH session' in result.output
+
+
+class TestWorkstationStopConfirmation:
+    """`edh workstation stop` asks before it stops, unless --yes; --yes is required in JSON mode."""
+
+    ARGS = ['edh', 'workstation', 'stop', 's-1']
+
+    def test_a_declined_prompt_sends_nothing(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            result = cli_runner.invoke(cli, self.ARGS, input='n\n')
+            assert result.exit_code == 1
+            mocks['api_client'].stop_edh_workstation.assert_not_called()
+            text = ' '.join(result.output.split())
+            assert "Stop workstation 's-1'? Its open applications close; its disk is kept" in text
+            assert "'vamscli edh workstation start s-1' starts it again" in text
+            assert 'Workstation stop requested' not in result.output
+
+    def test_an_accepted_prompt_stops(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].stop_edh_workstation.return_value = WORKSTATION
+            result = cli_runner.invoke(cli, self.ARGS, input='y\n')
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].stop_edh_workstation.assert_called_once_with('s-1')
+            assert 'Stop workstation' in result.output
+            assert 'Workstation stop requested' in result.output
+
+    def test_yes_stops_without_a_prompt(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].stop_edh_workstation.return_value = WORKSTATION
+            result = cli_runner.invoke(cli, self.ARGS + ['--yes'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].stop_edh_workstation.assert_called_once_with('s-1')
+            assert 'Stop workstation' not in result.output
+
+    def test_json_output_without_yes_refuses_with_one_error_object(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            result = cli_runner.invoke(cli, self.ARGS + ['--json-output'])
+            assert result.exit_code == 1
+            mocks['api_client'].stop_edh_workstation.assert_not_called()
+            assert json.loads(result.output) == {
+                "error": "Confirmation required",
+                "message": "Stopping a workstation requires the --yes flag",
+                "sessionId": "s-1",
+            }
+
+    def test_the_help_names_the_prompt_and_the_flag(self, cli_runner):
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'stop', '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert '--yes' in text
+        assert 'asks before it stops' in text
+        assert 'stop SESSION_ID --yes --json-output' in text
 
 
 class TestWorkstationNotConfirmed:
@@ -609,7 +665,7 @@ class TestWorkstationNotConfirmed:
 
     @pytest.mark.parametrize("command,method,extra", [
         ("start", "start_edh_workstation", []),
-        ("stop", "stop_edh_workstation", []),
+        ("stop", "stop_edh_workstation", ['--yes']),
         ("delete", "delete_edh_workstation", ['--confirm'])])
     def test_the_message_names_the_listing_and_the_exit_is_non_zero(
             self, cli_runner, generic_command_mocks, command, method, extra):

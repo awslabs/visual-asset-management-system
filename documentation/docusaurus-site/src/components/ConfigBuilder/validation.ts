@@ -930,6 +930,12 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useNvidiaGr00t.enabled"),
     },
     {
+        id: "vpc-required-image-to-3d",
+        label: "pipelines.useImageTo3d",
+        fieldPaths: ["app.pipelines.useImageTo3d.enabled"],
+        appliesWhen: (c) => !!g(c, "app.pipelines.useImageTo3d.enabled"),
+    },
+    {
         id: "vpc-required-coordinate-transform",
         label: "pipelines.useConversionCoordinateTransform",
         fieldPaths: ["app.pipelines.useConversionCoordinateTransform.enabled"],
@@ -1720,6 +1726,18 @@ const CORE_RULES: Rule[] = [
             return !Array.isArray(types) || types.length === 0;
         },
         message: "useImageTo3d.instanceTypes must be a non-empty array.",
+    },
+    {
+        id: "imageto3d-model-cache-generation",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useImageTo3d.modelCacheGeneration"],
+        appliesWhen: (c) => {
+            if (!g(c, "app.pipelines.useImageTo3d.enabled")) return false;
+            const generation = g(c, "app.pipelines.useImageTo3d.modelCacheGeneration");
+            return !Number.isSafeInteger(generation) || generation < 0;
+        },
+        message:
+            "useImageTo3d.modelCacheGeneration must be a whole number of 0 or more. Raise it by one to start every model on an empty weight cache.",
     },
     {
         id: "imageto3d-blenderagent-model-id",

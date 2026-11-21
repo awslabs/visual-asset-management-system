@@ -100,6 +100,20 @@ const stalledRow: WorkstationRecord = {
     startFailure: { availabilityZone: "us-west-2b", observedAt: "2026-10-24T11:40:00Z" },
 };
 
+const LAUNCH_STALLED_SENTENCE =
+    "EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may still place it.";
+
+// A new launch EDH kept `pending` for 3 hours: the sweep recorded the stall on the row, which stays
+// CREATING (EDH may still place it), and the service reports no activity for it.
+const launchStalledRow: WorkstationRecord = {
+    ...stoppedRow,
+    state: "CREATING",
+    edhState: "pending",
+    activity: null,
+    lastError: "LAUNCH_STALLED",
+    startFailure: { observedAt: "2026-10-24T13:00:00Z" },
+};
+
 const list = (rows: WorkstationRecord[]) => ({
     data: rows,
     isLoading: false,
@@ -415,6 +429,7 @@ describe("WorkstationsPage stalled start", () => {
 
         await openActionsFor(user, "Render box");
         await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        await user.click(screen.getByRole("button", { name: "Stop" }));
 
         await waitFor(() =>
             expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" })
@@ -448,6 +463,116 @@ describe("WorkstationsPage stalled start", () => {
         await openActionsFor(user, "Render box");
         expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
         expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+    });
+});
+
+describe("WorkstationsPage stalled launch", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        (useAllowedRoutesModule.useAllowedRoutes as jest.Mock).mockReturnValue({
+            loading: false,
+            can: () => true,
+        });
+        (queries.useOsSignIn as jest.Mock).mockReturnValue({
+            mutate: jest.fn(),
+            reset: jest.fn(),
+            data: undefined,
+            error: null,
+            isPending: false,
+        });
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(mutations());
+        (queries.useWorkstations as jest.Mock).mockReturnValue(list([launchStalledRow]));
+    });
+
+    it("reads Launch stalled with the sentence beneath the badge and no AWS line", () => {
+        renderPage();
+
+        const cell = statusCell("Render box");
+        expect(cell.getByText("Launch stalled")).toBeInTheDocument();
+        expect(cell.queryByText("Starting")).not.toBeInTheDocument();
+        expect(cell.queryByText("Creating")).not.toBeInTheDocument();
+        expect(cell.getByText(LAUNCH_STALLED_SENTENCE)).toBeInTheDocument();
+        expect(cell.getByTitle(LAUNCH_STALLED_SENTENCE)).toHaveTextContent("Launch stalled");
+        expect(cell.queryByText(/^AWS:/)).not.toBeInTheDocument();
+    });
+
+    it("offers Delete, neither Stop nor Start, and leaves Connect inert", async () => {
+        const user = userEvent.setup();
+        renderPage();
+
+        expect(statusCell("Render box").getByRole("button", { name: "Connect" })).toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        await openActionsFor(user, "Render box");
+        expect(screen.getByRole("menuitem", { name: "Delete" })).not.toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the launch stall's badge, sentence and Delete, and offers no Stop, on a row also carrying DESKTOP_ERROR", async () => {
+        // The service never writes both (EDH's error on a launch that never ran orphans it); the
+        // launch stall applies to a record that carries both anyway.
+        (queries.useWorkstations as jest.Mock).mockReturnValue(
+            list([
+                {
+                    ...launchStalledRow,
+                    edhState: "error",
+                    connectionAvailable: false,
+                    connectionUnavailableReason: "DESKTOP_ERROR",
+                },
+            ])
+        );
+        const user = userEvent.setup();
+        renderPage();
+
+        const cell = statusCell("Render box");
+        expect(cell.getByText("Launch stalled")).toBeInTheDocument();
+        expect(cell.getByText(LAUNCH_STALLED_SENTENCE)).toBeInTheDocument();
+        expect(cell.queryByText(/remote display is not responding/)).not.toBeInTheDocument();
+        await openActionsFor(user, "Render box");
+        expect(screen.getByRole("menuitem", { name: "Delete" })).not.toHaveAttribute(
+            "aria-disabled",
+            "true"
+        );
+        expect(screen.queryByRole("menuitem", { name: "Stop" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+    });
+
+    it("deletes the stalled launch once the deletion is confirmed", async () => {
+        const m = mutations();
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
+        const user = userEvent.setup();
+        renderPage();
+
+        await openActionsFor(user, "Render box");
+        await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+        await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+        await waitFor(() =>
+            expect(m.deleteWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" })
+        );
+        expect(m.stopWorkstation.mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("keeps Delete disabled on a launch EDH has not placed before the bound (control)", async () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue(
+            list([
+                { ...launchStalledRow, lastError: null, startFailure: null, activity: "starting" },
+            ])
+        );
+        const user = userEvent.setup();
+        renderPage();
+
+        expect(statusCell("Render box").getByText("Starting")).toBeInTheDocument();
+        await openActionsFor(user, "Render box");
         expect(screen.getByRole("menuitem", { name: "Delete" })).toHaveAttribute(
             "aria-disabled",
             "true"

@@ -12,13 +12,28 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
+            "path": "backendPipelines/conversion/coordinateTransform/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
             "path": "backendPipelines/genAi/cadStepAgent/container/requirements.txt",
             "reason": "CPU pipeline container requirements without a lock.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
+            "path": "backendPipelines/genAi/cadStepAgent/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
             "path": "backendPipelines/genAi/videoSopBom/container/requirements.txt",
             "reason": "CPU pipeline container requirements without a lock.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
+            "path": "backendPipelines/genAi/videoSopBom/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
@@ -52,6 +67,11 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
+            "path": "backendPipelines/preview/pcPotreeViewer/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
             "path": "backendPipelines/preview/pcPotreeViewer/container/utils/requirements.txt",
             "reason": "Requirements of the Potree container's utils package; folded into the container's lock.",
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
@@ -82,6 +102,11 @@
             "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
         },
         {
+            "path": "backendPipelines/utility/zipArchive/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
+            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
+        },
+        {
             "path": "tools/VamsCLI/pyproject.toml",
             "reason": "Published package with ranged dependencies by design; gets a development-only uv.lock for audit.",
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
@@ -94,6 +119,16 @@
         {
             "path": "tools/VamsCLI/requirements-dev.txt",
             "reason": "Ranged development requirements of VamsCLI.",
+            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+        },
+        {
+            "path": "tools/VamsCLI/requirements-build.txt",
+            "reason": "Input of requirements.lock: the setuptools and wheel that pyproject.toml's [build-system] requires, locked together with requirements.txt so the EDH AMI recipes can build the CLI with --no-build-isolation. Ranged like the other VamsCLI inputs; it has no lock of its own.",
+            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+        },
+        {
+            "path": "tools/VamsCLI/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes --only-binary :all:` for Python 3.12 on x86_64 manylinux_2_34) that the EDH al2023-desktop and isaacsim AMI recipes install with --require-hashes before building the CLI offline. It is not a uv.lock, so the CI audit does not read it until VamsCLI gets its development uv.lock and this file is generated from that lock.",
             "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
         },
         {
@@ -129,6 +164,41 @@
         {
             "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",
             "reason": "Installed into Isaac Sim's bundled Python, which a lock must target explicitly.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs into Isaac Sim's bundled Python; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/cosmos/transfer/container/requirements-nccl.txt",
+            "reason": "Input of requirements-nccl.lock: the NCCL wheel the Transfer image adds to upstream's environment.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/cosmos/transfer/container/requirements-nccl.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-image.txt",
+            "reason": "What the GR00T image installs besides Isaac-GR00T's own dependencies; an input of requirements.lock.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-build.txt",
+            "reason": "The build tools the source-only packages of requirements.lock build with; an input of requirements-build.lock.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-build.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
             "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
         }
     ]

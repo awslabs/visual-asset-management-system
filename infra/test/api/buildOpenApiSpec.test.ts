@@ -139,4 +139,43 @@ describe("buildOpenApiSpec", () => {
         );
         expect(spec["x-amazon-apigateway-policy"]).toBeDefined();
     });
+
+    describe("authorizer result cache with an IP allow-list", () => {
+        const routes = [
+            { path: "/database", method: HttpMethod.GET, lambdaFn: fakeFn("a") },
+            {
+                path: "/api/amplify-config",
+                method: HttpMethod.GET,
+                lambdaFn: fakeFn("c"),
+                allowAnonymous: true,
+            },
+        ];
+        const authorizers = (spec: any) => ({
+            authed: spec.components.securitySchemes.VamsAuthorizer[
+                "x-amazon-apigateway-authorizer"
+            ],
+            anon: spec.components.securitySchemes.VamsAnonymousAuthorizer[
+                "x-amazon-apigateway-authorizer"
+            ],
+        });
+
+        it("turns the cache off on both schemes when authorizerCacheDisabled is set", () => {
+            const { authed, anon } = authorizers(
+                buildOpenApiSpec(routes, { ...baseOpts, authorizerCacheDisabled: true })
+            );
+            expect(authed.authorizerResultTtlInSeconds).toBe(0);
+            expect(anon.authorizerResultTtlInSeconds).toBe(0);
+            // The identity sources are unchanged.
+            expect(authed.identitySource).toBe("method.request.header.Authorization");
+            expect(anon.identitySource).toBe("context.identity.sourceIp");
+        });
+
+        it("keeps the 30 s and 900 s caches when it is not set or false", () => {
+            for (const opts of [baseOpts, { ...baseOpts, authorizerCacheDisabled: false }]) {
+                const { authed, anon } = authorizers(buildOpenApiSpec(routes, opts));
+                expect(authed.authorizerResultTtlInSeconds).toBe(30);
+                expect(anon.authorizerResultTtlInSeconds).toBe(900);
+            }
+        });
+    });
 });
