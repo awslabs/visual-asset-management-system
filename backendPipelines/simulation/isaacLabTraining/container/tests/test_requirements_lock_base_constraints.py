@@ -51,3 +51,7 @@ def test_constraints_header_digest_matches_the_dockerfile():
     digest = re.search(r"^ARG ISAAC_LAB_DIGEST=(sha256:[0-9a-f]{64})$", dockerfile, re.MULTILINE).group(1)
     header = _read("base-constraints.txt").split("\n\n")[0]
     assert f"Base image digest: {digest}" in header
+    # The regeneration command must pull the base by digest: a re-pointed tag would freeze a different
+    # image than the header names.
+    command = re.search(r"^# Command: (.+)$", header, re.MULTILINE).group(1)
+    assert f"@{digest}" in command

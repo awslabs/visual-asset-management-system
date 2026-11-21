@@ -258,7 +258,9 @@ describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfil
     });
 
     it("locks every direct dependency of requirements.txt, with a hash on every pin", () => {
-        expect(lock).toMatch(/^#\s+uv pip compile requirements\.txt (?:--constraint \S+ )?--generate-hashes /m);
+        expect(lock).toMatch(
+            /^#\s+uv pip compile requirements\.txt (?:--constraint \S+ )?--generate-hashes /m
+        );
         expect(entries.length).toBeGreaterThan(0);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
         const locked = new Set(entries.map((e) => e.name));

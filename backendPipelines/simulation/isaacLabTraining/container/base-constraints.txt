@@ -1,6 +1,6 @@
 # Frozen package set of the Isaac Lab base image, used as constraints when requirements.lock is resolved.
 # Base image digest: sha256:f70acc9ed3bc3fc67099a0c5715379c432cc9965623cabbaf54f74599997e245
-# Command: docker run --rm --entrypoint /opt/isaaclab-venv/bin/python nvcr.io/nvidia/isaac-lab:3.0.0 -m pip freeze
+# Command: docker run --rm --entrypoint /opt/isaaclab-venv/bin/python nvcr.io/nvidia/isaac-lab:3.0.0@sha256:f70acc9ed3bc3fc67099a0c5715379c432cc9965623cabbaf54f74599997e245 -m pip freeze
 # Editable (-e) and VCS or local (@ ...) entries are left out because they are not on PyPI.
 # Regenerate this file whenever ISAAC_LAB_DIGEST in the Dockerfile moves, then regenerate requirements.lock.
 absl-py==2.4.0
