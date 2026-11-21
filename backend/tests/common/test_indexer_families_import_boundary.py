@@ -26,9 +26,10 @@ and the rest of ``common``. Only an import that names ANOTHER group's own packag
 
 **Two admitted crossings, both function-scoped.**
 
-* ``vectorSearchService._opensearch_step`` imports ``handlers.osSemanticSearch.search`` INSIDE the
-  function, after ``OPENSEARCH_DISABLED`` has been ruled out, to enrich hits when an OpenSearch mode
-  is on. A deployment without OpenSearch never executes that import.
+* ``vectorSearchService._opensearch_module`` imports ``handlers.osSemanticSearch.search`` INSIDE the
+  function, which its callers reach only after ``OPENSEARCH_DISABLED`` has been ruled out: for the
+  request's API deadline (``_api_deadline``) and to constrain and enrich hits (``_opensearch_step``)
+  when an OpenSearch mode is on. A deployment without OpenSearch never executes that import.
 * ``crReindexer.ReindexUtility.clear_opensearch_indexes`` imports ``opensearchpy`` INSIDE the
   method, so the core reindexer's row-rewriting path never loads the client on a deployment without
   OpenSearch.
@@ -60,7 +61,7 @@ VECTOR_FILES = ("models/vectorsearch.py",)
 # An entry names the function, never the file, and is an upper bound (converting a site keeps the
 # guard green).
 _ADMITTED_CROSSINGS: Dict[Tuple[str, str], int] = {
-    ("handlers/osVectorSearch/vectorSearchService.py", "_opensearch_step"): 1,
+    ("handlers/osVectorSearch/vectorSearchService.py", "_opensearch_module"): 1,
     ("handlers/indexing/crReindexer.py", "clear_opensearch_indexes"): 1,
 }
 
