@@ -668,3 +668,77 @@ class TestRegistrationReadErrorsRetry:
                                          "vamsBinding": _binding()}]}}
         with pytest.raises(_fa.RegistrationUnavailableError):
             self._run(event, query_side_effect=RuntimeError("timeout"))
+
+
+def _unbound_sqs_event(key):
+    """One asset.file.uploaded message without a binding (queued before bucket sync added it)."""
+    return {"Records": [{"messageId": "m0", "body": json.dumps({"detail": {"Records": [
+        {"s3": {"bucket": {"name": "b1"}, "object": {"key": key, "versionId": "v0"}}}]}})}]}
+
+
+def _client_error(code, status, operation="Query"):
+    return ClientError({"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}},
+                       operation)
+
+
+RETRYABLE_READ_ERRORS = [
+    _client_error("ProvisionedThroughputExceededException", 400),
+    _client_error("ThrottlingException", 400),
+    _client_error("InternalServerError", 500),
+    _client_error("SlowDown", 503),
+    EndpointConnectionError(endpoint_url="https://dynamodb.us-east-1.amazonaws.com"),
+    ReadTimeoutError(endpoint_url="https://dynamodb.us-east-1.amazonaws.com"),
+]
+NON_RETRYABLE_READ_ERRORS = [
+    _client_error("ValidationException", 400),
+    _client_error("AccessDeniedException", 400),
+    _client_error("ResourceNotFoundException", 400),
+]
+
+
+@pytest.mark.unit
+class TestAttributionReadErrorsRetry:
+    """A retryable read error while attributing a file (the location index, the asset id lookup, an
+    asset row) retries the message like an unreadable registration, with none of its workflows
+    launched. Any other error drops only that file, as before."""
+
+    def _run(self, event):
+        return TestRegistrationReadErrorsRetry()._run(event)
+
+    @pytest.mark.parametrize("error", RETRYABLE_READ_ERRORS, ids=lambda e: type(e).__name__ + str(e)[:40])
+    def test_a_retryable_asset_row_read_retries_its_message(self, tables, error):
+        tables([ASSET_A1])
+        with patch.object(wd.asset_storage_table, "get_item", side_effect=error):
+            response, m_invoke, m_warning = self._run(_sqs_event("prefix/a1/scan.e57"))
+        assert response["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+        assert not m_invoke.called
+        assert any("is retried" in str(c.args[0]) for c in m_warning.call_args_list)
+
+    def test_a_throttled_location_index_query_retries_its_message(self, tables, monkeypatch):
+        tables([ASSET_A1], ready=True)
+        monkeypatch.setattr(_fa, "resolve_owner", MagicMock(side_effect=RETRYABLE_READ_ERRORS[0]))
+        response, m_invoke, _ = self._run(_unbound_sqs_event("prefix/a1/scan.e57"))
+        assert response["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+        assert not m_invoke.called
+
+    def test_a_throttled_asset_id_lookup_retries_its_message(self, tables):
+        tables([ASSET_A1])
+        with patch.object(wd.asset_storage_table, "query", side_effect=RETRYABLE_READ_ERRORS[1]):
+            response, m_invoke, _ = self._run(_unbound_sqs_event("prefix/a1/scan.e57"))
+        assert response["batchItemFailures"] == [{"itemIdentifier": "m0"}]
+        assert not m_invoke.called
+
+    @pytest.mark.parametrize("error", NON_RETRYABLE_READ_ERRORS, ids=lambda e: str(e)[:60])
+    def test_any_other_read_error_drops_only_that_file(self, tables, error):
+        tables([ASSET_A1])
+        with patch.object(wd.asset_storage_table, "get_item", side_effect=error), \
+             patch.object(wd.logger, "exception") as m_exception:
+            response, m_invoke, _ = self._run(_sqs_event("prefix/a1/scan.e57"))
+        assert response["batchItemFailures"] == []
+        assert not m_invoke.called
+        assert any("continuing" in str(c.args[0]) for c in m_exception.call_args_list)
+
+    @pytest.mark.parametrize("error", RETRYABLE_READ_ERRORS + NON_RETRYABLE_READ_ERRORS + [RuntimeError("x")],
+                             ids=lambda e: type(e).__name__ + str(e)[:40])
+    def test_the_classifier(self, error):
+        assert wd.is_retryable_read_error(error) is (error in RETRYABLE_READ_ERRORS)

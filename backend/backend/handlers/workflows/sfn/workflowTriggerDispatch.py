@@ -25,6 +25,7 @@ import os
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
+from botocore.exceptions import ClientError, ConnectionError as BotocoreConnectionError, HTTPClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.resourceNames import get_table_name, ResourceKeys
@@ -83,6 +84,30 @@ _workflow_row_cache = {}
 
 _excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 _excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
+
+# AWS error codes of a read a later attempt can complete: throttling, capacity and service-side faults.
+RETRYABLE_READ_ERROR_CODES = frozenset({
+    "ProvisionedThroughputExceededException", "ThrottlingException", "Throttling", "RequestLimitExceeded",
+    "TooManyRequestsException", "InternalServerError", "InternalFailure", "ServiceUnavailable",
+    "ServiceUnavailableException",
+})
+
+
+class AttributionReadUnavailableError(Exception):
+    """A read a file's attribution depends on (the location index, the asset id lookup, an asset row)
+    failed in a way a later attempt can complete; the message is retried."""
+
+
+def is_retryable_read_error(error):
+    """Whether a failed AWS read is worth retrying: a throttle or service-side fault (one of
+    RETRYABLE_READ_ERROR_CODES, or HTTP 429 or 5xx), or a connection or timeout error."""
+    if isinstance(error, (BotocoreConnectionError, HTTPClientError)):
+        return True
+    if not isinstance(error, ClientError):
+        return False
+    status = (error.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
+    code = (error.response.get("Error") or {}).get("Code", "")
+    return code in RETRYABLE_READ_ERROR_CODES or status == 429 or status >= 500
 
 
 def _should_skip_key(s3_key):
@@ -392,8 +417,9 @@ def _iter_uploaded_objects(event):
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Dispatch fileUpload workflow triggers for each uploaded object in the (SQS-buffered
     EventBridge) event. Best-effort per file: per-file/per-workflow failures are logged and do not
-    fail the batch. A message whose files depend on a bucket registration that could not be read is
-    reported as a batch item failure and retried, with none of its workflows launched. A failure that
+    fail the batch. A message whose files depend on a bucket registration that could not be read, or
+    whose attribution met a retryable read error (`is_retryable_read_error`), is reported as a batch
+    item failure and retried, with none of its workflows launched. A failure that
     prevents dispatching the batch at all (trigger enumeration, or an error outside the per-file loop)
     raises so the SQS event source retries the batch and it eventually reaches the DLQ rather than
     being silently deleted."""
@@ -435,16 +461,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                     except RegistrationUnavailableError:
                         raise
                     except Exception as e:
+                        if is_retryable_read_error(e):
+                            raise AttributionReadUnavailableError(f"{s3_key}: {e}") from e
                         logger.exception(f"Error resolving {s3_key} for fileUpload triggers (continuing): {e}")
                         continue
                     if resolved:
                         pending.append((s3_key, version_id, resolved))
-            except RegistrationUnavailableError as e:
+            except (RegistrationUnavailableError, AttributionReadUnavailableError) as e:
                 identifier = batch_item_identifier(message_record) if message_record else ""
                 if not identifier:
                     raise
-                logger.warning(f"fileUpload dispatch could not read a bucket registration ({e}); "
-                               f"message {identifier} is retried")
+                unread = ("a bucket registration" if isinstance(e, RegistrationUnavailableError)
+                          else "what a file's attribution depends on")
+                logger.warning(f"fileUpload dispatch could not read {unread} ({e}); message {identifier} is retried")
                 failures.append({"itemIdentifier": identifier})
                 continue
             for s3_key, version_id, resolved in pending:
