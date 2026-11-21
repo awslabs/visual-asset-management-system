@@ -482,9 +482,11 @@ if mount -t efs -o tls ${trainingEfs.fileSystemId}:/ ${efsRootMount} && mountpoi
             }),
             resultPath: "$.batchResult",
             // Per mode, from openPipeline: 28800 s for training, 32400 s for evaluation, each equal to
-            // that mode's bundle taskTimeout. Both clocks start close together (the parent's at the
-            // workflow step, this one when the task is entered, a moment later), so this one fires
-            // first or together, and its Catch reports a readable failure.
+            // that mode's bundle taskTimeout. The parent's clock starts first (at the workflow step;
+            // vamsExecute, openPipeline and the Pass state run before this task is entered), so at the
+            // bound the parent's step timeout fires first and is what the execution records. The
+            // workflow's error handler then stops the registered sub-processes, this state machine and
+            // its Batch job, so the GPU is not left running.
             taskTimeout: sfn.Timeout.at("$.taskTimeoutSeconds"),
             // The heartbeat clock starts when this task is ENTERED, but the only producer is the
             // container (first beat 5 minutes after it starts). Nothing beats while the Batch job sits

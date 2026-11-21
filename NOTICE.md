@@ -522,19 +522,21 @@ content hash.
 
 **Isaac Lab Training Pipeline Dependencies**
 
-| Name                  | Version  | License                   | Notes                                                                                                                    |
-| :-------------------- | :------- | :------------------------ | :----------------------------------------------------------------------------------------------------------------------- |
-| NVIDIA Isaac Lab      | 3.0.0    | BSD-3-Clause / Apache-2.0 | Robot learning framework (`nvcr.io/nvidia/isaac-lab:3.0.0`)                                                              |
-| NVIDIA Isaac Sim      | 6.2      | NVIDIA Proprietary        | Base container image (NVIDIA EULA)                                                                                       |
-| Newton                | 1.6.1    | Apache-2.0                | Physics engine, default (`physics=newton_mjwarp`); ships in the base image                                               |
-| MuJoCo-Warp / MuJoCo  | 3.12.0   | Apache-2.0                | Newton's solver; ships in the base image                                                                                 |
-| NVIDIA Warp           | 1.17.0   | Apache-2.0                | GPU kernel framework used by Newton; ships in the base image                                                             |
-| RSL-RL                | 5.5.1    | BSD-3-Clause              | Reinforcement learning library from ETH Zurich; ships in the base image                                                  |
-| PyTorch               | 2.11     | BSD-3-Clause              | Deep learning framework; ships in the base image                                                                         |
-| MoviePy               | 1.0.3    | MIT                       | Video recording for evaluation; installed into the image                                                                 |
-| imageio-ffmpeg        | 0.6.0    | BSD-2-Clause              | Video encoding; installed into the image. It bundles an FFmpeg executable that is invoked as a subprocess and not linked |
-| aws-lambda-powertools | ^3.2.0   | MIT-0                     | Lambda utilities                                                                                                         |
-| boto3                 | 1.43.126 | Apache-2.0                | AWS SDK for Python                                                                                                       |
+| Name                               | Version  | License                                        | Notes                                                                                                                    |
+| :--------------------------------- | :------- | :--------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------- |
+| NVIDIA Isaac Lab                   | 3.0.0    | BSD-3-Clause / Apache-2.0                      | Robot learning framework (`nvcr.io/nvidia/isaac-lab:3.0.0`)                                                              |
+| NVIDIA Isaac Sim                   | 6.2      | NVIDIA Proprietary                             | Base container image (NVIDIA EULA)                                                                                       |
+| Newton                             | 1.6.1    | Apache-2.0                                     | Physics engine, default (`physics=newton_mjwarp`); ships in the base image                                               |
+| MuJoCo-Warp / MuJoCo               | 3.12.0   | Apache-2.0                                     | Newton's solver; ships in the base image                                                                                 |
+| NVIDIA Warp                        | 1.17.0   | Apache-2.0                                     | GPU kernel framework used by Newton; ships in the base image                                                             |
+| RSL-RL                             | 5.5.1    | BSD-3-Clause                                   | Reinforcement learning library from ETH Zurich; ships in the base image                                                  |
+| PyTorch                            | 2.11     | BSD-3-Clause                                   | Deep learning framework; ships in the base image                                                                         |
+| MoviePy                            | 1.0.3    | MIT                                            | Video recording for evaluation; installed into the image                                                                 |
+| imageio-ffmpeg                     | 0.6.0    | BSD-2-Clause                                   | Video encoding; installed into the image. It bundles an FFmpeg executable that is invoked as a subprocess and not linked |
+| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2    | LGPL-2.1-or-later / GPL-2.0-or-later per build | Static binary shipped inside the imageio-ffmpeg wheel; invoked as a subprocess.                                          |
+| boto3                              | 1.41.5   | Apache-2.0                                     | AWS SDK for Python, in the training image (held at the version the base image's botocore allows)                         |
+| aws-lambda-powertools              | 2.36.0   | MIT-0                                          | Lambda utilities, in the pipeline's AWS Lambda functions (the VAMS Lambda base layer)                                    |
+| boto3                              | 1.43.126 | Apache-2.0                                     | AWS SDK for Python, in the pipeline's AWS Lambda functions (the VAMS Lambda base layer)                                  |
 
 **Container Base Image**
 

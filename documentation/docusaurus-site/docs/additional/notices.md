@@ -128,6 +128,16 @@ The Video SOP/BOM Extraction pipeline container installs the Debian trixie `ffmp
 GPL-2.0-or-later terms apply only when this optional pipeline is enabled (`app.pipelines.useGenAiVideoSopBom.enabled`). Review the license requirements with your legal team before enabling it. See the [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md#third-party-library-licenses) page.
 :::
 
+### Isaac Lab Training Pipeline Library Notice
+
+The Isaac Lab training pipeline container is built on the NVIDIA Isaac Lab 3.0.0 image (`nvcr.io/nvidia/isaac-lab:3.0.0`, pinned by digest), which carries NVIDIA Isaac Sim 6.2. Isaac Sim is proprietary NVIDIA software under the NVIDIA Software License Agreement; see [NVIDIA License Notices](#nvidia-license-notices). The base image also ships the open-source libraries the pipeline runs: Isaac Lab (BSD-3-Clause, with parts under Apache-2.0), the Newton physics engine (Apache-2.0), MuJoCo-Warp and MuJoCo (Apache-2.0), NVIDIA Warp (Apache-2.0), RSL-RL (BSD-3-Clause) and PyTorch (BSD-3-Clause). The image build adds MoviePy (MIT) and `imageio-ffmpeg` (BSD-2-Clause) for evaluation video, and boto3 (Apache-2.0).
+
+`imageio-ffmpeg` bundles a static FFmpeg 7.0.2 binary, which the pipeline runs as a separate process to encode evaluation video and does not link against. FFmpeg is licensed under LGPL-2.1-or-later, or GPL-2.0-or-later for a build that enables its GPL components; the license of the bundled binary is set by the `imageio-ffmpeg` release's build. The exact versions are in the repository's `NOTICE.md`.
+
+:::warning
+These terms apply only when this optional pipeline is enabled (`app.pipelines.useIsaacLabTraining.enabled`, which also requires `acceptNvidiaEula: true`). Review the license requirements with your legal team before enabling it. See the [NVIDIA Isaac Lab pipeline](../pipelines/nvidia-isaac-lab.md) page.
+:::
+
 ### Gaussian Splat Toolbox Pipeline Model Notice
 
 The Gaussian Splat Toolbox container image ships the segmentation model weights its optional
@@ -168,7 +178,7 @@ The `isaacsim` recipe (`backendAddons/edh/amiRecipes/isaacsim/`) downloads and i
 
 ### NVIDIA License Notices
 
-**Isaac Lab Training Pipeline:** Uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
+**Isaac Lab Training Pipeline:** Uses the NVIDIA Isaac Lab 3.0.0 container image, which carries NVIDIA Isaac Sim 6.2. NVIDIA Isaac Sim container images are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
 
 **NVIDIA Cosmos Predict Pipeline (v1 -- Predict1):** The v1 pipeline is not a deployable pipeline. Its container definition is retained under `backendPipelines/genAi/nvidia/cosmos/predict/containerv1/` as a reference implementation for anyone building an equivalent pipeline of their own, and there is no configuration key that deploys it — `app.pipelines.useNvidiaCosmos` provisions the v2.5 pipeline described below. The licence terms are recorded here because the container definition ships in the repository.
 
