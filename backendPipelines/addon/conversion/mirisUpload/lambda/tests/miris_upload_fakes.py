@@ -19,7 +19,8 @@ def claim_held_by(s3_mock, task_token):
 
 class FakeS3:
     """An in-memory S3 client covering what the claim code calls: a paginated listing, a
-    conditional put, get and delete. Objects are {(bucket, key): (body, etag)}."""
+    conditional put (IfNoneMatch and IfMatch), get and delete. Objects are
+    {(bucket, key): (body, etag)}; `modified` holds each object's write time, taken from `now`."""
 
     def __init__(self):
         import types
@@ -27,6 +28,9 @@ class FakeS3:
         from botocore.exceptions import ClientError
 
         self.objects = {}
+        self.modified = {}
+        self.now = 1_800_000_000.0
+        self.puts = 0
         self.exceptions = types.SimpleNamespace(ClientError=ClientError)
         self.list_calls = []
 
@@ -49,20 +53,34 @@ class FakeS3:
 
         return _Paginator()
 
-    def put_object(self, Bucket, Key, Body=b"", IfNoneMatch=None, **_):
-        if IfNoneMatch == "*" and (Bucket, Key) in self.objects:
+    def put_object(self, Bucket, Key, Body=b"", IfNoneMatch=None, IfMatch=None, **_):
+        current = self.objects.get((Bucket, Key))
+        if IfNoneMatch == "*" and current is not None:
             raise self.exceptions.ClientError(
                 {"Error": {"Code": "PreconditionFailed", "Message": "exists"}}, "PutObject")
-        self.objects[(Bucket, Key)] = (Body, '"put"')
+        if IfMatch is not None and (current is None or current[1] != IfMatch):
+            raise self.exceptions.ClientError(
+                {"Error": {"Code": "PreconditionFailed", "Message": "changed"}}, "PutObject")
+        self.puts += 1
+        self.objects[(Bucket, Key)] = (Body, f'"put-{self.puts}"')
+        self.modified[(Bucket, Key)] = self.now
         return {}
 
     def get_object(self, Bucket, Key):
         import io
+        from datetime import datetime, timezone
 
         if (Bucket, Key) not in self.objects:
             raise self.exceptions.ClientError(
                 {"Error": {"Code": "NoSuchKey", "Message": "missing"}}, "GetObject")
-        return {"Body": io.BytesIO(self.objects[(Bucket, Key)][0])}
+        body, etag = self.objects[(Bucket, Key)]
+        modified = datetime.fromtimestamp(self.modified.get((Bucket, Key), self.now), timezone.utc)
+        return {"Body": io.BytesIO(body), "ETag": etag, "LastModified": modified}
+
+    def claim(self, bucket, key):
+        import json
+
+        return json.loads(self.objects[(bucket, key)][0])
 
     def delete_object(self, Bucket, Key):
         self.objects.pop((Bucket, Key), None)

@@ -4,11 +4,13 @@
  */
 
 import * as cdk from "aws-cdk-lib";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { Construct } from "constructs";
@@ -60,6 +62,13 @@ export const MIRIS_UPLOAD_CONTAINER_OVERHEAD_SECONDS = 1200;
  * while the job still runs and no end state reports to the outer workflow.
  */
 export const MIRIS_UPLOAD_ORCHESTRATION_MARGIN_SECONDS = 1800;
+
+/**
+ * Time beyond the state machine's own limit within which its end state, or the execution-ended
+ * rule, reports to the outer workflow. A pending claim older than the limit plus this belongs to a
+ * run that never reported, and the outer workflow task times out at the same point.
+ */
+export const MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS = 900;
 
 /**
  * The job's memory. Parsing text USD costs about 8 times the file size, so this bounds the text
@@ -211,6 +220,8 @@ export class MirisUploadConstruct extends Construct {
             upload.taskTimeoutSeconds + MIRIS_UPLOAD_CONTAINER_OVERHEAD_SECONDS;
         const executionTimeoutSeconds =
             attemptDurationSeconds + MIRIS_UPLOAD_ORCHESTRATION_MARGIN_SECONDS;
+        const reportedWithinSeconds =
+            executionTimeoutSeconds + MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS;
 
         // Batch Fargate pipeline
         const batchPipeline = new BatchFargatePipelineConstruct(
@@ -406,6 +417,21 @@ export class MirisUploadConstruct extends Construct {
         // reported from the status change: the end Lambda releases the claim and fails the outer
         // workflow's task token. A FAILED execution whose failure branch already reported meets a
         // closed token, which the Lambda treats as done.
+        // What the execution-ended rule cannot deliver to pipelineEnd after its retries.
+        const executionEndedDlq = new sqs.Queue(this, "MirisUploadExecutionEndedDLQ", {
+            retentionPeriod: cdk.Duration.days(14),
+            encryption: kmsKey ? sqs.QueueEncryption.KMS : sqs.QueueEncryption.SQS_MANAGED,
+            encryptionMasterKey: kmsKey,
+            enforceSSL: true,
+        });
+        NagSuppressions.addResourceSuppressions(executionEndedDlq, [
+            {
+                id: "AwsSolutions-SQS3",
+                reason:
+                    "This queue is itself the dead-letter target for the Miris upload execution-ended " +
+                    "EventBridge rule, so it does not take a further dead-letter queue. An alarm watches it.",
+            },
+        ]);
         new events.Rule(this, "MirisUploadExecutionEndedRule", {
             description:
                 "Releases the Miris upload claim and fails the workflow task when the inner execution ends unreported",
@@ -417,7 +443,28 @@ export class MirisUploadConstruct extends Construct {
                     stateMachineArn: [stateMachine.stateMachineArn],
                 },
             },
-            targets: [new eventsTargets.LambdaFunction(pipelineEndFunction, { retryAttempts: 2 })],
+            targets: [
+                new eventsTargets.LambdaFunction(pipelineEndFunction, {
+                    retryAttempts: 2,
+                    deadLetterQueue: executionEndedDlq,
+                }),
+            ],
+        });
+        new cloudwatch.Alarm(this, "MirisUploadEndRuleDLQAlarm", {
+            alarmName: `${props.config.name}-${props.config.app.baseStackName}-mirisUploadEndRuleDLQ`,
+            alarmDescription:
+                "An ended Miris upload execution could not be reported to pipelineEnd, so its workflow " +
+                "task stays running until its timeout and its claim stays pending until it goes stale. " +
+                "Fix the cause (see the pipelineEnd function's log), then clear the claim as the Miris " +
+                "upload pipeline page describes.",
+            metric: executionEndedDlq.metricApproximateNumberOfMessagesVisible({
+                period: cdk.Duration.minutes(5),
+                statistic: cloudwatch.Stats.MAXIMUM,
+            }),
+            threshold: 0,
+            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            evaluationPeriods: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
         });
 
         // Open pipeline Lambda
@@ -444,7 +491,8 @@ export class MirisUploadConstruct extends Construct {
             props.storageResources,
             props.config,
             props.vpc,
-            props.pipelineSubnets
+            props.pipelineSubnets,
+            reportedWithinSeconds
         );
 
         // VAMS execute Lambda
@@ -487,6 +535,8 @@ export class MirisUploadConstruct extends Construct {
                     workflowId: "miris-upload",
                 },
                 triggerEnabled: upload.autoRegisterAutoTriggerOnFileUpload === true,
+                // A run that never reports stops showing as running once its claim goes stale.
+                executionConfigOverrides: { taskTimeout: String(reportedWithinSeconds) },
             });
         }
 

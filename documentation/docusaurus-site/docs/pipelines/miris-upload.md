@@ -28,15 +28,18 @@ The workflow takes exactly one file; a whole-asset (`/`) or folder selection is 
 
 ### Duplicate uploads and re-runs
 
-A `fileUpload` trigger fires once per matching file, so an asset made of several USD layers fans out to one execution per layer. The pipeline collapses that fan-out with a claim object in the auxiliary bucket, `locks/miris-upload/<databaseId>/<assetId>/<fingerprint>.claim`, written with a conditional Amazon S3 put. The fingerprint is a SHA-256 digest of the asset-relative key and ETag of every file under the asset root whose extension is one of `triggerExtensions`. The first execution to write the claim proceeds; the others report themselves as skipped without an AWS Batch job.
+A `fileUpload` trigger fires once per matching file, so an asset made of several USD layers fans out to one execution per layer. The pipeline collapses that fan-out with a claim object in the auxiliary bucket, `locks/miris-upload/<databaseId>/<assetId>/<fingerprint>.claim`, written with a conditional Amazon S3 put. The fingerprint is a SHA-256 digest of the asset-relative key and ETag of every file under the asset root whose extension is one of `triggerExtensions`. The first execution to write the claim proceeds; the others report themselves as skipped without an AWS Batch job. A claim records when it was taken and is `pending` until its run succeeds, when it becomes `completed`.
 
--   **Unchanged USD files.** A successful upload keeps its claim, so a later trigger on the same content is skipped.
+-   **Unchanged USD files.** A successful upload keeps its claim and marks it `completed`, so a later trigger on the same content is skipped whatever the claim's age.
 -   **Changed, added, or reverted USD files** give a new fingerprint, so the next trigger uploads. A successful upload also deletes the asset's other claims.
 -   **Failed runs** release their claim, so the next trigger on the same content uploads.
--   **Manual runs**, from **Execute Workflow** or the viewer, always upload and write no claim; when they succeed they delete the asset's claims. No claim needs to be deleted by hand.
+-   **Runs that end without reporting** (the execution-ended rule cannot reach its end function, or a release fails) leave a `pending` claim. Once it is older than the inner execution's time limit plus 15 minutes it is stale, and the next trigger on the same content replaces it and uploads. A dead-letter queue on the rule keeps what it could not deliver, and the `<name>-<baseStackName>-mirisUploadEndRuleDLQ` alarm reports it.
+-   **Manual runs**, from **Execute Workflow** or the viewer, always upload and write no claim; when they succeed they delete the asset's claims.
 -   **A change to non-USD files alone does not start an upload**, because only trigger-extension files enter the fingerprint. Run the workflow on one of the asset's USD files to upload a texture change.
 -   **A queued run uploads the asset as it is when its job starts.** When newer files land while a run waits in the job queue, it can upload the newer content under the earlier claim. The next trigger, or a manual run, corrects the stream.
 -   **A multi-file upload can upload twice**, when a run fingerprints the asset before all of its USD files have landed.
+
+To clear a claim by hand, so that the next trigger on unchanged content uploads again (for example when an upload succeeded but the stream metadata was not recorded), delete the asset's objects under `locks/miris-upload/<databaseId>/<assetId>/` in the auxiliary bucket, or run the workflow manually on one of the asset's USD files.
 
 ---
 

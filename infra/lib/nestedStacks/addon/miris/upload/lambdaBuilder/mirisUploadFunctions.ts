@@ -139,7 +139,8 @@ export function buildMirisUploadGateFunction(
     storageResources: storageResources,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    claimStaleSeconds: number
 ): lambda.Function {
     const name = "mirisUploadGate";
     const region = cdk.Stack.of(scope).region;
@@ -152,6 +153,8 @@ export function buildMirisUploadGateFunction(
         environment: {
             ALLOWED_INPUT_FILEEXTENSIONS:
                 config.app.addons.useMirisStreaming.upload.triggerExtensions,
+            // A pending claim older than this is stale and the next triggered run replaces it.
+            MIRIS_UPLOAD_CLAIM_STALE_SECONDS: String(claimStaleSeconds),
         },
     });
 
@@ -365,6 +368,16 @@ export function buildPipelineEndFunction(
 
     // A run that does not succeed releases its claim here, so the same content can be retried.
     grantClaimRelease(fun, storageResources);
+    // A successful run marks its claim completed.
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["s3:PutObject"],
+            resources: [
+                `${storageResources.s3.assetAuxiliaryBucket.bucketArn}/${MIRIS_CLAIM_PREFIX}/*`,
+            ],
+        })
+    );
     // A successful run lists the asset's claims to retire those on other content; the listing is
     // limited to the claim prefix.
     fun.addToRolePolicy(

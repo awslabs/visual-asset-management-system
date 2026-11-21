@@ -31,18 +31,23 @@ uploads in its own database, which VAMS resolves natively during trigger matchin
 """
 import json
 import os
+import time
 
 import boto3
 from botocore.config import Config
 from customLogging.logger import safeLogger
 
 from mirisClaim import (
+    CLAIM_COMPLETED,
     asset_root_prefix,
+    claim_body,
     claim_location,
     content_fingerprint,
+    is_stale,
     list_trigger_files,
     owner_id,
     parse_extensions,
+    read_claim,
 )
 
 logger = safeLogger(service="MirisUploadGate")
@@ -52,6 +57,8 @@ sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGIO
 
 # The extensions that trigger the pipeline; only files with one of them enter the fingerprint.
 ALLOWED_INPUT_FILEEXTENSIONS = os.environ.get("ALLOWED_INPUT_FILEEXTENSIONS", ".usd,.usda,.usdc,.usdz")
+# Age after which a pending claim is stale: the inner execution's time limit plus a margin.
+CLAIM_STALE_SECONDS = int(os.environ.get("MIRIS_UPLOAD_CLAIM_STALE_SECONDS", "86400"))
 
 
 def _parse_body(event):
@@ -61,20 +68,15 @@ def _parse_body(event):
     return body
 
 
-def _claim_is_ours(bucket, key, owner):
-    """Whether the claim already at `key` was written by this execution.
-
-    Anything unverifiable (no owner to compare, a claim that has since been released, a claim
-    written before claims recorded an owner, an unreadable body) is treated as another execution's.
-    """
-    if not owner:
-        return False
+def _replace_stale_claim(bucket, key, etag, body):
+    """Overwrite a stale claim, conditional on it being unchanged since it was read, so two runs
+    cannot both take it over. Returns True when this run now holds the claim."""
     try:
-        existing = json.loads(s3_client.get_object(Bucket=bucket, Key=key)["Body"].read())
-    except (s3_client.exceptions.ClientError, ValueError) as e:
-        logger.info(f"Could not confirm claim ownership, treating it as held elsewhere: {e}")
+        s3_client.put_object(Bucket=bucket, Key=key, Body=body, IfMatch=etag)
+    except s3_client.exceptions.ClientError as e:
+        logger.info(f"Stale claim s3://{bucket}/{key} changed before it could be replaced: {e}")
         return False
-    return isinstance(existing, dict) and existing.get("owner") == owner
+    return True
 
 
 def _report_skipped(task_token, reason):
@@ -124,31 +126,31 @@ def lambda_handler(event, context):
         logger.warning("No claim location for this run; proceeding without dedup")
         return {"gate": "proceed", "claimFingerprint": ""}
 
+    now = time.time()
+    new_claim = claim_body(database_id, asset_id, fingerprint, body.get("mirisAssetName", ""), owner, now)
     try:
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=json.dumps({
-                "databaseId": database_id,
-                "assetId": asset_id,
-                "fingerprint": fingerprint,
-                "mirisAssetName": body.get("mirisAssetName", ""),
-                "owner": owner,
-            }).encode("utf-8"),
-            IfNoneMatch="*",
-        )
+        s3_client.put_object(Bucket=bucket, Key=key, Body=new_claim, IfNoneMatch="*")
     except s3_client.exceptions.ClientError as e:
         code = e.response.get("Error", {}).get("Code", "")
-        if code in ("PreconditionFailed", "ConditionalRequestConflict"):
-            if _claim_is_ours(bucket, key, owner):
-                logger.info(f"Claim s3://{bucket}/{key} already held by this execution; proceeding")
-                return {"gate": "proceed", "claimFingerprint": fingerprint}
+        if code not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise
+        # Without a task token this run can neither hold a claim nor report its outcome.
+        existing, etag, claimed_at = read_claim(s3_client, bucket, key) if owner else (None, None, None)
+        if existing is not None and existing.get("owner") == owner:
+            logger.info(f"Claim s3://{bucket}/{key} already held by this execution; proceeding")
+            return {"gate": "proceed", "claimFingerprint": fingerprint}
+        if existing is not None and is_stale(existing, claimed_at, CLAIM_STALE_SECONDS, now) \
+                and _replace_stale_claim(bucket, key, etag, new_claim):
+            logger.info(f"Replaced stale claim s3://{bucket}/{key} taken at {claimed_at}")
+            return {"gate": "proceed", "claimFingerprint": fingerprint}
+        if existing is not None and existing.get("state") == CLAIM_COMPLETED:
+            reason = f"This content of asset {asset_id!r} is already uploaded to Miris"
+        else:
             reason = (f"Miris upload of this content of asset {asset_id!r} is already claimed by "
                       f"another execution")
-            logger.info(f"Skipping: {reason}")
-            _report_skipped(task_token, reason)
-            return {"gate": "skip", "reason": reason}
-        raise
+        logger.info(f"Skipping: {reason}")
+        _report_skipped(task_token, reason)
+        return {"gate": "skip", "reason": reason}
 
     logger.info(f"Claimed s3://{bucket}/{key}")
     return {"gate": "proceed", "claimFingerprint": fingerprint}

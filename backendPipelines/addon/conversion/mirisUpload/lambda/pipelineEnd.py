@@ -8,9 +8,10 @@ inside the execution can reach, a state machine timeout or a stopped execution, 
 leave the outer workflow task waiting out its own timeout and the claim in place.
 
 A run that does not succeed also releases the dedup claim the gate wrote, so the same content is
-eligible again for the next trigger. A successful run keeps its claim: that record is what collapses
-the per-file trigger fan-out and repeat triggers on unchanged content. It also retires the asset's
-claims on other content, so a later trigger on earlier content (a reverted version) uploads again.
+eligible again for the next trigger. A successful run keeps its claim and marks it completed: that
+record is what collapses the per-file trigger fan-out and repeat triggers on unchanged content, and
+a completed claim never goes stale. It also retires the asset's claims on other content, so a later
+trigger on earlier content (a reverted version) uploads again.
 """
 import json
 import os
@@ -225,6 +226,15 @@ def lambda_handler(event, context):
     status = event.get("status", "success")
 
     if status == "success":
+        mirisClaim.complete_claim(
+            s3_client,
+            logger,
+            event.get("inputOutputS3AssetAuxiliaryFilesPath", ""),
+            event.get("databaseId", ""),
+            event.get("assetId", ""),
+            event.get("claimFingerprint", ""),
+            mirisClaim.owner_id(task_token),
+        )
         mirisClaim.retire_superseded_claims(
             s3_client,
             logger,

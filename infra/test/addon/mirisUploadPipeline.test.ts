@@ -15,6 +15,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import { MIRIS_DEPENDENCY_MANIFEST_PREFIX } from "../../lib/nestedStacks/addon/miris/upload/lambdaBuilder/mirisUploadFunctions";
 import {
     MIRIS_UPLOAD_CONTAINER_OVERHEAD_SECONDS,
+    MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS,
     MIRIS_UPLOAD_MEMORY_MIB,
     MIRIS_UPLOAD_ORCHESTRATION_MARGIN_SECONDS,
 } from "../../lib/nestedStacks/addon/miris/upload/constructs/mirisUpload-construct";
@@ -120,6 +121,14 @@ describe("Miris upload timeouts", () => {
         );
         expect(byName.MIRIS_UPLOAD_ATTEMPT_DURATION_SECONDS.Value).toBe(String(attemptSeconds()));
         expect(byName.VAMS_TASK_MEMORY_MIB.Value).toBe(String(MIRIS_UPLOAD_MEMORY_MIB));
+    });
+
+    test("a pending claim goes stale once the state machine's limit and the end-report margin pass", () => {
+        const executionSeconds = parseAsl(singleStateMachine(template)).TimeoutSeconds;
+        expect(MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS).toBeGreaterThanOrEqual(600);
+        expect(envOf("mirisUploadGate.lambda_handler").MIRIS_UPLOAD_CLAIM_STALE_SECONDS).toBe(
+            String(executionSeconds + MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS)
+        );
     });
 
     test("the workflow task timeout in the vamsSchema bundle covers the state machine", () => {
@@ -432,6 +441,44 @@ describe("Miris upload IAM", () => {
     });
 });
 
+describe("Miris upload execution-ended rule", () => {
+    test("its target retries twice and sends what it cannot deliver to an encrypted dead-letter queue", () => {
+        const rules = byType("AWS::Events::Rule").filter(([id]) =>
+            id.startsWith("MirisUploadPipelineMirisUploadExecutionEndedRule")
+        );
+        expect(rules).toHaveLength(1);
+        const [target] = rules[0][1].Properties.Targets;
+        expect(target.RetryPolicy.MaximumRetryAttempts).toBe(2);
+        const [queueId] = target.DeadLetterConfig.Arn["Fn::GetAtt"];
+        const queue = resources[queueId];
+        expect(queue.Type).toBe("AWS::SQS::Queue");
+        expect(
+            queue.Properties.SqsManagedSseEnabled ?? queue.Properties.KmsMasterKeyId
+        ).toBeTruthy();
+    });
+
+    test("an alarm with no action watches the dead-letter queue", () => {
+        const rules = byType("AWS::Events::Rule").filter(([id]) =>
+            id.startsWith("MirisUploadPipelineMirisUploadExecutionEndedRule")
+        );
+        const [queueId] = rules[0][1].Properties.Targets[0].DeadLetterConfig.Arn["Fn::GetAtt"];
+        const alarms = byType("AWS::CloudWatch::Alarm").filter(([, a]) =>
+            JSON.stringify(a.Properties.Dimensions ?? []).includes(queueId)
+        );
+        expect(alarms).toHaveLength(1);
+        const [, alarm] = alarms[0];
+        expect(alarm.Properties).toMatchObject({
+            MetricName: "ApproximateNumberOfMessagesVisible",
+            Namespace: "AWS/SQS",
+            Threshold: 0,
+            ComparisonOperator: "GreaterThanThreshold",
+            TreatMissingData: "notBreaching",
+        });
+        expect(alarm.Properties.AlarmName).toMatch(/-mirisUploadEndRuleDLQ$/);
+        expect(alarm.Properties.AlarmActions).toBeUndefined();
+    });
+});
+
 describe("Miris upload auxiliary-bucket grants", () => {
     const CLAIM_OBJECTS = "${AUX}/locks/miris-upload/*";
 
@@ -482,6 +529,8 @@ describe("Miris upload auxiliary-bucket grants", () => {
                     resources: ["${AUX}"],
                     condition: { StringLike: { "s3:prefix": ["locks/miris-upload/*"] } },
                 },
+                // A successful run marks its claim completed.
+                claimObjects(["s3:PutObject"]),
             ],
         ],
     ])("%s touches the auxiliary bucket only under the claim prefix", (stem, expected) => {
@@ -577,6 +626,11 @@ describe("Miris upload registration", () => {
             workflowId: "miris-upload",
         });
         expect(props.triggerEnabled).toBe("false");
+        // The workflow task times out with the claim's stale window, not the bundle's 48 hours.
+        const executionSeconds = parseAsl(singleStateMachine(template)).TimeoutSeconds;
+        expect(JSON.parse(props.executionConfigOverrides)).toEqual({
+            taskTimeout: String(executionSeconds + MIRIS_UPLOAD_END_REPORT_MARGIN_SECONDS),
+        });
 
         const workflow = JSON.parse(
             fs.readFileSync(path.join(PIPELINE_DIR, "vamsSchema", "workflow.json"), "utf-8")

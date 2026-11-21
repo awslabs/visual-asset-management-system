@@ -15,14 +15,20 @@ added layer computes a new one. Only the BUCKET is taken from the auxiliary URI:
 scoped to the workflow execution, so folding the prefix into the key would give every fanned-out
 execution a different key and defeat the dedup entirely.
 
-A successful upload retires the asset's claims on any other content, so the only claim left is the
-one for the content Miris streams.
+A claim is ``pending`` while its run is in flight and ``completed`` once the run succeeded. A
+completed claim keeps collapsing repeat triggers on the same content; a pending claim older than the
+inner execution's time limit plus a margin is stale (its run ended without reporting) and the next
+triggered run replaces it. A successful upload retires the asset's claims on any other content, so
+the only claim left is the one for the content Miris streams.
 """
 import hashlib
 import json
 import os
 
-CLAIM_PREFIX = os.environ.get("MIRIS_UPLOAD_CLAIM_PREFIX", "locks/miris-upload")
+# Matches the IAM grants on the auxiliary bucket (MIRIS_CLAIM_PREFIX in mirisUploadFunctions.ts).
+CLAIM_PREFIX = "locks/miris-upload"
+CLAIM_PENDING = "pending"
+CLAIM_COMPLETED = "completed"
 
 
 def parse_extensions(value):
@@ -103,6 +109,78 @@ def retire_superseded_claims(s3_client, logger, aux_uri, database_id, asset_id, 
     if deleted:
         logger.info(f"Retired {len(deleted)} superseded claim(s) of asset {database_id}/{asset_id}")
     return deleted
+
+
+def claim_body(database_id, asset_id, fingerprint, miris_asset_name, owner, claimed_at,
+               state=CLAIM_PENDING):
+    """The bytes of a claim."""
+    return json.dumps({
+        "databaseId": database_id,
+        "assetId": asset_id,
+        "fingerprint": fingerprint,
+        "mirisAssetName": miris_asset_name,
+        "owner": owner,
+        "state": state,
+        "claimedAt": claimed_at,
+    }).encode("utf-8")
+
+
+def read_claim(s3_client, bucket, key):
+    """(claim, ETag, claimed-at epoch seconds) of the claim at `key`; (None, None, None) when there
+    is no readable claim there.
+
+    The claimed-at time is the claim's own `claimedAt`, else the object's last write (a claim
+    written before claims recorded a time), else None.
+    """
+    try:
+        response = s3_client.get_object(Bucket=bucket, Key=key)
+        claim = json.loads(response["Body"].read())
+    except Exception:
+        return None, None, None
+    if not isinstance(claim, dict):
+        return None, None, None
+    claimed_at = claim.get("claimedAt")
+    if isinstance(claimed_at, bool) or not isinstance(claimed_at, (int, float)):
+        last_modified = response.get("LastModified")
+        claimed_at = last_modified.timestamp() if hasattr(last_modified, "timestamp") else None
+    return claim, response.get("ETag"), claimed_at
+
+
+def is_stale(claim, claimed_at, stale_after_seconds, now):
+    """Whether a claim belongs to a run that ended without reporting: still pending, and taken more
+    than `stale_after_seconds` ago. A completed claim, or one whose age is unknown, never is."""
+    if claim.get("state") == CLAIM_COMPLETED or claimed_at is None:
+        return False
+    return now - claimed_at > stale_after_seconds
+
+
+def complete_claim(s3_client, logger, aux_uri, database_id, asset_id, fingerprint, owner):
+    """Mark this execution's claim completed after a successful run, so later triggers on the same
+    content skip it whatever its age.
+
+    Only the claim `owner` holds is changed, and only if it has not been replaced since it was read.
+    Best-effort: left pending, the claim goes stale and a later trigger uploads the content again.
+    Returns True when the claim was marked.
+    """
+    bucket, key = claim_location(aux_uri, database_id, asset_id, fingerprint)
+    if not bucket:
+        return False
+    claim, etag, _ = read_claim(s3_client, bucket, key)
+    if claim is None or not owner or claim.get("owner") != owner:
+        logger.info(f"No claim of this execution to complete at s3://{bucket}/{key}")
+        return False
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=json.dumps({**claim, "state": CLAIM_COMPLETED}).encode("utf-8"),
+            IfMatch=etag,
+        )
+    except Exception as e:
+        logger.warning(f"Could not mark claim s3://{bucket}/{key} completed: {e}")
+        return False
+    logger.info(f"Marked claim s3://{bucket}/{key} completed")
+    return True
 
 
 def owner_id(task_token):

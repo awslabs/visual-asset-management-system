@@ -245,9 +245,16 @@ describe("Miris add-on in static mode with the upload pipeline", () => {
         }
     );
 
-    test("an alarm watches Miris auth failures; static mode has no cleanup queue to alarm on", () => {
+    test("alarms watch Miris auth failures and the upload's end-rule queue; static mode has no cleanup queue", () => {
         expectAuthFailureAlarm(synth);
-        expect(mirisAlarms(synth)).toHaveLength(1);
+        expect(
+            mirisAlarms(synth)
+                .map((a) => a.properties.AlarmName)
+                .sort()
+        ).toEqual([
+            expect.stringMatching(/-mirisAuthFailures$/),
+            expect.stringMatching(/-mirisUploadEndRuleDLQ$/),
+        ]);
     });
 
     test.each([STATUS_HANDLER, MINT_HANDLER])(
