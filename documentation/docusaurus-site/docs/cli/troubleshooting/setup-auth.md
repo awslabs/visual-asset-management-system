@@ -154,10 +154,10 @@ Amazon Cognito issues a `NEW_PASSWORD_REQUIRED` challenge for new accounts.
 
 **Resolution:**
 
-Provide the new password with `--new-password`. In interactive mode you are prompted for it if omitted; with `--json-output`, `--new-password` is required.
+Provide the new password with `--new-password-stdin`, which reads it from standard input after the current password (`--new-password <password>` also works but puts the password in the OS process table). In interactive mode you are prompted for it if omitted; with `--json-output`, one of the two is required.
 
 ```bash
-vamscli auth login -u user@example.com -p temp-password --new-password new-password
+printf '%s\n%s\n' "$TEMP_PASSWORD" "$NEW_PASSWORD" | vamscli auth login -u user@example.com --password-stdin --new-password-stdin
 ```
 
 :::note
@@ -178,14 +178,14 @@ You can also complete a forced change with `vamscli auth change-password`, which
     vamscli auth change-password -u user@example.com
     ```
 
--   If you have forgotten your current password, use the two-step self-service `vamscli auth forgot-password`. Run it with only `--username` to email a verification code, then run it again with `--code` and `--new-password` to confirm.
+-   If you have forgotten your current password, use the two-step self-service `vamscli auth forgot-password`. Run it with only `--username` to email a verification code, then run it again with `--code` and `--new-password-stdin` to confirm.
 
     ```bash
     # Step 1: request a code
     vamscli auth forgot-password -u user@example.com
 
-    # Step 2: confirm with the emailed code
-    vamscli auth forgot-password -u user@example.com --code 123456 --new-password new-password
+    # Step 2: confirm with the emailed code; the new password is read from stdin
+    printf '%s\n' "$NEW_PASSWORD" | vamscli auth forgot-password -u user@example.com --code 123456 --new-password-stdin
     ```
 
 :::note

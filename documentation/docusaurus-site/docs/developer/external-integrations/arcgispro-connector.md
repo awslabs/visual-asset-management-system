@@ -61,7 +61,8 @@ For VAMS deployments using AWS Cognito as the identity provider. Enter your VAMS
 CLI equivalent:
 
 ```bash
-vamscli auth login -u user@example.com -p yourpassword
+vamscli auth login -u user@example.com            # prompts for the password
+printf '%s\n' "$VAMS_PASSWORD" | vamscli auth login -u user@example.com --password-stdin   # in a script
 ```
 
 ### Token override authentication
@@ -74,8 +75,9 @@ For VAMS deployments using an external identity provider, or when authenticating
 CLI equivalent:
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "vams_your-api-key"
-vamscli auth login --user-id user@example.com --token-override "eyJhbGciOiJSUzI1NiIs..."
+# The key or token is read from stdin, so it never appears in the process's arguments
+echo "$VAMS_API_KEY" | vamscli auth login --user-id user@example.com --token-override-stdin
+echo "$IDP_JWT" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 ## Usage
