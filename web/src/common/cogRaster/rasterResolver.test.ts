@@ -402,9 +402,9 @@ describe("a file opened at a version (R4-1)", () => {
         expect(result).toMatchObject({
             usedCog: false,
             staleCog: true,
-            label: "site.tif (version v1)",
+            label: "site.tif (asset version 3)",
         });
-        expect(result.file).toEqual({ ...FILE, assetVersionId: "3", versionId: "v1" });
+        expect(result.file).toEqual({ ...FILE, assetVersionId: "3" });
         expect(requestPresignedUrl).toHaveBeenCalledTimes(1);
         expect(fetchFileInfo).toHaveBeenCalledWith(
             expect.objectContaining({ fileKey: FILE.key, includeVersions: true })
@@ -441,6 +441,17 @@ describe("a file opened at a version (R4-1)", () => {
         const result: any = await prepareRaster({ ...FILE, versionId: "v1" });
         expect(result).toMatchObject({ usedCog: false, staleCog: false });
         expect(result.file.key).toBe(FILE.key);
+    });
+
+    it("draws the latest COG, flagged as older, for a file opened at its latest version", async () => {
+        // The file page passes the version a file is at even when it is the latest.
+        attributesByKey({
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v1", cog_link_outputCrs: "EPSG:3857" },
+        });
+        const result: any = await prepareRaster({ ...FILE, versionId: "v2" });
+        expect(result).toMatchObject({ usedCog: true, staleCog: true, label: "site.tif.cog.tif" });
+        expect(result.file).toEqual({ databaseId: "db", assetId: "a1", key: COG_KEY });
     });
 
     it("draws an unpinned file from its COG, as before", async () => {

@@ -384,23 +384,29 @@ export async function prepareRaster(
             ? sourceAttributes.cogFile
             : undefined;
 
+    let pinned = false;
     if (cogFile && isPinned(file)) {
-        // Opened at a version: only a COG made from that version stands in for it.
-        const shownVersionId =
-            file.versionId ?? pinnedVersion(file, await readFileVersions(file))?.versionId;
-        const cog = shownVersionId
-            ? await cogOfPinnedVersion(file, cogKeyFor(cogFile), shownVersionId)
-            : { matched: false };
-        if ("url" in cog) {
-            target = cog.ref;
-            url = cog.url;
-            usedCog = true;
-        } else {
-            // The version itself is drawn, named by its file version when the API says which.
-            target = shownVersionId ? { ...file, versionId: shownVersionId } : file;
-            staleCog = !!shownVersionId && !cog.matched;
+        const shown = pinnedVersion(file, await readFileVersions(file));
+        // The file page passes the version a file is at even when it is the latest; a latest file
+        // version is the file as it is now and takes the latest COG, as an unpinned file does.
+        pinned = !!file.assetVersionId || !shown?.isLatest;
+        if (pinned) {
+            // Opened at a version: only a COG made from that version stands in for it.
+            const shownVersionId = file.versionId ?? shown?.versionId;
+            const cog = shownVersionId
+                ? await cogOfPinnedVersion(file, cogKeyFor(cogFile), shownVersionId)
+                : { matched: false };
+            if ("url" in cog) {
+                target = cog.ref;
+                url = cog.url;
+                usedCog = true;
+            } else {
+                // The version itself is drawn, named by its file version or its asset version.
+                staleCog = !!shownVersionId && !cog.matched;
+            }
         }
-    } else if (cogFile) {
+    }
+    if (cogFile && !pinned) {
         const cogRef: RasterFileRef = {
             databaseId: file.databaseId,
             assetId: file.assetId,
