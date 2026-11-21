@@ -95,6 +95,17 @@ def input_object_prefix(input_s3_asset_file_key):
     return key.rsplit("/", 1)[0]
 
 
+def input_relative_subdir(event, input_s3_asset_file_key):
+    """The input file's subdirectory within the asset ('parts/housing', or ''): the folder of its
+    manifest relativePath when the event carries one, which holds for an asset created on an existing
+    bucket folder and for a chained step's input alike; else located by the threaded assetId
+    (``relative_subdir_from_asset_id``)."""
+    relative = (event.get("inputRelativePath") or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] if "/" in relative else ""
+    return relative_subdir_from_asset_id(input_s3_asset_file_key, event.get('assetId', ''))
+
+
 def relative_subdir_from_asset_id(input_s3_asset_file_key, asset_id):
     """The input file's subdirectory within the asset, located by the threaded assetId within the
     file's full S3 key ('base/xidM/parts/housing/model.obj' + 'xidM' -> 'parts/housing'). Yields ''
@@ -261,7 +272,7 @@ def construct_modelops_definition(event):
         # that does not change the file extension gains one further folder, so the write-back cannot
         # resolve to the input's own key.
         relative_subdir = output_relative_subdir(
-            relative_subdir_from_asset_id(input_s3_asset_file_key, event.get('assetId', '')),
+            input_relative_subdir(event, input_s3_asset_file_key),
             input_s3_asset_extension, output_s3_asset_extension)
 
         # The destination the produced file is written to. The workflow's output-files prefix is the
