@@ -636,9 +636,11 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     `infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/conversion3dBasicLauncherFunctions.ts`, each with
     its own `states:SendTaskFailure` grant (`infra/test/pipelines/taskTokenFailureGrants.test.ts`). The container's
     contract with them: the converter never receives the workflow's task token, the Batch task gets only locations in
-    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets
-    `linuxParameters.initProcessEnabled` (the entry runs as PID 1 and does not reap orphaned grandchildren such as
-    Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
+    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets no ECS init
+    process: `batch_entry.py` is the task's PID 1, so the descendants reparented to it are reaped (`reap_orphans`),
+    and it makes itself non-dumpable before the worker starts (`harden_process`), so a worker child of the same user
+    cannot read its environment -- the task's credential endpoint -- through `/proc/1/environ`. It sets
+    `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
     ladder (4/30, 8/60, 16/120) is one list in `size_check.BATCH_TASK_SIZES`, `computeTier.JOB_SIZES` and
     `CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES` in `infra/config/config.ts`; tests compare them.
 -   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`

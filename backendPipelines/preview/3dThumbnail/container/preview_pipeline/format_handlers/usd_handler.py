@@ -41,6 +41,7 @@ import pyvista as pv
 from PIL import Image
 from .. import resources, scene_parts
 from ..utils.logging import get_logger
+from .scene_limits import MAX_SCENE_NODES, SceneLimit
 
 logger = get_logger()
 
@@ -258,6 +259,7 @@ def _collect_parts(root, xform_cache, context, plan=None):
     for prim in iterator:
         if prim.IsPseudoRoot():
             continue
+        context.count_prim()
         if not _is_rendered(prim, time):
             iterator.PruneChildren()
             continue
@@ -401,6 +403,7 @@ def _sample_plan(root, xform_cache, context):
     for prim in iterator:
         if prim.IsPseudoRoot():
             continue
+        context.count_prim()
         if not _is_rendered(prim, time):
             iterator.PruneChildren()
             continue
@@ -513,6 +516,7 @@ def _count_instancer(prim, xform_cache, context, cache):
         vertices = 0
         if root:
             for child in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+                context.count_prim()
                 if _is_rendered(child, time) and child.IsA(UsdGeom.Gprim):
                     vertices += _local_extent(child, cache, context)[0]
         per_prototype.append(vertices)
@@ -532,11 +536,18 @@ def _count_instancer(prim, xform_cache, context, cache):
 # --------------------------------------------------------------------------------------------------
 
 def _rig_content(stage, name):
-    """(has a camera, has a light) for the root prim ``name``: a UsdGeom camera, and any UsdLux light."""
+    """(has a camera, has a light) for the root prim ``name``: a UsdGeom camera, and any UsdLux light.
+
+    This walk runs after the load's walks, so it is bounded by a fresh node limit of its own: a rig
+    root that expands past the stage bound ends at once with the same message instead of running to
+    the job's timeout."""
     from pxr import Usd, UsdGeom, UsdLux
 
+    limit = SceneLimit("USD stage", max_nodes=MAX_SCENE_NODES)
     camera = light = False
     for prim in Usd.PrimRange(stage.GetPrimAtPath("/" + name), Usd.TraverseInstanceProxies()):
+        if not limit.visit():
+            raise _node_bound_error(limit.max_nodes)
         camera = camera or prim.IsA(UsdGeom.Camera)
         light = light or prim.HasAPI(UsdLux.LightAPI) or str(prim.GetTypeName()).endswith("Light")
         if camera and light:
@@ -623,6 +634,16 @@ def left_out_roots_unused(file_path, left_out):
         return []
 
 
+def _node_bound_error(max_nodes):
+    """The ValueError a walk raises once it passes the node bound. One wording for every walk, so a
+    stage that expands past the bound refuses with the same message wherever the bound is first met."""
+    return ValueError(
+        f"The USD stage expands to more than {max_nodes:,} prims "
+        f"(instance proxies included) and is too large to preview. Reduce the depth or the "
+        f"number of nested instanceable prims."
+    )
+
+
 class _LoadContext:
     def __init__(self, file_path, asset_root, time):
         self.file_path = file_path
@@ -646,6 +667,10 @@ class _LoadContext:
         self.capped = False
         # (type name, path, root prim name) of each rendered prim of an undrawn type met by the walk.
         self.skipped_prims = []
+        # Bounds the number of prims one walk visits (instance proxies included). A file of nested
+        # instanceable prims composes cheaply but expands to 2^depth proxies, which hold no vertices,
+        # so the MAX_POINTS vertex cap never stops the walk; this does.
+        self.scene_limit = SceneLimit("USD stage", max_nodes=MAX_SCENE_NODES)
 
     def reset_counts(self):
         """Forget what a discarded walk counted, so a second walk of the stage starts clean."""
@@ -654,6 +679,14 @@ class _LoadContext:
         self.skipped_prims = []
         self.mdl_unread.clear()
         self.mdl_approximated.clear()
+        self.scene_limit = SceneLimit("USD stage", max_nodes=MAX_SCENE_NODES)
+
+    def count_prim(self):
+        """Count one visited prim against the node bound; raise once the bound is passed, so a scene
+        that expands past it ends at once with a clear message instead of running to the job's
+        timeout."""
+        if not self.scene_limit.visit():
+            raise _node_bound_error(self.scene_limit.max_nodes)
 
 
 def _counted(counts):
@@ -878,6 +911,7 @@ def _expand_point_instancer(prim, xform_cache, context, plan=None):
         geometry = []
         if root:
             for child in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+                context.count_prim()
                 if not _is_rendered(child, time):
                     continue
                 relative, _ = xform_cache.ComputeRelativeTransform(child, root)

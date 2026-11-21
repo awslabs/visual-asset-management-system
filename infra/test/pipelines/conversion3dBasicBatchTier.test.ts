@@ -91,17 +91,25 @@ describe("batchTier on", () => {
         template.resourceCountIs("AWS::Batch::JobDefinition", 1);
     });
 
-    test("the job definition has 200 GiB of storage, an init process and the Region", () => {
+    test("the job definition has 200 GiB of storage, no ECS init process and the Region", () => {
         template.hasResourceProperties("AWS::Batch::JobDefinition", {
             ContainerProperties: Match.objectLike({
                 EphemeralStorage: { SizeInGiB: 200 },
-                LinuxParameters: { InitProcessEnabled: true },
                 Environment: Match.arrayWith([
                     Match.objectLike({ Name: "AWS_REGION" }),
                     Match.objectLike({ Name: "AWS_DEFAULT_REGION" }),
                 ]),
             }),
         });
+    });
+
+    test("no ECS init process is enabled on the job definition (the image's entry is PID 1)", () => {
+        // The ECS init would run as the task uid and hold the task environment, so a worker child
+        // could read the task's credential endpoint from /proc/1/environ. With no init, batch_entry.py
+        // is PID 1: non-dumpable before the worker starts, and it reaps orphaned descendants.
+        const jobDefs = template.findResources("AWS::Batch::JobDefinition");
+        const props = Object.values(jobDefs)[0].Properties.ContainerProperties;
+        expect(props.LinuxParameters?.InitProcessEnabled).toBeUndefined();
     });
 
     test("the job role holds no Step Functions action and writes only under the run's output prefix", () => {
