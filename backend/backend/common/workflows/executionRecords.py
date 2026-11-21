@@ -361,7 +361,7 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
                          database_id: str = "", asset_id: str = "",
                          asset_root_s3_key: str = "", aux_preview_prefix: str = "",
                          bucket_id: str = "", bucket_region: str = "",
-                         bucket_account_id: str = "") -> dict:
+                         bucket_account_id: str = "", exclude_locations=None) -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
     location (bucket/key/versionId) and asset identity a pipeline reads for that path.
 
@@ -374,8 +374,11 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
     baseAssetsPrefix -- from the manifest alone; empty when the writer has no asset row.
     `bucketRegion` is the Region the file's bucket is in, which a pipeline uses to build the
     client that reads the file; a consumer treats an empty value as the deployment Region.
-    `bucketAccountId` is the bucket's owning account when it is not the deployment account."""
-    return {
+    `bucketAccountId` is the bucket's owning account when it is not the deployment account.
+    `excludeLocations`, present only when not empty, lists the stored locations of other assets nested in
+    the input asset's location under a folder input: the keys they hold are those assets' files, so a
+    pipeline that lists the folder leaves them out."""
+    entry = {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",
         "assetId": asset_id or "",
@@ -388,6 +391,9 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
         "key": key,
         "versionId": version_id or "",
     }
+    if exclude_locations:
+        entry["excludeLocations"] = sorted(exclude_locations)
+    return entry
 
 
 def build_manifest_output_target(location_type="asset", asset_id="", database_id="",

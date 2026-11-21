@@ -5,11 +5,13 @@ manifest's ``excludeLocations`` names their stored locations, and the files they
 under it; a single file: its key, its companion folder and its previews) are not archived."""
 
 import io
+import json
 import zipfile
 
 import pytest
 
-from test_runner import AUX, BASE, FakeS3, _manifest, _zip_job
+from test_runner import ASSETS, AUX, BASE, FakeS3, OneClient, _manifest, _zip_job
+from zip_archive_pipeline import runner
 from zip_archive_pipeline.resolve import expand_selection, held_by_excluded
 
 pytestmark = pytest.mark.unit
@@ -54,3 +56,43 @@ def test_a_zip_download_job_archives_only_the_assets_own_files(s3):
     assert job.run()["status"] == "succeeded"
     with zipfile.ZipFile(io.BytesIO(s3.completed[(AUX, ARCHIVE_KEY)])) as z:
         assert sorted(z.namelist()) == ["a.glb", "model.glb2.txt", "sub/b.obj"]
+
+
+def _archive_run(s3, entries):
+    """A Zip Archive workflow run (archiveRun) whose run manifest is the one executeWorkflow wrote."""
+    s3.add("pipelines/run/manifest.json", json.dumps({"inputFiles": entries}).encode(), bucket=ASSETS)
+    definition = {"mode": "archiveRun", "archiveRun": {
+        "runManifest": {"bucket": ASSETS, "key": "pipelines/run/manifest.json"}, "assetId": "xasset1",
+        "databaseId": "db1", "outputBucket": ASSETS, "outputDir": "pipelines/run/output/files/",
+        "config": {"format": "zip", "includePreviewFiles": True}}}
+    return runner.Job(definition, OneClient(s3), None, logger=lambda *a: None)
+
+
+def _archived(s3, result):
+    with zipfile.ZipFile(io.BytesIO(s3.completed[(ASSETS, result["archiveKey"])])) as z:
+        return sorted(z.namelist())
+
+
+def test_a_workflow_run_over_the_whole_asset_archives_only_the_assets_own_files(s3):
+    result = _archive_run(s3, [{"bucket": ASSETS, "key": BASE, "versionId": "", "excludeLocations": EXCLUDE}]).run()
+    assert _archived(s3, result) == ["a.glb", "model.glb2.txt", "sub/b.obj"]
+
+
+def test_a_workflow_run_over_a_folder_leaves_the_nested_asset_under_it_out(s3):
+    s3.add(BASE + "sub/inner/d.glb", b"d", content_type="model/x")
+    result = _archive_run(s3, [{"bucket": ASSETS, "key": BASE + "sub/", "versionId": "",
+                                "excludeLocations": [BASE + "sub/inner/"]}]).run()
+    assert _archived(s3, result) == ["sub/b.obj"]
+
+
+def test_a_workflow_run_without_the_list_archives_the_folder_as_before(s3):
+    # Control: the same folder without excludeLocations archives every key under it
+    result = _archive_run(s3, [{"bucket": ASSETS, "key": BASE, "versionId": ""}]).run()
+    assert _archived(s3, result) == sorted(OWN + NESTED + ["model.glb2.txt"])
+
+
+def test_the_lists_of_several_inputs_are_merged(s3):
+    result = _archive_run(s3, [
+        {"bucket": ASSETS, "key": BASE + "sub/", "versionId": "", "excludeLocations": [BASE + "inner/"]},
+        {"bucket": ASSETS, "key": BASE, "versionId": "", "excludeLocations": [BASE + "model.glb", 7, ""]}]).run()
+    assert _archived(s3, result) == ["a.glb", "model.glb2.txt", "sub/b.obj"]

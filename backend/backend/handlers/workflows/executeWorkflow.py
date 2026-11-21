@@ -1911,13 +1911,21 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         # The concrete S3 version the run reads (stamped by _verify_inputs_exist), so the manifest
         # and the persisted input row name the same version.
         version_id = item.get("resolvedVersionId") or item.get("versionId", "")
+        # A folder input (or the whole asset) names the locations of assets nested in it: a pipeline that
+        # lists the folder leaves their keys out
+        exclude_locations = []
+        if not full_key or full_key.endswith("/"):
+            nested = nested_locations_of_asset(_asset_table(), _buckets_table(), asset, bucket, root,
+                                               asset_table_name=asset_table_name)
+            exclude_locations = [loc for loc in nested.locations if loc.startswith(full_key or "")]
         entries.append(er.build_manifest_entry(
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,
             asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix,
             bucket_id=bucket_id or "",
             bucket_region=bucket_details.get("bucketRegion", ""),
-            bucket_account_id=bucket_details.get("bucketAccountId", "")))
+            bucket_account_id=bucket_details.get("bucketAccountId", ""),
+            exclude_locations=exclude_locations))
     return entries
 
 
