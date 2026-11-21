@@ -2,20 +2,80 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import random
+import threading
 import time
 import boto3
 from botocore.config import Config
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 from customLogging.logger import safeLogger
 
 logger = safeLogger(service_name="ResourceNames")
 
-retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+# The sweep client. A sweep runs during Lambda init, which Lambda stops after 10 seconds, so the
+# client is bounded rather than given Rule 6's five adaptive attempts: one-second connect and
+# two-second read timeouts and no botocore retries. The page loop in _sweep_parameters owns the
+# retries, under SWEEP_BUDGET_SECONDS, so no SDK back-off sleep can carry a sweep past its budget.
+sweep_client_config = Config(connect_timeout=1, read_timeout=2, retries={'max_attempts': 0, 'mode': 'standard'})
 
 CACHE_TTL_SECONDS = 3600
 
 # Held far shorter than CACHE_TTL_SECONDS: a parameter published after the miss was
 # recorded is picked up within this window instead of at the next full refresh.
 MISSING_KEY_TTL_SECONDS = 300
+
+# Wall-clock budget of one sweep, its retries and their sleeps included. A sweep that cannot
+# finish inside it fails, and the back-off window below answers the lookups that follow.
+SWEEP_BUDGET_SECONDS = 4.0
+
+# GetParametersByPath returns at most 10 parameters per call.
+SWEEP_PAGE_SIZE = 10
+
+# Sleep before retrying a page: uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS,
+# SWEEP_RETRY_BASE_SECONDS * 2 ** k)) for the k-th retry in a row of the same page.
+SWEEP_RETRY_BASE_SECONDS = 0.1
+SWEEP_RETRY_MAX_SLEEP_SECONDS = 1.0
+
+# After n failed sweeps in a row, the container starts no sweep for uniform(0.5, 1.0) *
+# min(SWEEP_BACKOFF_MAX_SECONDS, SWEEP_BACKOFF_BASE_SECONDS * 2 ** (n - 1)) seconds: about 2,
+# 4, 8 and 16 seconds, then 30. The jitter spreads containers that failed together.
+SWEEP_BACKOFF_BASE_SECONDS = 2.0
+SWEEP_BACKOFF_MAX_SECONDS = 30.0
+
+# Error codes a page is retried on inside the budget: throttling and transient service faults.
+# Any HTTP 5xx response is retried as well.
+_RETRYABLE_ERROR_CODES = frozenset({
+    "ThrottlingException",
+    "Throttling",
+    "ThrottledException",
+    "RequestThrottledException",
+    "TooManyRequestsException",
+    "RequestLimitExceeded",
+    "RequestTimeout",
+    "RequestTimeoutException",
+    "InternalServerError",
+    "ServiceUnavailable",
+})
+
+# Connection failures and timeouts a page is retried on inside the budget.
+_RETRYABLE_CONNECTION_ERRORS = (ConnectTimeoutError, ReadTimeoutError, EndpointConnectionError, ConnectionClosedError)
+
+# Clock, sleep and jitter the sweep and the back-off window use.
+_monotonic = time.monotonic
+_sleep = time.sleep
+_uniform = random.uniform
+
+
+class ResourceNameUnavailableError(RuntimeError):
+    """A resource name could not be resolved because Parameter Store could not be read: the sweep
+    failed, or the lookup came inside the back-off window that follows a failed sweep. Not a
+    KeyError, because the parameter may well be published."""
 
 
 class ResourceParamKey:
@@ -100,43 +160,148 @@ _cache = {}
 _cache_fetched_at = 0.0
 _missing_keys = {}
 
+# Failed sweeps in a row, and the _monotonic() time before which no sweep starts.
+_failed_sweeps = 0
+_sweep_retry_after = 0.0
+# The window (its _sweep_retry_after) whose refused lookups have been logged.
+_window_logged_for = None
+
+# One sweep at a time per container. Taken only when a lookup needs a sweep, so a cache hit
+# never waits on it.
+_sweep_lock = threading.Lock()
+
+# What _answer_without_sweep returns when only a sweep can answer.
+_NEEDS_SWEEP = object()
+
 
 def _get_ssm_client():
     global _ssm_client
     if _ssm_client is None:
-        _ssm_client = boto3.client('ssm', config=retry_config)
+        _ssm_client = boto3.client('ssm', config=sweep_client_config)
     return _ssm_client
 
 
-def _refresh_cache():
-    """Fetch every resource-name parameter under the deployment prefix in one
-    paginated GetParametersByPath sweep and replace the module cache."""
-    global _cache, _cache_fetched_at, _missing_keys
-    prefix = os.environ["VAMS_RESOURCE_PARAM_PREFIX"].rstrip("/")
-    new_cache = {}
-    paginator = _get_ssm_client().get_paginator('get_parameters_by_path')
-    for page in paginator.paginate(Path=prefix, Recursive=True):
+def _error_code(error: Exception) -> str:
+    """The service error code of a ClientError, else the exception's class name."""
+    if isinstance(error, ClientError):
+        return (getattr(error, "response", None) or {}).get("Error", {}).get("Code") or "ClientError"
+    return type(error).__name__
+
+
+def _is_retryable(error: Exception) -> bool:
+    """Throttling, a transient service fault, or a connection failure or timeout."""
+    if isinstance(error, _RETRYABLE_CONNECTION_ERRORS):
+        return True
+    if isinstance(error, ClientError):
+        response = getattr(error, "response", None) or {}
+        status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
+        return _error_code(error) in _RETRYABLE_ERROR_CODES or status >= 500
+    return False
+
+
+def _sweep_parameters(prefix: str) -> dict:
+    """Read every parameter under the prefix with GetParametersByPath, page by page, inside
+    SWEEP_BUDGET_SECONDS, and return them keyed by their path below the prefix.
+
+    A page that fails with a retryable error is requested again with its own NextToken after a
+    jittered sleep, so the pages already read are kept. Any other error ends the sweep at once.
+    No call starts and no sleep runs past the budget; when the budget runs out the sweep raises
+    the last error, or TimeoutError when none was raised. Logs one line per sweep: counts and
+    timings, never a parameter name or value."""
+    client = _get_ssm_client()
+    started = _monotonic()
+    deadline = started + SWEEP_BUDGET_SECONDS
+    parameters = {}
+    pages = calls = retries_in_a_row = 0
+    next_token = None
+    last_error = None
+
+    def failed(error: Exception) -> Exception:
+        logger.error(
+            f"Resource name sweep failed ({_error_code(error)}) after {pages} pages, {calls} calls, "
+            f"{_monotonic() - started:.2f}s")
+        return error
+
+    while True:
+        if _monotonic() >= deadline:
+            raise failed(last_error or TimeoutError(
+                f"Resource name sweep did not finish within {SWEEP_BUDGET_SECONDS}s"))
+        request = {"Path": prefix, "Recursive": True, "MaxResults": SWEEP_PAGE_SIZE}
+        if next_token:
+            request["NextToken"] = next_token
+        calls += 1
+        try:
+            page = client.get_parameters_by_path(**request)
+        except Exception as e:
+            if not _is_retryable(e):
+                raise failed(e)
+            last_error = e
+            pause = _uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS, SWEEP_RETRY_BASE_SECONDS * 2 ** retries_in_a_row))
+            retries_in_a_row += 1
+            if _monotonic() + pause >= deadline:
+                raise failed(e)
+            _sleep(pause)
+            continue
+        pages += 1
+        retries_in_a_row = 0
         for param in page.get('Parameters', []):
             key = param['Name'][len(prefix):].lstrip('/')
-            new_cache[key] = param['Value']
+            parameters[key] = param['Value']
+        next_token = page.get('NextToken')
+        if not next_token:
+            logger.info(
+                f"Refreshed {len(parameters)} resource name parameters from SSM in {pages} pages, "
+                f"{calls} calls, {_monotonic() - started:.2f}s")
+            return parameters
+
+
+def _refresh_cache():
+    """Fetch every resource-name parameter under the deployment prefix in one bounded
+    GetParametersByPath sweep (_sweep_parameters) and replace the module cache. A sweep that
+    fails raises and leaves the cache as it was."""
+    global _cache, _cache_fetched_at, _missing_keys
+    prefix = os.environ["VAMS_RESOURCE_PARAM_PREFIX"].rstrip("/")
+    new_cache = _sweep_parameters(prefix)
     _cache = new_cache
     _cache_fetched_at = time.time()
     # The sweep covers the whole prefix, so it is authoritative for absence too: keys it
     # now carries are no longer missing, and the rest are re-confirmed at this timestamp.
     _missing_keys = {k: _cache_fetched_at for k in _missing_keys if k not in _cache}
-    logger.info(f"Refreshed {len(_cache)} resource name parameters from SSM")
 
 
-def get_resource_name(key: ResourceParamKey) -> str:
-    """Resolve a resource name: env var override first, then the cached SSM map
-    (refreshed at most once per CACHE_TTL_SECONDS per container). A key a completed
-    sweep did not carry is remembered as missing for MISSING_KEY_TTL_SECONDS, so an
-    unpublished parameter costs one sweep per window rather than one per call."""
-    for env_name in key.env_var_names:
-        value = os.environ.get(env_name)
-        if value:
-            return value
+def _record_failed_sweep():
+    """Open the back-off window: no sweep starts in this container until it has passed."""
+    global _failed_sweeps, _sweep_retry_after
+    _failed_sweeps += 1
+    window = SWEEP_BACKOFF_BASE_SECONDS * 2 ** min(_failed_sweeps - 1, 16)
+    _sweep_retry_after = _monotonic() + _uniform(0.5, 1.0) * min(SWEEP_BACKOFF_MAX_SECONDS, window)
 
+
+def _record_completed_sweep():
+    global _failed_sweeps, _sweep_retry_after
+    _failed_sweeps = 0
+    _sweep_retry_after = 0.0
+
+
+def _in_backoff_window() -> bool:
+    return _failed_sweeps > 0 and _monotonic() < _sweep_retry_after
+
+
+def _log_backoff_window_once():
+    """One WARNING per back-off window for the lookups it answers without a sweep."""
+    global _window_logged_for
+    if _window_logged_for == _sweep_retry_after:
+        return
+    _window_logged_for = _sweep_retry_after
+    logger.warning(
+        f"Resource name lookups are answered from the cache only for {_sweep_retry_after - _monotonic():.1f}s "
+        f"after {_failed_sweeps} failed SSM sweep(s); names not cached are refused")
+
+
+def _answer_without_sweep(key: ResourceParamKey):
+    """The answer the module state gives without reading SSM: a fresh cached name, KeyError for a
+    recorded miss and, inside the back-off window, a stale cached name or
+    ResourceNameUnavailableError. _NEEDS_SWEEP when only a sweep can answer."""
     if key.param_key in _cache and (time.time() - _cache_fetched_at) < CACHE_TTL_SECONDS:
         return _cache[key.param_key]
 
@@ -145,20 +310,65 @@ def get_resource_name(key: ResourceParamKey) -> str:
         # Same error as a fresh miss, so a cached negative is indistinguishable to callers.
         raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
 
-    try:
-        _refresh_cache()
-    except Exception as e:
+    if _in_backoff_window():
+        _log_backoff_window_once()
         if key.param_key in _cache:
-            logger.warning(f"SSM refresh failed; serving cached value for {key.param_key}: {e}")
             return _cache[key.param_key]
-        logger.exception(f"Failed loading resource name parameters from SSM: {e}")
-        raise
+        raise ResourceNameUnavailableError(
+            f"Resource name not resolved while SSM sweeps back off after a failure: {key.param_key}")
 
-    if key.param_key not in _cache:
-        _missing_keys[key.param_key] = _cache_fetched_at
-        logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
-        raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
-    return _cache[key.param_key]
+    return _NEEDS_SWEEP
+
+
+def get_resource_name(key: ResourceParamKey) -> str:
+    """Resolve a resource name: env var override first, then the cached SSM map
+    (refreshed at most once per CACHE_TTL_SECONDS per container). A key a completed
+    sweep did not carry is remembered as missing for MISSING_KEY_TTL_SECONDS, so an
+    unpublished parameter costs one sweep per window rather than one per call.
+
+    A sweep is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A failed
+    sweep opens a back-off window in which no sweep starts: a lookup inside it is answered from
+    the cache, stale or not, or refused with ResourceNameUnavailableError, as is a failed sweep
+    for a name the cache does not hold. A cache hit takes no lock and reads no SSM."""
+    for env_name in key.env_var_names:
+        value = os.environ.get(env_name)
+        if value:
+            return value
+
+    answer = _answer_without_sweep(key)
+    if answer is not _NEEDS_SWEEP:
+        return answer
+
+    with _sweep_lock:
+        # Another thread may have finished a sweep, or failed one, while this one waited.
+        answer = _answer_without_sweep(key)
+        if answer is not _NEEDS_SWEEP:
+            return answer
+
+        try:
+            _refresh_cache()
+        except Exception as e:
+            if "VAMS_RESOURCE_PARAM_PREFIX" not in os.environ:
+                # A deployment without the prefix is misconfigured, not throttled: raised as the
+                # KeyError it is and never recorded as a failed sweep.
+                if key.param_key in _cache:
+                    logger.warning(f"SSM refresh failed; serving cached value for {key.param_key}: {e}")
+                    return _cache[key.param_key]
+                logger.exception(f"Failed loading resource name parameters from SSM: {e}")
+                raise
+            _record_failed_sweep()
+            if key.param_key in _cache:
+                logger.warning(f"SSM refresh failed; serving cached value for {key.param_key}")
+                return _cache[key.param_key]
+            raise ResourceNameUnavailableError(
+                f"Resource name parameters could not be read from SSM: {key.param_key}") from e
+        _record_completed_sweep()
+
+        if key.param_key not in _cache:
+            _missing_keys[key.param_key] = _cache_fetched_at
+            logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
+            raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
+        return _cache[key.param_key]
 
 
 # Readable aliases for call sites
