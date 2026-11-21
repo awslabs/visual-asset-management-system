@@ -288,49 +288,57 @@ describe("EDH add-on Lambdas", () => {
     );
 
     test.each(EDH_TEMPLATES)(
-        "%s: the launch worker reads instances on every resource with a reasoned suppression, and may stop, start or terminate none",
+        "%s: the launch worker, the workstation service and the session reconciler read instances on every resource with a reasoned suppression, and may stop, start or terminate none",
         (name) => {
             const s = edhSynth(name);
             const fns = edhFunctions(s);
-            const [worker] = fns.filter(
-                (r) => handlerOf(r) === "handlers.addon.edh.edhLaunchWorker.lambda_handler"
-            );
-            expect(worker).toBeDefined();
             const allowedOn = (fn: Resource) =>
                 statementsOf(s, fn).filter((st) => st.Effect === "Allow");
-            // A refused start names the Availability Zone of the stopped desktop's instance.
-            const describe = allowedOn(worker).filter((st) =>
-                actionsOf(st).includes("ec2:DescribeInstances")
-            );
-            expect(describe.length).toBeGreaterThan(0);
-            expect([...new Set(describe.flatMap(resourcesOf))]).toEqual(["*"]);
             const covers = (pattern: string, action: string) =>
                 new RegExp(`^${pattern.replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i").test(
                     action
                 );
-            const lifecycle = allowedOn(worker)
-                .flatMap(actionsOf)
-                .filter((a) =>
-                    ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"].some(
-                        (x) => covers(a, x)
-                    )
-                );
-            expect(lifecycle).toEqual([]);
-            // Neither API-facing workstation role reads instances: the start runs in the worker.
-            for (const module of ["edhWorkstationService", "edhAdminService"]) {
+            // A refused start names the Availability Zone of the stopped desktop's instance (the worker); a
+            // start EC2 accepted and then returned to stopped records the instance's state reason (the
+            // workstation service's list and get, and the sweep).
+            for (const module of [
+                "edhLaunchWorker",
+                "edhWorkstationService",
+                "edhSessionReconciler",
+            ]) {
                 const [fn] = fns.filter(
                     (r) => handlerOf(r) === `handlers.addon.edh.${module}.lambda_handler`
                 );
+                expect(fn).toBeDefined();
+                const describe = allowedOn(fn).filter((st) =>
+                    actionsOf(st).includes("ec2:DescribeInstances")
+                );
+                expect(describe.length).toBeGreaterThan(0);
+                expect([...new Set(describe.flatMap(resourcesOf))]).toEqual(["*"]);
+                const lifecycle = allowedOn(fn)
+                    .flatMap(actionsOf)
+                    .filter((a) =>
+                        ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"].some(
+                            (x) => covers(a, x)
+                        )
+                    );
+                expect(lifecycle).toEqual([]);
+                const reasons = (
+                    (fn.raw.Metadata?.cdk_nag?.rules_to_suppress ?? []) as Array<{ reason: string }>
+                ).map((r) => r.reason);
                 expect(
-                    allowedOn(fn).some((st) => actionsOf(st).includes("ec2:DescribeInstances"))
-                ).toBe(false);
+                    reasons.some((r) =>
+                        r.startsWith("ec2:DescribeInstances accepts no resource ARN")
+                    )
+                ).toBe(true);
             }
-            const reasons = (
-                (worker.raw.Metadata?.cdk_nag?.rules_to_suppress ?? []) as Array<{ reason: string }>
-            ).map((r) => r.reason);
+            // The admin service does not read instances: its stop and deactivate go through EDH.
+            const [admin] = fns.filter(
+                (r) => handlerOf(r) === "handlers.addon.edh.edhAdminService.lambda_handler"
+            );
             expect(
-                reasons.some((r) => r.startsWith("ec2:DescribeInstances accepts no resource ARN"))
-            ).toBe(true);
+                allowedOn(admin).some((st) => actionsOf(st).includes("ec2:DescribeInstances"))
+            ).toBe(false);
         }
     );
 
@@ -1062,7 +1070,7 @@ describe("EDH AMI builds", () => {
         expect(text).not.toMatch(/"imagebuilder:\*"/);
     });
 
-    test("AMI and snapshot tagging and deletion are bound to this deployment's tag value", () => {
+    test("AMI tagging and AMI and snapshot deletion are bound to this deployment's tag value", () => {
         // The tag key alone scopes nothing: a role holding CreateTags on the key could tag any AMI and
         // then delete it, another deployment's included. Every statement names the prefix as the value.
         const fns = edhFunctions(withAmiBuilds);
@@ -1082,7 +1090,7 @@ describe("EDH AMI builds", () => {
                     ["ec2:CreateTags", "ec2:DeregisterImage", "ec2:DeleteSnapshot"].includes(a)
                 )
             );
-            expect(sts.length).toBeGreaterThanOrEqual(2);
+            expect(sts.length).toBeGreaterThanOrEqual(1);
             for (const st of sts) {
                 const equals = st.Condition?.StringEquals ?? {};
                 const named = Object.entries(equals).filter(([key]) =>
@@ -1102,6 +1110,37 @@ describe("EDH AMI builds", () => {
                     );
                 }
             }
+        }
+    });
+
+    test("a snapshot is never tagged, and is deleted only when it already carries this deployment's tag", () => {
+        // Image Builder writes the distribution configuration's tags on an AMI's snapshots, so no Lambda
+        // holds a tag write on a snapshot, and every snapshot grant is conditioned on the deployment tag
+        // the snapshot already carries.
+        const fns = edhFunctions(withAmiBuilds);
+        const prefix = fns.find((f) => moduleOf(f) === "edhAmiRecipeService")!.properties
+            .Environment.Variables.EDH_AMI_BUILD_PREFIX;
+        const onSnapshots = (fn: Resource) =>
+            statementsOf(withAmiBuilds, fn).filter(
+                (st) =>
+                    st.Effect === "Allow" &&
+                    resourcesOf(st).some((r) => /:snapshot\//.test(r)) &&
+                    !actionsOf(st).every((a) => a.startsWith("ec2:Describe"))
+            );
+        for (const fn of fns) {
+            for (const st of onSnapshots(fn)) {
+                expect(actionsOf(st)).not.toContain("ec2:CreateTags");
+                expect(actionsOf(st)).not.toContain("ec2:*");
+                expect(st.Condition?.StringEquals?.["aws:ResourceTag/vams:deployment"]).toBe(
+                    prefix
+                );
+            }
+        }
+        // EC2 checks ec2:DeleteSnapshot on each snapshot DeregisterImage deletes, so the Lambdas that
+        // retire and prune hold it.
+        for (const module of ["edhAmiRecipeService", "edhAmiBuildRegistrar"]) {
+            const fn = fns.find((f) => moduleOf(f) === module)!;
+            expect(onSnapshots(fn).flatMap((st) => actionsOf(st))).toContain("ec2:DeleteSnapshot");
         }
     });
 

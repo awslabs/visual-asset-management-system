@@ -10,12 +10,12 @@ This page documents the service quotas, default limits, and configurable thresho
 
 VAMS uses Amazon API Gateway REST API with configurable rate limiting.
 
-| Parameter            | Default            | Configurable | Configuration Key                              |
-| -------------------- | ------------------ | ------------ | ---------------------------------------------- |
-| Global rate limit    | 50 requests/second | Yes          | `app.api.apiGatewayRest.globalRateLimit`       |
-| Global burst limit   | 100 requests       | Yes          | `app.api.apiGatewayRest.globalBurstLimit`      |
-| Integration timeout  | 29 seconds         | Yes (29–300) | `app.api.apiGatewayRest.apiGatewayTimeoutTime` |
-| Authorizer cache TTL | 30 seconds         | No           | Set in CDK authorizer construct                |
+| Parameter            | Default                                                                                                   | Configurable | Configuration Key                              |
+| -------------------- | --------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------- |
+| Global rate limit    | 50 requests/second                                                                                        | Yes          | `app.api.apiGatewayRest.globalRateLimit`       |
+| Global burst limit   | 100 requests                                                                                              | Yes          | `app.api.apiGatewayRest.globalBurstLimit`      |
+| Integration timeout  | 29 seconds                                                                                                | Yes (29–300) | `app.api.apiGatewayRest.apiGatewayTimeoutTime` |
+| Authorizer cache TTL | 30 seconds (900 on the anonymous routes; 0 with `app.authProvider.authorizerOptions.allowedIpRanges` set) | No           | Set in CDK authorizer construct                |
 
 :::tip
 The burst limit must be greater than or equal to the rate limit. Adjust both values in `infra/config/config.json` and redeploy to apply changes.
@@ -274,6 +274,22 @@ most about 8 hours, before its copy fails.
 The per-execution limit comes from the DynamoDB item size limit of 400 KB: the row that tracks an
 execution's large outputs keeps one copy id of about 55 bytes for each. Split such a run into several
 executions, or package the outputs into fewer files.
+
+### Download as Zip Limits
+
+Download as Zip (`app.pipelines.useZipDownloads`) builds each archive in the background. Three limits are configurable; see [Zip downloads](../deployment/configuration-reference.md#zip-downloads-apppipelinesusezipdownloads).
+
+| Parameter                                                     | Default | Allowed range   | Exceeding it                                       |
+| ------------------------------------------------------------- | ------- | --------------- | -------------------------------------------------- |
+| Files in one archive (`maxFilesPerRequest`)                   | 100,000 | 1 to 1,000,000  | The request is refused with `400`                  |
+| Total size of one archive's files (`maxTotalBytesPerRequest`) | 5 TiB   | 1 byte to 5 TiB | The request is refused with `400`                  |
+| Queued or running jobs per user (`maxActiveRequestsPerUser`)  | 5       | 1 to 100        | A new request is refused with `429` until one ends |
+
+Three limits are fixed:
+
+-   **Individually selected files: 2,000 per request.** A larger selection names folders or the whole asset instead; files inside a selected folder do not count toward this limit.
+-   **Archive size: 5 TiB.** An archive is one Amazon S3 object, so a selection whose archive, with its headers, would pass 5 TiB is refused.
+-   **Retention: 7 days.** A job and its archive expire 7 days after the job was created; an expired archive can no longer be downloaded. An archive the Zip Archive pipeline writes into an asset is an asset file and does not expire.
 
 ### Execution Detail and Log Limits
 

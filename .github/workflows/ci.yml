@@ -82,6 +82,44 @@ jobs:
             - name: eslint
               run: npm run lint
 
+    # Lock check and vulnerability audit of every Python project that has a uv.lock. The script finds
+    # the projects with `git ls-files`, so a new uv.lock is audited without editing this job, and
+    # infra/test/ci/pythonDependencyLocks.test.ts fails a new Python dependency set that has neither a
+    # uv.lock nor an exemption. Per project: `uv lock --check`, regeneration of each committed export
+    # (requirements.txt) with a diff, and pip-audit of the exports. Any advisory not on
+    # .github/python-audit-allowlist.json fails the job, as does an allowlist entry with no reason, a
+    # past review date or no matching finding, and an advisory service that cannot be reached. One job
+    # loops over the projects (no matrix): each check takes seconds, and one job writes one summary.
+    python-dependency-audit:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup Python Version
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-python@v7
+              with:
+                  python-version: 3.13
+
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the audit resolves nothing new.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            - name: Check and audit every uv.lock
+              env:
+                  PIP_AUDIT_VERSION: "2.10.1"
+              run: python .github/scripts/python_dependency_audit.py
+
     # Security scan of the source tree. Findings are report-only; a scan that does not run fails the
     # job. It runs before any dependency install, so it scans the checked-out source only.
     ash:
@@ -264,7 +302,7 @@ jobs:
                   path: ash-output/
                   retention-days: 7
 
-    # The VamsCLI suite. Its build backend is setuptools, so no Poetry install is needed.
+    # The VamsCLI suite, installed from tools/VamsCLI/uv.lock. Its build backend stays setuptools.
     vamscli-test:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest
@@ -281,15 +319,37 @@ jobs:
               with:
                   python-version: 3.12.16
 
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the suite installs from the lock.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            # The locked set (tools/VamsCLI/uv.lock) with the dev extra, in tools/VamsCLI/.venv; the venv's
+            # bin directory goes on PATH so the suites below run in it. uv does not change what users
+            # install: the published package keeps its ranged dependencies and pip.
             - name: Install VamsCLI dependencies
               working-directory: tools/VamsCLI
+              env:
+                  UV_PYTHON_DOWNLOADS: never
               run: |
-                  pip install -e ".[dev]"
+                  uv sync --frozen --extra dev --python 3.12
+                  echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
             - name: Run VamsCLI pytest tests
               working-directory: tools/VamsCLI
               run: |
                   pytest --cov=vamscli --cov-report=xml --cov-report=term -v --tb=short > pytest_output.txt 2>&1
+
+            - name: Run permissionsSetup pytest tests
+              run: pytest -q --tb=short -p no:cacheprovider tools/permissionsSetup/tests
+
+            - name: Run Isaac Sim connector pytest tests
+              working-directory: tools/ExternalIntegrations/isaacsim_vams_integration
+              run: pytest -q --tb=short
 
             - name: Upload VamsCLI test results
               # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
@@ -350,6 +410,41 @@ jobs:
                   if-no-files-found: error
                   include-hidden-files: true
                   retention-days: 1
+
+    # Builds the documentation site on every pull request and on pushes to development and
+    # development-*, without deploying it. The site fails its build on a broken link or anchor
+    # (docusaurus.config.ts), and docs.yml builds it only on pushes to main and release/**, so without
+    # this job a broken link merged on development would first fail at release time. Pushes to main
+    # and release/** skip it: docs.yml builds the site there.
+    docs-build:
+        if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) && !(github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Checkout repo
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/checkout@v4
+
+            - name: Setup node
+              # GitHub-maintained actions/* use major-version tags; third-party actions are SHA-pinned.
+              # nosemgrep: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+                  cache-dependency-path: documentation/docusaurus-site/package-lock.json
+
+            - name: Pin npm version
+              run: npm install -g npm@11.19.1
+
+            - name: Npm ci documentation site
+              working-directory: documentation/docusaurus-site
+              run: npm ci
+
+            - name: Build documentation site
+              working-directory: documentation/docusaurus-site
+              run: npm run build
 
     # One TypeScript type check over all of infra (lib, bin, config, test). The infra Jest suite
     # compiles transpile-only (infra/tsconfig.json sets isolatedModules), so a type error fails here and
@@ -529,10 +624,20 @@ jobs:
               working-directory: web
               run: npm ci --ignore-scripts
 
+            # Only the Cesium viewer's install script (the other viewer postinstall builds are not needed
+            # by the unit tests): it installs the lockfile-pinned @cesium/engine under the 7-day
+            # min-release-age rule (customInstalls/cesium/.npmrc) and bundles public/viewers/cesium/Cesium.js,
+            # which the real-Cesium request hook tests load.
+            - name: Install the Cesium bundle
+              working-directory: web
+              run: node ./customInstalls/cesium/cesiumInstall.js
+
             - name: Web test
               working-directory: web
               env:
                   CI: "true"
+                  # A missing Cesium bundle fails the real-Cesium suite instead of skipping it.
+                  REQUIRE_CESIUM_BUNDLE: "1"
               run: npx jest --ci --coverage
 
     # The backend suite, on every push and pull request the workflow runs for.
@@ -578,7 +683,8 @@ jobs:
     # The pipeline suites under backendPipelines/. Their test modules share basenames across pipelines
     # and no tests directory is a package, so one pytest process over the tree fails at collection.
     # backendPipelines/ci/pipeline_tests.py finds every tests directory, builds each one's environment
-    # from its own requirements, and runs one pytest process per directory. It splits the directories
+    # from its own requirements (uv installs the committed exports of the uv locks), and runs one pytest
+    # process per directory. It splits the directories
     # into three groups, one job each, so a new directory runs without a workflow edit. A directory
     # whose tests render is marked in backendPipelines/ci/suite-settings.json and runs under xvfb-run. A directory
     # that cannot run on a CPU-only runner is listed with its reason in
@@ -606,6 +712,16 @@ jobs:
               uses: actions/setup-python@v7
               with:
                   python-version: 3.12.16
+
+            # The runner builds each suite's environment with uv from the committed exports. The version
+            # every pyproject.toml requires (`[tool.uv] required-version`), checked against the SHA-256 of
+            # its release archive.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
 
             - name: Install the system packages the group's suites need
               # A suite that renders (headlessDisplay in suite-settings.json) runs under xvfb-run; the runner
@@ -665,6 +781,14 @@ jobs:
             - name: Build the image and run the golden round trip
               run: bash backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh
 
+            # The same cells on the image's AWS Batch target (non-root user, batch_entry.py entrypoint), so a
+            # change that breaks the Batch output or entrypoint cannot pass with the Lambda run alone.
+            - name: Build the Batch target and run the golden round trip
+              env:
+                  GOLDEN_TARGET: batch
+                  GOLDEN_IMAGE: vams-3dbasic-golden-batch
+              run: bash backendPipelines/conversion/3dBasic/lambdaContainer/tests/golden/run_golden.sh
+
     # The VamsMCP suite. The server imports vamscli, which is not on PyPI, so VamsCLI is installed from
     # its directory first. The mcp SDK needs Pydantic v2, so this suite has a job of its own rather
     # than sharing the backend's Pydantic v1 environment.
@@ -685,11 +809,24 @@ jobs:
               with:
                   python-version: 3.12.16
 
+            # The uv version every pyproject.toml requires (`[tool.uv] required-version`), checked
+            # against the SHA-256 of its release archive. No cache: the suite installs from the lock.
+            - name: Setup uv
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+              with:
+                  version: "0.13.8"
+                  checksum: 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 # pragma: allowlist secret
+                  enable-cache: false
+
+            # The locked set (tools/VamsMCP/uv.lock) with the dev extra, in tools/VamsMCP/.venv. The lock
+            # resolves vamscli from ../VamsCLI as an editable install, as this job always installed it.
             - name: Install VamsMCP dependencies
               working-directory: tools/VamsMCP
+              env:
+                  UV_PYTHON_DOWNLOADS: never
               run: |
-                  pip install -e ../VamsCLI
-                  pip install -e ".[dev]"
+                  uv sync --frozen --extra dev --python 3.12
+                  echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
             - name: Run VamsMCP pytest tests
               working-directory: tools/VamsMCP

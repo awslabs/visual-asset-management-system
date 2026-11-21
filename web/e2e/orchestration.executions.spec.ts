@@ -776,6 +776,11 @@ test.describe("Executions board — partial detail responses", () => {
                 "This session is not granted the abort route; the hint shows without a button"
             );
             await abort.click();
+            // Abort asks first; nothing is sent until the confirmation's Abort.
+            const confirm = page.getByRole("dialog", { name: "Abort Execution" });
+            await expect(confirm).toBeVisible();
+            expect(aborts).toHaveLength(0);
+            await confirm.getByRole("button", { name: "Abort" }).click();
             await expect.poll(() => aborts.length, { timeout: 15_000 }).toBe(1);
             expect(errors, `page errors: ${errors.join(" | ")}`).toHaveLength(0);
         });

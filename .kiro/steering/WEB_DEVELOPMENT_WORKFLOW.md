@@ -2,7 +2,7 @@
 
 This document provides comprehensive guidelines for developing and extending the VAMS web frontend application. Follow these rules to ensure consistency, quality, and maintainability across all frontend implementations.
 
-> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its testing sections are also the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
+> **Steering Document Sync (bidirectional):** This document (together with `WEB_FRONTEND.md`) mirrors the Claude Code steering in `web/CLAUDE.md` (and cross-cutting rules in the root `CLAUDE.md`). Its "End-to-End Testing (Playwright)" section is the Kiro counterpart for `web/e2e/CLAUDE.md`. Whenever you change a rule, pattern, or convention here, make the equivalent change in the matching `CLAUDE.md` file(s) in the same change — and whenever those `CLAUDE.md` files change, reflect it back here. Keep the two sets of documents saying the same thing.
 
 > **Add-on steering:** an add-on's own steering lives in `.kiro/steering/ADDON_*.md` (`inclusion: fileMatch`), which loads when you edit that add-on's files; this document covers core and the lanes an add-on plugs into.
 
@@ -221,7 +221,7 @@ web/
 -   [ ] **Import from service layer**: Never import `apiClient` directly
 -   [ ] **Use Context for shared state**: Follow `AssetDetailContext.ts` patterns
 -   [ ] **Handle API responses**: Check boolean flag before using data
--   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.6)
+-   [ ] **List toolbar and sorting**: A list page puts the search and the refresh button on the left and the filter drop-downs on the right (`TableList.tsx`, or `components/list/ListToolbar.tsx`), and every column that offers sorting sorts (`components/list/tableSorting.ts`; see `WEB_FRONTEND.md` section 7.7)
 
 #### **Step 3: Page and Route Setup**
 
@@ -444,7 +444,7 @@ Cache.setItem("config", data);
 
 The orchestration module implements Tier-1 permission graying via `useAllowedRoutes()` (fetches and caches `GET /auth/routes/api/allowed`). Components call `can(method, pathTemplate)` to check if the current user may invoke an endpoint, and gray/hide actions accordingly. Admin-only actions (Logs, Permanent-Delete) are hidden in menus and action rows when the route is not allowed. The trigger list (`TriggersEditor`, on the Triggers page and the builder's Triggers step) offers Add, Edit and Retry only to a role that may call the trigger `PUT` route and Delete only to one that may call its `DELETE`; the create flow's Triggers step is gated on the `PUT` as a whole. Navigational surfaces are the exception: the execution detail page's Logs tab stays present whatever the permission, and its panel states that logs are not viewable rather than rendering an empty viewer — removing a tab makes the capability undiscoverable, while an absent menu entry simply narrows a list of actions. Gate the panel's contents, not the tab. Tier-2 is not pre-checked client-side — the backend filters lists to what the user can access.
 
-The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
+The core pages use the same check: the database list (Create, Edit, Delete Selected), the asset page (Delete, Upload Files, the metadata editor) and the search page's Search and Asset list views (Create Asset, Delete Selected, and Unarchive Selected, gated on `PUT /database/{databaseId}/assets/{assetId}/unarchiveAsset` as the asset page's Unarchive is: `database-admin` reaches it through `starts_with /database`, `database-user` denies it and `database-readonly` has no `PUT`; `pages/search/SearchPage.tsx` computes the three reasons). The delete dialog both open (`modals/AssetDeleteModal.tsx`) offers its permanent-delete toggle only with `canPermanentlyDelete` (the `deleteAsset` route), and the search list disables Delete Selected for a selection with an archived row without that route, since such a selection can only be permanently deleted. The metadata editor (`metadataV2/MetadataContainer.tsx`) is editable with POST or PUT on the asset metadata route and offers row delete on a stored field only with `canDelete` (DELETE on that route); clearing a schema field and removing a field added in the same edit stay available. With `canDelete` false a bulk-edit CSV import also keeps every stored field the file leaves out, since a `replace_all` that removes stored keys needs the route's DELETE. The file metadata editor (`metadata/FileMetadata.tsx`, both file tabs) and the asset-link metadata editor pass `canDelete` from DELETE on their own routes (`.../metadata/file`, `/asset-links/{assetLinkId}/metadata`). The database metadata editor is not gated: the `database-user` template grants DELETE on `/database/{databaseId}/metadata` for its own database only, which the listing does not report (see below). A Cloudscape button there is disabled with `disabledReason` from `routeDisabledReason(loading, allowed, deniedReason)` (`features/orchestration/permissions/routeDisabledReason.ts`), which also disables it, with "Checking your permissions.", while the check loads. `can()` sees only what the listing reports, and the listing evaluates each `{param}` segment as a placeholder: a grant written for a concrete value (`starts_with /database/<id>/`, as the `database-user` template grants `PUT`) is not listed. Do not gate an action on a route a shipped template grants only that way, or that role loses an action it may perform. `features/orchestration/permissions/templateRoleRoutes.testdata.ts` holds the listing for the `database-readonly` and `database-user` templates, and `backend/tests/handlers/auth/test_permission_templates_web_action_routes.py` checks it against the templates.
 
 ```typescript
 const { can } = useAllowedRoutes();
@@ -452,7 +452,7 @@ const canDelete = can("DELETE", "/workflows/executions/{executionId}/permanent")
 <Button disabled={!canDelete}>Permanent Delete</Button>;
 ```
 
-System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu. Every other action the API would refuse stays listed, disabled with its reason from `features/orchestration/permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
+System records (`isSystem: true` on a pipeline or workflow) are graded from the record rather than the route: the Pipelines and Workflows pages show a **System** badge and open them in a **View** page where locked fields and steps are disabled and greyed, the pipeline drag handle is locked, a template allows only its config body, web form and tag schema, the trigger editor allows only Enabled, and a save sends only `{enabled}`. View replaces Edit in the actions menu and is open to any role that may read the record, so on a pipeline or workflow View page **Enabled** and **Update**/**Save** follow the record's `PUT` route: a role without it sees them disabled with `routeDisabledReason` ("Your role does not allow changing this pipeline." / "… this workflow."). Every other action the API would refuse stays listed, disabled with its reason from `features/orchestration/permissions/systemRecordReasons.ts`: **Archive** in the Pipelines and Workflows menus (`ContextMenu` `disabledReason`), **Create Template** and **Delete** on the Templates board, and **Add** and **Delete** in the trigger list (`DisabledReasonButton`). A run a system feature started (its server `triggerType` starts with `System-`) lists **Rerun** in the executions row menu disabled with `SYSTEM_RECORD_REASONS.rerunSystemRun`, since the rerun route refuses it. The route check runs first: an action the role may not call stays hidden whatever the record. A disabled control with a reason stays focusable (`aria-disabled`, not `disabled`), is announced with its reason (`aria-description`), and shows the reason on hover and focus (`DisabledReasonTooltip`, which opens above the control, stays inside the viewport at any width, and Escape dismisses); choosing it does nothing. This is presentation only; the backend guards in `common/workflows/systemRecords.py` enforce it (mirrors `web/CLAUDE.md` 6.4).
 
 ### **Rule 13: Toast Notifications (Orchestration Module)**
 
@@ -581,9 +581,9 @@ const data = result[1];
 
 A `403` the deployment's AWS WAF web ACL blocked is not a permission denial. `isRequestBlocked(error)` (in `apiClient.ts`, re-exported from `APIService.ts`, since components never import `apiClient`) recognizes its body (`blockedBy: "waf"`), and `parseErrorResponse` appends ` (request ID <id>)` to its message, so code that maps a `403` to a permission sentence checks `isRequestBlocked` first and shows the message.
 
-A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `apiClient.ts`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message.
+A request whose response the browser never saw rejects with a `TypeError` ("Failed to fetch"). `isNetworkFailure(error)` recognizes it, and the service returns or throws `NETWORK_FAILURE_MESSAGE` (both in `services/networkFailure.ts`, re-exported by `apiClient.ts`; a `catch` uses `requestFailureMessage(error, fallback)`) in its place, with no status, so the page says the service could not be reached and can offer Retry instead of a "not found" or permission message. A create or launch that got no reply says its outcome is unknown and where to check before retrying.
 
-A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour
+A TanStack Query hook never retries a final answer. The app's query client (`createAppQueryClient` in `utils/queryRetry.ts`) retries a failed query once, except when the error carries a 4xx status other than 408 or 429: a 403 is the API's authorization decision and a 404 says the object is not there, so the page shows the error at once. `toTuple` / `toTupleWithWarnings` tag a failed tuple with the call's status (`failureStatus(result)`, non-enumerable, so the tuple still destructures and compares as `[false, message]`), and the hooks in `features/orchestration/api/queries.ts` throw through `callService`, which raises a `ServiceCallError` carrying it. A hook that throws on a tuple itself goes through `callService` too, or its 403 is re-sent (#1270). A service that rebuilds its tuple drops the status and keeps the old retry-once behaviour. The core services that are not TanStack hooks return the status as a visible third entry instead, `[false, message, status?]` (the zip download calls, `downloadAsset`, `fetchFileInfo`, `ComplianceService.getDatabaseBindings`), so a caller reads `result[2]`.
 
 ### **Authentication: Dual-Mode System**
 
@@ -645,9 +645,15 @@ VAMS supports dark/light themes (default: dark):
 }
 ```
 
+### **A Resizable Table Column's Width Is Seeded Once**
+
+With `resizableColumns`, Cloudscape seeds each column's width **once**, on the render in which that column id first becomes visible, and silently ignores later changes to its declared `width` (raising `minWidth` is not the lever either). **The value that selects the visible column set and the value that selects a column's declared width must come from one source, resolved in the same render**: this is why `SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the `_rectype` filter. Full rule: `WEB_FRONTEND.md` section 10.5.
+
+Source: `web/CLAUDE.md`, "10.5 A Resizable Table Column's Width Is Seeded Once".
+
 ### **Feature Flags**
 
-Feature flags are read from `/api/secure-config` and stored in `appCache`:
+Feature flags are read from `GET /secure-config` and stored in `appCache`:
 
 ```typescript
 const config = appCache.getItem("config");
@@ -945,7 +951,7 @@ Do **not** label a test whose forbidden construct is still writable: a CSP that 
 a Tailwind utility. Those must keep holding. Full criterion: root `CLAUDE.md` Rule 13; Claude Code
 counterpart: `web/CLAUDE.md` section 11.4.1.
 
-**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack; full guide: `web/e2e/CLAUDE.md`). A core spec gives a page or shared component permanent smoke coverage, must not require specific data, and is named `orchestration.{page}.spec.ts`, `viewers.spec.ts`, `search.spec.ts`, or `{addon}.{page}.spec.ts` for an add-on page. Import locators from `support/fixtures.ts` rather than rewriting them: `cachedFeaturesEnabled(page)` reads the deployment's feature flags from the app's own cache, so a spec can `test.skip` on an absent flag, and `expectTableRendered(page, emptyState?)` takes the page's own empty-state regex when its copy does not read "No … found". An add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`. A spec that mutates data or needs a second user does so only behind an `E2E_*` opt-in variable, documented in `web/e2e/CLAUDE.md` ("Running the suite"), and otherwise skips with the reason: `zipdownloads.spec.ts` takes `E2E_ZIP_CREATE=1` and `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD`.
+**End-to-end specs** (`web/e2e/`, Playwright against a deployed stack) follow the rules in "End-to-End Testing (Playwright)" below.
 
 **Playwright specs for the search page (`web/e2e/`).** These drive the deployed search page and must pass
 against any sandbox. The core spec for a page outside the orchestration module is `{page}.spec.ts`
@@ -974,7 +980,9 @@ against any sandbox. The core spec for a page outside the orchestration module i
     dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
     as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
 -   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
-    the API's message, and the switches and the query band stay.
+    the API's message, and the switches and the query band stay. With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
 -   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
     opened by click, Enter or Space; an exact count has none.
 -   **A database route locks the Database filter and names it**: the disabled multiselect reads the
@@ -997,6 +1005,173 @@ npm run prettier-fix
 
 ---
 
+## 🧪 **End-to-End Testing (Playwright)**
+
+Mirrors `web/e2e/CLAUDE.md`; a change to either lands in both (root `CLAUDE.md` Rule 11).
+
+Playwright drives the **deployed** application, so it is the only layer that proves a frontend change reached
+users. `E2E_BASE_URL` is required: `playwright.config.ts` throws when it is unset. A fix that exists only in
+`web/src/` fails until the front end is rebuilt (`cd web && npm run build`) and deployed. Confirm the
+deployment took by matching the served main-bundle hash to the local one
+(`curl -s https://<host>/index.html | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js'` against
+`ls web/dist/assets/index-*.js`). A passing jest suite says nothing about what is deployed.
+
+### **Two kinds of spec**
+
+|           | **Core specs (tracked)**                                                                                                                                                                                                                                                                                                                                                                | **Ad-hoc specs (untracked)**                                |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Purpose   | Permanent smoke coverage of a page or shared component                                                                                                                                                                                                                                                                                                                                  | Prove one specific change or fix works                      |
+| Data      | **Must not require specific data**                                                                                                                                                                                                                                                                                                                                                      | May target known seed data                                  |
+| Naming    | `orchestration.{page}.spec.ts`; `{area}.spec.ts` or `{area}.{page}.spec.ts` for another page or shared concern (`databases`, `tags`, `search`, `search.counts`, `security`, `navigation.profile-menu`, `asset.archived`, `zipdownloads`, `viewers`); `seeded.{feature}.spec.ts` for a spec that reads a seed fixture the environment names; `{addon}.{page}.spec.ts` for an add-on page | `*.reviewfixes.spec.ts`, `_probe.spec.ts`, anything scratch |
+| Committed | Yes                                                                                                                                                                                                                                                                                                                                                                                     | No: keep out of git                                         |
+
+-   Add a core spec only when a new page or shared component is added. A fix to existing behaviour gets an
+    ad-hoc spec, or a new assertion in the relevant core spec when the behaviour is permanent.
+-   A `seeded.` spec hardcodes nothing: a seed script writes a JSON fixture, an `E2E_*` variable names it, and
+    the whole file skips with the reason when it is unset (`seeded.compare.spec.ts` reads `E2E_COMPARE_SEED`).
+-   Prefix throwaway probe specs with `_` and delete them when finished; a probe left behind runs in every
+    later suite.
+
+### **Rule E1: Core specs pass against ANY environment**
+
+-   Never depend on a particular pipeline, workflow, execution, asset or count existing. Derive the subject
+    from whatever exists (`firstCardId(page)`) and `test.skip(!id, "<reason>")` when there is none; never a
+    hardcoded seed id.
+-   Never wait on data to prove the page loaded: wait on the page's own heading (`gotoOrchestration`), then
+    assert the list rendered rows **or** its empty state (`expectTableRendered`).
+-   A spec that needs a file of a particular type finds one with `findAssetFiles` and skips when there is
+    none, never a fixed database and asset id.
+-   A skip with a reason is the honest outcome when a precondition is absent; a test that passes because its
+    assertion never ran is not. Card lists are server-paginated (pageSize 50), so a spec that waits for one
+    seeded id fails once newer items push it off page 1.
+
+### **Rule E2: Core specs do not mutate the environment**
+
+-   Open dialogs and wizards to assert they work, then dismiss them (`Escape`); never Launch.
+-   For a destructive action, assert the confirm appears and says the right thing, then dismiss it (capture a
+    native `confirm()` with `page.once("dialog", …)` and `d.dismiss()`).
+-   Only an ad-hoc spec may create and clean up its own data. The one core exception is
+    `zipdownloads.spec.ts`, which creates one zip job and deletes it again only behind `E2E_ZIP_CREATE=1`,
+    and skips that case with the reason without it. A core spec that needs a second user reads it from
+    `E2E_SECOND_USERNAME` / `E2E_SECOND_PASSWORD` (signed in with `signInAs`, never hardcoded) and skips
+    without them. A spec lists its other opt-in variables in its header comment.
+
+### **Rule E3: Use the shared harness, don't re-derive selectors**
+
+`web/e2e/support/fixtures.ts` holds the durable selector knowledge; import from it, and when a page's markup
+changes fix the helper once. An add-on's page helpers sit beside it in `support/{addon}Fixtures.ts`. The full
+helper table is in `web/e2e/CLAUDE.md` Rule 3; the groups are:
+
+-   **Navigation and page state:** `gotoOrchestration`, `orchestrationRoot`, `searchBox`, `facet`,
+    `firstCardId`, `openCardMenu`, `tableRows` / `expectTableRendered` (takes the page's own empty-state
+    regex), `menuSurface`, `wizardRail`, `rowValue`, `collectPageErrors`, `sideNavigation`,
+    `profileMenuName` / `profileMenuTrigger` / `openProfileMenu` / `profileMenuLink`, `signInAs`.
+-   **Feature switches:** `featureSwitches(page)` is the harness's one feature reader (the deployment's
+    `featuresEnabled`, from the app's own cache); `test.skip` on an absent switch. `cachedFeaturesEnabled`
+    and `featuresEnabled` are older names for it, and `missingFeatures(list, req)` lists the required
+    features a deployment lacks.
+-   **Files and viewers:** `openAssetFile`, `openFileManager`, `selectTreePath`, `treeNode`,
+    `selectedTreeNode`, `chooseViewer`, `chooseSelectOption`, `apiContext`, `findAssetFiles`,
+    `findNestedAssetFile`, `findAssetsWithFiles`, `viewerSamples`, `compareSeed`, `openViewerFile`,
+    `pickViewerIfAsked`, `expectViewerSelected`, `dataGrid`, `largestCanvas`, `canvasStats`,
+    `expectCanvasRendered`, `expectSuperSplatRendered`.
+-   **Layout:** `VIEWPORTS` (phone 390, tablet 768, laptop 1280, desktop 1440), `pageOverflowX` /
+    `expectNoPageOverflowX`, `expectReachable`.
+-   **Security and hygiene:** `watchConsoleErrors` (ignores only `CONSOLE_ERROR_IGNORE`),
+    `watchCspViolations` (call before navigating) / `expectNoNewCspViolations`, `watchRequestHosts`
+    (`thirdParty()`), `SUPERSPLAT_CSP_ALLOWED`, `CSP_CONSOLE_REPORT`.
+
+Selector facts worth not rediscovering:
+
+-   The orchestration search input is `getByLabel("Search")`, matched by label, not placeholder; there are two
+    "Search" inputs (filter bar and global nav), so scope to `.orchestration-root`.
+-   Filters are native `<select>`s (`Status`, `Execution Type`, `Database`, `Group by`, `Filter by status`,
+    `Filter by trigger`, `Filter by group ID`, `Time window`). Cards expose `Actions for {id}` buttons, the
+    stable way to read a card's identity. The template panel heading is an `h1` reading exactly `Templates`.
+    Execution trigger values use the stored vocabulary (`Manual`, `File-Upload`).
+-   The pipeline form is a three-step wizard ("1 Basic", "2 Execution", "3 Settings"); later steps' fields do
+    not exist until you advance with the form's own `Next`. Never locate a step by name:
+    `getByRole("button", { name: /Settings/ })` matches the global navigation's Settings button.
+-   The execute flow is one dialog: its first step is the workflow picker (`role=option` rows in a
+    `role=listbox`, search labelled `Workflow`) except from a workflow card's Execute action, and `Launch`
+    exists only on the final step; an Inputs-step assertion targets `Next`.
+-   The executions board names the workflow's database `Workflow Database` and has no `Group` column.
+-   `[role="menu"]` is ambiguous on every page: closed Cloudscape Selects keep zero-size menus earlier in
+    document order. Reach the open surface with `menuSurface(items)`.
+-   A detail panel's field value is the label's next sibling; use `rowValue(page, label)`, never a page-wide
+    `getByText` for a value's shape.
+
+### **Rule E4: Assert behaviour, not implementation**
+
+Prefer role-based, user-visible assertions. A crash regression asserts no uncaught errors
+(`collectPageErrors` empty), not only that something rendered. A layering fix proves the dialog receives the
+click (`document.elementFromPoint` at the dialog lands inside it); a z-index alone proves nothing.
+
+### **Viewer render proof (shared by every viewer PR)**
+
+`viewers.spec.ts` "viewer render proof (seeded samples)" proves a viewer DRAWS a known file. Add a viewer's
+cases to `renderCases` there; never start another spec or harness.
+
+-   **Samples** are entries of the tracked `e2e/fixtures/viewer-samples.json` (schema checked by
+    `web/src/visualizerPlugin/config/viewerSamplesManifest.test.ts`): `id`, `viewer` (a config viewer id, or
+    `none` for a `not-offered` subject), `path`, `licence`, `source`, and exactly one of a download (`url`
+    pinned to a tag or commit, `size`, `sha256`; the seeder refuses a mismatch), `generated`, or
+    `derivedFrom` plus `transform`. Optional `requiresFeature` and `expect` thresholds. Verify the licence at
+    its source before adding a download; no sample binary is ever committed.
+-   **Seeding:** `tools/VamsCLI/examples/seed_viewer_samples.py --profile <name>` uploads the samples to one
+    distributable asset and writes `e2e/fixtures/viewer-samples-seed.json`; export its path as
+    `E2E_VIEWER_SAMPLES`.
+-   **A case** names `sample`, `viewer` (the exact config `name`; the case asserts that viewer opened) and
+    `kind` (`canvas`, `image`, `raster-notice`, `pdf`, `grid`, `text`, `text-binary`, `text-encoding`,
+    `not-offered`, `potree`, `refused`, `supersplat`), with optional `select`, `requiresFeature` /
+    `withoutFeature`, `fetches`, `thresholds`, `cspAllowed`, `servedBundle`, `consoleAllowed`, `reads` and
+    `selectInPanel`. VNTANA and VEERUM have no feature flag, so their cases skip when the viewer is not
+    offered.
+-   **Every case fails** on console or page errors (`watchConsoleErrors`; never widen
+    `CONSOLE_ERROR_IGNORE` for one case, use `consoleAllowed`), on any CSP violation outside `cspAllowed`
+    (list the development baseline's violations exactly, so only new ones fail) and on any request host
+    outside the deployment (`watchRequestHosts`). Run the spec on the development build first and record its
+    pixel stats; a case that passes there and fails on a change is a regression.
+-   **Potree cases** read the octree the Potree pipeline wrote, so run that pipeline on each `potree-*` sample
+    after seeding; the case skips, naming the pipeline, until `preview/PotreeViewer/metadata.json` exists. It
+    asserts `Potree.lru.numPoints > 0` and point pixels by red channel.
+-   **SuperSplat** renders only through WebGPU, which headless Chromium hides. `E2E_WEBGPU=1` runs those cases
+    in a separate `chromium-webgpu` project and takes them out of `chromium`; without an adapter they skip,
+    and `E2E_REQUIRE_WEBGPU=1` makes that a failure. Run them where a GPU is available: Chromium's software
+    adapter loses the device while the editor loads a file.
+
+### **Running the suite**
+
+```bash
+cd web
+export E2E_BASE_URL=https://<your-deployment-host>   # required
+export E2E_USERNAME=<user> E2E_PASSWORD=<pass>       # never hardcode credentials
+npm run e2e                                           # all specs
+npx playwright test e2e/orchestration.pipelines.spec.ts --retries=0 --workers=2
+E2E_WEBGPU=1 E2E_REQUIRE_WEBGPU=1 npx playwright test e2e/viewers.spec.ts   # SuperSplat render checks
+```
+
+-   `retries: 1` reports a fail-then-pass as **flaky**, and Playwright's exit code counts flaky as success;
+    read the summary line, not the exit status (a shell pipeline makes the exit code the pipeline's).
+-   `auth.setup.ts` signs in once and saves `e2e/.auth/admin.json` for 45 minutes (rapid Cognito sign-ins can
+    trip the edge WAF); `E2E_FORCE_LOGIN=1` refreshes it, and an MFA account runs `npm run e2e:auth` headed
+    once. Keep `auth.setup.ts` tracked and working: every spec depends on it.
+
+### **Adding a core spec for a new page**
+
+1. Add a new orchestration route to the `gotoOrchestration` union in `support/fixtures.ts`.
+2. Assert, in order: the page renders without a crash; its controls exist; its filters offer the expected
+   values; one interaction per row action.
+3. Derive every subject from the environment (Rule E1) and mutate nothing (Rule E2).
+4. Put new selector knowledge in `support/fixtures.ts`, not inline.
+5. Run against a deployed environment; the result is `passed` or an explicit `skipped`, never a silent pass.
+
+Anti-patterns: hardcoded seed ids; waiting on data to prove page load; mutating shared state in a core spec;
+inline selectors; committing an ad-hoc or `_probe` spec; hardcoded credentials or base URL; calling a web fix
+verified without checking the deployed bundle hash.
+
+---
+
 ## 🔍 **Code Review Checklist**
 
 ### **Compliance Checks**
@@ -1015,7 +1190,7 @@ npm run prettier-fix
 -   [ ] npm used (no yarn)
 -   [ ] Relative imports used (no path aliases)
 -   [ ] Theme-aware styles (Cloudscape design tokens or theme.css custom properties)
--   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.6)
+-   [ ] List pages use the standard toolbar (search and refresh left, filters right) and every sortable column sorts (`WEB_FRONTEND.md` section 7.7)
 
 ### **Documentation Checks**
 
@@ -1031,7 +1206,7 @@ npm run prettier-fix
 
 1. Create component in `src/components/myfeature/MyFeatureTable.tsx`
 2. Use `@cloudscape-design/collection-hooks` for filtering/sorting
-3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.6 (search and refresh on the left, filters on the right; every sortable column sorts)
+3. Lay out the toolbar and wire the column sorting per `WEB_FRONTEND.md` section 7.7 (search and refresh on the left, filters on the right; every sortable column sorts)
 4. Create page wrapper in `src/pages/MyFeaturePage.tsx`
 5. Add lazy import + route in `src/routes.tsx`
 6. Add a navigation entry in `src/layout/navigationRegistry.ts` (`placement: "profile"` for a page of the signed-in user)

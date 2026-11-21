@@ -231,7 +231,8 @@ def list(ctx: click.Context, database_id: str, asset_id: str, asset_version_id: 
 @click.option('-a', '--asset-id', required=True, help='Asset ID')
 @click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
 @click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
-              help='Update type: update (upsert) or replace_all (replace all metadata)')
+              help='Update type: update (upsert) or replace_all (replace all metadata; removing stored '
+                   'keys also needs the DELETE permission on the route, or the request is refused with 403)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -252,7 +253,8 @@ def update(ctx: click.Context, database_id: str, asset_id: str, json_input: str,
     
     Update Types:
         - update: Upsert provided metadata (create or update, keep unlisted keys)
-        - replace_all: Replace ALL metadata (delete unlisted keys, upsert provided)
+        - replace_all: Replace ALL metadata (delete unlisted keys, upsert provided); removing stored
+          keys also needs the DELETE permission on the route, or the request is refused with 403
     
     Examples:
         # Update metadata (upsert mode)
@@ -438,7 +440,8 @@ def list(ctx: click.Context, database_id: str, asset_id: str, file_path: str, me
               help='Type: metadata or attribute')
 @click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
 @click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
-              help='Update type: update (upsert) or replace_all (replace all metadata)')
+              help='Update type: update (upsert) or replace_all (replace all metadata; removing stored '
+                   'keys also needs the DELETE permission on the route, or the request is refused with 403)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -632,7 +635,8 @@ def list(ctx: click.Context, asset_link_id: str, show_archived: bool, page_size:
 @click.option('--asset-link-id', required=True, help='Asset link ID')
 @click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
 @click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
-              help='Update type: update (upsert) or replace_all (replace all metadata)')
+              help='Update type: update (upsert) or replace_all (replace all metadata; removing stored '
+                   'keys also needs the DELETE permission on the route, or the request is refused with 403)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth
@@ -814,7 +818,8 @@ def list(ctx: click.Context, database_id: str, page_size: int, starting_token: s
 @click.option('-d', '--database-id', required=True, help='Database ID')
 @click.option('--json-input', required=True, help='JSON input file (with @ prefix) or JSON string')
 @click.option('--update-type', type=click.Choice(['update', 'replace_all']), default='update',
-              help='Update type: update (upsert) or replace_all (replace all metadata)')
+              help='Update type: update (upsert) or replace_all (replace all metadata; removing stored '
+                   'keys also needs the DELETE permission on the route, or the request is refused with 403)')
 @click.option('--json-output', is_flag=True, help='Output raw JSON response')
 @click.pass_context
 @requires_setup_and_auth

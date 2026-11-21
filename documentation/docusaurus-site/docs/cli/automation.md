@@ -167,16 +167,16 @@ For automated environments, use one of the following authentication approaches.
 Create an API key through the VAMS web interface or CLI, then use it as a token override:
 
 ```bash
-vamscli auth login --user-id ci-bot@example.com --token-override "$VAMS_API_KEY"
+printenv VAMS_API_KEY | vamscli auth login --user-id ci-bot@example.com --token-override-stdin
 ```
 
 #### Token Override with Service Tokens
 
-If your organization uses a service token system, pass the token directly:
+If your organization uses a service token system, pipe the token in:
 
 ```bash
-vamscli auth login --user-id "$VAMS_SERVICE_USER" \
-    --token-override "$VAMS_SERVICE_TOKEN" \
+printenv VAMS_SERVICE_TOKEN | vamscli auth login --user-id "$VAMS_SERVICE_USER" \
+    --token-override-stdin \
     --expires-at "+3600"
 ```
 
@@ -185,7 +185,7 @@ vamscli auth login --user-id "$VAMS_SERVICE_USER" \
 For development environments where security requirements are lower:
 
 ```bash
-vamscli auth login -u "$VAMS_USERNAME" -p "$VAMS_PASSWORD" --save-credentials
+printenv VAMS_PASSWORD | vamscli auth login -u "$VAMS_USERNAME" --password-stdin --save-credentials
 ```
 
 :::warning[Credential Security]
@@ -207,7 +207,7 @@ Configure profiles for each environment during your pipeline setup stage:
 ```bash
 # Setup stage
 vamscli --profile staging setup https://staging-vams.example.com --skip-version-check
-vamscli --profile staging auth login --user-id ci-bot@example.com --token-override "$STAGING_TOKEN"
+printenv STAGING_TOKEN | vamscli --profile staging auth login --user-id ci-bot@example.com --token-override-stdin
 
 # Deployment stage
 vamscli --profile staging assets create -d release-db \
@@ -246,11 +246,13 @@ jobs:
                   pip install -e .
 
             - name: Configure VamsCLI
+              env:
+                  VAMS_TOKEN: ${{ secrets.VAMS_TOKEN }}
               run: |
                   vamscli setup ${{ secrets.VAMS_URL }} --skip-version-check
-                  vamscli auth login \
+                  printenv VAMS_TOKEN | vamscli auth login \
                     --user-id ${{ secrets.VAMS_USER }} \
-                    --token-override "${{ secrets.VAMS_TOKEN }}"
+                    --token-override-stdin
 
             - name: Upload Build Artifacts
               run: |
@@ -281,7 +283,7 @@ upload-to-vams:
     script:
         - cd tools/VamsCLI && pip install -e . && cd ../..
         - vamscli setup "$VAMS_URL" --skip-version-check
-        - vamscli auth login --user-id "$VAMS_USER" --token-override "$VAMS_TOKEN"
+        - printenv VAMS_TOKEN | vamscli auth login --user-id "$VAMS_USER" --token-override-stdin
         - |
             ASSET_ID=$(vamscli assets create \
               -d "$VAMS_DATABASE" \
@@ -504,12 +506,12 @@ IS_AUTH=$(echo "$AUTH_STATUS" | jq -r '.authenticated')
 
 if [ "$IS_AUTH" != "true" ]; then
     echo "Re-authenticating..."
-    vamscli auth login -u "$VAMS_USER" -p "$VAMS_PASSWORD" --json-output
+    printenv VAMS_PASSWORD | vamscli auth login -u "$VAMS_USER" --password-stdin --json-output
 fi
 
 # Alternatively, attempt token refresh
 vamscli auth refresh --json-output 2>/dev/null || \
-    vamscli auth login -u "$VAMS_USER" -p "$VAMS_PASSWORD" --json-output
+    printenv VAMS_PASSWORD | vamscli auth login -u "$VAMS_USER" --password-stdin --json-output
 ```
 
 ## Verbose Mode
@@ -524,6 +526,8 @@ Enable `--verbose` for debugging scripts and troubleshooting API issues. Verbose
 ```bash
 vamscli --verbose assets list -d my-database
 ```
+
+Verbose output masks credentials such as passwords, tokens, API keys, and the signatures of presigned URLs. See [Verbose Output](troubleshooting/general.md#verbose-output) for what it masks.
 
 :::tip[Combining Verbose and JSON Output]
 Verbose log messages are written to a rotating log file and do not interfere with `--json-output`. You can safely use both flags together in scripts where you need clean JSON output but also want log files for debugging.

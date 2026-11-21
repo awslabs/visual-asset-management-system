@@ -91,7 +91,7 @@ The Search view provides several mechanisms for finding assets:
 -   **Keyword** / **Natural language** -- When both engines are enabled, choose how the query is read: keyword matching across indexed fields, or a natural-language description ranked by semantic similarity of each file's generated metadata, text, and renders. With only one engine enabled the control is fixed to that engine.
 -   **Text search** -- Enter keywords to search across asset names and properties.
 -   **Database filter** -- Filter assets to a specific database by navigating from the Databases page or using the database selector. On a database's page the filter is locked to that database and shows its name.
--   **Search notice and failures** -- Rare natural-language warnings, such as "Some result details couldn't be loaded. The matches are still shown.", appear in a dismissible **Search notice** above the results, as does a keyword search page the search time limit cut short ("The search ran out of time before every match on this page was checked ..."), whose count then shows as a minimum. A search that cannot finish, for example "Search is busy right now. Try again in a moment.", shows a **Search failed** notification with the reason and keeps every search control. See [Search and Discovery](search-and-discovery.md#the-query-band).
+-   **Search notice and failures** -- Rare natural-language warnings, such as "Some result details couldn't be loaded. The matches are still shown.", appear in a dismissible **Search notice** above the results, as does a keyword search page the search time limit cut short ("The search ran out of time before every match on this page was checked ..."), whose count then shows as a minimum. A search that cannot finish, for example "Search is busy right now. Try again in a moment.", shows a **Search failed** notification with the reason and keeps every search control; when no results are on screen yet, a **Search did not finish** message above the results also says so. See [Search and Discovery](search-and-discovery.md#the-query-band).
 -   **Column customization** -- Show or hide table columns to focus on the properties that matter to you.
 -   **Property filtering** -- Use the filter bar to build complex queries combining multiple properties with AND/OR logic (keyword mode, or natural-language mode with Amazon OpenSearch enabled).
 
@@ -159,7 +159,7 @@ When you select a file in the file manager and choose to view it, VAMS opens a d
 
 ### Supported Viewer Types
 
-VAMS includes 24 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images (including TIFF and TGA, which browsers cannot show, plus WebP and BMP), video, audio, documents, text files such as NVIDIA MDL materials, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
+VAMS includes 25 built-in viewer plugins covering 3D models, point clouds, Gaussian splats, images (including TIFF and TGA, which browsers cannot show, plus WebP and BMP), video, audio, documents, text files such as NVIDIA MDL materials, and tabular data. The viewer is selected automatically only when exactly one viewer supports the file extension. If multiple viewers support the same extension, you choose one from a dropdown and can switch between them.
 
 For the complete list of supported file viewers and extensions, see [File Viewers](../concepts/viewers.md).
 

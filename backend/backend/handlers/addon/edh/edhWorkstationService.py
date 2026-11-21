@@ -93,25 +93,29 @@ from .common.edhSessionState import (
     EXPIRES_AT_FIELD,
     ACTIVITY_FIELD,
     ACTIVITY_STARTING,
-    CONNECTION_CHECKED_AT_FIELD, CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED, CONNECTION_UNAVAILABLE_REASON_FIELD,
+    CONNECTION_CHECKED_AT_FIELD, CONNECTION_UNAVAILABLE_DESKTOP_ERROR, CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED,
+    CONNECTION_UNAVAILABLE_REASON_FIELD, DESKTOP_ERROR_MESSAGE,
     DISPLAY_SESSION_ENDED_MESSAGE,
+    LAST_ERROR_LAUNCH_STALLED,
     LAST_ERROR_LEASE_EXPIRED,
     LAST_ERROR_RESERVATION_FULL,
-    START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
-    STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
+    START_ACCEPTED_FIELD, START_IN_PROGRESS_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
+    STATE_STOPPED, STOP_REQUESTED_FIELD, WORKER_ACTION_START, WORKER_PAYLOAD_KEYS,
     capacity_reservation_fallback_reason, capacity_reservation_named, connection_check_applies,
     connection_checks_due, connection_unavailable_reason,
     credential_claim_stamp, deleted_row_expiry,
-    edh_failure_attributes, edh_failure_read_due,
+    edh_failure_attributes, edh_failure_read_due, instance_state_reason,
     launch_image_snapshot, observed_row_attributes, orphaned_last_error, session_row_live, start_accepted_cleared,
-    start_in_progress, start_stall_cleared, start_stamp, start_stamp_cleared, state_for_edh_session_state,
+    start_in_progress, start_return_attributes, start_returned_to_stopped, start_stall_cleared, start_stamp,
+    start_stamp_cleared, state_for_edh_session_state,
     workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
 lambda_client = boto3.client('lambda', config=retry_config)
-# Amazon EC2 in the Lambda's own Region, where EDH launches the desktops: the instance-type facts the catalog shows.
+# Amazon EC2 in the Lambda's own Region, where EDH launches the desktops: the instance-type facts the catalog shows,
+# and why EC2 returned a started desktop's instance to stopped.
 ec2 = boto3.client('ec2', config=retry_config)
 logger = safeLogger(service_name="EdhWorkstationService")
 
@@ -266,11 +270,14 @@ def _workstation_auth_object(image_id, os_family, instance_type):
     }
 
 
-def _image_auth_object(image_id, os_family):
-    """The edhImage enforcement dict: exactly the matrix fields, as strings."""
+def _image_auth_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict for a catalog image: exactly the matrix fields, as strings. The stack id
+    and name are the image's own; ``edhRecipeId`` names an AMI recipe and is empty here."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
         "edhImageId": str(image_id),
+        "edhStackName": str(stack_name if stack_name is not None else ""),
+        "edhRecipeId": "",
         "edhOsFamily": str(os_family),
     }
 
@@ -745,7 +752,7 @@ def list_catalog_images(event):
             # A stack whose family cannot be determined is not offered; it is never Linux by default.
             continue
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
-        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
+        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["name"], item["osFamily"]), "GET"):
             items.append((item, stack))
     recipe_builds = _recipe_builds_by_stack("catalog images listed as baseline") if items else {}
     items = [_categorized(item, recipe_builds.get(item["imageId"]), stack) for item, stack in items]
@@ -821,13 +828,36 @@ def _desktop_for_row(row, desktops):
     return None
 
 
+def _start_return(row, changed):
+    """What a start EDH accepted that ended stopped records (``start_returned_to_stopped``): the code its instance's
+    EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``); nothing for a stop or hibernation
+    a user or the instance initiated, or for any other change. A read of the instance that fails is logged by the error's type
+    and records the start failed without an AWS error code."""
+    if not start_returned_to_stopped(row, changed):
+        return {}
+    instance_id = changed.get('instanceId') or row.get('instanceId')
+    code = zone = None
+    if instance_id:
+        try:
+            code, zone = instance_state_reason(ec2.describe_instances(InstanceIds=[str(instance_id)]))
+        except Exception as err:
+            logger.warning(f"The instance of bootstrap {row['bootstrapId']} was not read ({type(err).__name__}); its "
+                           "start is recorded failed without an AWS error code")
+    attributes = start_return_attributes(row, code, zone, datetime.now(timezone.utc))
+    if attributes:
+        logger.warning(f"EC2 returned the started desktop of bootstrap {row['bootstrapId']} to stopped "
+                       f"({code or 'reason not read'}); recorded as {attributes['lastError']}")
+    return attributes
+
+
 def _observe_desktop(row, desktop, **stamps):
     """Persist what EDH's desktop record changes on the row, with ``stamps`` (the read's own time stamps) in the
-    same write, then bind the session secret to the instance the row now holds when it is not yet bound to it. A
-    write of stamps alone leaves the row's updatedAt, which marks a change of the row. A failed binding is logged
-    and left to the reconciler. A row deleted since it was read keeps what its deletion wrote, and nothing is
-    bound for it."""
+    same write, and, for a start EDH accepted that EC2 returned to stopped, why (``_start_return``), then bind the
+    session secret to the instance the row now holds when it is not yet bound to it. A write of stamps alone leaves
+    the row's updatedAt, which marks a change of the row. A failed binding is logged and left to the reconciler. A
+    row deleted since it was read keeps what its deletion wrote, and nothing is bound for it."""
     changed = observed_row_attributes(row, desktop)
+    changed.update(_start_return(row, changed))
     written = {**changed, **stamps}
     if written and not _update_live_row(row, touch=bool(changed), **written):
         logger.info(f"Bootstrap {row['bootstrapId']} was deleted since it was read; EDH's view is not merged")
@@ -858,14 +888,17 @@ def _desktop_states(event, client, rows, edh_uid, operation, unanswered=None):
 
 
 def _record_failed_launches(event, rows, unanswered):
-    """Record ORPHANED, with its launch-error code, each CREATING row whose session id EDH's session-state
-    read left out, and take its credential back. EDH answers only the desktops it holds active and
-    deactivates a desktop whose placement failed within minutes; a launch that never ran cannot be held
-    out by Save and Resume (a desktop EDH continued under another id is answered, so is not in
-    ``unanswered``). A stalled start's code and stamp go with the move out of CREATING. A row deleted since it
-    was read keeps what its deletion wrote; a revoke that fails is left to the session sweep."""
+    """Record ORPHANED, with its launch-error code, each new launch -- a CREATING row without a start EDH accepted
+    (``startAcceptedAt``) -- whose session id EDH's session-state read left out, and take its credential back. EDH
+    answers only the desktops it holds active and deactivates a desktop whose placement failed within minutes; a
+    launch that never ran cannot be held out by Save and Resume (a desktop EDH continued under another id is
+    answered, so is not in ``unanswered``). A started desktop EDH no longer has has run, and is left to the session
+    sweep, which records it DELETED once EDH confirms it gone, as it does an ACTIVE or STOPPED one. A stalled start's
+    code goes with the move out of CREATING. A row deleted since it was read keeps what its deletion wrote; a revoke
+    that fails is left to the session sweep."""
     for row in rows:
-        if row.get('state') != STATE_CREATING or str(row.get('sessionId') or '') not in unanswered:
+        if (row.get('state') != STATE_CREATING or row.get(START_ACCEPTED_FIELD) is not None
+                or str(row.get('sessionId') or '') not in unanswered):
             continue
         failed = {**start_stall_cleared(row), 'state': STATE_ORPHANED, 'connectionAvailable': False,
                   'lastError': orphaned_last_error(row.get('lastError'))}
@@ -1103,9 +1136,10 @@ def _instance_type_offered_for_image(recipe_build, instance_type):
 
 def _launch_reservation(event, request, os_family):
     """(the reservation fields the launch's row carries, None), or (None, the refusal), for a launch that may
-    name a capacity reservation. None named is today's launch: no field, no read. A named one runs eight checks
-    in order, before any row, mint, worker or further EDH call: registered and offered; Tier-2 ``POST`` on it (a
-    role that may see it, Tier-2 ``GET``, is told it may not launch into it; any other gets the generic refusal);
+    name a capacity reservation. None named is today's launch: no field, no read. A named one runs nine checks
+    in order, before any row, mint, worker or further EDH call: Tier-2 on the id, which needs no read (a role with
+    neither ``POST`` nor ``GET`` on it gets the generic refusal whether or not it is registered); registered and
+    offered; Tier-2 ``POST`` (a role that may see it, Tier-2 ``GET``, is told it may not launch into it);
     EC2 read (a failure refuses, since a reservation not read is not known to be full); active; EDH has a private
     subnet in its Availability Zone (not known passes); the requested instance type; a platform that suits the
     image's family; a free slot, or, when it has none, its fallback, which launches on-demand and records the
@@ -1113,16 +1147,17 @@ def _launch_reservation(event, request, os_family):
     capacity_reservation_id = request.capacityReservationId
     if capacity_reservation_id is None:
         return {}, None
+    enforcer = _enforcer()
+    auth_object = _reservation_auth_object(capacity_reservation_id)
+    may_launch = enforcer.enforce(auth_object, "POST")
+    if not may_launch and not enforcer.enforce(auth_object, "GET"):
+        return None, authorization_error(event=event)
     registration = reservations.get_registration(capacity_reservation_id)
     if registration is None or not registration['enabled']:
         return None, validation_error(body={'message': RESERVATION_NOT_REGISTERED_MESSAGE}, event=event)
-    enforcer = _enforcer()
-    auth_object = _reservation_auth_object(capacity_reservation_id)
-    if not enforcer.enforce(auth_object, "POST"):
-        if enforcer.enforce(auth_object, "GET"):
-            return None, authorization_error(event=event, body={
-                'message': RESERVATION_NOT_PERMITTED_MESSAGE, 'code': RESERVATION_NOT_PERMITTED_CODE})
-        return None, authorization_error(event=event)
+    if not may_launch:
+        return None, authorization_error(event=event, body={
+            'message': RESERVATION_NOT_PERMITTED_MESSAGE, 'code': RESERVATION_NOT_PERMITTED_CODE})
     try:
         facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
     except reservations.CapacityReservationReadError as err:
@@ -1344,6 +1379,18 @@ def _deleted_start_response(event):
     return general_error(status_code=409, body={'message': 'A deleted workstation cannot be started'}, event=event)
 
 
+def _launch_stalled(row):
+    """Whether the row is a new launch the session sweep recorded LAUNCH_STALLED and that is still CREATING."""
+    return row.get('state') == STATE_CREATING and row.get('lastError') == LAST_ERROR_LAUNCH_STALLED
+
+
+def _launch_stalled_stop_response(event):
+    """The 409 for a stop of a new launch EDH has not placed: the desktop never ran and EDH refuses to stop it,
+    so the owner's way out is a delete."""
+    return general_error(status_code=409, event=event, body={
+        'message': 'EDH has not placed this new workstation, so it cannot be stopped; delete it instead'})
+
+
 def _start_in_progress_response(event):
     """The 409 for a start of a desktop another start may yet start."""
     return general_error(status_code=409, event=event,
@@ -1447,6 +1494,12 @@ def stop_workstation(event, path):
         return _no_session_response(event)
     edh_uid = _caller_edh_uid()
     client = EdhClient(profile="api")
+    # A stored stall is checked against EDH's view first, so a launch EDH has placed since the sweep is stopped
+    # as any other; one EDH still has not placed is refused before the stop reaches EDH.
+    if _launch_stalled(row):
+        _merge_edh_state([row], _desktop_states(event, client, [row], edh_uid, "workstationStop"))
+        if _launch_stalled(row):
+            return _launch_stalled_stop_response(event)
     try:
         _call_edh(event, client, "stop_desktop", "workstationStop", edh_uid, edh_uid, session_id)
     except EdhOutcomeUnknownError as lost:
@@ -1529,6 +1582,10 @@ def start_workstation(event, path):
     desktop = _desktop_for_row(row, desktops)
     edh_state = str(desktop.get(EDH_FIELD_SESSION_STATE) or '') if desktop else ''
     if edh_state and edh_state.lower() != EDH_SESSION_STATE_STOPPED:
+        # A stopped row EDH reports in error is a desktop that runs with a failed Amazon DCV check: it is stopped
+        # and started again through a stop first.
+        if connection_unavailable_reason(row) == CONNECTION_UNAVAILABLE_DESKTOP_ERROR:
+            return _desktop_error_response(event, row)
         return _not_stopped_in_edh_response(event, edh_state)
     if start_in_progress(row):
         # Another start of the desktop -- one the launch worker may still be running, or one whose outcome EDH
@@ -1867,13 +1924,24 @@ def _not_ready_response(event):
 
 def _not_connectable_response(event, row):
     """The 409 a connect or a desktop sign-in answers for an ACTIVE row found not connectable:
-    ``DISPLAY_SESSION_ENDED`` with what to do when the row now records the desktop's display session ended, else
-    the generic not-ready answer."""
-    if connection_unavailable_reason(row) == CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED:
+    ``DISPLAY_SESSION_ENDED`` or ``DESKTOP_ERROR`` with what to do when the row now records either
+    (``connection_unavailable_reason``), else the generic not-ready answer."""
+    reason = connection_unavailable_reason(row)
+    if reason == CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED:
         logger.warning(f"EDH listed the running desktop of session {row.get('sessionId')} without a DCV session")
         return general_error(status_code=409, body={'code': CONNECTION_UNAVAILABLE_DISPLAY_SESSION_ENDED,
                                                     'message': DISPLAY_SESSION_ENDED_MESSAGE}, event=event)
+    if reason == CONNECTION_UNAVAILABLE_DESKTOP_ERROR:
+        return _desktop_error_response(event, row)
     return _not_ready_response(event)
+
+
+def _desktop_error_response(event, row):
+    """The 409 for a workstation that has run and that EDH reports in its error state (its Amazon DCV health check
+    failed): ``DESKTOP_ERROR`` with what to do. A connect, a desktop sign-in and a start of it answer it."""
+    logger.warning(f"EDH reports the desktop of session {row.get('sessionId')} in its error state")
+    return general_error(status_code=409, body={'code': CONNECTION_UNAVAILABLE_DESKTOP_ERROR,
+                                                'message': DESKTOP_ERROR_MESSAGE}, event=event)
 
 
 def connect_workstation(event, path):

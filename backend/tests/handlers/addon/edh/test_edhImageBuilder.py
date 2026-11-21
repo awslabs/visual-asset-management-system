@@ -130,10 +130,10 @@ class TestComponentDataSubstitution:
                 DEPLOYMENT)
 
     def test_an_undeclared_placeholder_is_refused(self):
-        with pytest.raises(ib_mod.ComponentDocumentError, match=r"unresolved placeholder"):
+        with pytest.raises(ib_mod.ComponentDocumentError, match=f"^{ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED}$"):
             ib_mod.substitute_component_data(
                 "schemaVersion: 1.0\n# ${ASSET_typo}\n", "vams-artefacts", ASSET_RECIPE, DEPLOYMENT)
-        with pytest.raises(ib_mod.ComponentDocumentError, match=r"unresolved placeholder"):
+        with pytest.raises(ib_mod.ComponentDocumentError, match=f"^{ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED}$"):
             ib_mod.substitute_component_data(
                 "schemaVersion: 1.0\n# ${PARAM_missing}\n", "vams-artefacts", ASSET_RECIPE, DEPLOYMENT)
 
@@ -144,10 +144,14 @@ class TestComponentDataSubstitution:
             out = ib_mod.substitute_component_data("v=${PARAM_a}", "", recipe, DEPLOYMENT)
             assert out == "v=${PARAM_b}"
 
-    def test_malformed_asset_and_parameter_tokens_are_refused(self):
+    def test_malformed_asset_and_parameter_tokens_are_refused(self, monkeypatch):
         for token in ["${ASSET_}", "${ASSET_vamscli%/}", "${ASSET_a.b}", "${PARAM_key }"]:
-            with pytest.raises(ib_mod.ComponentDocumentError, match=re.escape(token)):
+            log = MagicMock()
+            monkeypatch.setattr(ib_mod, "logger", log)
+            with pytest.raises(ib_mod.ComponentDocumentError) as err:
                 ib_mod.substitute_component_data(f"x={token}", "vams-artefacts", ASSET_RECIPE, DEPLOYMENT)
+            assert str(err.value) == ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED
+            assert token in " ".join(str(call.args[0]) for call in log.warning.call_args_list)
         # ${base} expansions remain untouched
         assert ib_mod.substitute_component_data("x=${base}t64", "", RECIPE, DEPLOYMENT) == "x=${base}t64"
 
@@ -213,17 +217,26 @@ class TestDeploymentPlaceholders:
         ("${DEPLOY_SessionSecretPrefix}", DEPLOYMENT),
         ("${DEPLOY_}", DEPLOYMENT),
     ])
-    def test_a_key_outside_the_set_or_without_a_value_is_unresolved(self, token, deployment):
-        with pytest.raises(ib_mod.ComponentDocumentError, match=re.escape(
-                f"unresolved placeholder(s) in component document: {token}")):
+    def test_a_key_outside_the_set_or_without_a_value_is_unresolved(self, token, deployment, monkeypatch):
+        log = MagicMock()
+        monkeypatch.setattr(ib_mod, "logger", log)
+        with pytest.raises(ib_mod.ComponentDocumentError) as err:
             ib_mod.substitute_component_data(f"schemaVersion: 1.0\n# {token}\n", "", RECIPE, deployment)
+        # The refusal is a fixed text; the token it could not resolve is logged, not returned.
+        assert str(err.value) == ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED
+        assert token in " ".join(str(call.args[0]) for call in log.warning.call_args_list)
 
     @pytest.mark.parametrize("value", ["team-a/edh-session", 'team-a/"$(id)/', "team a/", "team-a/\n"])
-    def test_a_value_not_of_the_keys_form_is_refused(self, value):
-        with pytest.raises(ib_mod.ComponentDocumentError, match=re.escape(
-                "deployment value(s) not in the expected form for: ${DEPLOY_sessionSecretPrefix}")):
+    def test_a_value_not_of_the_keys_form_is_refused(self, value, monkeypatch):
+        log = MagicMock()
+        monkeypatch.setattr(ib_mod, "logger", log)
+        with pytest.raises(ib_mod.ComponentDocumentError) as err:
             ib_mod.substitute_component_data(
                 "schemaVersion: 1.0\n# ${DEPLOY_sessionSecretPrefix}\n", "", RECIPE, {"sessionSecretPrefix": value})
+        assert str(err.value) == ib_mod.COMPONENT_DEPLOYMENT_VALUE_MALFORMED
+        assert "${DEPLOY_sessionSecretPrefix}" not in str(err.value)
+        assert "${DEPLOY_sessionSecretPrefix}" in " ".join(
+            str(call.args[0]) for call in log.warning.call_args_list)
 
     @pytest.mark.parametrize("extra,refused", [(0, False), (1, True)])
     def test_the_length_limit_counts_the_deployment_value(self, extra, refused):
@@ -407,6 +420,41 @@ class TestParentResolution:
 
 
 @pytest.mark.unit
+class TestParentResolutionRefusalsNameNoInput:
+    """A parent that cannot be resolved is refused with a fixed text; the name it was given and the AWS
+    error code go to the log only."""
+
+    def _refusal_and_log(self, monkeypatch, parent, *, c=None, edh=None):
+        log = MagicMock()
+        monkeypatch.setattr(ib_mod, "logger", log)
+        with pytest.raises(ib_mod.ParentImageUnavailable) as err:
+            ib_mod.resolve_parent_image(parent, ctx=c or ctx(), edh_client=edh, kind="vdi")
+        return str(err.value), " ".join(str(call.args[0]) for call in log.warning.call_args_list)
+
+    def test_an_unreadable_ssm_parameter(self, monkeypatch):
+        c = ctx()
+        c.ssm.get_parameter.side_effect = _client_error("ParameterNotFound")
+        refusal, logged = self._refusal_and_log(monkeypatch, "ssm:/team/parent-ami", c=c)
+        assert refusal == ib_mod.PARENT_SSM_PARAMETER_UNREADABLE
+        assert "/team/parent-ami" not in refusal and "ParameterNotFound" not in refusal
+        assert "/team/parent-ami" in logged and "ParameterNotFound" in logged
+
+    def test_an_edh_stack_edh_does_not_list(self, monkeypatch):
+        edh = MagicMock()
+        edh.list_software_stacks.return_value = []
+        refusal, logged = self._refusal_and_log(monkeypatch, "edhStack:Team Stack", edh=edh)
+        assert refusal == ib_mod.PARENT_EDH_STACK_NOT_LISTED
+        assert "Team Stack" not in refusal
+        assert "Team Stack" in logged
+
+    def test_an_unsupported_reference(self, monkeypatch):
+        refusal, logged = self._refusal_and_log(monkeypatch, "other:team-parent")
+        assert refusal == ib_mod.PARENT_REFERENCE_UNSUPPORTED
+        assert "team-parent" not in refusal
+        assert "team-parent" in logged
+
+
+@pytest.mark.unit
 class TestMaterialize:
     def test_creates_every_resource_once_and_returns_the_arns(self):
         c = ctx()
@@ -510,7 +558,7 @@ class TestMaterialize:
         recipe = {**ASSET_RECIPE, "components": [
             {"name": "first", "data": "schemaVersion: 1.0"},
             {"name": "second", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}]}
-        with pytest.raises(ib_mod.ComponentDocumentError, match="PARAM_missing"):
+        with pytest.raises(ib_mod.ComponentDocumentError, match=f"^{ib_mod.COMPONENT_PLACEHOLDER_UNRESOLVED}$"):
             ib_mod.materialize(c, recipe, "ami-0abc0abc0abc0abc0")
         c.ib.create_component.assert_not_called()
 
@@ -570,11 +618,60 @@ class TestImagesAndCleanup:
         c.ib.get_image.return_value = {"image": {"state": {"status": "FAILED", "reason": "boom"}}}
         assert ib_mod.describe_image(c, "arn:img/1") == {"status": "FAILED", "reason": "boom", "amiId": None, "snapshotIds": []}
 
-    def test_deregister_tolerates_already_gone(self):
+    def test_deregister_deletes_the_snapshots_in_the_same_call(self):
+        # One DeregisterImage call removes the snapshots; no snapshot is deleted on its own.
+        c = ctx()
+        c.ec2.deregister_image.return_value = {"Return": True, "DeleteSnapshotResults": [
+            {"SnapshotId": "snap-1", "ReturnCode": "success"}]}
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1"])
+        c.ec2.deregister_image.assert_called_once_with(ImageId="ami-1", DeleteAssociatedSnapshots=True)
+        c.ec2.delete_snapshot.assert_not_called()
+
+    @pytest.mark.parametrize("code", ["internal-error", "client-error", "missing-permissions"])
+    def test_a_snapshot_deregistration_left_is_deleted_on_its_own_and_a_shared_one_is_kept(self, code):
+        c = ctx()
+        c.ec2.deregister_image.return_value = {"Return": True, "DeleteSnapshotResults": [
+            {"SnapshotId": "snap-1", "ReturnCode": code},
+            {"SnapshotId": "snap-2", "ReturnCode": "skipped"},
+            {"SnapshotId": "snap-3", "ReturnCode": "success"}]}
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1", "snap-2", "snap-3"])
+        assert [call.kwargs for call in c.ec2.delete_snapshot.call_args_list] == [{"SnapshotId": "snap-1"}]
+
+    def test_the_recorded_snapshots_of_an_ami_already_gone_are_deleted(self):
+        # An AMI deregistered without its snapshots leaves them; the build row's ids still name them.
         c = ctx()
         c.ec2.deregister_image.side_effect = _client_error("InvalidAMIID.NotFound")
-        c.ec2.delete_snapshot.side_effect = _client_error("InvalidSnapshot.NotFound")
-        ib_mod.deregister_ami(c, "ami-1", ["snap-1"])
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1", "snap-2"])
+        assert [call.kwargs for call in c.ec2.delete_snapshot.call_args_list] == [
+            {"SnapshotId": "snap-1"}, {"SnapshotId": "snap-2"}]
+
+    def test_a_snapshot_already_gone_is_done_and_another_failure_is_logged_not_raised(self, monkeypatch):
+        c = ctx()
+        c.ec2.deregister_image.side_effect = _client_error("InvalidAMIID.NotFound")
+        c.ec2.delete_snapshot.side_effect = [_client_error("InvalidSnapshot.NotFound"),
+                                             _client_error("InvalidSnapshot.InUse"), RuntimeError("timeout")]
+        errors = []
+        monkeypatch.setattr(ib_mod.logger, "error", lambda message, *a, **k: errors.append(message))
+        ib_mod.deregister_ami(c, "ami-1", ["snap-1", "snap-2", "snap-3"])
+        assert c.ec2.delete_snapshot.call_count == 3
+        assert len(errors) == 2
+        assert "snap-2" in errors[0] and "InvalidSnapshot.InUse" in errors[0]
+        assert "snap-3" in errors[1] and "RuntimeError" in errors[1]
+        assert not any("snap-1" in e for e in errors)
+
+    def test_deregister_raises_an_error_other_than_not_found(self):
+        c = ctx()
+        c.ec2.deregister_image.side_effect = _client_error("UnauthorizedOperation")
+        with pytest.raises(ClientError):
+            ib_mod.deregister_ami(c, "ami-1", ["snap-1"])
+        c.ec2.delete_snapshot.assert_not_called()
+
+    def test_tag_ami_tags_the_ami_only(self):
+        # Image Builder tags the snapshots from the distribution configuration.
+        c = ctx()
+        ib_mod.tag_ami(c, "ami-1", {"vams:deployment": "vams-t1-edh"})
+        c.ec2.create_tags.assert_called_once_with(
+            Resources=["ami-1"], Tags=[{"Key": "vams:deployment", "Value": "vams-t1-edh"}])
 
     def test_the_instances_using_an_ami_are_listed_across_pages_sorted_and_once_each(self):
         c = ctx()

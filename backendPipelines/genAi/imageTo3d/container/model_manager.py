@@ -15,6 +15,7 @@ Every decision the cache logic takes is logged: a slow run is almost always a ca
 log is the only place that distinguishes a miss from a failed restore.
 """
 
+import fcntl
 import logging
 import os
 import shutil
@@ -22,6 +23,8 @@ import subprocess  # nosec B404
 import tempfile
 import time
 from pathlib import Path
+
+from hfguard import hf_pins
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -49,33 +52,71 @@ FETCH_ATTEMPTS = 3
 FETCH_RETRY_BACKOFF_SECONDS = 5
 
 
+def _partial_lock_path(hub_dir: Path, repo_dir: Path, partial: Path) -> Path:
+    """The lock huggingface_hub holds while it writes ``partial``: ``.locks/<repo dir>/<blob>.lock``."""
+    return hub_dir / ".locks" / repo_dir.name / (partial.name[: -len(".incomplete")] + ".lock")
+
+
+def _unlink_unless_locked(path: Path, lock_path: Path) -> bool:
+    """Unlink ``path`` while holding ``lock_path``; False, leaving it, when another holder has the lock.
+
+    The lock is the flock huggingface_hub's file lock takes on the same file, so a download writing
+    ``path`` on any instance sharing the cache keeps it. No lock directory means no download has
+    started for the repository."""
+    if not lock_path.parent.is_dir():
+        path.unlink()
+        return True
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o664)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        try:
+            path.unlink()
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return True
+    finally:
+        os.close(fd)
+
+
 def _discard_partial_downloads(cache_dir: str, repo: str) -> int:
-    """Remove any partial blob left by an interrupted download of ``repo``."""
+    """Remove the partial blobs of ``repo`` that no download is writing.
+
+    The cache is shared by every instance, so another job may be downloading other blobs of the same
+    repository right now; its partial files are held by their locks and left alone."""
     removed = 0
-    repo_dir = _repo_cache_dir(Path(cache_dir), repo)
+    hub_dir = Path(cache_dir)
+    repo_dir = _repo_cache_dir(hub_dir, repo)
     if not repo_dir.is_dir():
         return removed
     for partial in repo_dir.rglob("*.incomplete"):
         try:
-            partial.unlink()
-            removed += 1
+            if _unlink_unless_locked(partial, _partial_lock_path(hub_dir, repo_dir, partial)):
+                removed += 1
+            else:
+                logger.info(f"Left the partial download {partial.name}: another download holds it")
         except OSError as e:
             logger.warning(f"Could not remove the partial download {partial}: {e}")
     return removed
 
 
 def fetch_repo(repo: str, cache_dir: str, token=None, attempts: int = FETCH_ATTEMPTS) -> str:
-    """Download ``repo`` into ``cache_dir``, retrying the shared filesystem's transient faults.
+    """Download ``repo`` at its pinned commit into ``cache_dir``, retrying the shared filesystem's
+    transient faults.
 
-    Returns the local snapshot directory. See RETRYABLE_FETCH_ERRNOS for which failures are retried and
-    why a retry discards the partial download rather than resuming it.
+    Returns the local snapshot directory. A repository with no pin in hfguard/hf_pins.py is refused before
+    any download. See RETRYABLE_FETCH_ERRNOS for which failures are retried and why a retry discards the
+    partial download rather than resuming it.
     """
     from huggingface_hub import snapshot_download
 
+    revision = hf_pins.revision_for(repo)
     last_error = None
     for attempt in range(1, max(int(attempts), 1) + 1):
         try:
-            return snapshot_download(repo_id=repo, cache_dir=cache_dir, token=token)
+            return snapshot_download(repo_id=repo, cache_dir=cache_dir, token=token, revision=revision)
         except OSError as e:
             if getattr(e, "errno", None) not in RETRYABLE_FETCH_ERRNOS:
                 raise
@@ -294,10 +335,17 @@ def _has_cached_repo(hub_dir: Path, repo: str) -> bool:
     Looks only under that repo's own ``snapshots`` directory, which the HuggingFace cache layout fixes:
     ``hub/models--org--name/snapshots/{revision}/``. Those entries are symlinks into ``blobs``, so the
     walk is over a handful of names rather than over every blob in the cache.
+
+    A pinned repo is cached only when its PINNED commit's snapshot holds the weights: a cache written
+    before the pin, or under an earlier pin, keeps other commits' snapshots beside it, and those are not
+    the weights this run loads.
     """
     snapshots = _repo_cache_dir(hub_dir, repo) / "snapshots"
     if not snapshots.is_dir():
         return False
+    if hf_pins.is_pinned(repo):
+        pinned = snapshots / hf_pins.revision_for(repo)
+        return pinned.is_dir() and _first_weight_file(pinned) is not None
     for revision in snapshots.iterdir():
         if revision.is_dir() and _first_weight_file(revision) is not None:
             return True
@@ -424,36 +472,18 @@ def _restore_from_s3(hf_home: str, s3_bucket: str, s3_prefix: str) -> bool:
         return False
 
 
-def _invalidate(hf_home: str, s3_bucket: str, s3_prefix: str) -> None:
-    """Clear both the EFS cache and its S3 backup for one model."""
-    hf_path = Path(hf_home)
-    logger.info(f"Invalidating the HF cache at {hf_home}")
-    if hf_path.exists():
-        shutil.rmtree(str(hf_path), ignore_errors=True)
-        logger.info(f"Deleted the EFS HF cache at {hf_home}")
-    else:
-        logger.info(f"No EFS HF cache to delete at {hf_home}")
-
-    s3_path = _s3_cache_uri(s3_bucket, s3_prefix)
-    try:
-        subprocess.run(  # nosemgrep: dangerous-subprocess-use-audit
-            ["aws", "s3", "rm", s3_path, "--recursive", "--quiet"],
-            capture_output=True, text=True, timeout=600
-        )  # nosemgrep: dangerous-subprocess-use-audit
-        logger.info(f"Deleted the S3 HF cache backup at {s3_path}")
-    except Exception as e:
-        logger.warning(f"Failed to clear the S3 cache backup at {s3_path}: {e}")
-
-
-def ensure_models_cached(hf_home: str, s3_bucket: str, s3_prefix: str,
-                         invalidate: bool = False, repos=(), required_files=()) -> None:
+def ensure_models_cached(hf_home: str, s3_bucket: str, s3_prefix: str, repos=(), required_files=()) -> None:
     """Ensure HF_HOME holds this run's weights, restoring from S3 when it does not.
+
+    A run cannot clear the cache: the model's cache directory and S3 prefix are shared by every run of
+    that model, so a run clearing them would pull weights from under the others. Starting every model on
+    an empty cache is the deployment setting ``app.pipelines.useImageTo3d.modelCacheGeneration`` (see
+    model_cache_path).
 
     Args:
         hf_home: Per-model HF_HOME directory on the shared EFS mount
         s3_bucket: Model cache bucket
         s3_prefix: Per-model key prefix within that bucket
-        invalidate: Clear the EFS cache and its S3 backup before checking
         repos: The HuggingFace repo ids this model needs, so the check asks whether THOSE are
             cached rather than whether the cache holds anything at all
         required_files: Weights kept under HF_HOME outside the HuggingFace layout, such as a rembg
@@ -466,9 +496,6 @@ def ensure_models_cached(hf_home: str, s3_bucket: str, s3_prefix: str,
 
     logger.info(f"Model cache: hf_home={hf_home}, s3={_s3_cache_uri(s3_bucket, s3_prefix)}")
     warn_if_cache_is_not_shared()
-
-    if invalidate:
-        _invalidate(hf_home, s3_bucket, s3_prefix)
 
     if _cache_holds(hf_home, repos, required_files):
         logger.info(f"Using the EFS HF cache at {hf_home} (fast path, no download)")
@@ -564,10 +591,27 @@ def warn_if_cache_is_not_shared(mount: str = None) -> bool:
     return False
 
 
-def resolve_hf_home(model_key: str, base: str = None) -> str:
+def model_cache_path(model_key: str, generation=None) -> str:
+    """The per-model cache path, relative to both the EFS mount and the model cache bucket's ``imageTo3d/``.
+
+    Generation 0 is ``hf_cache/<model>``, the layout every deployment has used, so an upgrade keeps its
+    cache. A higher generation, from the deployment setting ``modelCacheGeneration``, is
+    ``hf_cache/g<N>/<model>``: raising it starts every model on an empty cache at its next run, while a job
+    already running keeps reading the directory it started with, and the old one is left for an operator to
+    remove. The CDK construct composes S3_MODEL_PREFIX by the same rule.
+    """
+    raw = os.environ.get("MODEL_CACHE_GENERATION", "0") if generation is None else generation
+    text = str(raw).strip() or "0"
+    if not text.isdigit():
+        raise ValueError(f"MODEL_CACHE_GENERATION must be a whole number of 0 or more, not '{raw}'")
+    number = int(text)
+    return f"hf_cache/{model_key}" if number == 0 else f"hf_cache/g{number}/{model_key}"
+
+
+def resolve_hf_home(model_key: str, base: str = None, generation=None) -> str:
     """The per-model HF_HOME under the shared EFS mount."""
     mount = base or os.environ.get("MODEL_CACHE_MOUNT", "/mnt/efs/imageto3d-models")
-    return os.path.join(mount, "hf_cache", model_key)
+    return os.path.join(mount, model_cache_path(model_key, generation))
 
 
 def resolve_rembg_home(hf_home: str) -> str:

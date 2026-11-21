@@ -53,7 +53,7 @@ from models.common import (
     VAMSGeneralErrorResponse, validation_error_message,
 )
 from models.addon.edh import (
-    CapacityReservationViewModel, LeaseSettingsRequestModel, RegisterCapacityReservationRequestModel,
+    EDH_OS_FAMILIES, CapacityReservationViewModel, LeaseSettingsRequestModel, RegisterCapacityReservationRequestModel,
     RegisterSimulationImageRequestModel, RegisterVdiImageRequestModel, UpdateCapacityReservationRequestModel,
     edh_failure_projection, start_failure_projection,
 )
@@ -75,12 +75,13 @@ from .common import edhCapacityReservations as reservations
 from .common import edhSessionBootstrap as bootstrap
 from .common.edhLeasePolicy import LeaseValidationError, read_lease_policy, write_lease_policy
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, EDH_SESSION_STATE_FIELD,
+    ACTIVITY_FIELD, CAPACITY_RESERVATION_FALLBACK_REASON_FIELD, CONNECTION_UNAVAILABLE_REASON_FIELD,
+    EDH_SESSION_STATE_FIELD,
     EXPIRES_AT_FIELD, IMAGE_NAME_FIELD, START_FAILURE_FIELD, STATE_CREATING, STATE_DELETED, STATE_ORPHANED,
     STATE_STOPPED, STOP_REQUESTED_FIELD, capacity_reservation_fallback_reason, capacity_reservation_named,
     connection_verdict, deleted_row_expiry,
     start_accepted_cleared, start_stall_cleared,
-    start_stamp_cleared, state_for_edh_session_state, workstation_activity, workstation_image,
+    start_stamp_cleared, state_for_edh_desktop, workstation_activity, workstation_image,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
@@ -127,6 +128,8 @@ _STACK_LABEL_ID = re.compile(r"\(id:\s*(\d+)\)\s*$")
 # Stale views: a desktop EDH reports stopped whose row last changed at least idleMinutes ago (or that
 # has no row to time against), and a row EDH no longer lists at all.
 STALE_IDLE_MINUTES_DEFAULT = 120
+# A year. A larger threshold lists nothing a year cannot, and an unbounded one overflows the cutoff.
+STALE_IDLE_MINUTES_MAX = 525600
 STALE_REASON_STOPPED = "stopped"
 STALE_REASON_MISSING = "missingInEdh"
 STOPPED_STATES = frozenset({STATE_STOPPED, STATE_ORPHANED})
@@ -220,11 +223,14 @@ def _workstation_auth_object(image_id, os_family, instance_type):
     }
 
 
-def _image_auth_object(image_id, os_family):
-    """The edhImage enforcement dict: exactly the matrix fields, as strings."""
+def _image_auth_object(image_id, stack_name, os_family):
+    """The edhImage enforcement dict for an image: exactly the matrix fields, as strings. The stack id and
+    name are the image's own; ``edhRecipeId`` names an AMI recipe and is empty on every image route."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
         "edhImageId": str(image_id if image_id is not None else ""),
+        "edhStackName": str(stack_name if stack_name is not None else ""),
+        "edhRecipeId": "",
         "edhOsFamily": str(os_family if os_family is not None else ""),
     }
 
@@ -605,7 +611,8 @@ def list_images(event):
     allowed = []
     for item in items:
         # Appends only on an allow, so an absent enforcer yields an empty catalog, never an open one.
-        if enforcer and enforcer.enforce(_image_auth_object(item["imageId"], item["osFamily"]), "GET"):
+        auth_object = _image_auth_object(item["imageId"], item["stackName"], item["osFamily"])
+        if enforcer and enforcer.enforce(auth_object, "GET"):
             allowed.append(item)
     return success(body={'Items': allowed})
 
@@ -621,10 +628,11 @@ def register_image(event, kind_label):
         fields = simulation_stack_fields(request)
         os_family = OS_FAMILY_LINUX
 
-    # Tier-2 from the validated body: the EDH id does not exist yet, so the stack name stands in.
+    # Tier-2 from the validated body: the EDH id does not exist yet, so it is decided on the stack name
+    # with an empty stack id.
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforcer().enforce(_image_auth_object(request.stackName, os_family), "POST"):
+    if not _enforcer().enforce(_image_auth_object("", request.stackName, os_family), "POST"):
         return authorization_error()
 
     kind = KIND_BY_IMAGE_KIND[kind_label]
@@ -740,7 +748,8 @@ def delete_image(event, kind_label):
     item = _image_item(kind_label, record)
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
-    if not _enforcer().enforce(_image_auth_object(item["imageId"], item["osFamily"]), "DELETE"):
+    if not _enforcer().enforce(_image_auth_object(item["imageId"], item["stackName"], item["osFamily"]),
+                              "DELETE"):
         return authorization_error()
 
     _call_edh(event, client, "delete_software_stack", "adminImageDelete", edh_uid, kind, image_id,
@@ -782,15 +791,17 @@ def _instance_item(record, row):
 
     edh_state = record_str(EDH_FIELD_SESSION_STATE)
     image_id = row.get('imageId') or _stack_id_from_label(record.get(EDH_FIELD_SESSION_SOFTWARE_STACK))
-    state = state_for_edh_session_state(edh_state, row.get('state'))
+    state = state_for_edh_desktop(row, edh_state)
     connectable = row.get('connectionAvailable')
+    reason = row.get(CONNECTION_UNAVAILABLE_REASON_FIELD)
     if edh_state is not None:
         # Connectable as the session sweep records it from the same record (``connection_verdict``): running with a
         # link that signs a user in, or with no link field at all unless the row records the desktop's display
-        # session ended.
-        connectable = connection_verdict(row, record)[0]
+        # session ended; a desktop that has run and that EDH reports in error is not, and records why.
+        connectable, reason = connection_verdict(row, record)
     activity = workstation_activity({**row, 'state': state, 'edhState': edh_state if edh_state is not None
                                      else row.get('edhState'), 'connectionAvailable': connectable,
+                                     CONNECTION_UNAVAILABLE_REASON_FIELD: reason,
                                      'sessionId': record_str(EDH_FIELD_SESSION_UUID) or row.get('sessionId')})
     image_id = str(image_id) if image_id is not None else None
     stored_image = {**row, IMAGE_NAME_FIELD: row.get(IMAGE_NAME_FIELD)
@@ -950,6 +961,9 @@ def list_stale_instances(event):
         return validation_error(body={'message': "idleMinutes must be an integer"}, event=event)
     if idle_minutes < 1:
         return validation_error(body={'message': "idleMinutes must be at least 1"}, event=event)
+    if idle_minutes > STALE_IDLE_MINUTES_MAX:
+        return validation_error(body={'message': f"idleMinutes must be at most {STALE_IDLE_MINUTES_MAX}"},
+                                event=event)
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=idle_minutes)
     client = EdhClient(profile="api")
@@ -996,6 +1010,12 @@ def act_on_instance(event, action):
             record = candidate
             break
     if record is None and row is None:
+        # Decided as a session of no known image or type, of every OS family: a caller who passes is
+        # told it is missing, any other gets the refusal a session it may not act on gets.
+        if len(claims_and_roles["tokens"]) == 0 or not all(
+                _enforcer().enforce(_workstation_auth_object("", os_family, ""), "POST")
+                for os_family in EDH_OS_FAMILIES):
+            return authorization_error()
         return general_error(status_code=404, body={'message': "Session not found"}, event=event)
 
     item = _instance_item(record, row)

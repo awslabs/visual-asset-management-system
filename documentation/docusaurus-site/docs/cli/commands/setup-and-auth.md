@@ -30,11 +30,11 @@ vamscli setup <BASE_URL> [OPTIONS]
 
 ### What setup does
 
-1. Validates the base URL format (accepts any HTTP/HTTPS URL).
+1. Validates the base URL format: an HTTPS URL, or plain HTTP for `localhost` or a loopback address only.
 2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) maps the bootstrap routes `/api/version` and `/api/amplify-config` onto the stage, so a fronted or custom-domain URL is used unchanged.
 3. Checks API version compatibility using the base URL.
 4. Fetches Amplify configuration from `<base-url>/api/amplify-config`.
-5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path).
+5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path), and refuses it under the same HTTPS rule as the base URL.
 6. Stores both the original base URL and extracted API Gateway URL locally.
 7. Sets the profile as active when configuration is saved.
 8. Clears existing authentication profiles (with `--force`).
@@ -128,17 +128,13 @@ vamscli auth login -u john.doe@example.com --save-credentials
 cat password.txt | vamscli auth login -u john.doe@example.com --password-stdin
 printenv VAMS_PASSWORD | vamscli auth login -u john.doe@example.com --password-stdin --json-output
 
-# Discouraged: the password is visible in the OS process table
-vamscli auth login -u john.doe@example.com -p mypassword
+# -p/--password also works but puts the password in the OS process table; avoid it
 
 # First login when Amazon Cognito forces a password change: two lines on stdin,
 # the temporary password first, then the new one
 printf '%s
 %s
 ' "$TEMP_PASSWORD" "$NEW_PASSWORD" | vamscli auth login -u john.doe@example.com --password-stdin --new-password-stdin --json-output
-
-# Discouraged: both passwords are visible in the OS process table
-vamscli auth login -u john.doe@example.com -p temporary-password --new-password new-password
 ```
 
 Only a trailing carriage return and line feed are stripped from a piped credential, so a password ending in a space is preserved. The bytes are decoded as UTF-8.
@@ -154,9 +150,7 @@ Amazon Cognito can require a password change before the first successful sign-in
 echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin
 echo "$VAMS_TOKEN" | vamscli auth login --user-id john.doe@example.com --token-override-stdin --expires-at "+3600"
 
-# Discouraged: the token is visible in the OS process table
-vamscli auth login --user-id john.doe@example.com --token-override "eyJhbGciOiJIUzI1NiIs..."
-vamscli auth login --user-id john.doe@example.com --token-override "token123" --expires-at "2025-12-31T23:59:59Z"
+# --token-override <token> also works but puts the token in the OS process table; avoid it
 ```
 
 ### Token override expiration formats
@@ -177,7 +171,7 @@ Username/password sign-in works only for users that exist natively in the Amazon
 -   **Amazon Cognito federated to OIDC** (`useCognito.useOidc`) — same as SAML; the identity lives in the external provider.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "your-token"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 Obtain the token from the identity provider or from the VAMS web application after signing in through the federated login button. Token override validates the token against the VAMS API rather than against a specific issuer, so a token from any of these providers works. A user pool with federation enabled still accepts username/password for its **native** users (for example the initial administrator), so an administrator can keep using `--username`.
@@ -220,9 +214,7 @@ vamscli auth change-password -u john.doe@example.com
 printf '%s\n%s\n' "$OLD_PASSWORD" "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --old-password-stdin --new-password-stdin --json-output
 echo "$NEW_PASSWORD" | vamscli auth change-password -u john.doe@example.com --new-password-stdin
 
-# Discouraged: the passwords are visible in the OS process table
-vamscli auth change-password -u john.doe@example.com --old-password old --new-password new
-vamscli auth change-password -u john.doe@example.com --old-password old --new-password new --json-output
+# --old-password and --new-password also work but put the passwords in the OS process table; avoid them
 ```
 
 :::warning[Passwords on the Command Line]
@@ -274,9 +266,6 @@ vamscli auth forgot-password -u john.doe@example.com
 
 # Step 2 (recommended): the password never reaches the process table
 echo "$NEW_PASSWORD" | vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password-stdin
-
-# Step 2, discouraged: the password is visible in the OS process table
-vamscli auth forgot-password -u john.doe@example.com --code 123456 --new-password new-password
 
 # JSON output (request a code only)
 vamscli auth forgot-password -u john.doe@example.com --json-output
@@ -347,9 +336,7 @@ Exactly one of `--token` or `--token-stdin` is required.
 echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin
 echo "$VAMS_TOKEN" | vamscli auth set-override -u john.doe@example.com --token-stdin --expires-at "+3600"
 
-# Discouraged: the token is visible in the OS process table
-vamscli auth set-override -u john.doe@example.com --token "eyJhbGciOiJIUzI1NiIs..."
-vamscli auth set-override -u john.doe@example.com --token "token123" --expires-at "+3600"
+# --token <token> also works but puts the token in the OS process table; avoid it
 ```
 
 :::warning[Tokens on the Command Line]
@@ -601,7 +588,7 @@ vamscli profile switch production
 
 ```bash
 # Set override token
-vamscli auth login --user-id user@example.com --token-override "external_token" --expires-at "+7200"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin --expires-at "+7200"
 
 # Use commands normally
 vamscli assets list -d my-database

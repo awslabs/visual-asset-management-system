@@ -17,8 +17,12 @@ import WorkstationStatusBadge, {
     describeStartFailure,
 } from "./WorkstationStatusBadge";
 import fixture from "../workstationStatusCases.json";
-import { connectUnavailableReason } from "../workstations/ConnectLink";
+import {
+    connectionUnavailableMessage,
+    connectUnavailableReason,
+} from "../workstations/ConnectLink";
 import type {
+    ConnectionUnavailableReason,
     StartFailure,
     WorkstationActivity,
     WorkstationRecord,
@@ -76,17 +80,50 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
         );
         expect(creatingCodes).toContain("START_STALLED");
         expect(CASES.filter((c) => c.badge === "Start stalled").length).toBeGreaterThanOrEqual(1);
+        // So is a new launch EDH has not placed after 3 hours.
+        expect(creatingCodes).toContain("LAUNCH_STALLED");
+        expect(CASES.filter((c) => c.badge === "Launch stalled").length).toBeGreaterThanOrEqual(1);
         // A running workstation whose remote display session has ended.
         expect(
             CASES.filter((c) => c.record.connectionUnavailableReason === "DISPLAY_SESSION_ENDED")
         ).toHaveLength(1);
+        // A workstation that has run which EDH reports in error, in each state it keeps.
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError !== "LAUNCH_STALLED" &&
+                    c.record.lastError !== "START_STALLED"
+            )
+                .map((c) => c.record.state)
+                .sort()
+        ).toEqual(["ACTIVE", "CREATING", "STOPPED"]);
+        // A stalled start EDH then reports in error has run, so it keeps both codes: the start
+        // stall's badge and the desktop error's Connect sentence.
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError === "START_STALLED"
+            ).map((c) => [c.badge, c.connectionUnavailableMessage !== undefined])
+        ).toEqual([["Start stalled", true]]);
+        // Both at once: a stalled launch EDH reports in error is orphaned, and a record carrying both
+        // codes anyway reads as the launch stall.
+        expect(
+            CASES.filter((c) => c.record.state === "ORPHANED" && c.record.edhState === "error").map(
+                (c) => c.record.lastError
+            )
+        ).toEqual(["LAUNCH_ERROR"]);
+        expect(
+            CASES.filter(
+                (c) =>
+                    c.record.connectionUnavailableReason === "DESKTOP_ERROR" &&
+                    c.record.lastError === "LAUNCH_STALLED"
+            ).map((c) => c.badge)
+        ).toEqual(["Launch stalled"]);
     });
 
     it.each(table)("%s: the Connect reason is as agreed", (_name, c) => {
-        if (c.connectionUnavailableMessage === undefined) {
-            expect(c.record.connectionUnavailableReason ?? null).toBeNull();
-            return;
-        }
         const record = {
             ...c.record,
             bootstrapId: "b-1",
@@ -98,6 +135,14 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
             createdAt: "2026-10-23T10:00:00Z",
             updatedAt: "2026-10-23T15:19:13Z",
         } as unknown as WorkstationRecord;
+        if (c.connectionUnavailableMessage === undefined) {
+            // No sentence for the record's reason: none recorded, or a launch stall that outranks it.
+            expect(connectionUnavailableMessage(record)).toBeNull();
+            if (c.record.lastError !== "LAUNCH_STALLED") {
+                expect(c.record.connectionUnavailableReason ?? null).toBeNull();
+            }
+            return;
+        }
         expect(connectUnavailableReason(record)).toBe(c.connectionUnavailableMessage);
     });
 
@@ -112,11 +157,16 @@ describe("workstationStatusCases.json (shared with the CLI tests)", () => {
                 activity={c.record.activity as WorkstationActivity | null}
                 instanceType={c.record.instanceType}
                 startFailure={c.record.startFailure}
+                connectionUnavailableReason={
+                    c.record.connectionUnavailableReason as ConnectionUnavailableReason | null
+                }
             />
         );
         expect(screen.getByText(c.badge)).toBeInTheDocument();
-        // The phases in motion carry the pulsing dot.
-        const moving = ["Starting", "Stopping", "Creating"].includes(c.badge);
+        // The phases in motion carry the pulsing dot; a workstation EDH reports in error is not moving.
+        const moving =
+            ["Starting", "Stopping", "Creating"].includes(c.badge) &&
+            c.record.connectionUnavailableReason !== "DESKTOP_ERROR";
         const dot = screen.getByText(c.badge).parentElement?.querySelector(".animate-pulse");
         if (moving) {
             expect(dot).not.toBeNull();

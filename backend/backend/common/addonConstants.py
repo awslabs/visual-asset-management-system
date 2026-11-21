@@ -39,6 +39,8 @@ from typing import Dict, List, Union
 ADDON_PERMISSION_CONSTRAINT_FIELDS: Dict[str, Union[str, List[str]]] = {
     # EDH Workstations (handlers/addon/edh/)
     "edhImageId": "",
+    "edhStackName": "",
+    "edhRecipeId": "",
     "edhOsFamily": "",
     "edhInstanceType": "",
     "edhCapacityReservationId": "",
@@ -51,8 +53,13 @@ ADDON_CONSTRAINT_OBJECT_TYPE_FIELDS: Dict[str, dict] = {
         {"label": "EDH Image ID", "value": "edhImageId"},
         {"label": "EDH OS Family", "value": "edhOsFamily"},
         {"label": "EDH Instance Type", "value": "edhInstanceType"}]},
+    # An image (an EDH software stack) or an AMI recipe. Each field names one identifier; a route that has
+    # no value for a field evaluates it as "": the stack id is unknown on registration, and the image
+    # fields are empty on the AMI recipe routes, as the recipe id is on the image routes.
     "edhImage": {"label": "EDH Image", "fields": [
         {"label": "EDH Image ID", "value": "edhImageId"},
+        {"label": "EDH Stack Name", "value": "edhStackName"},
+        {"label": "EDH AMI Recipe ID", "value": "edhRecipeId"},
         {"label": "EDH OS Family", "value": "edhOsFamily"}]},
     # A registered EC2 capacity reservation: GET lists it in the launch catalog, POST launches into it.
     "edhCapacityReservation": {"label": "EDH Capacity Reservation", "fields": [

@@ -33,10 +33,12 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # Named explicitly rather than globbed: a glob that stops matching reads as "all copies agree".
 LOGGER_COPIES = (
     "backendPipelines/3dRecon/splatToolbox/lambda/customLogging/logger.py",
+    "backendPipelines/conversion/cogConvert/lambda/customLogging/logger.py",
     "backendPipelines/conversion/coordinateTransform/lambda/customLogging/logger.py",
     "backendPipelines/genAi/cadStepAgent/lambda/customLogging/logger.py",
     "backendPipelines/genAi/imageTo3d/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/3/lambda/customLogging/logger.py",
+    "backendPipelines/conversion/3dBasic/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/predict/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/reason/lambda/customLogging/logger.py",
     "backendPipelines/genAi/nvidia/cosmos/transfer/lambda/customLogging/logger.py",

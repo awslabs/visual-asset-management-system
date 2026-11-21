@@ -69,6 +69,9 @@ from models.assetsV3 import (
     DeleteAssetPreviewResponseModel, DeleteAuxiliaryPreviewAssetFilesRequestModel, DeleteAuxiliaryPreviewAssetFilesResponseModel
 )
 from handlers.assets.assetVersions import validate_asset_version_exists, get_all_asset_versions
+from common.compliance.quarantineGuard import (
+    QUARANTINE_COPY_BLOCK_MESSAGE, QuarantineBlockedResponse, check_quarantine_block, quarantine_refusal,
+)
 
 # Configure AWS clients with retry configuration
 region = os.environ.get('AWS_REGION', 'us-east-1')
@@ -1567,12 +1570,10 @@ def find_preview_files_for_base(bucket: str, base_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
@@ -1612,12 +1613,10 @@ def find_preview_files_for_base_including_archived(bucket: str, base_key: str) -
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_key)
         filename = os.path.basename(base_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
+
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_key}{PREVIEW_FILE_PATTERN}"
         
         # Create the pattern to match preview files for this base file
         pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
@@ -2607,6 +2606,12 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         # Validate cross-asset permissions
         if not validate_cross_asset_permissions(source_asset, dest_asset, claims_and_roles):
             raise VAMSAuthorizationDeniedResponse()
+
+        # A copy to another asset takes the file's bytes out of the source asset, so the quarantine
+        # block applies to it as to a download (a no-op unless COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD
+        # is on). Checked after both assets are authorized, so a refused caller never learns the
+        # source's state. A copy within the asset keeps the bytes where the block still applies.
+        check_quarantine_block(databaseId, assetId, message=QUARANTINE_COPY_BLOCK_MESSAGE)
     else:
         # Same asset, need POST permission
         dest_asset = get_asset_with_permissions(databaseId, assetId, "POST", claims_and_roles)
@@ -4125,6 +4130,8 @@ def handle_copy_file(event, context) -> APIGatewayProxyResponseV2:
         return validation_error(body={'message': validation_error_message(v)}, event=event)
     except VAMSAuthorizationDeniedResponse:
         return authorization_error(event=event)
+    except QuarantineBlockedResponse as refusal:
+        return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)

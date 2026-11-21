@@ -254,37 +254,50 @@ def _with_conflict_retry(operation):
             time.sleep(PUBLISH_CONFLICT_BACKOFF_SECONDS * (attempt + 1))
 
 
-def prune_state_machine_versions(sf_client, state_machine_arn, keep_version_arns=()):
-    """Delete published versions beyond the newest MAX_RETAINED_STATE_MACHINE_VERSIONS, never one
-    named in keep_version_arns. Every deploy publishes one, and Step Functions caps a state machine's
-    versions, so unpruned versions would eventually block every save of a long-lived workflow.
+def prune_state_machine_versions(sf_client, state_machine_arn, keep_version_arns=(),
+                                 recorded_version_arn=""):
+    """Delete published versions beyond the newest MAX_RETAINED_STATE_MACHINE_VERSIONS that are older
+    than recorded_version_arn (the version the workflow record named when the deploy read it), never
+    one named in keep_version_arns. Every deploy publishes one, and Step Functions caps a state
+    machine's versions, so unpruned versions would eventually block every save of a long-lived
+    workflow.
+
+    A version newer than the recorded one is never deleted: concurrent redeploys each publish one,
+    and any of them may be the one the winning write records, so a burst of them must not prune the
+    version that becomes the record's. When the recorded version is not listed (none recorded yet,
+    or it is gone), nothing is deleted; the next deploy that reads a listed version prunes.
 
     Deleting a version stops new executions from starting on it and leaves its in-progress executions
     running. Best-effort: a failure is logged and the next deploy retries the sweep."""
     keep = {arn for arn in keep_version_arns if arn}
     try:
-        seen = 0
+        newest_first = []
         kwargs = {"stateMachineArn": state_machine_arn}
         while True:
             # Newest first (ListStateMachineVersions orders by creation time, descending).
             response = sf_client.list_state_machine_versions(**kwargs) or {}
             for version in response.get("stateMachineVersions", []) or []:
                 version_arn = (version or {}).get("stateMachineVersionArn", "")
-                if not version_arn:
-                    continue
-                seen += 1
-                if seen <= MAX_RETAINED_STATE_MACHINE_VERSIONS or version_arn in keep:
-                    continue
-                sf_client.delete_state_machine_version(stateMachineVersionArn=version_arn)
+                if version_arn:
+                    newest_first.append(version_arn)
             if not response.get("nextToken"):
-                return
+                break
             kwargs["nextToken"] = response["nextToken"]
+        if not recorded_version_arn or recorded_version_arn not in newest_first:
+            return
+        # Keep the recorded version, every version newer than it, and at least the newest
+        # MAX_RETAINED_STATE_MACHINE_VERSIONS.
+        retained = max(MAX_RETAINED_STATE_MACHINE_VERSIONS, newest_first.index(recorded_version_arn) + 1)
+        for version_arn in newest_first[retained:]:
+            if version_arn not in keep:
+                sf_client.delete_state_machine_version(stateMachineVersionArn=version_arn)
     except Exception as e:
         logger.warning(f"Pruning state machine versions for {state_machine_arn} failed "
                        f"(non-fatal): {e}")
 
 
-def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="", job_names=None):
+def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="", job_names=None,
+                         recorded_version_arn=""):
     """Generate the workflow ASL from its referenced pipelines, deploy the Step Functions state
     machine, and publish the deployed revision as a version. Returns
     (state_machine_arn, job_names, state_machine_version_arn).
@@ -303,7 +316,9 @@ def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="",
 
     The version is immutable: an execution started on its ARN runs exactly this definition, which an
     execution started on the unqualified ARN right after an update is not guaranteed to do. The
-    caller persists it with the job names, and the execute handler starts on it.
+    caller persists it with the job names, and the execute handler starts on it. recorded_version_arn
+    is the version the workflow record named when the caller read it; older versions are pruned only
+    past it (prune_state_machine_versions).
 
     Raises on a deployment failure (missing env, ASL/validation error, or a boto3 error) so the
     caller aborts the save rather than persisting a workflow whose state machine was not deployed."""
@@ -351,5 +366,6 @@ def deploy_state_machine(database_id, workflow_id, ref_records, existing_arn="",
         version_arn = _with_conflict_retry(
             lambda: publish_state_machine_version(sf_client, state_machine_arn))
 
-    prune_state_machine_versions(sf_client, state_machine_arn, keep_version_arns=[version_arn])
+    prune_state_machine_versions(sf_client, state_machine_arn, keep_version_arns=[version_arn],
+                                 recorded_version_arn=recorded_version_arn)
     return state_machine_arn, job_names, version_arn or ""

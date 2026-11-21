@@ -7,6 +7,7 @@ import React from "react";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ExecuteWizard, { validateInputSelection } from "./ExecuteWizard";
+import { LAUNCH_OUTCOME_UNKNOWN_MESSAGE } from "../api/executions";
 import type { Workflow, Pipeline, Template } from "../types";
 
 // Mock the API queries
@@ -683,6 +684,61 @@ describe("ExecuteWizard", () => {
         const alert = await screen.findByRole("alert");
         const items = alert.querySelectorAll("li");
         expect(Array.from(items).map((li) => li.textContent)).toEqual(reasons);
+    });
+
+    // A launch that got no reply may have started a run: the wizard says so instead of "failed".
+    it("reports a launch that got no reply as not confirmed rather than failed", async () => {
+        const onClose = jest.fn();
+        const templateWithDefault: Template = {
+            ...mockTemplate,
+            tagSchema: [
+                {
+                    tagKey: "requiredTag",
+                    type: "string",
+                    required: true,
+                    default: "defaultValue",
+                    label: "Required Tag",
+                },
+            ],
+        };
+        const { useTemplates, useTemplate } = require("../api/queries");
+        const { tagSchema: _omitUnknown, ...listRowUnknown } = templateWithDefault as any;
+        useTemplates.mockReturnValue({ data: [listRowUnknown], isLoading: false, isSuccess: true });
+        useTemplate.mockReturnValue({
+            data: templateWithDefault,
+            isLoading: false,
+            isSuccess: true,
+        });
+        mockExecuteWorkflow.mutateAsync.mockRejectedValue(
+            new Error(LAUNCH_OUTCOME_UNKNOWN_MESSAGE)
+        );
+
+        render(
+            <QueryClientProvider client={queryClient}>
+                <ExecuteWizard
+                    open={true}
+                    onClose={onClose}
+                    workflow={mockWorkflow}
+                    databaseId="db1"
+                />
+            </QueryClientProvider>
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => {
+            const headers = screen.getAllByRole("heading", { level: 3 });
+            expect(headers.find((h) => h.textContent?.includes("Test Pipeline"))).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+        await waitFor(() => expect(screen.getByText(/Review & Launch/i)).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole("button", { name: /Launch/i }));
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Launch not confirmed:");
+        expect(alert).toHaveTextContent(LAUNCH_OUTCOME_UNKNOWN_MESSAGE);
+        expect(alert).not.toHaveTextContent("Execution failed");
+        expect(onClose).not.toHaveBeenCalled();
     });
 
     it("shows backend warnings on the success path instead of closing silently", async () => {

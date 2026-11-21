@@ -793,7 +793,9 @@ function SearchPageListView({
         setShowPreviewModal(true);
     };
 
-    if (!state?.initialResult) {
+    // Before the first answer, unless the first search failed: the table then says it did not finish
+    // rather than loading forever.
+    if (!state?.initialResult && !state?.searchFailed) {
         return <div>Loading..</div>;
     }
 
@@ -841,6 +843,10 @@ function SearchPageListView({
     const hasArchivedAssetSelected = state?.selectedItems?.some(
         (item: any) => item.bool_archived === true || item.status === "archived"
     );
+    // A selection with an archived row can only be permanently deleted, so it needs that permission.
+    const deleteSelectedDisabledReason =
+        assetActionDisabledReasons?.delete ??
+        (hasArchivedAssetSelected ? assetActionDisabledReasons?.permanentDelete : undefined);
 
     // Filter out undefined/null column names and add preview column if showPreviewThumbnails is enabled
     let enhancedColumnDefinitions = orderedColumnNames
@@ -1167,7 +1173,13 @@ function SearchPageListView({
                     stickyHeader={true}
                     wrapLines={false}
                     empty={
-                        state?.nlpIdle ? (
+                        state?.searchFailed ? (
+                            // The search did not answer: no filter is the cause, so there is no action.
+                            <EmptyState
+                                title="No results to show"
+                                subtitle="The search did not finish."
+                            />
+                        ) : state?.nlpIdle ? (
                             <EmptyState
                                 title="Describe what you are looking for"
                                 subtitle="Natural-language search runs once you enter a description. It matches on meaning across file contents, including image and video scenes."
@@ -1247,13 +1259,15 @@ function SearchPageListView({
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
                     loadingText="Loading"
-                    items={state?.result?.hits?.hits?.map((hit: any) => ({
-                        ...hit._source,
-                        _id: hit._id,
-                        _score: hit._score,
-                        _vector: hit._vector,
-                        explanation: hit.explanation,
-                    }))}
+                    items={
+                        state?.result?.hits?.hits?.map((hit: any) => ({
+                            ...hit._source,
+                            _id: hit._id,
+                            _score: hit._score,
+                            _vector: hit._vector,
+                            explanation: hit.explanation,
+                        })) ?? []
+                    }
                     sortingColumn={
                         state?.tableSort?.sortingField
                             ? {
@@ -1351,9 +1365,9 @@ function SearchPageListView({
                                             disabled={
                                                 state?.selectedItems?.length === 0 ||
                                                 state?.disableSelection ||
-                                                !!assetActionDisabledReasons?.delete
+                                                !!deleteSelectedDisabledReason
                                             }
-                                            disabledReason={assetActionDisabledReasons?.delete}
+                                            disabledReason={deleteSelectedDisabledReason}
                                             onClick={() => {
                                                 setShowDeleteModal(true);
                                             }}
@@ -1486,6 +1500,7 @@ function SearchPageListView({
                 mode="asset"
                 selectedAssets={state?.selectedItems || []}
                 forceDeleteMode={hasArchivedAssetSelected}
+                canPermanentlyDelete={!assetActionDisabledReasons?.permanentDelete}
                 onSuccess={(operation) => {
                     setShowDeleteModal(false);
 

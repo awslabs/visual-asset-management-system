@@ -275,23 +275,34 @@ describe("WorkstationsPage", () => {
         expect(screen.getByRole("button", { name: "Launch Workstation" })).toBeInTheDocument();
     });
 
-    it("renders the not-enabled panel and reads nothing when the flag is absent", () => {
-        const { appCache } = require("../../../services/appCache");
-        appCache.getItem.mockReturnValue({ featuresEnabled: [] });
-
+    it("keeps the listed workstations when a later poll fails, and says the list could not be refreshed", () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue({
+            ...list([activeRow]),
+            error: new Error("Service unavailable"),
+        });
         renderPage();
 
-        const panel = screen.getByRole("status");
-        expect(panel).toHaveTextContent("EDH Workstations is not enabled in this deployment.");
-        expect(panel).toHaveTextContent("Ask a VAMS administrator to enable the add-on.");
-        // The neutral tone of an unavailable view, not the warning tone of a data caveat.
-        expect(panel).toHaveClass("bg-surface-container");
-        expect(panel).not.toHaveClass("bg-yellow-100");
-        expect(screen.queryByRole("table")).not.toBeInTheDocument();
+        expect(screen.getByText("Dev box")).toBeInTheDocument();
         expect(
-            screen.queryByRole("button", { name: "Launch Workstation" })
-        ).not.toBeInTheDocument();
-        expect(queries.useWorkstations).not.toHaveBeenCalled();
+            screen.getByText(
+                "Could not refresh: Service unavailable. The list shows the last answer."
+            )
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Error loading workstations/)).not.toBeInTheDocument();
+    });
+
+    it("shows the error panel when the first read fails and there is nothing to keep", () => {
+        (queries.useWorkstations as jest.Mock).mockReturnValue({
+            ...list([]),
+            data: undefined,
+            error: new Error("Service unavailable"),
+        });
+        renderPage();
+
+        expect(
+            screen.getByText("Error loading workstations: Service unavailable")
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/Could not refresh/)).not.toBeInTheDocument();
     });
 
     it("shows an empty state with a call to action, not an empty table, when the caller has no workstations", () => {
@@ -500,6 +511,37 @@ describe("WorkstationsPage", () => {
         expect(stoppedItems[stoppedItems.length - 1]).toHaveTextContent("Delete");
     });
 
+    it.each([
+        ["STOPPED", "error"],
+        ["ACTIVE", "error"],
+        ["CREATING", "error"],
+    ] as const)(
+        "offers Stop and not Start to a %s workstation EDH reports in error (DESKTOP_ERROR)",
+        async (state, edhState) => {
+            const user = userEvent.setup();
+            const m = mutations();
+            (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
+            (queries.useWorkstations as jest.Mock).mockReturnValue(
+                list([
+                    {
+                        ...stoppedRow,
+                        state,
+                        edhState,
+                        activity: null,
+                        connectionAvailable: false,
+                        connectionUnavailableReason: "DESKTOP_ERROR",
+                    },
+                ])
+            );
+            renderPage();
+
+            await openActionsFor(user, "Render box");
+            const stop = screen.getByRole("menuitem", { name: "Stop" });
+            expect(stop).not.toHaveAttribute("aria-disabled", "true");
+            expect(screen.queryByRole("menuitem", { name: "Start" })).not.toBeInTheDocument();
+        }
+    );
+
     it("keeps Start disabled on a stopped workstation EDH still lists stopping, naming EDH's state", async () => {
         const user = userEvent.setup();
         const m = mutations();
@@ -588,7 +630,33 @@ describe("WorkstationsPage", () => {
         );
     });
 
-    it("disables Stop on a workstation while its stop is in flight, and offers it again once the stop fails", async () => {
+    it("asks before it stops a workstation, and a cancelled confirmation sends nothing", async () => {
+        const user = userEvent.setup();
+        const m = mutations();
+        (queries.useWorkstationMutations as jest.Mock).mockReturnValue(m);
+        renderPage();
+
+        await openActionsFor(user, "Dev box");
+        await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        const dialog = screen.getByRole("dialog", { name: "Stop Dev box" });
+        expect(dialog).toHaveTextContent("Its open applications close");
+        expect(dialog).toHaveTextContent("its disk is kept");
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        expect(m.stopWorkstation.mutateAsync).not.toHaveBeenCalled();
+        // Focus returns to the row's menu trigger.
+        expect(screen.getByLabelText("Actions for Dev box")).toHaveFocus();
+
+        await openActionsFor(user, "Dev box");
+        await user.click(screen.getByRole("menuitem", { name: "Stop" }));
+        await user.click(screen.getByRole("button", { name: "Stop" }));
+        await waitFor(() =>
+            expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledWith({ sessionId: "s-1" })
+        );
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    it("sends one stop for a second confirm while the first is in flight, and offers Stop again once the stop fails", async () => {
         const user = userEvent.setup();
         const m = mutations();
         let refuse: (err: Error) => void = () => undefined;
@@ -603,18 +671,13 @@ describe("WorkstationsPage", () => {
 
         await openActionsFor(user, "Dev box");
         await user.click(screen.getByRole("menuitem", { name: "Stop" }));
-        await openActionsFor(user, "Dev box");
-        const stop = screen.getByRole("menuitem", { name: "Stop" });
-        expect(stop).toHaveAttribute("aria-disabled", "true");
-        expect(stop).toHaveAccessibleDescription("A stop of this workstation is in progress.");
-        await user.click(stop);
+        const confirm = screen.getByRole("button", { name: "Stop" });
+        await user.click(confirm);
+        await user.click(confirm);
         expect(m.stopWorkstation.mutateAsync).toHaveBeenCalledTimes(1);
-        const del = screen.getByRole("menuitem", { name: "Delete" });
-        expect(del).toHaveAttribute("aria-disabled", "true");
-        expect(del).toHaveAccessibleDescription("A stop of this workstation is in progress.");
-        await user.keyboard("{Escape}");
 
         await act(async () => refuse(new Error("Forbidden")));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
         await waitFor(() =>
             expect(screen.getByRole("alert")).toHaveTextContent("Failed to stop Dev box: Forbidden")
         );
@@ -705,6 +768,7 @@ describe("WorkstationsPage", () => {
 
         const items = await openActionsFor(user, "Dev box");
         await user.click(items.find((item) => item.textContent === "Stop")!);
+        await user.click(screen.getByRole("button", { name: "Stop" }));
 
         await waitFor(() =>
             expect(screen.getByRole("alert")).toHaveTextContent("Failed to stop Dev box: Forbidden")

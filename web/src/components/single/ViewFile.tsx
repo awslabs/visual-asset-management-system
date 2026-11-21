@@ -556,6 +556,17 @@ function ViewFileForAsset() {
         setViewType(event.detail.selectedId);
     };
 
+    // A file of an archived asset is looked up without showArchived, so the API answers that it is
+    // not found. When the asset read says the asset is archived, the page says so instead.
+    const shownPathError: FileLoadError | null =
+        directPathError === FILE_NOT_FOUND && asset?.status === "archived"
+            ? {
+                  header: `${Synonyms.Asset} Archived`,
+                  message: `This file's ${Synonyms.asset} is archived. Unarchive the ${Synonyms.asset} to view its files.`,
+                  retryable: false,
+              }
+            : directPathError;
+
     // The file alert's Retry. The press itself shows the loading state, as the asset warning's Retry
     // does, so the alert and its button are gone before the second click of a double-click arrives.
     // The effect below sets it too, but React applies an effect's update in a later task, which can
@@ -979,21 +990,21 @@ function ViewFileForAsset() {
 
                     {/* Show error state for direct path access. The header names the cause, and a
                         failure that may pass (no response, a blocked or failed request) offers Retry. */}
-                    {!isLoadingDirectPath && directPathError && (
+                    {!isLoadingDirectPath && shownPathError && (
                         <Box padding={{ top: "s", horizontal: "l" }}>
                             <Container>
                                 <Box padding="m">
                                     <Alert
                                         type="error"
                                         statusIconAriaLabel="Error"
-                                        header={directPathError.header}
+                                        header={shownPathError.header}
                                         action={
-                                            directPathError.retryable ? (
+                                            shownPathError.retryable ? (
                                                 <Button onClick={retryDirectPathLoad}>Retry</Button>
                                             ) : undefined
                                         }
                                     >
-                                        {directPathError.message}
+                                        {shownPathError.message}
                                         <br />
                                         <br />
                                         <Link

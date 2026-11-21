@@ -128,7 +128,7 @@ function App() {
                                 onItemClick: (e) => {
                                     const id = e?.detail?.id;
                                     if (id === SIGN_OUT_ITEM_ID) void signOut();
-                                    // The current page's item is a checkbox item (no href).
+                                    // A page item's id names the route it opens.
                                     else if (id?.startsWith(PAGE_ITEM_ID_PREFIX))
                                         window.location.hash = id.slice(PAGE_ITEM_ID_PREFIX.length);
                                 },

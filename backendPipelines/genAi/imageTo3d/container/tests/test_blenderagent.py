@@ -18,6 +18,7 @@ import json
 import os
 import re
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -51,12 +52,31 @@ class TestTheSandboxIsClosedByConfiguration:
     def test_no_approval_prompt_can_ever_block_a_headless_run(self):
         assert 'approval_policy = "never"' in codex_config("http://x/v1", "KEY", "high")
 
-    def test_credentials_are_kept_out_of_the_commands_the_agent_runs(self):
-        config = codex_config("http://x/v1", "BRIDGE", "high")
-        # Up to the next section header, not the next bracket: the exclude list itself opens with one.
+    def test_codex_starts_with_the_allowlist_and_this_runs_values_only(self):
+        parent = {
+            "PATH": "/opt/venv/bin:/usr/bin", "LANG": "C.UTF-8", "U2NET_HOME": "/opt/rembg",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/x", "AWS_REGION": "us-east-1",
+            "AWS_ACCESS_KEY_ID": "test-access-key", "AWS_BATCH_JOB_ID": "job", "AWS_EXECUTION_ENV": "AWS_ECS_EC2",
+            "HF_TOKEN": "test-hf-token", "HF_HOME": "/mnt/efs/x", "S3_MODEL_PREFIX": "imageTo3d/hf_cache/blenderagent/",
+        }
+        run = {"CODEX_HOME": "/var/agent/codex_home", "BRIDGE": "sk-run", "AGENT_WORKSPACE": "/var/agent/workspace"}
+        env = blenderagent.codex_process_env(parent, run)
+        assert env == {"PATH": "/opt/venv/bin:/usr/bin", "LANG": "C.UTF-8", "U2NET_HOME": "/opt/rembg", **run}
+        assert not [name for name in env if name.startswith(("AWS_", "HF_"))]
+
+    def test_the_allowlist_names_no_credential_or_job_variable(self):
+        for name in blenderagent.CODEX_INHERITED_ENV:
+            assert not name.startswith(("AWS_", "HF_")), name
+            assert not re.search("KEY|TOKEN|SECRET|CREDENTIAL", name), name
+
+    def test_the_bridge_key_is_excluded_from_the_commands_and_snapshots_are_off(self):
+        config = codex_config("http://x/v1", "BLENDERAGENT_BRIDGE_KEY", "high")
+        # A shell snapshot replays Codex's own variables before every command, past the policy below.
+        assert "shell_snapshot = false" in config
         policy = config.split("[shell_environment_policy]", 1)[1].split("\n[", 1)[0]
-        for pattern in ('"AWS_*"', '"*TOKEN*"', '"*SECRET*"', '"*KEY*"'):
-            assert pattern in policy, f"{pattern} is not excluded from the agent's command environment"
+        # Codex's default excludes (*KEY*, *SECRET*, *TOKEN*) are what remove the bridge key.
+        assert "ignore_default_excludes = false" in policy
+        assert '"*KEY*"' in policy
 
     def test_the_model_provider_is_the_bridge_over_the_responses_api(self):
         config = codex_config("http://127.0.0.1:4321/v1", "BRIDGE_KEY", "high")
@@ -76,6 +96,22 @@ class TestTheSandboxIsClosedByConfiguration:
         """The whole point of excluding /tmp from the sandbox is defeated if the workspace lives there."""
         assert not str(blenderagent.AGENT_ROOT).replace("\\", "/").startswith("/tmp")
 
+    def test_the_sandbox_needs_no_user_namespace(self):
+        """The job runs unprivileged, where bubblewrap cannot create its user namespace and every command the
+        agent runs failed ("bwrap: No permissions to create a new namespace"). Landlock + seccomp needs none."""
+        config = codex_config("http://x/v1", "KEY", "high")
+        features = config.split("[features]", 1)[1].split("\n[", 1)[0]
+        assert "use_legacy_landlock = true" in features
+
+    def test_a_fresh_workspace_holds_the_metadata_dirs_the_landlock_sandbox_requires(self, tmp_path, monkeypatch):
+        """Without .git, .agents and .codex present, Codex refuses the Landlock backend for a workspace-write
+        sandbox ('permission profiles requiring direct runtime enforcement'), and every command fails."""
+        monkeypatch.setattr(blenderagent, "AGENT_ROOT", tmp_path / "agent")
+        dirs = BlenderAgentAdapter()._fresh_root()
+        for name in (".git", ".agents", ".codex"):
+            assert (dirs["workspace"] / name).is_dir(), name
+            assert not any((dirs["workspace"] / name).iterdir()), f"{name} must start empty"
+
 
 @pytest.mark.unit
 class TestTheBridgeRoutesToBedrockOnTheTaskRole:
@@ -84,6 +120,20 @@ class TestTheBridgeRoutesToBedrockOnTheTaskRole:
         params = config["model_list"][0]["litellm_params"]
         assert params["model"] == "bedrock/converse/us.openai.gpt-5.6-terra"
         assert params["aws_region_name"] == "us-west-2"
+
+    @pytest.mark.parametrize("region, host", [
+        ("us-west-2", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+        ("us-gov-west-1", "https://bedrock-runtime.us-gov-west-1.amazonaws.com"),
+        ("eusc-de-east-1", "https://bedrock-runtime.eusc-de-east-1.amazonaws.eu"),
+    ])
+    def test_the_bridge_is_given_the_partitions_bedrock_host(self, region, host):
+        """LiteLLM's own Region-prefix table has no EU Sovereign Cloud entry, so without an explicit
+        endpoint the first model call there goes to an amazonaws.com host that does not exist."""
+        boto3 = pytest.importorskip("boto3")
+        if isinstance(boto3, MagicMock):
+            pytest.skip("boto3 is stubbed here; the endpoint comes from botocore's partition data")
+        params = litellm_config("m", region)["model_list"][0]["litellm_params"]
+        assert params["aws_bedrock_runtime_endpoint"] == host
 
     def test_no_credential_is_written_into_the_bridge_configuration(self):
         config = json.dumps(litellm_config("m", "r"))
@@ -126,6 +176,147 @@ class TestTheBridgeRoutesToBedrockOnTheTaskRole:
         assert blenderagent.image_editing_enabled() is True
         monkeypatch.setenv("BLENDERAGENT_IMAGE_EDITING", "false")
         assert blenderagent.image_editing_enabled() is False
+
+
+class _FakeBridgeProcess:
+    """A stand-in for the LiteLLM process: alive unless built with an exit code."""
+
+    def __init__(self, returncode=None):
+        self.returncode = returncode
+        self.stopped = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.stopped = True
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.stopped = True
+
+
+def _bridge_stand_in(accepted_key: str, refusal: int = 400):
+    """A loopback server answering /v1/models with 200 for ``accepted_key`` and ``refusal`` for any other key.
+
+    400 with "No connected db." is what the pinned LiteLLM 1.100.0, run without a database as the adapter
+    runs it, answers to a key it does not hold.
+    """
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            ok = self.path == "/v1/models" and self.headers.get("Authorization") == f"Bearer {accepted_key}"
+            body = (b'{"data": [{"id": "agent"}]}' if ok
+                    else b'{"error": {"message": "No connected db.", "type": "no_db_connection"}}')
+            self.send_response(200 if ok else refusal)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.mark.unit
+class TestEachRunHasItsOwnBridge:
+    """Batch places several Blender agent runs on one CPU instance, and they share its network."""
+
+    def test_the_port_default_is_picked_per_run(self):
+        with open(os.path.join(_CONTAINER_DIR, "config.json"), encoding="utf-8") as handle:
+            defaults = json.load(handle)
+        assert re.search(r'"BLENDERAGENT_BRIDGE_PORT": "0"', json.dumps(defaults))
+
+    def test_a_run_is_never_given_a_port_another_process_holds(self):
+        import socket
+
+        held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        held.bind(("127.0.0.1", blenderagent.free_loopback_port()))
+        held.listen(1)
+        try:
+            taken = held.getsockname()[1]
+            assert {blenderagent.free_loopback_port() for _ in range(5)}.isdisjoint({taken})
+        finally:
+            held.close()
+
+    @pytest.mark.parametrize("refusal", [400, 401])
+    def test_readiness_refuses_a_bridge_that_rejects_this_runs_key(self, tmp_path, monkeypatch, refusal):
+        real_sleep = blenderagent.time.sleep
+        monkeypatch.setattr(blenderagent.time, "sleep", lambda s: real_sleep(0.05))
+        server = _bridge_stand_in("sk-another-run", refusal)
+        try:
+            port = server.server_address[1]
+            with pytest.raises(RuntimeError, match="refused this run's key"):
+                BlenderAgentAdapter._wait_for_bridge(port, "sk-this-run", _FakeBridgeProcess(), tmp_path / "log",
+                                                     timeout=1)
+            # [control] the same bridge is accepted with its own key.
+            BlenderAgentAdapter._wait_for_bridge(port, "sk-another-run", _FakeBridgeProcess(), tmp_path / "log",
+                                                 timeout=1)
+        finally:
+            server.shutdown()
+
+    def test_a_bridge_that_exits_is_reported_as_exited(self, tmp_path):
+        with pytest.raises(blenderagent.BridgeExited):
+            BlenderAgentAdapter._wait_for_bridge(1, "sk-x", _FakeBridgeProcess(returncode=1), tmp_path / "log",
+                                                 timeout=5)
+
+    def test_a_bridge_that_loses_its_port_is_started_again_on_another(self, tmp_path, monkeypatch):
+        ports = iter([41001, 41002])
+        monkeypatch.setattr(blenderagent, "free_loopback_port", lambda: next(ports))
+        started = []
+
+        def start(self, bridge_dir, model_id, region, port, key, env):
+            started.append((port, _FakeBridgeProcess()))
+            return started[-1][1]
+
+        def wait(port, key, process, log_path, timeout=120):
+            if port == 41001:
+                raise blenderagent.BridgeExited("address in use")
+
+        monkeypatch.setattr(BlenderAgentAdapter, "_start_bridge", start)
+        monkeypatch.setattr(BlenderAgentAdapter, "_wait_for_bridge", staticmethod(wait))
+        process, port = BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 0, "sk-x", {})
+        assert port == 41002 and process is started[1][1]
+        assert started[0][1].stopped, "the bridge that lost its port is left running"
+
+    def test_a_fixed_port_is_tried_once(self, tmp_path, monkeypatch):
+        started = []
+        monkeypatch.setattr(BlenderAgentAdapter, "_start_bridge",
+                            lambda self, *a: started.append(a) or _FakeBridgeProcess())
+
+        def wait(port, key, process, log_path, timeout=120):
+            raise blenderagent.BridgeExited("address in use")
+
+        monkeypatch.setattr(BlenderAgentAdapter, "_wait_for_bridge", staticmethod(wait))
+        with pytest.raises(blenderagent.BridgeExited):
+            BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 4000, "sk-x", {})
+        assert len(started) == 1
+
+    def test_a_readiness_timeout_is_raised_and_not_retried(self, tmp_path, monkeypatch):
+        # Only a bridge that exited is started again; one that never became ready would only time out again.
+        started = []
+
+        def start(self, bridge_dir, model_id, region, port, key, env):
+            started.append(_FakeBridgeProcess())
+            return started[-1]
+
+        def wait(port, key, process, log_path, timeout=120):
+            raise RuntimeError(f"The model bridge did not become ready on port {port} within {timeout}s.")
+
+        monkeypatch.setattr(BlenderAgentAdapter, "_start_bridge", start)
+        monkeypatch.setattr(BlenderAgentAdapter, "_wait_for_bridge", staticmethod(wait))
+        with pytest.raises(RuntimeError, match="did not become ready") as raised:
+            BlenderAgentAdapter()._start_ready_bridge(tmp_path, "m", "us-east-1", 0, "sk-x", {})
+        assert not isinstance(raised.value, blenderagent.BridgeExited)
+        assert len(started) == 1, "a readiness timeout was retried"
+        assert started[0].stopped, "the bridge that never became ready is left running"
 
 
 @pytest.mark.unit

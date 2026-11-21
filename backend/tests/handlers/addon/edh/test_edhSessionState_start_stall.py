@@ -114,11 +114,16 @@ class TestTheMergeKeepsAndClearsTheStall:
         assert changed["lastError"] is None and changed["startFailure"] is None
         assert changed["startAcceptedAt"] is None
 
-    def test_error_orphans_the_row_with_a_launch_error_not_the_stall(self):
+    def test_error_on_an_accepted_start_keeps_the_row_creating_and_records_the_desktop_error(self):
         changed = observed_row_attributes(_stalled(), _listed("error"))
+        assert changed.get("state", "CREATING") == "CREATING"
+        assert "lastError" not in changed and "startFailure" not in changed and "startAcceptedAt" not in changed
+        assert changed["connectionUnavailableReason"] == "DESKTOP_ERROR"
+
+    def test_error_on_a_new_launch_orphans_the_row_with_a_launch_error(self):
+        changed = observed_row_attributes(_creating(), _listed("error"))
         assert changed["state"] == "ORPHANED"
         assert changed["lastError"] == "LAUNCH_ERROR"
-        assert changed["startFailure"] is None and changed["startAcceptedAt"] is None
 
     def test_an_accepted_starts_stamp_goes_once_the_desktop_runs(self):
         changed = observed_row_attributes(_creating(startAcceptedAt=_accepted(60)), _listed("running"))

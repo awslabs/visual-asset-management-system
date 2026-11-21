@@ -164,6 +164,22 @@ describe("OutputIngestionProgress", () => {
         expect(rows[2]).toHaveTextContent("Not started");
     });
 
+    it("scrolls the file table inside its own focusable region, so it never widens the page", () => {
+        render(
+            <OutputIngestionProgress
+                executionPhase={INGESTING_OUTPUTS_PHASE}
+                outputIngestion={progress()}
+            />
+        );
+        // The region and the table it scrolls are named apart, so neither name is read twice.
+        const region = screen.getByRole("region", { name: "Output files table, scrolls sideways" });
+        expect(region).toHaveClass("overflow-x-auto");
+        expect(region).toHaveAttribute("tabIndex", "0");
+        expect(region).toContainElement(
+            screen.getByRole("table", { name: "Output files being copied" })
+        );
+    });
+
     it("maps a failed and a cancelled copy to text and shows the reason", () => {
         render(
             <OutputIngestionProgress

@@ -12,15 +12,20 @@ Through a web interface, command-line tool, and REST API, VAMS enables any autho
 
 VAMS can store, manage, and version **any file type** — it is not limited to a fixed set of formats. However, the following data types have built-in viewer and pipeline support out of the box. Because VAMS is extensible through custom viewer plugins and processing pipelines, this list represents the current set of native integrations, not a limitation of the platform.
 
-| Category                        | Formats with Built-in Viewer/Pipeline Support                         |
-| ------------------------------- | --------------------------------------------------------------------- |
-| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF                          |
-| **CAD Models**                  | STEP, STP, IGES, BREP                                                 |
-| **Point Clouds**                | E57, LAS, LAZ                                                         |
-| **Universal Scene Description** | USD, USDA, USDC, USDZ                                                 |
-| **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                 |
-| **Documents and Media**         | PDF, images, video, audio, CSV, HTML, text                            |
-| **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins |
+| Category                        | Formats with Built-in Viewer/Pipeline Support                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **3D Meshes**                   | glTF, GLB, OBJ, STL, FBX, PLY, DAE, 3DS, 3MF, AMF, OFF, WRL, BIM, 3DM¹                         |
+| **CAD Models**                  | STEP, STP, IGES, IGS, BREP                                                                     |
+| **BIM**                         | IFC, IFCZIP¹                                                                                   |
+| **Point Clouds**                | E57, LAS, LAZ, PLY                                                                             |
+| **Geospatial**                  | 3D Tiles tilesets (JSON); GeoTIFF / Cloud Optimized GeoTIFF (map view needs location services) |
+| **Universal Scene Description** | USD, USDA, USDC, USDZ                                                                          |
+| **Gaussian Splats**             | PLY (splat), SPZ, SOG                                                                          |
+| **Robotics Data**               | MCAP, ROS 1 and ROS 2 bags (BAG, DB3), PX4 ULog (ULG, ULOG)¹                                   |
+| **Documents and Media**         | PDF, images, video, audio, CSV, FCS, HTML, text                                                |
+| **Any other file type**         | Stored and versioned in Amazon S3; viewable via custom viewer plugins                          |
+
+¹ BIM (IFC, IFCZIP), Rhinoceros 3D (3DM) and robotics formats need `app.webUi.allowUnsafeEvalFeatures`, which the shipped templates leave off.
 
 For the complete viewer-to-extension mapping, see [File Viewers](../concepts/viewers.md).
 
@@ -41,7 +46,7 @@ For the runtime versions and build tooling VAMS deploys with, and the versions y
 VAMS delivers the following core capabilities:
 
 -   **Asset Management** -- Organize visual assets across databases with metadata, tagging, versioning, and relationship linking
--   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 24 built-in viewer plugins
+-   **Interactive Visualization** -- View 3D models, point clouds, CAD files, Gaussian splats, USD scenes, robotics logs, and media files directly in the browser through 25 built-in viewer plugins
 -   **Automated Processing** -- Execute pipelines for 3D conversion, metadata extraction, point cloud processing, preview thumbnail generation (3D files, images, TGA/TIFF and video), and AI-powered metadata generation
 -   **Intelligent Search** -- Full-text and attribute-based search powered by Amazon OpenSearch Service, and natural-language (vector) search powered by Amazon Bedrock embeddings in a DynamoDB vector index, across assets and files
 -   **Fine-Grained Access Control** -- Two-tier Attribute-Based and Role-Based Access Control (ABAC/RBAC) using Casbin policy enforcement
@@ -58,9 +63,9 @@ VAMS provides three primary methods for interacting with your visual asset manag
 | Feature               | Web Interface                        | Command Line Interface (CLI)                | Direct API Access                  |
 | --------------------- | ------------------------------------ | ------------------------------------------- | ---------------------------------- |
 | **Best for**          | Interactive use, visualization       | Automation, scripting, bulk operations      | Custom integrations, applications  |
-| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 25 command groups | Full programmatic control via REST |
+| **Asset Management**  | Visual interface with drag-and-drop  | Programmatic control with 28 command groups | Full programmatic control via REST |
 | **File Upload**       | Drag-and-drop with progress tracking | Advanced chunking and retry logic           | Custom upload with presigned URLs  |
-| **3D Viewing**        | 24 interactive viewer plugins        | Not applicable                              | Not applicable                     |
+| **3D Viewing**        | 25 interactive viewer plugins        | Not applicable                              | Not applicable                     |
 | **Automation**        | Manual operations                    | Full automation with profile support        | Complete automation control        |
 | **Bulk Operations**   | Limited                              | Optimized for bulk tasks                    | Custom bulk implementations        |
 | **CI/CD Integration** | Not suitable                         | Designed for pipeline integration           | Full integration flexibility       |
@@ -73,7 +78,7 @@ The web-based interface provides an intuitive, browser-based experience for visu
 
 ### Command Line Interface (VamsCLI)
 
-The VamsCLI offers powerful automation capabilities through 25 command groups covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
+The VamsCLI offers powerful automation capabilities through 28 command groups (27 core groups and the EDH Workstations add-on group) covering assets, databases, files, metadata, pipelines, workflows, executions, directory synchronization, search, permissions, compliance, user management, and API key management. It supports multi-environment profile management and machine-readable JSON output for scripting.
 
 ### Direct API Access
 

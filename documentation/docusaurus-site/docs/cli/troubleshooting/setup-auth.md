@@ -15,15 +15,17 @@ This page covers issues encountered while configuring VamsCLI, signing in, manag
 
 **Symptoms:**
 
--   `vamscli setup` fails with `Invalid base URL. Please provide a valid HTTP/HTTPS URL.`
+-   `vamscli setup` fails with `Invalid base URL. Please provide an https URL (plain http is accepted only for localhost or a loopback address).`
+-   `vamscli setup` fails with `Invalid API Gateway URL extracted from amplify config: http://...`
+-   `vamscli setup` fails with `The deployment redirected the configuration read to plain http (...)`
 
 **Cause:**
 
-The URL passed to `vamscli setup` is missing a scheme or host, or uses a scheme other than `http`/`https`.
+The URL passed to `vamscli setup` is missing a scheme or host, uses a scheme other than `https`, or uses plain `http` for a host other than `localhost` or a loopback address. The same rule applies to the API URL the deployment publishes in its Amplify configuration, because every later command sends your sign-in token to that URL, and to a redirect the configuration read follows.
 
 **Resolution:**
 
-Pass a complete HTTP or HTTPS URL for any VAMS entry point — a CloudFront distribution, Application Load Balancer, custom domain, or Amazon API Gateway endpoint. VamsCLI fetches the Amplify configuration from this URL and extracts the API Gateway URL automatically.
+Pass a complete HTTPS URL for any VAMS entry point — a CloudFront distribution, Application Load Balancer, custom domain, or Amazon API Gateway endpoint. VamsCLI fetches the Amplify configuration from this URL and extracts the API Gateway URL automatically.
 
 ```bash
 vamscli setup https://d1234567890.cloudfront.net
@@ -32,6 +34,8 @@ vamscli setup https://abc123.execute-api.us-west-2.amazonaws.com
 ```
 
 When targeting the Amazon API Gateway `execute-api` endpoint directly, pass the bare endpoint URL — VamsCLI appends the REST API stage path (`/api`) for you. A `403 Missing Authentication Token` on the first setup call usually means the endpoint URL is otherwise incorrect (wrong API id or Region) rather than a missing stage. Through a CloudFront/ALB/custom-domain front, use the front's URL unchanged.
+
+A profile already set up with an `http` URL keeps working. To move it to `https`, run `vamscli setup https://<url> --force` (with `--profile <name>` before `setup` for another profile), then sign in again with `vamscli auth login`: `--force` replaces the profile, its sign-in included.
 
 ### Failed to Fetch Amplify Configuration
 
@@ -117,10 +121,10 @@ The deployment uses an external identity provider rather than Amazon Cognito, so
 
 **Resolution:**
 
-Use an override token instead. Obtain a valid token from your identity provider and supply it with `--user-id` and `--token-override`, or store it with `vamscli auth set-override`.
+Use an override token instead. Obtain a valid token from your identity provider and pipe it to `--token-override-stdin` with `--user-id`, or store it with `vamscli auth set-override --token-stdin`.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 ### MFA Code Rejected
@@ -150,10 +154,10 @@ Amazon Cognito issues a `NEW_PASSWORD_REQUIRED` challenge for new accounts.
 
 **Resolution:**
 
-Provide the new password with `--new-password`. In interactive mode you are prompted for it if omitted; with `--json-output`, `--new-password` is required.
+Provide the new password with `--new-password-stdin`, which reads it from standard input after the current password (`--new-password <password>` also works but puts the password in the OS process table). In interactive mode you are prompted for it if omitted; with `--json-output`, one of the two is required.
 
 ```bash
-vamscli auth login -u user@example.com -p temp-password --new-password new-password
+printf '%s\n%s\n' "$TEMP_PASSWORD" "$NEW_PASSWORD" | vamscli auth login -u user@example.com --password-stdin --new-password-stdin
 ```
 
 :::note
@@ -174,14 +178,14 @@ You can also complete a forced change with `vamscli auth change-password`, which
     vamscli auth change-password -u user@example.com
     ```
 
--   If you have forgotten your current password, use the two-step self-service `vamscli auth forgot-password`. Run it with only `--username` to email a verification code, then run it again with `--code` and `--new-password` to confirm.
+-   If you have forgotten your current password, use the two-step self-service `vamscli auth forgot-password`. Run it with only `--username` to email a verification code, then run it again with `--code` and `--new-password-stdin` to confirm.
 
     ```bash
     # Step 1: request a code
     vamscli auth forgot-password -u user@example.com
 
-    # Step 2: confirm with the emailed code
-    vamscli auth forgot-password -u user@example.com --code 123456 --new-password new-password
+    # Step 2: confirm with the emailed code; the new password is read from stdin
+    printf '%s\n' "$NEW_PASSWORD" | vamscli auth forgot-password -u user@example.com --code 123456 --new-password-stdin
     ```
 
 :::note
@@ -215,8 +219,8 @@ Override tokens are used directly and are never refreshed. VamsCLI performs a pr
 
 **Resolution:**
 
-1. Set a fresh token: `vamscli auth set-override -u user@example.com --token "<new-token>"`.
-2. For a single command, pass the token inline: `vamscli auth login --user-id user@example.com --token-override "<new-token>"`.
+1. Set a fresh token: `echo "$VAMS_TOKEN" | vamscli auth set-override -u user@example.com --token-stdin`.
+2. Or sign in with it, which also validates it: `echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin`.
 3. To return to Amazon Cognito authentication, clear the override: `vamscli auth clear-override`.
 
 :::tip

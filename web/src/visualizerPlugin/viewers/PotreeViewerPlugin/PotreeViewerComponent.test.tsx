@@ -102,6 +102,24 @@ describe("Potree viewer load failure", () => {
         });
     });
 
+    it("encodes each segment of the file key in the stream URL, keeping the slashes", async () => {
+        respond(404, { message: "File not found" });
+        render(
+            <PotreeViewerComponent
+                {...({
+                    assetId: "asset1",
+                    databaseId: "db1",
+                    assetKey: "asset1/scans #2/50% cloud?.las",
+                } as any)}
+            />
+        );
+        await waitFor(() => expect(mockLoadPointCloud).toHaveBeenCalled());
+        expect(mockLoadPointCloud.mock.calls[0][0]).toBe(
+            "https://api.example/api/database/db1/assets/asset1/auxiliaryPreviewAssets/stream/" +
+                "scans%20%232/50%25%20cloud%3F.las/preview/PotreeViewer/metadata.json"
+        );
+    });
+
     it("keeps the missing-preview message and the pipeline hint for a 404", async () => {
         respond(404, { message: "File not found" });
         mount();

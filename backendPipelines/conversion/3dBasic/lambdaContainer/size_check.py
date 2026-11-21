@@ -19,18 +19,21 @@ output formats this pipeline writes and adding about 25%:
     .glb    5.5 - 21.8                       27
     .gltf   as .glb, over the glTF file plus its buffers      27
     .xyz    9.8 - 10.4                       13
+    .3mf    128 - 136 per zip byte           106 per zip byte before the download, and 26 per
+            (20.3 - 20.4 per uncompressed)   declared uncompressed byte after it
 
 The working disk holds the input, the files it references and the output; the output is at most 2.8
 times the input (a binary PLY or GLB written as OBJ text), so the disk need is the input plus 3.5 times
 the input and the referenced files.
 
 The limits come from the running function (``AWS_LAMBDA_FUNCTION_MEMORY_SIZE`` and the free space of
-the working directory), never from a constant, so a change to the function's memory or ephemeral
-storage moves them with it.
+the working directory), or, on the AWS Batch tier, from the task (``VAMS_TASK_MEMORY_MIB``), never from a
+constant, so a change to the function's memory or ephemeral storage moves them with it.
 """
 
 import os
 import shutil
+import zipfile
 
 MB = 1024 ** 2
 
@@ -116,16 +119,60 @@ DISK_HEADROOM_BYTES = 64 * MB
 
 MEMORY_RESOURCE = "function memory"
 DISK_RESOURCE = "working disk (/tmp)"
+# What a message calls the memory limit on an AWS Batch task. ``MEMORY_RESOURCE`` stays the identifier
+# the code compares and the escalation result carries; only the words a user reads change.
+BATCH_MEMORY_LABEL = "job memory"
 
 
 class InputTooLargeError(ValueError):
-    """The input is larger than this function can convert."""
+    """The input is larger than this function can convert.
+
+    ``total_bytes``, ``limit_bytes`` and ``resource`` carry what the message says, so the AWS Batch tier's
+    router can choose a job size from them without parsing the text; they are None when not known."""
+
+    def __init__(self, message, total_bytes=None, limit_bytes=None, resource=None):
+        super().__init__(message)
+        self.total_bytes = total_bytes
+        self.limit_bytes = limit_bytes
+        self.resource = resource
+
+
+# The compute tier a run executes on, from the environment the tier's launcher sets: the AWS Batch
+# container carries the task's memory, the Lambda runtime its function's.
+TIER_LAMBDA = "lambda"
+TIER_BATCH = "batch"
+TASK_MEMORY_VARIABLE = "VAMS_TASK_MEMORY_MIB"
+
+# The AWS Batch (Fargate) job sizes the tier runs on, as (vCPU, memory MiB): the Fargate pairs the
+# deployment offers. The launcher's selector and the CDK construct (both added with the infrastructure
+# change) keep the same ladder.
+BATCH_TASK_SIZES = ((4, 30 * 1024), (8, 60 * 1024), (16, 120 * 1024))
+
+
+def task_memory_bytes(environ=None):
+    """The AWS Batch task's memory in bytes from ``VAMS_TASK_MEMORY_MIB``, or None when it is not set
+    or not a positive number (on Lambda)."""
+    environ = os.environ if environ is None else environ
+    try:
+        mebibytes = int(environ.get(TASK_MEMORY_VARIABLE, ""))
+    except (TypeError, ValueError):
+        return None
+    return mebibytes * MB if mebibytes > 0 else None
+
+
+def compute_tier(environ=None):
+    """``batch`` on an AWS Batch task, else ``lambda``."""
+    return TIER_BATCH if task_memory_bytes(environ) else TIER_LAMBDA
 
 
 def memory_limit_bytes(environ=None):
-    """The function's memory in bytes from ``AWS_LAMBDA_FUNCTION_MEMORY_SIZE`` (MB), or None when it
-    is not set or not a positive number (outside Lambda)."""
+    """The memory this run may use in bytes: the Batch task's (``VAMS_TASK_MEMORY_MIB``), else the
+    function's (``AWS_LAMBDA_FUNCTION_MEMORY_SIZE``, MB); None when neither is set or a positive
+    number (a developer's machine)."""
     environ = os.environ if environ is None else environ
+    task = task_memory_bytes(environ)
+    if task:
+        return task
     try:
         megabytes = int(environ.get("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", ""))
     except ValueError:
@@ -191,6 +238,85 @@ def limits(extension, memory_bytes=None, disk_free_bytes=None, output_extension=
     return min(candidates) if candidates else (None, None)
 
 
+# Peak resident memory per UNCOMPRESSED byte of a package whose bytes on disk are compressed. A 3MF's
+# peak follows the XML it holds, not the zip: measured 20.3 to 20.4 per uncompressed byte (128 to 136
+# per zip byte at a 6.3 to 1 ratio, over 161 to 647 MB of zip), plus about 25%. The per-zip-byte
+# factors above stay as the estimate before the download, when only the zip's size is known; the
+# declared uncompressed size, read from the central directory after the download, is checked with
+# these. The COLLADA output's entry is the per-zip-byte pair factor (149) over the input's (106)
+# times the input's uncompressed factor, rounded up.
+UNCOMPRESSED_EXPANSION_FACTORS = {
+    '.3mf': {None: 26, '.dae': 37},
+}
+
+
+def uncompressed_expansion_factor(extension, output_extension=None):
+    """Peak memory per declared uncompressed byte for a compressed package, or None for a format
+    whose factor is per byte on disk."""
+    rows = UNCOMPRESSED_EXPANSION_FACTORS.get((extension or "").lower())
+    if not rows:
+        return None
+    return max(rows[None], rows.get((output_extension or "").lower(), 0))
+
+
+def declared_uncompressed_bytes(path):
+    """Total uncompressed size the zip's central directory declares, or None when the file is not a
+    zip (the format's own check reports that). Reads no member data."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return sum(info.file_size for info in archive.infolist())
+    except (zipfile.BadZipFile, OSError):
+        return None
+
+
+def uncompressed_limit_bytes(extension, memory_bytes, output_extension=None):
+    """The declared uncompressed bytes a compressed package may hold on ``memory_bytes`` of memory, or
+    None when the format's factor is per byte on disk or the memory is not known."""
+    factor = uncompressed_expansion_factor(extension, output_extension)
+    if factor is None or not memory_bytes:
+        return None
+    return max(int((memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES) / factor), 0)
+
+
+def uncompressed_limits_by_task_memory(extension, output_extension=None, sizes=BATCH_TASK_SIZES):
+    """``{task memory MiB: uncompressed limit in bytes}`` for each AWS Batch job size, the counterpart of
+    ``limits_by_task_memory`` for a package checked by its declared uncompressed size."""
+    return {mib: uncompressed_limit_bytes(extension, mib * MB, output_extension) for _, mib in sizes}
+
+
+def required_memory_bytes_uncompressed(extension, uncompressed_bytes, output_extension=None):
+    """The least memory (bytes) whose uncompressed limit admits ``uncompressed_bytes``, rounded up."""
+    usable = uncompressed_bytes * uncompressed_expansion_factor(extension, output_extension) + BASE_MEMORY_BYTES
+    return int(-(-usable // MEMORY_USABLE_FRACTION))
+
+
+def check_uncompressed_size(name, extension, uncompressed_bytes, memory_bytes=None, output_extension=None):
+    """Raise ``InputTooLargeError`` when a compressed package's declared uncompressed size is over
+    what the function's memory can convert. The message has the shape of ``check_size``'s, and the
+    error carries the declared size and the limit, so the Lambda tier can escalate it like an input over
+    the size check."""
+    limit = uncompressed_limit_bytes(extension, memory_bytes, output_extension)
+    if limit is None or uncompressed_bytes is None:
+        return None
+    if uncompressed_bytes > limit:
+        target = (f"converting {extension.lower()} to {output_extension.lower()}" if output_extension
+                  else f"{extension.lower()} inputs")
+        raise InputTooLargeError(
+            f"{name} is {_mb(uncompressed_bytes)} uncompressed, over the {_mb(limit)} uncompressed "
+            f"limit for {target}. The limit is set by the {resource_label(MEMORY_RESOURCE)}. Reduce the model's size "
+            f"and run the conversion again.",
+            total_bytes=uncompressed_bytes, limit_bytes=limit, resource=MEMORY_RESOURCE)
+    return limit
+
+
+def resource_label(resource, environ=None):
+    """The words a message uses for ``resource``: the memory limit of a Batch task is the job's memory,
+    not the function's."""
+    if resource == MEMORY_RESOURCE and compute_tier(environ) == TIER_BATCH:
+        return BATCH_MEMORY_LABEL
+    return resource
+
+
 def _mb(value):
     return f"{value / MB:,.1f} MB"
 
@@ -212,8 +338,23 @@ def check_size(name, extension, size_bytes, memory_bytes=None, disk_free_bytes=N
                 and expansion_factor(extension, output_extension) > expansion_factor(extension) else "")
         raise InputTooLargeError(
             f"{name} is {_mb(total)}, over the {_mb(limit)} limit for {target}. The limit is set by "
-            f"the {resource}. Reduce the model's size and run the conversion again.{hint}")
+            f"the {resource_label(resource)}. Reduce the model's size and run the conversion again.{hint}",
+            total_bytes=total, limit_bytes=limit, resource=resource)
     return limit
+
+
+def required_memory_bytes(extension, total_bytes, output_extension=None):
+    """The least memory (bytes) whose limit admits ``total_bytes`` of input and referenced files for
+    this pair: the inverse of the memory limit in ``limits``, rounded up."""
+    usable = total_bytes * expansion_factor(extension, output_extension) + BASE_MEMORY_BYTES
+    return int(-(-usable // MEMORY_USABLE_FRACTION))
+
+
+def limits_by_task_memory(extension, output_extension=None, sizes=BATCH_TASK_SIZES):
+    """``{task memory MiB: memory limit in bytes}`` for each AWS Batch job size, so the router can
+    pick the smallest size that admits an input (and name the largest size's limit) without holding
+    the factors."""
+    return {mib: limits(extension, mib * MB, None, output_extension)[0] for _, mib in sizes}
 
 
 def head_size(client, bucket, key, version_id=""):
@@ -251,3 +392,35 @@ def texture_budget_bytes(extension, geometry_bytes, memory_bytes=None, output_ex
     usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
     usable -= expansion_factor(extension, output_extension) * geometry_bytes
     return max(int(usable / TEXTURE_MEMORY_FACTOR), 0)
+
+
+# Peak resident memory per triangle of a USD scene read and written as GLB, measured on the 120 GiB
+# Fargate task on 24 to 358 million triangles (266 to 279 bytes, flat), rounded up. USD to STL needs
+# about 1.45 times that (SCENE_TRIANGLE_FACTOR_BY_OUTPUT), which the worker's address-space limit still
+# bounds.
+BYTES_PER_SCENE_TRIANGLE = 270
+
+
+# How much more memory per triangle an output format needs than GLB (the figure above), where measured.
+# Other outputs use the GLB figure.
+SCENE_TRIANGLE_FACTOR_BY_OUTPUT = {".stl": 1.45}
+
+
+def scene_triangle_budget(memory_bytes, floor, output_extension=None):
+    """The triangle budget of a scene walk (a USD, STEP or FBX scene) on a task with ``memory_bytes``:
+    the memory a conversion may use, less the base, divided by ``BYTES_PER_SCENE_TRIANGLE`` (times the
+    output format's factor), never below ``floor`` (the budget the Lambda tier has always had). None when
+    the memory is not known."""
+    if not memory_bytes:
+        return None
+    usable = memory_bytes * MEMORY_USABLE_FRACTION - BASE_MEMORY_BYTES
+    factor = SCENE_TRIANGLE_FACTOR_BY_OUTPUT.get((output_extension or "").lower(), 1.0)
+    return max(int(usable / (BYTES_PER_SCENE_TRIANGLE * factor)), int(floor))
+
+
+def triangle_budget(environ=None, floor=30_000_000, output_extension=None):
+    """The triangle budget this run's scene walks use, or None to keep the constant one. The constant
+    (30 million) is what the Lambda tier has always used, and at 10,240 MB the memory-derived budget
+    would be 34.6 million, so the Lambda tier keeps the constant; a Batch task derives the budget from
+    its own memory."""
+    return scene_triangle_budget(task_memory_bytes(environ), floor, output_extension)

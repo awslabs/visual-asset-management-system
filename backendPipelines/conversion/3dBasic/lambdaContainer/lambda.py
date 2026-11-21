@@ -13,6 +13,8 @@ import sys
 import tempfile
 import threading
 import time
+import conversion_service
+import expansion_bounds
 import incomplete_result
 import referenced_files
 import size_check
@@ -275,7 +277,7 @@ def relative_subdir_from_manifest_path(relative_path):
 
 
 # The mesh formats this pipeline accepts as input: every one is a format trimesh loads with the
-# container's pinned dependencies (requirements.txt / poetry.lock). COLLADA (`.dae`) needs pycollada
+# container's pinned dependencies (requirements.txt / uv.lock). COLLADA (`.dae`) needs pycollada
 # and `.3mf` / `.xaml` / `.3dxml` need lxml and networkx; with none of those installed trimesh
 # registers an exception wrapper in place of each loader. The registered inputFileFilters in
 # vamsSchema/pipeline.json declare this same set to VAMS.
@@ -616,7 +618,7 @@ def reap_other_processes(proc_root="/proc", uid=None, own_pid=None, kill=os.kill
 # processes of its user are the worker's descendants; elsewhere (a developer's machine) the user's
 # other processes are not the function's to stop.
 def _in_lambda_environment():
-    return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME")) or bool(size_check.task_memory_bytes())
 
 
 _STRAY_PROCESS_FILTER = None
@@ -675,7 +677,11 @@ _WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conve
 def worker_environment(environ=None, work_dir="/tmp"):
     """The scrubbed environment of the worker child."""
     environ = os.environ if environ is None else environ
-    env = {name: environ[name] for name in WORKER_ENV_PASSTHROUGH if name in environ}
+    # The passthrough list names what the interpreter needs; the scrub list is checked as well, so a
+    # name added to the first by mistake (an AWS_* or ECS_* variable, which on an AWS Batch task carry
+    # the job role's credential endpoint) still never reaches the child.
+    env = {name: environ[name] for name in WORKER_ENV_PASSTHROUGH
+           if name in environ and not conversion_service.is_scrubbed(name)}
     env.update({"HOME": "/tmp", "TMPDIR": work_dir, "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONNOUSERSITE": "1"})
     return env
@@ -716,7 +722,7 @@ def run_worker(job, work_dir, timeout_seconds=None):
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_group(process)
-            raise RuntimeError(
+            raise conversion_service.WorkerOutOfTime(
                 f"The conversion of {job['input_name']} did not finish within {int(timeout)} seconds "
                 f"and was stopped. Reduce the model's size and run the conversion again.")
         finally:
@@ -731,19 +737,26 @@ def run_worker(job, work_dir, timeout_seconds=None):
     except (OSError, ValueError):
         pass
     if result is not None and result.get("ok"):
+        global _peak_worker_memory_mib
+        peak = result.get("peakMemoryMiB")
+        if isinstance(peak, (int, float)) and not isinstance(peak, bool):
+            _peak_worker_memory_mib = max(peak, _peak_worker_memory_mib or 0)
         return result
     if result is None:
         _log_worker_stderr(stderr_path)
         code = process.returncode
         detail = f"was killed by signal {-code}" if code is not None and code < 0 else f"exited with status {code}"
-        raise RuntimeError(
+        # SIGKILL is how a container that reaches its memory limit loses the child (the limit is hit
+        # before the child's own address-space limit), on Lambda and on an AWS Batch task alike.
+        error_type = conversion_service.WorkerKilledForMemory if code == -9 else RuntimeError
+        raise error_type(
             f"The conversion of {job['input_name']} stopped unexpectedly: the converter {detail}. "
-            f"A model larger than the function's memory is the usual cause.")
+            f"A model larger than the {_memory_owner()}'s memory is the usual cause.")
     if result.get("type") == "MemoryError":
         memory = job.get("address_space_bytes")
         limit = f" ({memory / 1024 ** 2:,.0f} MB)" if memory else ""
-        raise RuntimeError(
-            f"{job['input_name']} needs more memory to convert than this function has{limit}. "
+        raise conversion_service.WorkerKilledForMemory(
+            f"{job['input_name']} needs more memory to convert than this {_memory_owner()} has{limit}. "
             f"Reduce the model's size and run the conversion again.")
     message = _without_work_dir(str(result.get("message") or "The conversion failed"), work_dir)
     if result.get("type") not in USER_ERRORS:
@@ -752,7 +765,7 @@ def run_worker(job, work_dir, timeout_seconds=None):
         logger.error(f"Conversion worker failed with {str(result.get('type'))[:100]}: {message[:2000]}")
         _log_worker_stderr(stderr_path)
         raise RuntimeError(f"The conversion of {job['input_name']} failed unexpectedly. "
-                           f"The function's log has the detail.")
+                           f"The {_memory_owner()}'s log has the detail.")
     raise ValueError(message)
 
 
@@ -784,7 +797,56 @@ def _log_worker_stderr(path):
         logger.error(f"Conversion worker stderr: {tail}")
 
 
-def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version="", options=None):
+# The phase timer of the run in progress (read by convert() for conversion-run.json).
+_phase_timer = conversion_service.PhaseTimer()
+# The largest peak resident memory (MiB) a worker of the run in progress reported; None before one has.
+_peak_worker_memory_mib = None
+
+
+def _memory_owner():
+    """What owns the memory a message names: the job on an AWS Batch task, the function on Lambda."""
+    return "job" if size_check.compute_tier() == size_check.TIER_BATCH else "function"
+
+
+def _escalation(reason, message, name, input_bytes, input_extension, output_filetype, resource=None):
+    """The named result a run returns instead of an error when it should continue on AWS Batch."""
+    required = None
+    if input_bytes is not None:
+        required = -(-size_check.required_memory_bytes(input_extension, input_bytes, output_filetype) // size_check.MB)
+    memory = size_check.memory_limit_bytes()
+    return conversion_service.escalation_result(
+        reason, message, input_name=name, input_bytes=input_bytes,
+        pair=f"{input_extension} to {output_filetype}", required_memory_mib=required,
+        limit_bytes_by_task_mib=size_check.limits_by_task_memory(input_extension, output_filetype),
+        min_task_memory_mib=(memory // size_check.MB) if memory else 0, resource=resource)
+
+
+def _uncompressed_escalation(message, name, uncompressed_bytes, input_extension, output_filetype):
+    """The named result of a compressed package (3MF) whose declared uncompressed size is over the
+    function's memory: ``inputBytes`` is the declared uncompressed size and the limits are per
+    uncompressed byte, so the router compares like with like."""
+    required = -(-size_check.required_memory_bytes_uncompressed(
+        input_extension, uncompressed_bytes, output_filetype) // size_check.MB)
+    memory = size_check.memory_limit_bytes()
+    return conversion_service.escalation_result(
+        conversion_service.REASON_SIZE, message, input_name=name, input_bytes=uncompressed_bytes,
+        pair=f"{input_extension} to {output_filetype}", required_memory_mib=required,
+        limit_bytes_by_task_mib=size_check.uncompressed_limits_by_task_memory(input_extension, output_filetype),
+        min_task_memory_mib=(memory // size_check.MB) if memory else 0, resource=size_check.MEMORY_RESOURCE)
+
+
+def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version="", options=None,
+                         allow_escalation=False):
+    """Convert the input and upload the output; returns the completion message of a run that left
+    referenced files out (None otherwise). With ``allow_escalation`` on the Lambda tier, a run the
+    function cannot finish (an input over its limits, a worker that ran out of memory or time, a
+    referenced file over its limits) raises ``EscalationRequired`` carrying the named result instead of
+    the error."""
+    escalation_allowed = bool(allow_escalation) and size_check.compute_tier() == size_check.TIER_LAMBDA
+    global _peak_worker_memory_mib
+    _peak_worker_memory_mib = None
+    _phase_timer.reset()
+    _phase_timer.phase("head")
     input_bucket, input_key = input_path.replace("s3://", "").split("/", 1)
     output_bucket, output_key = output_path.replace("s3://", "").split("/", 1)
     logger.info(f"Converting s3://{input_bucket}/{input_key} to {output_filetype}")
@@ -819,10 +881,21 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     # size, the limit and the resource, instead of ending in an out-of-memory kill or a full disk. The
     # same limit, less the input, bounds the files the input references.
     input_size, input_etag = head_input(input_bucket, input_key, input_version)
-    size_limit = size_check.check_size(
-        os.path.basename(input_key), input_s3_asset_extension, input_size,
-        memory_bytes=size_check.memory_limit_bytes(), disk_free_bytes=size_check.free_disk_bytes(tempfile.gettempdir()),
-        output_extension=output_filetype)
+    input_name = os.path.basename(input_key)
+    # A limit of the input's own format that no memory lifts is refused here on both tiers, and never
+    # escalated.
+    conversion_service.check_format_limit(input_name, input_s3_asset_extension, input_size)
+    try:
+        size_limit = size_check.check_size(
+            input_name, input_s3_asset_extension, input_size,
+            memory_bytes=size_check.memory_limit_bytes(), disk_free_bytes=size_check.free_disk_bytes(tempfile.gettempdir()),
+            output_extension=output_filetype)
+    except size_check.InputTooLargeError as error:
+        if not escalation_allowed:
+            raise
+        raise conversion_service.EscalationRequired(_escalation(
+            conversion_service.REASON_SIZE, str(error), input_name, error.total_bytes or input_size,
+            input_s3_asset_extension, output_filetype, error.resource)) from error
 
     # Download, convert and upload inside a working directory of this invocation's own, removed
     # before returning either way. The Lambda execution environment is reused between invocations
@@ -834,6 +907,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
     # directory holds is uploaded as output: the input has to be somewhere the upload cannot see it.
     work_dir = tempfile.mkdtemp()
     try:
+        _phase_timer.phase("download")
         input_dir = os.path.join(work_dir, 'input')
         export_dir = os.path.join(work_dir, 'export')
         os.makedirs(input_dir)
@@ -857,9 +931,29 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
                  expected_size=input_size)
         # An input whose text is not UTF-8 fails here, before its references are read or fetched.
         check_input_text(temp_file, input_s3_asset_extension, os.path.basename(input_key))
+        # A package compressed on disk (3MF) needs memory for what it holds, not for its zip: its
+        # declared uncompressed size is read from the central directory and checked before any part
+        # is parsed.
+        if size_check.uncompressed_expansion_factor(input_s3_asset_extension) is not None:
+            try:
+                size_check.check_uncompressed_size(
+                    input_name, input_s3_asset_extension, size_check.declared_uncompressed_bytes(temp_file),
+                    memory_bytes=size_check.memory_limit_bytes(), output_extension=output_filetype)
+            except size_check.InputTooLargeError as error:
+                # Memory-driven like the size check before the download, so it escalates the same way,
+                # but only when the largest AWS Batch job size would admit the declared size; otherwise
+                # it stays the refusal it is on every tier.
+                largest = max(size_check.uncompressed_limits_by_task_memory(
+                    input_s3_asset_extension, output_filetype).values(), default=None)
+                if not escalation_allowed or largest is None or error.total_bytes > largest:
+                    raise
+                raise conversion_service.EscalationRequired(_uncompressed_escalation(
+                    str(error), input_name, error.total_bytes, input_s3_asset_extension,
+                    output_filetype)) from error
         memory_bytes = size_check.memory_limit_bytes()
         handling = options.resolved_reference_handling(output_filetype)
         scene_input = input_s3_asset_extension in referenced_files.USD_EXTENSIONS or input_s3_asset_extension == ".dae"
+        _phase_timer.phase("references")
 
         def scan(batch):
             # The scanned formats' references are read in a worker child, like the conversion itself.
@@ -885,6 +979,15 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
                                      if handling == "selected-only" else None)),
             logger=logger, scan=scan)
         skipped_entries = list(getattr(fetched, "skipped_entries", None) or [])
+        if escalation_allowed and getattr(fetched, "skipped_for_size_count", 0):
+            # Files the model references were left out for size: a larger job can include them. The job is
+            # sized from the input and the declared sizes of every referenced file found (fetched or left
+            # out), so the larger run does not skip them again.
+            raise conversion_service.EscalationRequired(_escalation(
+                conversion_service.REASON_SIZE,
+                f"{input_name} references files the function's size limits leave out.", input_name,
+                input_size + max(getattr(fetched, "declared_bytes", 0) or 0, 0), input_s3_asset_extension,
+                output_filetype, size_check.MEMORY_RESOURCE))
         # MISSING_REFERENCES fail stops here, before the conversion, naming the files.
         if options.missing_references == "fail" and skipped_entries:
             raise ValueError(incomplete_result.refusal(os.path.basename(input_key), skipped_entries))
@@ -895,6 +998,7 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         outputFileName, _ = os.path.splitext(os.path.basename(input_key)) #get the original file name without extension
         outputFileName = f"{outputFileName}{output_filetype}" #add final output extension
         output_file = os.path.join(export_dir, outputFileName)
+        _phase_timer.phase("convert")
         worker_result = run_worker({
             "input_file": temp_file,
             "input_dir": input_dir,
@@ -907,8 +1011,12 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
             "input_name": os.path.basename(input_key),
             "address_space_bytes": size_check.address_space_limit_bytes(),
             "tool_timeout_seconds": int(worker_timeout_seconds()),
+            "max_scene_nodes": expansion_bounds.max_scene_nodes(memory_bytes),
             "file_size_bytes": size_check.file_size_limit_bytes(size_check.free_disk_bytes(work_dir)),
+            # The triangle budget of the scene walks: the constant one on Lambda, the task's own on Batch.
+            "max_triangles": size_check.triangle_budget(output_extension=output_filetype),
         }, work_dir) or {}
+        _phase_timer.phase("upload")
         removed = ((worker_result.get("report") or {}).get("removed")) or []
         if removed:
             logger.info(f"{len(removed)} name(s) a USD layer holds were removed before it was opened: "
@@ -944,6 +1052,28 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         for relative_name in exported:
             uploadV2(output_bucket, f"{output_key}{relative_name}",
                      os.path.join(export_dir, relative_name)) #upload to storage
+        _phase_timer.stop()
+    except (conversion_service.WorkerKilledForMemory, conversion_service.WorkerOutOfTime) as error:
+        _phase_timer.stop()
+        if not escalation_allowed:
+            if size_check.compute_tier() == size_check.TIER_LAMBDA:
+                # The function reports the error type by name to the workflow, and it has always been
+                # RuntimeError: the named subclass is for the escalation and the Batch task's log line.
+                raise RuntimeError(str(error)) from error
+            raise
+        killed = isinstance(error, conversion_service.WorkerKilledForMemory)
+        raise conversion_service.EscalationRequired(_escalation(
+            conversion_service.REASON_MEMORY if killed else conversion_service.REASON_TIME, str(error),
+            input_name, input_size, input_s3_asset_extension, output_filetype,
+            size_check.MEMORY_RESOURCE if killed else None)) from error
+    except referenced_files.ReferencedFileError as error:
+        _phase_timer.stop()
+        if not (escalation_allowed and error.for_size):
+            raise
+        raise conversion_service.EscalationRequired(_escalation(
+            conversion_service.REASON_SIZE, str(error), input_name,
+            input_size + (error.needed_bytes or 0), input_s3_asset_extension, output_filetype,
+            size_check.MEMORY_RESOURCE)) from error
     finally:
         reap_stray_processes()
         remove_work_dir(work_dir)
@@ -997,6 +1127,14 @@ def incomplete_message(input_name, fetched):
             f"Reduce the size of the referenced files and run the conversion again.")
 
 
+def remember_attempt_deadline_epoch(epoch_seconds, now_wall=None, now_monotonic=None):
+    """Record when an AWS Batch attempt ends (wall-clock epoch seconds), for the worker's time limit."""
+    global _invocation_deadline
+    now_wall = time.time() if now_wall is None else now_wall
+    now_monotonic = time.monotonic() if now_monotonic is None else now_monotonic
+    _invocation_deadline = now_monotonic + (float(epoch_seconds) - now_wall)
+
+
 def _remember_deadline(context):
     """Record when this invocation ends, from the Lambda context, for the worker's time limit."""
     global _invocation_deadline
@@ -1039,6 +1177,41 @@ def lambda_handler(event, context):
     if 'TaskToken' in data:
         raise Exception("VAMS Workflow TaskToken found in pipeline input. Make sure to register this pipeline in VAMS as NOT needing a task token callback.")
 
+    return convert(data)
+
+
+def _task_vcpu():
+    try:
+        value = int(os.environ.get("VAMS_TASK_VCPU", ""))
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def write_run_document(document):
+    """Write conversion-run.json under the run's results folder. Best effort, like the incomplete
+    result: the conversion's outcome stands without it."""
+    if not _results_location:
+        logger.info("No results location for this run; the tier is in the log only")
+        return
+    bucket, prefix = _results_location
+    try:
+        _s3_client_for_bucket(bucket).put_object(
+            Bucket=bucket, Key=prefix + conversion_service.RUN_DOCUMENT_FILENAME,
+            Body=json.dumps(document, indent=2).encode("utf-8"), ContentType="application/json")
+    except Exception as e:  # noqa: BLE001 - the conversion's outcome stands
+        logger.warning(f"Could not write {conversion_service.RUN_DOCUMENT_FILENAME} ({type(e).__name__})")
+
+
+def convert(data):
+    """The whole conversion of one request, the same on both compute tiers (the Lambda handler and
+    ``batch_entry.py`` both call it): read the input configuration, resolve the run's locations from
+    the manifest, convert, upload, and report.
+
+    ``data`` is the request body (the workflow's task body without its envelope). With
+    ``allowEscalation`` true on the Lambda tier, a run the function cannot finish returns the named
+    result (``escalate`` true, with the reason and what the router needs) instead of raising. Returns
+    ``{'statusCode': 200, 'body': message or 'Success'}``, or that result."""
     # VAMS shows this step's log by reading the function's log group, which every run shares, for the
     # lines that contain the run's workflow execution id. A warning about a skipped referenced file
     # names no S3 path that would carry it, so the id goes on every line from here on. A direct
@@ -1070,8 +1243,44 @@ def lambda_handler(event, context):
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
     input_path, output_path, relative_subdir, version_id = resolve_inputs_from_manifest(data)
 
-    message = convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id, options)
+    # conversion-run.json is written only by a deployment that has the Batch tier: its state machine
+    # sends allowEscalation on the Lambda attempt (true or false), and the Batch task always runs it.
+    tier = size_check.compute_tier()
+    run_document_enabled = "allowEscalation" in data or tier == size_check.TIER_BATCH
+    memory = size_check.memory_limit_bytes()
+    task_memory_mib = (memory // size_check.MB) if memory else None
+    try:
+        # The flag is passed only when the state machine set it, so a deployment without the Batch
+        # tier calls the conversion exactly as before.
+        extra = {"allow_escalation": True} if conversion_service.allow_escalation(data) else {}
+        message = convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id,
+                                       options, **extra)
+    except conversion_service.EscalationRequired as escalation:
+        result = escalation.result
+        logger.info(f"The conversion continues on AWS Batch: {conversion_service.REASON_TEXT[result['reason']]}")
+        return result
+    except Exception as e:  # noqa: BLE001 - recorded, then raised unchanged
+        if tier == size_check.TIER_BATCH:
+            # The end of the line: say which tier ran and how it failed, then fail as before. The error text
+            # is the one the job's log and the workflow carry.
+            reason = data.get("escalationReason")
+            reason = reason if reason in conversion_service.ESCALATION_REASONS else None
+            _phase_timer.stop()
+            write_run_document(conversion_service.run_document(
+                tier, task_memory_mib, _task_vcpu(), _phase_timer.seconds, reason=reason,
+                escalated_from=size_check.TIER_LAMBDA if reason else None,
+                message=f"{type(e).__name__}: {e}", failed=True))
+        raise
 
+    if run_document_enabled:
+        reason = data.get("escalationReason")
+        reason = reason if reason in conversion_service.ESCALATION_REASONS else None
+        required = data.get("requiredMemoryMiB")
+        write_run_document(conversion_service.run_document(
+            tier, task_memory_mib, _task_vcpu(), _phase_timer.seconds, reason=reason,
+            escalated_from=size_check.TIER_LAMBDA if reason else None,
+            required_memory_mib=required if isinstance(required, int) and not isinstance(required, bool) else None,
+            message=message, peak_memory_mib=_peak_worker_memory_mib))
     if message:
         logger.warning(message)
     return {

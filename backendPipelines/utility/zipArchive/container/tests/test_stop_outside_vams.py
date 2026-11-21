@@ -13,7 +13,8 @@ job stayed Preparing (holding one of the user's active slots) the whole time.
 - SIGTERM after a VAMS stopper recorded the stop (``stopRequestedAt``: the user's cancel, the
   read-time reconcile, a delete; or the job already ended): nothing is sent, as before (#1125 D24).
 - Hard kill (no SIGTERM): the container heartbeats its own token as well as the VAMS workflow's, so
-  the state's heartbeat timeout ends the run (States.HeartbeatTimeout).
+  the state's heartbeat timeout ends the run (recorded as States.Timeout; the zipArchive pipelineEnd
+  reports it as ZipArchiveHeartbeatLost).
 """
 
 import pytest

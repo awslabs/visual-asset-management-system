@@ -29,11 +29,13 @@ import meshcleanup
 import preprocess
 import printfeatures
 import texturing
+from hfguard import hf_pins
 from model_manager import (
     backup_cache_to_s3,
     ensure_models_cached,
     fetch_rembg_session,
     fetch_repo,
+    model_cache_path,
     resolve_hf_home,
     resolve_rembg_home,
     session_weight_candidates,
@@ -182,6 +184,12 @@ def resolve_settings(allowed: dict, params: dict, model: str) -> dict:
     unknown = sorted(supplied - other_models - set(accepted))
     if unknown:
         logger.info(f"Dropped settings not in config.json: {', '.join(unknown)}")
+    if "INVALIDATE_MODEL_CACHE" in supplied:
+        # A run setting before 2.7.0. The cache is shared by every run of the model, so clearing it is a
+        # deployment decision now.
+        logger.warning("INVALIDATE_MODEL_CACHE is no longer a run setting and was ignored. To start every "
+                       "model on an empty cache, raise app.pipelines.useImageTo3d.modelCacheGeneration "
+                       "and deploy.")
     return settings
 
 
@@ -731,6 +739,14 @@ def run() -> None:
 
     hf_home = resolve_hf_home(model)
     os.environ["HF_HOME"] = hf_home
+    s3_model_prefix = os.environ.get("S3_MODEL_PREFIX", "")
+    # The EFS directory and the S3 prefix are composed by one rule in two places (here, and the CDK job
+    # definition); a disagreement would back one model's directory up over another's, so it stops the run.
+    expected_prefix = f"imageTo3d/{model_cache_path(model)}"
+    if s3_model_prefix.strip("/") != expected_prefix:
+        raise ValueError(f"S3_MODEL_PREFIX is '{s3_model_prefix}' but this model's cache directory is "
+                         f"{hf_home}, whose prefix is '{expected_prefix}'; the job definition and the "
+                         f"container disagree on the model cache layout")
     # rembg reads its weights from U2NET_HOME, which the image points at a baked copy of the default
     # session's file. Moved under the model's cache directory, the S3 backup and restore carry them with
     # the model's own weights, and the baked copy seeds the default session so it never downloads.
@@ -746,8 +762,7 @@ def run() -> None:
         ensure_models_cached(
             hf_home=hf_home,
             s3_bucket=os.environ.get("S3_MODEL_BUCKET", ""),
-            s3_prefix=os.environ.get("S3_MODEL_PREFIX", ""),
-            invalidate=_is_true(settings.get("INVALIDATE_MODEL_CACHE", "false")),
+            s3_prefix=s3_model_prefix,
             # The repos this model declares, so the check asks whether ITS weights are cached rather
             # than whether the cache holds anything -- and so it can answer from a handful of directory
             # reads instead of a walk of the whole tree. The selected background-removal backend's own
@@ -943,7 +958,7 @@ def run() -> None:
     try:
         backup_cache_to_s3(hf_home=hf_home,
                            s3_bucket=os.environ.get("S3_MODEL_BUCKET", ""),
-                           s3_prefix=os.environ.get("S3_MODEL_PREFIX", ""),
+                           s3_prefix=s3_model_prefix,
                            required_files=segmentation_weights)
     except Exception as backup_error:
         logger.warning(f"Backing the model cache up to S3 failed (non-fatal): {backup_error}")
@@ -956,6 +971,12 @@ def run() -> None:
 
 def main() -> None:
     try:
+        # First, before anything imports transformers or diffusers: every HuggingFace download in this
+        # process uses its pinned commit (hfguard/hf_pins.py). Upstream processes install it themselves
+        # through models.base.run_upstream.
+        if not hf_pins.install():
+            raise RuntimeError("huggingface_hub is not installed in this image, so HuggingFace downloads "
+                               "cannot be held to their pinned commits")
         run()
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")

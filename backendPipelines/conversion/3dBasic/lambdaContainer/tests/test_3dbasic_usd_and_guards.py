@@ -235,7 +235,7 @@ def Scope "S" {
         _write_layer(directory / "root.usda", "#usda 1.0\n" + "".join(
             _MESH.replace('"M"', f'"M{i}"') for i in range(4)))
         limit = scene_limits.SceneLimit("root.usda", max_triangles=2)
-        with pytest.raises(ValueError, match="expands past"):
+        with pytest.raises(ValueError, match="expands to more nodes or geometry than this function converts"):
             usd_io.read_usd(str(directory / "root.usda"), str(directory), limit)
 
     def test_a_file_that_is_not_usd_fails_as_a_user_error(self, tmp_path):
@@ -672,3 +672,68 @@ class TestImplicitPrims:
         _write_layer(directory / "prims.usda", '#usda 1.0\ndef Cube "C" {\n}\ndef Sphere "S" {\n    double radius = 0.5\n}\n')
         out = helpers.convert(tmp_path, str(directory / "prims.usda"), ".glb")
         assert len(trimesh.load(out).geometry) == 2
+
+
+@pytest.mark.unit
+class TestLinkedLayerTextGuard:
+    def _linked(self, tmp_path):
+        directory = tmp_path / "input"
+        directory.mkdir()
+        _write_layer(directory / "geo.usda", "#usda 1.0\n" + _MESH)
+        _write_layer(directory / "root.usda", '#usda 1.0\n(\n    subLayers = [@./geo.usda@]\n)\n')
+        out = tmp_path / "export"
+        out.mkdir()
+        return directory, out
+
+    def test_usda_output_refuses_a_linked_layer_with_an_oversize_array_before_writing(self, tmp_path, monkeypatch):
+        directory, out = self._linked(tmp_path)
+        monkeypatch.setattr(usd_io, "USDA_MAX_ARRAY_TEXT_BYTES", 100)
+        with pytest.raises(ValueError, match=r"geo\.usda.*usdc"):
+            usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usda"), ".usda")
+        assert list(out.iterdir()) == []
+
+    def test_usdc_output_is_not_subject_to_the_text_guard(self, tmp_path, monkeypatch):
+        directory, out = self._linked(tmp_path)
+        monkeypatch.setattr(usd_io, "USDA_MAX_ARRAY_TEXT_BYTES", 100)
+        usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usdc"), ".usdc")
+        assert (out / "geo.usdc").is_file()
+
+    def test_usda_output_below_the_limit_converts(self, tmp_path):
+        directory, out = self._linked(tmp_path)
+        usd_io.convert_linked(str(directory / "root.usda"), str(directory), str(out / "root.usda"), ".usda")
+        assert (out / "geo.usda").is_file()
+
+
+@pytest.mark.unit
+class TestLayerTextGuardEstimates:
+    def test_a_layer_that_cannot_be_opened_is_refused_with_its_name(self):
+        with pytest.raises(ValueError, match=r"geo\.usda could not be read"):
+            usd_io.check_layer_array_text(None, "geo.usda")
+
+    def test_the_message_calls_the_size_an_estimate(self, monkeypatch):
+        layer = Sdf.Layer.CreateAnonymous(".usda")
+        layer.ImportFromString("#usda 1.0\n" + _MESH)
+        monkeypatch.setattr(usd_io, "USDA_MAX_ARRAY_TEXT_BYTES", 100)
+        with pytest.raises(ValueError, match="an estimated"):
+            usd_io.check_layer_array_text(layer, "geo.usda")
+
+    def test_short_integers_are_counted_by_their_digits_not_the_widest_entry(self, monkeypatch):
+        from pxr import Vt
+        monkeypatch.setattr(usd_io, "USDA_MAX_ARRAY_TEXT_BYTES", 1000)
+        one_digit = Vt.IntArray([1] * 200)  # 200 x (1 + 2) = 600 bytes; the per-entry bound says 4400
+        assert usd_io._layer_array_text_estimate(one_digit) == 600
+        wide = Vt.IntArray([12345678] * 200)
+        assert usd_io._layer_array_text_estimate(wide) == 200 * (8 + 2)
+
+    def test_only_the_first_time_samples_of_an_attribute_are_read(self, monkeypatch):
+        layer = Sdf.Layer.CreateAnonymous(".usda")
+        stage = Usd.Stage.Open(layer)
+        prim = stage.DefinePrim("/P")
+        attribute = prim.CreateAttribute("a", Sdf.ValueTypeNames.Int)
+        for frame in range(usd_io.LAYER_SAMPLES_CHECKED + 40):
+            attribute.Set(frame, frame)
+        queried = []
+        original = layer.QueryTimeSample
+        monkeypatch.setattr(type(layer), "QueryTimeSample", lambda self, path, time: queried.append(time) or original(path, time), raising=False)
+        usd_io.check_layer_array_text(layer, "x")
+        assert len(queried) <= usd_io.LAYER_SAMPLES_CHECKED

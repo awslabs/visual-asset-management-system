@@ -57,10 +57,19 @@ DEPLOYMENT_PARAMETERS = {
     "sessionSecretPrefix": ("EDH_SESSION_SECRET_PREFIX", re.compile(r"^[A-Za-z0-9/_+=.@-]+/\Z")),
 }
 _SLUG = re.compile(r"[^A-Za-z0-9_-]")
-_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable", "InvalidSnapshot.NotFound")
+_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Unavailable")
+_SNAPSHOT_NOT_FOUND_CODE = "InvalidSnapshot.NotFound"
+# The DeregisterImage results of a snapshot that is gone, or kept because another AMI uses it.
+_SNAPSHOT_DELETE_SETTLED_CODES = ("success", "skipped")
 # The DescribeImages errors of a parent AMI id EC2 does not find, and the refusal they become.
 _PARENT_NOT_FOUND_CODES = ("InvalidAMIID.NotFound", "InvalidAMIID.Malformed")
 PARENT_IMAGE_NOT_FOUND = "the parent image could not be found"
+# Refusal texts that name no recipe input and no AWS error code; the detail goes to the log only.
+COMPONENT_PLACEHOLDER_UNRESOLVED = "a component document names a placeholder the recipe does not declare"
+COMPONENT_DEPLOYMENT_VALUE_MALFORMED = "a component document names a deployment value not in its expected form"
+PARENT_SSM_PARAMETER_UNREADABLE = "the parent image's SSM parameter could not be read"
+PARENT_EDH_STACK_NOT_LISTED = "EDH lists no stack of the recipe's kind with the parent image's name"
+PARENT_REFERENCE_UNSUPPORTED = "the parent image reference is not supported"
 # The DescribeInstanceTypes error of a call naming an instance type EC2 does not offer.
 _INSTANCE_TYPE_NOT_OFFERED_CODE = "InvalidInstanceType"
 # The root volume's device name when the parent image does not report one.
@@ -200,11 +209,11 @@ def substitute_component_data(data: str, artefacts_bucket: str, recipe: Dict[str
 
     resolved = _PLACEHOLDER.sub(resolve, data)
     if unresolved:
-        raise ComponentDocumentError(
-            f"unresolved placeholder(s) in component document: {', '.join(sorted(set(unresolved)))}")
+        logger.warning(f"Unresolved placeholder(s) in a component document: {', '.join(sorted(set(unresolved)))}")
+        raise ComponentDocumentError(COMPONENT_PLACEHOLDER_UNRESOLVED)
     if malformed:
-        raise ComponentDocumentError(
-            f"deployment value(s) not in the expected form for: {', '.join(sorted(set(malformed)))}")
+        logger.warning(f"Deployment value(s) not in the expected form for: {', '.join(sorted(set(malformed)))}")
+        raise ComponentDocumentError(COMPONENT_DEPLOYMENT_VALUE_MALFORMED)
     return resolved
 
 
@@ -241,15 +250,19 @@ def resolve_parent_image(parent_image: str, *, ctx: ImageBuilderContext, edh_cli
         try:
             return ctx.ssm.get_parameter(Name=name)["Parameter"]["Value"]
         except ClientError as err:
-            raise ParentImageUnavailable(f"SSM parameter {name} could not be read ({err.response['Error']['Code']})")
+            logger.warning(f"Parent image SSM parameter {name} could not be read "
+                           f"({err.response.get('Error', {}).get('Code')})")
+            raise ParentImageUnavailable(PARENT_SSM_PARAMETER_UNREADABLE)
     if parent_image.startswith(PARENT_EDH_STACK_PREFIX):
         stack_name = parent_image[len(PARENT_EDH_STACK_PREFIX):]
         for record in edh_client.list_software_stacks(KIND_BY_IMAGE_KIND[kind]):
             if (isinstance(record, dict) and str(record.get(EDH_STACK_NAME_FIELD)) == stack_name
                     and record.get(EDH_STACK_AMI_FIELD)):
                 return str(record[EDH_STACK_AMI_FIELD])
-        raise ParentImageUnavailable(f"EDH lists no {kind} stack named {stack_name!r}")
-    raise ParentImageUnavailable(f"unsupported parent image reference: {parent_image!r}")
+        logger.warning(f"EDH lists no {kind} stack named {stack_name!r}")
+        raise ParentImageUnavailable(PARENT_EDH_STACK_NOT_LISTED)
+    logger.warning(f"Unsupported parent image reference: {parent_image!r}")
+    raise ParentImageUnavailable(PARENT_REFERENCE_UNSUPPORTED)
 
 
 def describe_parent_image(ec2, ami_id: str) -> Dict[str, Any]:
@@ -321,7 +334,8 @@ def visibility_tag(cluster_id: str) -> str:
 
 def ami_tags(recipe: Dict[str, Any], ctx: ImageBuilderContext) -> Dict[str, str]:
     """The tag set the built AMI and its snapshots carry: the VAMS tags plus the EDH cluster's
-    visibility tag, applied by the distribution configuration and again once the image is built."""
+    visibility tag, applied to both by the distribution configuration and to the AMI again once the
+    image is built."""
     return {**_tags(recipe, ctx), visibility_tag(ctx.cluster_id): VISIBILITY_TAG_VALUE}
 
 
@@ -442,8 +456,9 @@ def cancel_image(ctx: ImageBuilderContext, image_build_version_arn: str) -> None
     ctx.ib.cancel_image_creation(imageBuildVersionArn=image_build_version_arn)
 
 
-def tag_ami(ctx: ImageBuilderContext, ami_id: str, snapshot_ids: List[str], tags: Dict[str, str]) -> None:
-    ctx.ec2.create_tags(Resources=[ami_id, *snapshot_ids], Tags=[{"Key": k, "Value": v} for k, v in tags.items()])
+def tag_ami(ctx: ImageBuilderContext, ami_id: str, tags: Dict[str, str]) -> None:
+    """Tag the AMI. Its snapshots carry the distribution configuration's tags, which Image Builder writes."""
+    ctx.ec2.create_tags(Resources=[ami_id], Tags=[{"Key": k, "Value": v} for k, v in tags.items()])
 
 
 def instances_using_ami(ctx: ImageBuilderContext, ami_id: str) -> List[str]:
@@ -456,18 +471,36 @@ def instances_using_ami(ctx: ImageBuilderContext, ami_id: str) -> List[str]:
                    for instance in reservation.get("Instances", [])})
 
 
-def _ignore_not_found(call, **kwargs) -> None:
+def _error_code(err: ClientError) -> Optional[str]:
+    return err.response.get("Error", {}).get("Code")
+
+
+def _delete_snapshot(ctx: ImageBuilderContext, ami_id: str, snapshot_id: str) -> None:
+    """Delete one snapshot; one already gone is done, and any other failure is logged, not raised."""
     try:
-        call(**kwargs)
+        ctx.ec2.delete_snapshot(SnapshotId=snapshot_id)
     except ClientError as err:
-        if err.response.get("Error", {}).get("Code") not in _NOT_FOUND_CODES:
-            raise
+        if _error_code(err) != _SNAPSHOT_NOT_FOUND_CODE:
+            logger.error(f"{ami_id}: snapshot {snapshot_id} not deleted ({_error_code(err)})")
+    except Exception as err:
+        logger.error(f"{ami_id}: snapshot {snapshot_id} not deleted ({type(err).__name__})")
 
 
 def deregister_ami(ctx: ImageBuilderContext, ami_id: str, snapshot_ids: List[str]) -> None:
-    _ignore_not_found(ctx.ec2.deregister_image, ImageId=ami_id)
-    for snapshot in snapshot_ids:
-        _ignore_not_found(ctx.ec2.delete_snapshot, SnapshotId=snapshot)
+    """Deregister the AMI and delete its snapshots in the same call. EC2 keeps a snapshot another AMI also
+    uses. A snapshot EC2 reports it did not delete for another reason, and every recorded snapshot of an AMI
+    already gone, is then deleted on its own; a delete that fails is logged and not retried."""
+    try:
+        response = ctx.ec2.deregister_image(ImageId=ami_id, DeleteAssociatedSnapshots=True)
+    except ClientError as err:
+        if _error_code(err) not in _NOT_FOUND_CODES:
+            raise
+        leftover = list(snapshot_ids)
+    else:
+        leftover = [result["SnapshotId"] for result in response.get("DeleteSnapshotResults") or []
+                    if result.get("SnapshotId") and result.get("ReturnCode") not in _SNAPSHOT_DELETE_SETTLED_CODES]
+    for snapshot_id in leftover:
+        _delete_snapshot(ctx, ami_id, snapshot_id)
 
 
 def delete_image_build(ctx: ImageBuilderContext, image_build_version_arn: str) -> None:

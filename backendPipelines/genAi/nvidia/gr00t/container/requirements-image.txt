@@ -1,0 +1,11 @@
+# What the GR00T image installs besides Isaac-GR00T's own dependencies (its pyproject.toml with the
+# `base` extra, at the Dockerfile's STABLE_COMMIT). requirements.lock is compiled from both; its header
+# holds the command, run with that pyproject.toml at /workspace/pyproject.toml as in the image. Not named
+# requirements.txt: the pipeline test runner installs a container's requirements.txt for its tests.
+pip
+setuptools>=64.0.0
+wheel
+setuptools_scm[toml]>=6.2
+gpustat
+# The prebuilt wheel flash-attn 2.7.1.post4's own setup selects for torch 2.5, CUDA 12, CPython 3.10.
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.1.post4/flash_attn-2.7.1.post4+cu12torch2.5cxx11abiFALSE-cp310-cp310-linux_x86_64.whl

@@ -28,6 +28,9 @@ GLOBAL_DATABASE_ID = "GLOBAL"
 # Bounds on schema-body prose. A rule or check name is an identifier-like label; a description
 # is free text shown in the UI.
 MAX_RULE_NAME_LENGTH = 256
+# Rule names starting with this prefix are reserved for results an evaluation records itself (the
+# rules of a parent `extends` names that was not found), so no rule of a schema can share one.
+RESERVED_RULE_NAME_PREFIX = "$"
 MAX_DESCRIPTION_LENGTH = 1024
 MAX_REASON_LENGTH = 1024
 # Upper bound of a sweep's continuation token (a Base64 JSON timestamp; far shorter in practice).
@@ -546,6 +549,9 @@ class VamsRulesV1Schema(BaseModel, extra='ignore'):
         if not valid:
             raise ValueError(message)
         for rule_name, rule_def in rules.items():
+            if str(rule_name).startswith(RESERVED_RULE_NAME_PREFIX):
+                logger.info(f"vams-rules-v1 rule '{rule_name}' uses the reserved name prefix")
+                raise ValueError(f"Rule names may not start with {RESERVED_RULE_NAME_PREFIX}")
             if not isinstance(rule_def, dict):
                 logger.info(f"vams-rules-v1 rule '{rule_name}' is not an object")
                 raise ValueError("Every rule must be an object")

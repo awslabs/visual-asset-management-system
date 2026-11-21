@@ -20,9 +20,11 @@ import posixpath
 import re
 import shutil
 import tempfile
+import time
 
 import numpy as np
 
+import expansion_bounds
 import scene_limits
 import vertex_normals
 from common.logger import safeLogger
@@ -219,6 +221,10 @@ def convert_linked(path, input_dir, output_file, output_extension, output_path_e
     out_dir = os.path.dirname(os.path.abspath(output_file))
     graph = dependency_graph(source, root)
     layers = _leaves_first(graph, source)
+    if output_extension == ".usda":
+        # Refused before anything is written: the text writer drops an array this size without an error.
+        for local in layers:
+            check_layer_array_text(Sdf.Layer.FindOrOpen(local), os.path.relpath(local, root))
     files = sorted({t for targets in graph.values() for t in targets if not _is_layer_name(t)})
 
     def destination(local):
@@ -332,10 +338,18 @@ def _is_layer_name(name):
     return str(name).lower().endswith((".usd", ".usda", ".usdc"))
 
 
-def read_usd(path, input_dir, limit=None):
-    """``(scene, meters_per_unit, up_axis)`` of a USD file. ``up_axis`` is 'y' or 'z'."""
+def read_usd(path, input_dir, limit=None, deadline=None):
+    """``(scene, meters_per_unit, up_axis)`` of a USD file. ``up_axis`` is 'y' or 'z'.
+
+    The scene's size is bounded twice. Before the stage is opened the prims its composition arcs
+    describe are counted from the layers (``expansion_bounds.usd_composed_prims``), so a file whose
+    references multiply does not compose; ``limit`` (default: ``CONVERSION_MAX_SCENE_NODES`` nodes)
+    is the bound of that count and of the walk below. ``deadline`` (a ``time.monotonic()`` value) ends
+    the walk with a refusal once it passes."""
     import trimesh
     Ar, Gf, Sdf, Tf, Usd, UsdGeom, UsdShade, UsdUtils, Vt = _import_pxr()
+    name = os.path.basename(path)
+    limit = limit or scene_limits.SceneLimit(name, max_nodes=expansion_bounds.CONVERSION_MAX_SCENE_NODES)
     skipped = []
     confine_dependencies(path, input_dir, skipped)
     if skipped:
@@ -343,22 +357,32 @@ def read_usd(path, input_dir, limit=None):
                        + "; ".join(f"{name[:100]} ({reason})" for name, reason, _ in skipped[:5]))
     allowed_root = os.path.realpath(input_dir)
     try:
+        prims = expansion_bounds.usd_composed_prims(path, limit.max_nodes)
+    except expansion_bounds.ExpansionCycle:
+        raise ValueError(f"{name}: a prim in the USD scene composes itself through its references, so the "
+                         f"scene cannot be converted.")
+    if not limit.expect(prims):
+        raise ValueError(f"{name}: the USD scene expands to more than {limit.max_nodes:,} prims through its "
+                         f"references, more than this function converts.")
+    try:
         stage = Usd.Stage.Open(path)
     except Exception as e:  # noqa: BLE001
-        raise ValueError(f"{os.path.basename(path)} could not be opened as USD: {e}")
+        raise ValueError(f"{name} could not be opened as USD: {e}")
     if stage is None:
-        raise ValueError(f"{os.path.basename(path)} could not be opened as USD")
+        raise ValueError(f"{name} could not be opened as USD")
     meters = UsdGeom.GetStageMetersPerUnit(stage) or USD_DEFAULT_METERS_PER_UNIT
     up = str(UsdGeom.GetStageUpAxis(stage)).lower()
     up = 'z' if up == 'z' else 'y'
-    limit = limit or scene_limits.SceneLimit(os.path.basename(path))
     scene = trimesh.Scene()
     cache = UsdGeom.XformCache()
     textures = {}
     count = 0
     for prim in Usd.PrimRange(stage.GetPseudoRoot(), Usd.TraverseInstanceProxies()):
         if not limit.visit():
-            break
+            raise ValueError(_walk_refusal(name, limit))
+        if deadline is not None and time.monotonic() > deadline:
+            raise ValueError(f"{name}: the USD scene expands to too many nodes to read in the time this "
+                             f"function has; {limit.nodes:,} nodes were read before it ran out.")
         imageable = UsdGeom.Imageable(prim)
         if not imageable or not prim.IsActive():
             continue
@@ -380,9 +404,7 @@ def read_usd(path, input_dir, limit=None):
         faces = len(geometry.faces) if hasattr(geometry, "faces") else 0
         limit.add(len(geometry.vertices), faces)
         if limit.reached:
-            raise ValueError(
-                f"{os.path.basename(path)} expands past the size this function converts "
-                f"({limit.what}); reduce the scene's instancing or size.")
+            raise ValueError(_walk_refusal(name, limit))
         count += 1
         scene.add_geometry(geometry, node_name=str(prim.GetPath()).strip("/").replace("/", "_") or "geometry",
                            geom_name=str(prim.GetPath()).strip("/").replace("/", "_") or "geometry")
@@ -392,6 +414,11 @@ def read_usd(path, input_dir, limit=None):
                    if layers else "")
         raise ValueError(f"{os.path.basename(path)} contains no geometry, so there is nothing to convert.{missing}")
     return scene, float(meters), up
+
+
+def _walk_refusal(name, limit):
+    return (f"{name}: the USD scene expands to more nodes or geometry than this function converts "
+            f"(more than {limit.max_nodes:,} nodes, {limit.max_triangles:,} triangles).")
 
 
 # Segments around the axis of a tessellated Cylinder, Cone or Capsule and the subdivision of a
@@ -622,6 +649,172 @@ def placed_reference(from_name, to_name, extension):
     return relative if relative.startswith(".") else "./" + relative
 
 
+# usd-core's text writer drops, without an error, any one array whose text is 2 GiB or more: Layer.Save()
+# returns True and the file holds the prim's other attributes but not the array. Measured on usd-core
+# 26.11 with an int array of 8-digit values (10 bytes an entry): 214,687,500 entries (2,146,875,055 bytes of
+# text) were written whole and 217,500,000 (2,175,000,055) were dropped, so the limit is the signed 32-bit
+# length of the text, 2,147,483,648. The bound is that less 7 percent. It is a text size, not an entry
+# count: the same 330 million entries are written whole as short numbers and dropped as long ones.
+USDA_MAX_ARRAY_TEXT_BYTES = 2_000_000_000
+# What an entry takes as text: an int is its digits and ", "; a point or a normal (vec3f) measured 37.2 bytes
+# on random float32 (the longest text a float32 has), so 40 is used; a texture coordinate (vec2f) is taken as
+# 27. A mesh with arrays this size is refused even when its numbers are short, and the message says what to
+# do.
+USDA_BYTES_PER_VEC3F = 40
+USDA_BYTES_PER_VEC2F = 27
+USDA_SEPARATOR_BYTES = 2
+# A crate (.usdc, and the layer inside a .usdz) compresses each array as one LZ4 block, and LZ4 takes
+# at most 0x7E000000 bytes (2,113,929,216) of input: a larger array writes, then fails at read with a
+# decompression error (measured on single-mesh crates of 3 and 6 GiB; a 4 GiB crate of 16 meshes read).
+USDC_MAX_ARRAY_BYTES = 0x7E000000
+
+# (array, entries per vertex or face, bytes per entry in a crate) of the arrays write_usd authors for a mesh.
+_MESH_ARRAYS = (("face vertex indices", "faces3", 4), ("face vertex counts", "faces", 4),
+                ("points", "vertices", 12), ("normals", "vertices", 12), ("texture coordinates", "vertices", 8))
+
+
+def _index_text_bytes(faces, vertices):
+    """The text size of a face-vertex-index array: its entries' digits plus a separator each. Counted
+    exactly (one pass per digit count over the array, no copy) once a cheap upper bound reaches the
+    limit, since an index is usually shorter than the longest one."""
+    entries = int(faces.size) if hasattr(faces, "size") else len(faces) * 3
+    upper = entries * (len(str(max(vertices, 1))) + USDA_SEPARATOR_BYTES)
+    if upper < USDA_MAX_ARRAY_TEXT_BYTES or not hasattr(faces, "size"):
+        return upper
+    flat = np.asarray(faces).reshape(-1)
+    digits = int(np.count_nonzero(flat >= 0))
+    for width in range(1, len(str(max(vertices, 1)))):
+        digits += int(np.count_nonzero(flat >= 10 ** width))
+    return digits + entries * USDA_SEPARATOR_BYTES
+
+
+def _text_array_sizes(geometry, vertices, faces):
+    """``(array name, text bytes)`` of each array a mesh's .usda text holds that can be large."""
+    faces_array = getattr(geometry, "faces", None)
+    sizes = []
+    if faces:
+        sizes.append(("face vertex indices", _index_text_bytes(faces_array, vertices)))
+        sizes.append(("face vertex counts", faces * (1 + USDA_SEPARATOR_BYTES)))
+    sizes.append(("points", vertices * USDA_BYTES_PER_VEC3F))
+    if faces:
+        sizes.append(("normals", vertices * USDA_BYTES_PER_VEC3F))
+        sizes.append(("texture coordinates", vertices * USDA_BYTES_PER_VEC2F))
+    return sizes
+
+
+def check_array_bounds(scene, output_extension, input_name="model"):
+    """Refuse, before anything is written, a mesh with an array the output format cannot hold: one whose
+    text would reach ``USDA_MAX_ARRAY_TEXT_BYTES`` for ``.usda`` (the text writer drops it silently), or
+    past ``USDC_MAX_ARRAY_BYTES`` bytes for ``.usdc`` and ``.usdz`` (the crate cannot be read back). The
+    message names the array and suggests another output. Applies on both compute tiers."""
+    geometries = scene.geometry.values() if hasattr(scene, "geometry") else [scene]
+    text = output_extension == ".usda"
+    for geometry in geometries:
+        points = getattr(geometry, "vertices", None)
+        faces_array = getattr(geometry, "faces", None)
+        vertices = len(points) if points is not None else 0
+        faces = len(faces_array) if faces_array is not None else 0
+        if text:
+            for name, size in _text_array_sizes(geometry, vertices, faces):
+                if size >= USDA_MAX_ARRAY_TEXT_BYTES:
+                    raise ValueError(
+                        f"{input_name} has a mesh whose {name} array would be about {size / 1e9:,.1f} GB of text, "
+                        f"more than the {USDA_MAX_ARRAY_TEXT_BYTES / 1e9:,.1f} GB a .usda array can hold (a larger "
+                        f"array is dropped without an error when the text is written). Convert it to .usdc "
+                        f"instead.")
+            continue
+        counts = {"vertices": vertices, "faces": faces, "faces3": 3 * faces}
+        for name, key, size in _MESH_ARRAYS:
+            if counts[key] * size > USDC_MAX_ARRAY_BYTES:
+                raise ValueError(
+                    f"{input_name} has a mesh whose {name} array is {counts[key] * size / 1024 ** 3:,.1f} GiB, "
+                    f"more than the {USDC_MAX_ARRAY_BYTES / 1024 ** 3:,.1f} GiB one array of a {output_extension} "
+                    f"file can hold (it would write but could not be read back). Convert it to another "
+                    f"format such as .glb or .stl, or split the model into several meshes.")
+
+
+def _layer_entry_text_bytes(value):
+    """The text bytes one entry of a ``Vt`` array takes in a .usda layer, or None when ``value`` is not a
+    numeric array (strings, tokens and paths are not bounded here)."""
+    kind = type(value).__name__
+    if not kind.endswith("Array"):
+        return None
+    name = kind[:-5]
+    digits = re.search(r"(\d)[a-z]?$", name)
+    count = 4 if name.startswith("Quat") else int(digits.group(1)) if digits else 1
+    if name.startswith(("Vec", "Quat")) and count == 3:
+        return USDA_BYTES_PER_VEC3F
+    if name.startswith("Vec") and count == 2:
+        return USDA_BYTES_PER_VEC2F
+    if name.startswith(("Vec", "Quat")) and count == 4:
+        return 4 * USDA_BYTES_PER_VEC3F // 3 + USDA_SEPARATOR_BYTES
+    if name.startswith("Matrix"):
+        return count * count * 14 + USDA_SEPARATOR_BYTES
+    if name.startswith(("Float", "Half", "Double")):
+        return 26 + USDA_SEPARATOR_BYTES
+    if name.startswith(("Int", "Uint", "Uchar", "Char", "Short", "Ushort")):
+        return 20 + USDA_SEPARATOR_BYTES
+    return None
+
+
+# The most time samples of one attribute that check_layer_array_text reads (each query loads the sample).
+# A layer with more is checked on its first samples and its default value only.
+LAYER_SAMPLES_CHECKED = 256
+
+
+def _layer_array_text_estimate(value):
+    """An estimate of the .usda text bytes of a ``Vt`` array value, or None when it is not a numeric
+    array. Integers are counted exactly (digits plus a separator) once the cheap upper bound reaches the
+    limit, since most are shorter than the widest; other types use the per-entry figures."""
+    per_entry = _layer_entry_text_bytes(value)
+    if per_entry is None:
+        return None
+    upper = len(value) * per_entry
+    kind = type(value).__name__
+    if upper >= USDA_MAX_ARRAY_TEXT_BYTES and kind.startswith(("Int", "Uint", "Short", "Ushort")):
+        flat = np.abs(np.asarray(value, dtype=np.int64)).reshape(-1)
+        digits = int(flat.size)
+        for width in range(1, 19):
+            digits += int(np.count_nonzero(flat >= 10 ** width))
+        return digits + int(np.count_nonzero(np.asarray(value).reshape(-1) < 0)) + flat.size * USDA_SEPARATOR_BYTES
+    return upper
+
+
+def check_layer_array_text(layer, name="layer"):
+    """Refuse a layer holding an array whose .usda text would reach ``USDA_MAX_ARRAY_TEXT_BYTES``: the
+    text writer drops such an array without an error. Used by convert-linked before it exports each layer
+    as ``.usda``. Sizes are estimates: integers are counted by their digits, other numbers by a per-entry
+    figure for the array type, which can be higher than the text of short numbers. Checks default values
+    and the first ``LAYER_SAMPLES_CHECKED`` time samples of each attribute. A layer that cannot be
+    opened is refused with a message naming it."""
+    from pxr import Sdf
+    if layer is None:
+        raise ValueError(f"{name} could not be read, so its arrays could not be checked for a .usda export.")
+    found = []
+
+    def visit(path):
+        if not path.IsPropertyPath():
+            return
+        spec = layer.GetAttributeAtPath(path)
+        if spec is None:
+            return
+        values = [spec.default] if spec.default is not None else []
+        for time in layer.ListTimeSamplesForPath(path)[:LAYER_SAMPLES_CHECKED]:
+            values.append(layer.QueryTimeSample(path, time))
+        for value in values:
+            size = _layer_array_text_estimate(value)
+            if size is not None and size >= USDA_MAX_ARRAY_TEXT_BYTES:
+                found.append((str(path), size))
+
+    layer.Traverse(Sdf.Path.absoluteRootPath, visit)
+    if found:
+        where, size = max(found, key=lambda item: item[1])
+        raise ValueError(
+            f"{name} has an array, {where}, that would be an estimated {size / 1e9:,.1f} GB of text, more than "
+            f"the {USDA_MAX_ARRAY_TEXT_BYTES / 1e9:,.1f} GB a .usda array can hold (a larger array is dropped "
+            f"without an error when the text is written). Convert it to .usdc instead.")
+
+
 def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, input_name="model",
               output_path_extension=None):
     """Write ``scene`` (a ``trimesh.Scene``, ``Trimesh`` or ``PointCloud``) as USD to ``output_file``
@@ -633,6 +826,7 @@ def write_usd(scene, output_file, meters_per_unit, up_axis, output_extension, in
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, UsdUtils, Vt
     if not isinstance(scene, trimesh.Scene):
         scene = trimesh.Scene(scene)
+    check_array_bounds(scene, output_extension, input_name)
     work_dir = os.path.dirname(os.path.abspath(output_file))
     if output_extension == ".usdz":
         # The layer and its textures are staged beside the export directory, not in it: everything in

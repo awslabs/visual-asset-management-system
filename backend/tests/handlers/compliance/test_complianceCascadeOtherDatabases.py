@@ -24,6 +24,7 @@ shipped permission templates scoped to one database, to both, and with a deny on
 """
 
 import json
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import boto3
@@ -248,7 +249,9 @@ def _seed_cascades(doubles):
                  "authorizedDatabaseIds": json.dumps([DB1, DB2])}
     table.put_item(Item=_cascade_row(
         EXECUTING, PARENT, "executing", "2026-10-30T04:00:00+00:00",
-        nodes=json.dumps({KEY1: "compliant", KEY2: "evaluating"}), **two_nodes))
+        nodes=json.dumps({KEY1: "compliant", KEY2: "evaluating"}),
+        # Its run is still making progress, so no reader takes it for one that stopped.
+        heartbeatAt=datetime.now(timezone.utc).isoformat(), **two_nodes))
     table.put_item(Item=_cascade_row(
         ABORTED, PARENT, "aborted", "2026-10-30T05:00:00+00:00",
         nodes=json.dumps({KEY1: "compliant", KEY2: "non_compliant"}),

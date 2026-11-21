@@ -142,6 +142,7 @@ FILE_CLASS_PHRASES: Dict[str, str] = {
     "text": "text file",
     "data": "data table (spreadsheet)",
     "tiles3d": "3D Tiles tileset",
+    "raster": "georeferenced raster (GeoTIFF)",
     "mesh": "3D model (mesh)",
     "usd": "3D model (USD scene)",
     "cad": "CAD model",

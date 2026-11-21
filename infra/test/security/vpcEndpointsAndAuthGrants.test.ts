@@ -180,12 +180,15 @@ describe("Batch/ECS/Fargate pipeline VPC condition blocks", () => {
 
     const isolatedSubnetBatchFlags = [
         "useConversionCoordinateTransform",
+        "useCogConversion",
         "usePreviewPcPotreeViewer",
         "usePreview3dThumbnail",
         "useSystemGenAiMetadata.useFargateRenderer",
         "useGenAiVideoSopBom",
         // The zipArchive system pipeline of Download as Zip.
         "useZipDownloads",
+        // The 3D Basic Conversion AWS Batch tier (batchTier.enabled): the Lambda function is unchanged.
+        "useConversion3dBasic.batchTier",
     ];
 
     // The three blocks, keyed by an anchor unique to each.

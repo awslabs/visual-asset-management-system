@@ -8,6 +8,7 @@ import { getDualValidAccessToken } from "../../../utils/authTokenUtils";
 import { appCache } from "../../../services/appCache";
 import { ViewerPluginProps } from "../../core/types";
 import { CesiumDependencyManager } from "./dependencies";
+import { installPresignedStreamReads } from "./presignedStreamReads";
 import CesiumSceneGraph from "./components/CesiumSceneGraph";
 import {
     describeTilesetFailure,
@@ -86,6 +87,20 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
             // Cleanup is handled by the viewer cleanup effect
         };
     }, []);
+
+    // Read every tileset file through a presigned S3 URL instead of the stream route's 307, which
+    // an external bucket with a single-origin CORS rule refuses (#1630). Installed before the
+    // tileset effects below run, and removed (the original request functions restored) on unmount.
+    useEffect(() => {
+        if (!cesiumLoaded || !config) return;
+        return installPresignedStreamReads((window as any).Cesium, {
+            streamPrefix: `${config.api}database/${databaseId}/assets/${encodeURIComponent(
+                assetId
+            )}/download/stream/`,
+            databaseId,
+            assetId,
+        });
+    }, [cesiumLoaded, config, databaseId, assetId]);
 
     // Scene control states
     const [showControls, setShowControls] = useState(true);
@@ -1602,8 +1617,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     height: "20px",
                                 }}
                                 title="Dismiss error"
+                                aria-label="Dismiss error"
                             >
-                                ×
+                                <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     )}
@@ -1641,8 +1657,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     fontWeight: "bold",
                                     padding: "0 0 0 12px",
                                 }}
+                                aria-label="Dismiss file version notice"
                             >
-                                ×
+                                <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     )}
@@ -1698,8 +1715,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     height: "20px",
                                 }}
                                 title="Dismiss warning"
+                                aria-label="Dismiss warning"
                             >
-                                ×
+                                <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     )}
@@ -1806,8 +1824,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                 height: "auto",
                             }}
                             title="Hide panel"
+                            aria-label="Hide panel"
                         >
-                            ×
+                            <span aria-hidden="true">×</span>
                         </button>
                         <div style={{ display: "flex", flex: 1, overflowX: "auto" }}>
                             <button
@@ -2498,8 +2517,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                 padding: "0 0 0 12px",
                             }}
                             title="Close"
+                            aria-label="Close"
                         >
-                            ×
+                            <span aria-hidden="true">×</span>
                         </button>
                     </div>
                     {pickedFeatureInfo.properties.length === 0 ? (

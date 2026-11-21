@@ -105,7 +105,11 @@
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true,
-                "enableStepInput": false
+                "enableStepInput": false,
+                "batchTier": {
+                    "enabled": false,
+                    "maxMemoryGiB": 120
+                }
             },
             "usePreview3dThumbnail": {
                 "enabled": false,
@@ -165,6 +169,12 @@
                 "autoRegisterWithVAMS": true,
                 "autoRegisterAutoTriggerOnFileUpload": false
             },
+            "useCogConversion": {
+                "enabled": false,
+                "useCodeBuild": false,
+                "autoRegisterWithVAMS": true,
+                "autoRegisterAutoTriggerOnFileUpload": false
+            },
             "useGenAiCadStepAgent": {
                 "enabled": false,
                 "runtime": "agentcore",
@@ -176,7 +186,7 @@
                     "modelId": "",
                     "apiKeySecretArn": ""
                 },
-                "allowInternetResearch": true,
+                "allowInternetResearch": false,
                 "bedrockGuardrail": {
                     "guardrailId": "",
                     "guardrailVersion": ""
@@ -388,6 +398,7 @@
                     "g5.8xlarge"
                 ],
                 "maxVCpus": 48,
+                "modelCacheGeneration": 0,
                 "models": {
                     "sam3d": {
                         "enabled": false

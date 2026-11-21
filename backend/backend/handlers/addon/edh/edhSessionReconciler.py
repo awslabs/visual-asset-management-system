@@ -12,11 +12,13 @@ shared session-state mapping, matching a row that never received its session id 
 stores for it. A desktop EDH lists running is recorded connectable. A row whose secret is not bound to
 the EC2 instance EDH places its desktop on -- never bound, or bound to an instance the desktop no longer
 runs on -- has the binding applied. A desktop EDH no longer lists was deactivated outside VAMS and is
-recorded DELETED, save that a launch still CREATING whose desktop EDH no longer has is recorded ORPHANED
-with its launch-error code: EDH deactivates a desktop whose placement failed, and a desktop that never ran
-is no Save and Resume. A launch still CREATING past the worker's grace window -- or, with the worker's
-attempts spent, past its last attempt's timeout -- is recorded ORPHANED. A launch its owner deleted
-before EDH listed its desktop re-adopts that desktop when EDH lists it within the reclaim window: the
+recorded DELETED, save that a new launch still CREATING (no start EDH accepted) whose desktop EDH no longer has is
+recorded ORPHANED with its launch-error code: EDH deactivates a desktop whose placement failed, and a desktop that
+never ran is no Save and Resume. EDH's ``error`` orphans only such a new launch; a desktop that has run keeps its
+state and its credential, recorded not connectable with ``DESKTOP_ERROR``. A start EDH accepted that EC2 returns
+to stopped records why, from the instance's EC2 state reason. A launch still CREATING past the worker's grace window
+-- or, with the worker's attempts spent, past its last attempt's timeout -- is recorded ORPHANED. A launch its owner
+deleted before EDH listed its desktop re-adopts that desktop when EDH lists it within the reclaim window: the
 row's state follows EDH again, its session id is completed, and it carries no credential until its owner
 stops and starts it. A credential is revoked only on a definite signal -- a row that ends STOPPED,
 ORPHANED or DELETED, or a key past its expiry; a live key on a desktop EDH lists stopped waits out a
@@ -30,8 +32,9 @@ ORPHANED with a session id and no captured reason is given the reason EDH record
 read from EDH's per-user listing as the row's owner -- the listing is owner-scoped -- at most once per row
 per read interval and within a per-sweep allowance of such reads; a read that fails writes only its stamp.
 A start of a stopped desktop EDH accepted whose desktop EDH still lists pending or placing half an hour later
-is recorded START_STALLED on its CREATING row, and nothing else is done to it: its key is kept and its desktop
-is neither stopped, deleted nor orphaned.
+is recorded START_STALLED on its CREATING row, and a new launch EDH still lists pending or placing three hours
+after it was made LAUNCH_STALLED; nothing else is done to either: its key is kept and its desktop is neither
+stopped, deleted nor orphaned.
 Session keys that no
 row names at all (a mint whose reply was lost, a row that is gone, a key a re-issue replaced) have their
 records deleted once expired or older than one sweep's grace, save that every unexpired key of a desktop
@@ -82,19 +85,23 @@ from .common.edhClient import (
 from .common.edhIdentity import SYSTEM_USER_ID
 from .common.edhLeasePolicy import lease_action, parse_iso, read_lease_policy
 from .common.edhSessionState import (
-    ACTIVITY_FIELD, CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD, EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD,
-    EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_STOPPED, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT,
-    LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED, MAX_LAUNCH_ATTEMPTS,
-    START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_STALL_EDH_STATES, START_STALL_SECONDS,
-    STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED, credential_claim_fresh,
-    credential_claim_stamp, deleted_row_expiry, edh_failure_attributes, edh_failure_read_due,
-    never_auto_start_schedule, observed_row_attributes, orphaned_last_error, schedule_never_auto_starts,
-    session_row_live, start_failure, start_in_progress, start_resolve_due, start_stall_cleared, start_stall_due,
+    ACTIVITY_FIELD, CONNECTION_UNAVAILABLE_REASON_FIELD, CREDENTIAL_CLAIM_SECONDS, EDH_FAILURE_FIELD,
+    EDH_FIELD_INSTANCE_ID, EDH_SCHEDULE_FIELD, EDH_SESSION_STATE_FIELD, EDH_SESSION_STATE_STOPPED,
+    EDH_UNLISTED_AT_FIELD, EXPIRES_AT_FIELD, LAST_ERROR_CREATE_TIMED_OUT, LAST_ERROR_LAUNCH_STALLED,
+    LAST_ERROR_LEASE_EXPIRED, LAST_ERROR_START_FAILED, LAST_ERROR_START_STALLED, LAUNCH_STALL_SECONDS,
+    MAX_LAUNCH_ATTEMPTS, START_ACCEPTED_FIELD, START_FAILURE_FIELD, START_IN_PROGRESS_SECONDS, START_STALL_EDH_STATES,
+    START_STALL_SECONDS, STATE_ACTIVE, STATE_CREATING, STATE_DELETED, STATE_ORPHANED, STATE_STOPPED,
+    credential_claim_fresh, credential_claim_stamp, deleted_row_expiry, desktop_has_run, edh_failure_attributes,
+    edh_failure_read_due, edh_reports_error, instance_state_reason, launch_stall_due, never_auto_start_schedule,
+    observed_row_attributes, orphaned_last_error, schedule_never_auto_starts, session_row_live, start_failure,
+    start_in_progress, start_resolve_due, start_return_attributes, start_returned_to_stopped, start_stall_cleared,
+    start_stall_due,
     start_stamp, state_for_edh_session_state,
 )
 
 retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 dynamodb = boto3.resource('dynamodb', config=retry_config)
+ec2 = boto3.client('ec2', config=retry_config)
 logger = safeLogger(service_name="EdhSessionReconciler")
 
 try:
@@ -110,13 +117,9 @@ session_table = dynamodb.Table(session_table_name)
 SWEPT_STATES = (STATE_CREATING, STATE_ACTIVE, STATE_STOPPED, STATE_ORPHANED)
 # States whose row is recorded DELETED -- or, for a launch whose desktop never ran, ORPHANED -- when EDH's
 # listing leaves its desktop out; that absence is confirmed with EDH's session-state read before any such
-# row is written.
+# row is written. ``EDH_UNLISTED_AT_FIELD`` (edhSessionState) is stamped on a row recorded DELETED that way, and
+# only then, so a desktop EDH's Save and Resume brings back under a new session uuid re-adopts it.
 UNLISTED_CONFIRMED_STATES = frozenset({STATE_CREATING, STATE_ACTIVE, STATE_STOPPED})
-# Stamped on a row the sweep records DELETED because EDH stopped listing its desktop, and only then: a row
-# deleted through VAMS never carries it. EDH's Save and Resume takes a desktop out of the listing while its
-# image is taken and brings it back under a new session uuid with the same name and owner, so only a row
-# carrying this stamp is re-adopted by a desktop listed under its name.
-EDH_UNLISTED_AT_FIELD = "edhUnlistedAt"
 # Rows the sweep reads by the session name of a listed desktop no scanned row claims, at most this many per
 # sweep: a DELETED row whose expiry is set is no longer scanned, and its resumed desktop names its bootstrap.
 MAX_RESUMED_ROW_LOOKUPS_PER_SWEEP = 50
@@ -445,6 +448,35 @@ def _bind_session_secret(row: Dict[str, Any], desktop: Dict[str, Any],
         return {}
 
 
+def _instance_state_reason(row: Dict[str, Any], instance_id) -> Tuple[Optional[str], Optional[str]]:
+    """(the state reason code, the Availability Zone) EC2 reads now for the row's instance; (None, None) without an
+    instance or when the read fails (logged by the error's type)."""
+    if not instance_id:
+        return None, None
+    try:
+        return instance_state_reason(ec2.describe_instances(InstanceIds=[str(instance_id)]))
+    except Exception as err:
+        logger.warning(f"The instance of bootstrap {row.get('bootstrapId')} was not read ({type(err).__name__}); its "
+                       "start is recorded failed without an AWS error code")
+        return None, None
+
+
+def _start_return(row: Dict[str, Any], updates: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+    """The attributes that record why a start EDH accepted ended stopped: a row this pass moves from CREATING to
+    STOPPED while it carries ``startAcceptedAt`` and no stop through VAMS (``start_returned_to_stopped``) records the
+    code its instance's EC2 state reason implies, with a ``startFailure`` (``start_return_attributes``), in the pass's
+    own conditional write; nothing for a stop or hibernation a user or the instance initiated, or for any other row.
+    The row stays STOPPED, keeps its disk and may be started again."""
+    if not start_returned_to_stopped(row, updates):
+        return {}
+    code, zone = _instance_state_reason(row, updates.get("instanceId") or row.get("instanceId"))
+    attributes = start_return_attributes(row, code, zone, now)
+    if attributes:
+        logger.warning(f"EC2 returned the started desktop of bootstrap {row.get('bootstrapId')} to stopped "
+                       f"({code or 'reason not read'}); recorded as {attributes['lastError']}")
+    return attributes
+
+
 def reconcile_row(row: Dict[str, Any], index: DesktopIndex, now: datetime,
                   summary: Optional[Dict[str, int]] = None) -> Tuple[Dict[str, Any], bool, bool]:
     """(row attribute updates, revoke the credential, remove the secret container) for one row. A row
@@ -496,7 +528,7 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
             desktop = resumed = _resumed_desktop(row, index)
     updates: Dict[str, Any] = {}
     if desktop is not None:
-        updates = observed_row_attributes(row, desktop)
+        updates = observed_row_attributes(row, desktop, now)
         if resumed is not None:
             # The row follows its desktop's new session; the never-auto-start schedule is set on it afresh.
             updates["sessionId"] = str(resumed[EDH_SESSION_ID_FIELD])
@@ -507,25 +539,27 @@ def _reconcile_decision(row: Dict[str, Any], index: DesktopIndex, now: datetime,
             logger.info(f"Bootstrap {row['bootstrapId']} follows its desktop resumed by EDH under a new session")
         if not re_adopted:
             updates.update(_bind_session_secret(row, desktop, summary))
+            updates.update(_start_return(row, updates, now))
             updates.update(_start_resolution(row, updates, desktop, now))
             updates.update(_start_stall(row, updates, desktop, now))
     elif state == STATE_CREATING and not row.get("sessionId"):
         if _inside_creating_grace(row, now):
             return {}, False, False
         updates = {"state": STATE_ORPHANED, "lastError": LAST_ERROR_CREATE_TIMED_OUT}
-    elif state == STATE_CREATING:
+    elif state == STATE_CREATING and row.get(START_ACCEPTED_FIELD) is None:
         # EDH records a desktop whose placement failed as ``error`` and deactivates it within minutes; a
         # desktop that never ran cannot be held out of the listing by Save and Resume, so a launch EDH no
-        # longer has is a failed launch, kept for its owner to see, not a removed desktop. A stalled start's
-        # code and stamp go with the move out of CREATING.
+        # longer has is a failed launch, kept for its owner to see, not a removed desktop.
         updates = {"state": STATE_ORPHANED, **start_stall_cleared(row)}
         last_error = orphaned_last_error(row.get("lastError"))
         if last_error != row.get("lastError"):
             updates["lastError"] = last_error
-    elif state in (STATE_ACTIVE, STATE_STOPPED):
+    elif state in (STATE_ACTIVE, STATE_STOPPED, STATE_CREATING):
         # EDH lists every desktop that is not deleted; one it no longer lists was removed outside VAMS, or is
-        # held out of the listing by EDH's Save and Resume, which the stamp lets a later sweep re-adopt.
-        updates = {"state": STATE_DELETED, EDH_UNLISTED_AT_FIELD: now.isoformat()}
+        # held out of the listing by EDH's Save and Resume, which the stamp lets a later sweep re-adopt. A start
+        # EDH accepted is of a desktop that has run, so it goes the same way; its stamp, and a stalled start's code,
+        # go with the move out of CREATING.
+        updates = {"state": STATE_DELETED, EDH_UNLISTED_AT_FIELD: now.isoformat(), **start_stall_cleared(row)}
     if updates.get("state") in SECRET_REMOVING_STATES and row.get("connectionAvailable") is not False:
         updates["connectionAvailable"] = False
     final_state = updates.get("state", state)
@@ -566,19 +600,30 @@ def _start_resolution(row: Dict[str, Any], updates: Dict[str, Any], desktop: Dic
 
 def _start_stall(row: Dict[str, Any], updates: Dict[str, Any], desktop: Dict[str, Any],
                  now: datetime) -> Dict[str, Any]:
-    """The attributes that record a start EDH accepted and has not finished: a row this pass leaves CREATING,
-    stamped ``startAcceptedAt`` at least ``START_STALL_SECONDS`` ago and not recorded stalled yet
-    (``start_stall_due``), whose desktop EDH still lists pending or placing, records START_STALLED with a
-    ``startFailure`` that names nothing EDH said. That is all: the desktop is neither stopped, deleted nor orphaned,
-    and the row stays CREATING, so its key is kept -- the desktop may still finish starting. The row is written
-    under the pass's own condition, so a write made since wins. Nothing for any other row."""
+    """The attributes that record a start EDH accepted, or a new launch, that has not finished: a row this pass
+    leaves CREATING, whose desktop EDH still lists pending or placing, records START_STALLED when it is stamped
+    ``startAcceptedAt`` at least ``START_STALL_SECONDS`` ago (``start_stall_due``), and LAUNCH_STALLED when it is a
+    new launch made at least ``LAUNCH_STALL_SECONDS`` ago (``launch_stall_due``), with a ``startFailure`` that names
+    nothing EDH said. That is all: the desktop is neither stopped, deleted nor orphaned, and the row stays CREATING,
+    so its key is kept -- the desktop may still finish starting, or be placed. The row is written under the pass's
+    own condition, so a write made since wins. Nothing for any other row, or one recorded stalled already."""
     edh_state = str(desktop.get(EDH_SESSION_STATE_FIELD) or "").lower()
-    if not start_stall_due({**row, **updates}, now) or edh_state not in START_STALL_EDH_STATES:
+    if edh_state not in START_STALL_EDH_STATES:
         return {}
-    logger.warning(f"The start of bootstrap {row.get('bootstrapId')} has not finished: EDH still lists its desktop "
-                   f"{edh_state} {START_STALL_SECONDS // 60} minutes after accepting the start; recorded as a "
-                   "stalled start")
-    return {"lastError": LAST_ERROR_START_STALLED, START_FAILURE_FIELD: start_failure(None, None, now)}
+    seen = {**row, **updates}
+    if start_stall_due(seen, now):
+        code = LAST_ERROR_START_STALLED
+        logger.warning(f"The start of bootstrap {row.get('bootstrapId')} has not finished: EDH still lists its "
+                       f"desktop {edh_state} {START_STALL_SECONDS // 60} minutes after accepting the start; recorded "
+                       "as a stalled start")
+    elif launch_stall_due(seen, now):
+        code = LAST_ERROR_LAUNCH_STALLED
+        logger.warning(f"The launch of bootstrap {row.get('bootstrapId')} has not finished: EDH still lists its "
+                       f"desktop {edh_state} {LAUNCH_STALL_SECONDS // 3600} hours after the launch; recorded as a "
+                       "stalled launch")
+    else:
+        return {}
+    return {"lastError": code, START_FAILURE_FIELD: start_failure(None, None, now)}
 
 
 def _persist(bootstrap_id: str, updates: Dict[str, Any], seen_updated_at, *, touch: bool = True) -> Optional[str]:
@@ -683,11 +728,17 @@ def _sweep_orphan_keys(referenced_key_ids: Set[str], live_bootstrap_ids: Set[str
 
 def _live_state(row: Dict[str, Any], index: DesktopIndex) -> Optional[str]:
     """The state EDH's listing implies for the row's desktop: None when EDH lists no desktop for the row.
-    A listed desktop in a state outside the mapping yields the empty string, which no lease branch acts on."""
+    A listed desktop in a state outside the mapping yields the empty string, which no lease branch acts on.
+    EDH's ``error`` on a row whose desktop has run (``desktop_has_run``) reads ACTIVE: EDH sets it on a desktop that
+    runs when its Amazon DCV check fails, so the lease stops such a desktop (EDH's stop takes a desktop in ``error``
+    that has an instance) and never deletes it as stopped; on any other row it reads ORPHANED, a failed launch."""
     desktop = _desktop_for_row(row, index) or _resumed_desktop(row, index)
     if desktop is None:
         return None
-    return state_for_edh_session_state(desktop.get(EDH_SESSION_STATE_FIELD), "")
+    session_state = desktop.get(EDH_SESSION_STATE_FIELD)
+    if edh_reports_error(session_state) and desktop_has_run(row):
+        return STATE_ACTIVE
+    return state_for_edh_session_state(session_state, "")
 
 
 def _apply_lease_action(action: str, row: Dict[str, Any], index: DesktopIndex, now: datetime,
@@ -714,7 +765,9 @@ def _apply_lease_action(action: str, row: Dict[str, Any], index: DesktopIndex, n
                 return False
         elif live != STATE_STOPPED:
             return False
-        stamped = _persist(bootstrap_id, {"state": STATE_STOPPED, "leaseStoppedAt": now.isoformat(),
+        # A reason the row recorded for not being connectable goes with the stop.
+        cleared = {CONNECTION_UNAVAILABLE_REASON_FIELD: None} if row.get(CONNECTION_UNAVAILABLE_REASON_FIELD) else {}
+        stamped = _persist(bootstrap_id, {**cleared, "state": STATE_STOPPED, "leaseStoppedAt": now.isoformat(),
                                           "lastError": LAST_ERROR_LEASE_EXPIRED, "connectionAvailable": False},
                            row["updatedAt"])
         summary["deferred" if stamped is None else "updated"] += 1

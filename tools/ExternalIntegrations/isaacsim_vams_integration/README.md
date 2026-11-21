@@ -108,7 +108,8 @@ For VAMS deployments using AWS Cognito as the identity provider. Use the `login(
 CLI equivalent:
 
 ```bash
-vamscli auth login -u user@example.com -p yourpassword
+vamscli auth login -u user@example.com            # prompts for the password
+printf '%s\n' "$VAMS_PASSWORD" | vamscli auth login -u user@example.com --password-stdin   # in a script
 ```
 
 #### Token Override Authentication (IDP JWT Token or VAMS API Key)
@@ -121,8 +122,9 @@ For VAMS deployments using an external identity provider, or when authenticating
 CLI equivalent:
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "vams_your-api-key"
-vamscli auth login --user-id user@example.com --token-override "eyJhbGciOiJSUzI1NiIs..."
+# The key or token is read from stdin, so it never appears in the process's arguments
+echo "$VAMS_API_KEY" | vamscli auth login --user-id user@example.com --token-override-stdin
+echo "$IDP_JWT" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 ---
@@ -198,7 +200,7 @@ exts."vams.connector.isaacsim".vamscli_path = "/home/ubuntu/vamscli-venv/bin/vam
 ### 4. Verify the CLI works
 
 ```bash
-~/vamscli-venv/bin/vamscli auth login -u your-email@example.com -p yourpassword
+~/vamscli-venv/bin/vamscli auth login -u your-email@example.com   # prompts for the password
 ~/vamscli-venv/bin/vamscli database list --json-output
 ```
 
@@ -252,7 +254,7 @@ Once enabled, the extension opens a **VAMS Connector** window with:
     -   **Any file**: **Download Only (save to disk)** saves it to `~/vams_downloads`, under its path within the asset
 5.  **Workflows** - Lists the enabled workflows of `GLOBAL` and the selected database, and the asset's execution history, where each execution's input file is shown by its path within the asset and a value too long for its column is shortened, with the workflow ID and the file's full key in tooltips. Choosing a workflow opens its Execute view: **Run on Entire Asset** where the workflow takes a whole asset, **Run** for each file the workflow and its first pipeline accept, and a template choice for a pipeline that requires one (see [Workflow Execution](#workflow-execution))
 
-When the extension's CLI profile is already signed in, as on a desktop that signs the profile in when it starts, the window takes that session over at startup, and **Refresh Databases** takes over a sign-in that completes after Isaac Sim started. Closing Isaac Sim leaves a session taken over this way signed in, and signs out one entered under **Authentication**. A request refused on a session taken over this way shows the CLI's error on the status line, followed by how to recover. On an EDH Workstations desktop whose sign-in ran (the extension uses the desktop's own profile `edh-<instance-id>` and finds the sign-in's log under `~/.vams/hosts/<instance-id>/`), that is `if this desktop was just started, its VAMS sign-in may not have completed; …`, which also names renewing the workstation's lease; anywhere else it is `the session this extension took over was refused; sign in under Authentication`. A key taken over this way lasts as long as whatever signed the profile in allows, and once the profile is signed in again with a new key the window uses it from its next request. For the sign-in of an EDH Workstations desktop, see [The workstation's VAMS sign-in](../../../documentation/docusaurus-site/docs/developer/edh-workstations/user-guide.md#the-workstations-vams-sign-in).
+When the extension's CLI profile is already signed in, as on a desktop that signs the profile in when it starts, the window takes that session over at startup, and **Refresh Databases** takes over a sign-in that completes after Isaac Sim started. Closing Isaac Sim leaves a session taken over this way signed in, and signs out one entered under **Authentication**. A request on a session taken over this way whose key VAMS does not accept (HTTP 401) shows the CLI's error on the status line, followed by how to recover; a request VAMS denies for a role, an entity or the network path (HTTP 403) shows the CLI's error alone, because signing in again does not change it. On an EDH Workstations desktop whose sign-in ran (the extension uses the desktop's own profile `edh-<instance-id>` and finds the sign-in's log under `~/.vams/hosts/<instance-id>/`), that is `if this desktop was just started, its VAMS sign-in may not have completed; …`, which also names renewing the workstation's lease; anywhere else it is `the session this extension took over was refused; sign in under Authentication`. A key taken over this way lasts as long as whatever signed the profile in allows, and once the profile is signed in again with a new key the window uses it from its next request. For the sign-in of an EDH Workstations desktop, see [The workstation's VAMS sign-in](../../../documentation/docusaurus-site/docs/developer/edh-workstations/user-guide.md#the-workstations-vams-sign-in).
 
 ### Viewing a loaded asset
 
@@ -482,7 +484,7 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 | **"VAMS CLI not found"**            | Install the CLI from the VAMS repository, `pip install -e /path/to/vams/tools/VamsCLI`, and ensure it is on PATH, or set `vamscli_path` in extension.toml                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **"Profile may not be configured"** | Run `vamscli setup <api-gateway-url>` to configure the default profile                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | **Login fails (Cognito)**           | Verify credentials with `vamscli auth login -u <email>` in a terminal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **Login fails (token/API key)**     | Verify with `vamscli auth login --user-id <email> --token-override <token>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Login fails (token/API key)**     | Verify with `vamscli auth login --user-id <email> --token-override-stdin`, piping the token in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | **Refused-session status**          | The session taken over from the CLI profile holds a key VAMS no longer accepts: a previous key while the desktop's own sign-in is still running, or a key that has expired. Select **Refresh Databases** once the sign-in completes, or sign in under **Authentication**; an expired key stays refused until the profile is signed in again. The lease advice is shown only on an EDH Workstations desktop whose sign-in ran. On an EDH Workstations desktop, see [The workstation's VAMS sign-in](../../../documentation/docusaurus-site/docs/developer/edh-workstations/user-guide.md#the-workstations-vams-sign-in) |
 | **Extension not found**             | Ensure the extension search path names the folder that contains the connector as `vams.connector.isaacsim` (see [Installation](#installation)), not the `isaacsim_vams_integration/` directory itself                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **omni.usd import errors**          | Stage operations (`export_and_upload_scene`, etc.) must be called from within Isaac Sim                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -500,7 +502,7 @@ UI button handlers are deferred via `omni.kit.app`'s update event stream to avoi
 
 -   Credentials are managed by the VAMS CLI profile system, not stored in extension code
 -   For headless or non-interactive environments, use VAMS API keys (prefixed `vams_`) or IDP JWT tokens via `login_with_token()`
--   The VAMS CLI handles Cognito token refresh automatically
+-   A Cognito sign-in whose access token has expired is renewed once with the CLI's refresh token (`vamscli auth refresh`) before the next call, a session taken over from the CLI profile included; a key or token with no refresh token stays refused until the profile is signed in again
 -   The extension caches credentials in memory only for automatic re-authentication during the session
 
 ---

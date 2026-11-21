@@ -13,12 +13,12 @@ This page covers common problems encountered with the VamsCLI `edh` commands, al
 
 With `--json-output`, an `edh` command error can carry these fields beside the ones the [JSON Error Format](../../cli/automation.md#json-error-format) lists:
 
-| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full)); a start's full reservation is recorded on the workstation instead (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). `EdhReservationNotPermittedError` (`RESERVATION_NOT_PERMITTED`): your role may see the reservation but not launch into it (see [Launch Refused Because the Role May Only View the Reservation](#launch-refused-because-the-role-may-only-view-the-reservation)). `EdhDisplaySessionEndedError` (`DISPLAY_SESSION_ENDED`): the workstation is running but its remote display session has ended (see [Connect Refused Because the Display Session Ended](#connect-refused-because-the-display-session-ended)) |
-| `waitOutcome`     | `EdhStartFailedError` (`failed`), `EdhStartStalledError` (`stalled`) and `EdhStartWaitTimeoutError` (`timedOut`), raised by `edh workstation start --wait` alone, beside the record's `state`, `activity`, `lastError` and `startFailure` (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped), [Start Stalled](#start-stalled) and [Waiting for a Start Timed Out](#waiting-for-a-start-timed-out))                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Field             | Carried by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `outcomeUnknown`  | `EdhOutcomeUnknownError` (`true`): EDH may have carried out a request whose answer was lost; check the listing before sending it again (see [A Request Was Not Confirmed](#a-request-was-not-confirmed))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `startInProgress` | `EdhStartInProgressError` (`true`): another start of the workstation is in progress (see [Start Refused Because a Start Is in Progress](#start-refused-because-a-start-is-in-progress))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `code`            | `EdhReservationFullError` (`RESERVATION_FULL`): the capacity reservation of a launch has no free slot (see [Launch Refused Because the Capacity Reservation Is Full](#launch-refused-because-the-capacity-reservation-is-full)); a start's full reservation is recorded on the workstation instead (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped)). `EdhReservationNotPermittedError` (`RESERVATION_NOT_PERMITTED`): your role may see the reservation but not launch into it (see [Launch Refused Because the Role May Only View the Reservation](#launch-refused-because-the-role-may-only-view-the-reservation)). `EdhDisplaySessionEndedError` (`DISPLAY_SESSION_ENDED`): the workstation is running but its remote display session has ended (see [Connect Refused Because the Display Session Ended](#connect-refused-because-the-display-session-ended)). `EdhDesktopErrorError` (`DESKTOP_ERROR`): EDH reports the workstation in its error state (see [Connect Refused Because EDH Reports the Desktop in Error](#connect-refused-because-edh-reports-the-desktop-in-error)) |
+| `waitOutcome`     | `EdhStartFailedError` (`failed`), `EdhStartStalledError` (`stalled`) and `EdhStartWaitTimeoutError` (`timedOut`), raised by `edh workstation start --wait` alone, beside the record's `state`, `activity`, `lastError` and `startFailure` (see [Start Left the Workstation Stopped](#start-left-the-workstation-stopped), [Start Stalled](#start-stalled) and [Waiting for a Start Timed Out](#waiting-for-a-start-timed-out))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ---
 
@@ -234,6 +234,29 @@ EDH accepted the start of the stopped workstation but has not reported the deskt
 2. Start it again with `vamscli edh workstation start SESSION_ID --wait`.
 3. If it stalls again, give the `Start Failure` line and the session id to an administrator, who sees the same session on the web's **Sessions** tab and can check the cluster with `vamscli edh admin health`.
 
+### Launch Stalled
+
+**Symptoms:**
+
+-   `edh workstation list` shows `STALLED` in the `State` column and `LAUNCH_STALLED` under `Last Error` for a workstation you launched and never started
+-   `edh workstation stop SESSION_ID --yes` fails with `Workstation stop refused (409): EDH has not placed this new workstation, so it cannot be stopped; delete it instead`
+-   `edh workstation get SESSION_ID` shows `State: STALLED`, `Activity: none`, `EDH State: pending` (or `placing`) and:
+
+    ```text
+      Last Error:      LAUNCH_STALLED
+      Start Failure:   EDH has not placed this new workstation 3 hours after its launch. Delete it, or wait: EDH may still place it.
+                       To delete it: vamscli edh workstation delete SESSION_ID --confirm
+    ```
+
+**Cause:**
+
+EDH accepted the launch and assigned it a session, but 3 hours later it still lists the desktop `pending` or `placing`: it has not placed the new desktop on an instance. A first boot can install a GPU driver and take well over an hour, so the bound is 3 hours rather than the 30 minutes of a stalled start. The reconciler's sweep records the stall; it does not stop, delete or orphan the workstation, because EDH may still place it, in which case the workstation moves on by itself and the code is cleared. The desktop never ran, so this is not a start: the API refuses its stop, and starting it again is not possible. EDH reported no AWS error, so there is no `AWS:` line.
+
+**Resolution:**
+
+1. Delete the workstation with `vamscli edh workstation delete SESSION_ID --confirm`, then launch a new one; or wait, since EDH may still place it.
+2. If new launches stall too, give the session id to an administrator, who sees the same session on the web's **Sessions** tab and can check the cluster with `vamscli edh admin health`.
+
 ### The Image Is an Older Build or Shows Only Its Id
 
 **Symptoms:**
@@ -303,6 +326,22 @@ vamscli edh workstation stop SESSION_ID
 vamscli edh workstation start SESSION_ID --wait
 vamscli edh workstation connect SESSION_ID
 ```
+
+### Connect Refused Because EDH Reports the Desktop in Error
+
+**Symptoms:**
+
+-   `edh workstation connect`, or `edh workstation start` of a stopped workstation, fails with HTTP 409 and `The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.`
+-   With `--json-output`, the error carries `error_type` `EdhDesktopErrorError` and `"code": "DESKTOP_ERROR"`
+-   `edh workstation get` shows `State:` `ACTIVE`, `STOPPED` or `STARTING` (a started workstation held in `CREATING`; `--json-output` keeps `state` `CREATING`), `Connectable: False` and the same sentence on a `Connection` line
+
+**Cause:**
+
+EDH checks every running desktop's Amazon DCV server and marks the desktop `error` when the check fails, then moves it on once the check passes again. VAMS keeps such a workstation in its state, with its disk and data, and the error does not revoke its session key (a `STOPPED` workstation's key is revoked as any stopped one's is); only a new launch that never ran is recorded `ORPHANED` for `error`.
+
+**Resolution:**
+
+Wait a few minutes and run `edh workstation get` again: once EDH moves the desktop on, the `Connection` line is gone and connect works. If it stays, stop the workstation (`edh workstation stop`), wait for `STOPPED`, then start it again. Do not delete it: its disk and data are intact.
 
 ### A Windows Workstation Opens at the Sign-in Screen
 
@@ -613,7 +652,7 @@ The registry holds VAMS's own entries for EC2 capacity reservations, at most 100
 
 **Symptoms:**
 
--   From a desktop whose `vamscli` was signed in by session bootstrap, `vamscli auth api-key create` (or an update) fails with HTTP 403 `API keys cannot be created or updated with a temporary session key`, while listing and deleting keys work
+-   From a desktop whose `vamscli` was signed in by session bootstrap, `vamscli api-key create` (or `vamscli api-key update`) fails with HTTP 403 `API keys cannot be created or updated with a temporary session key`, while listing and deleting keys work
 
 **Cause:**
 
@@ -759,6 +798,20 @@ Jobs are listed and killed under your own EDH identity on one backend: another u
 
 Use `vamscli edh container job list` (with `--backend eks --cluster NAME` for EKS jobs) and pass the row's `jobId` verbatim, with the same `--backend`, `--cluster` and `--namespace` options.
 
+### Job Submission Refused for a Quota
+
+**Symptoms:**
+
+-   `edh container job submit` reports `Container job submission refused (429): The EDH quota for this operation has been reached.`, with `error_type` `EdhQuotaExceededError` under `--json-output`
+
+**Cause:**
+
+EDH refused the job because a quota, budget or target-node limit is used up. This is not throttling: the CLI sends the request once and does not back off, because resending cannot clear the limit.
+
+**Resolution:**
+
+Run `vamscli edh container job list` to see the jobs that count toward the limit. Submit again after one of them ends, or kill a job you no longer need with `vamscli edh container job kill`. If the limit is too low for the work, ask the EDH administrator to raise it.
+
 ---
 
 ## AMI Recipes
@@ -801,8 +854,8 @@ Take the recipe id from `vamscli edh admin ami-recipe list` and the version from
 -   The command fails with `AMI recipe creation rejected (400)` or `AMI recipe update rejected (400)` and the field the API refused
 -   The command fails with `AMI recipe creation rejected (400)` or `AMI recipe update rejected (400)` and `Windows recipes support x86_64 only`
 -   `edh admin ami-recipe create`, `update` or `duplicate` fails with `AMI recipe creation rejected (400)` or `AMI recipe update rejected (400)` and `buildInstanceType does not match the recipe's architecture` or `parentImage does not match the recipe's architecture`
--   The command fails with HTTP 409 `assets are only supported on shipped recipes`, `the assets of a duplicated recipe cannot be changed`, `recipeId is already in use` or `stackName is already used by recipe '<id>'`
--   The command fails with HTTP 409 `unresolved placeholder(s) in component document: ...`, `deployment value(s) not in the expected form for: ...` or `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`
+-   The command fails with HTTP 409 `assets are only supported on shipped recipes`, `the assets of a duplicated recipe cannot be changed`, `recipeId is already in use` or `stackName is already used by another recipe`
+-   The command fails with HTTP 409 `a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form` or `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`
 
 **Cause:**
 
@@ -816,7 +869,7 @@ Correct the file and run the command again: keep component files in or below the
 
 **Symptoms:**
 
--   `edh admin ami-recipe build` fails with `AMI recipe build start refused (409)` and `the recipe is disabled`, `SSM parameter <name> could not be read (<code>)`, `EDH lists no <kind> stack named '<name>'`, `the parent image could not be found`, `the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`, `unresolved placeholder(s) in component document: ...`, `deployment value(s) not in the expected form for: ...`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`, or `recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`
+-   `edh admin ami-recipe build` fails with `AMI recipe build start refused (409)` and `the recipe is disabled`, `the parent image's SSM parameter could not be read`, `EDH lists no stack of the recipe's kind with the parent image's name`, `the parent image could not be found`, `the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`, `a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`, or `recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`
 -   `edh admin ami-recipe build` fails with `AMI recipe build start refused (409)` and `the recipe is being deleted`, `the recipe no longer exists`, or `the recipe's builds changed while the request was placed; try again`
 -   A build ends `FAILED` with `launch did not complete`
 -   A build stays `QUEUED` after the recipe's other builds have settled, with `not started: <reason>` in its `error`
@@ -849,6 +902,8 @@ The image completed and its AMI is kept, but registering the AMI in EDH, or atta
     vamscli edh admin ami-recipe register RECIPE_ID VERSION
     ```
 
+    A retry that fails again exits `1` with `Registration failed again: <reason>`.
+
 A successful retry makes the build `AVAILABLE` and retires the recipe's other `AVAILABLE` builds, a newer one included, and a retry the sweep completes on its own has the same effect. Retry an older build only if it should replace the current one; to keep a newer build, retire the older `REGISTER_FAILED` build with `vamscli edh admin ami-recipe retire RECIPE_ID VERSION --confirm`. That retire is refused while EDH lists no stack for the build (see [Retire Refused](#retire-refused)), and the sweep then keeps retrying the build until its five automatic attempts have failed. A retry refused with `the build's AMI has been deregistered` concerns a build that was already pruned; build the recipe again instead.
 
 ### Duplicate Refused
@@ -856,7 +911,7 @@ A successful retry makes the build `AVAILABLE` and retires the recipe's other `A
 **Symptoms:**
 
 -   `edh admin ami-recipe duplicate` fails with `Recipe Not Found: AMI recipe '<SOURCE_ID>' not found`
--   The command fails with `AMI recipe creation refused (409)` and `recipeId is already in use`, `stackName is already used by recipe '<id>'` or `the recipe to duplicate does not exist`
+-   The command fails with `AMI recipe creation refused (409)` and `recipeId is already in use`, `stackName is already used by another recipe` or `the recipe to duplicate does not exist`
 -   The command fails with `AMI recipe creation rejected (400)` and the display name or stack name field
 -   The command fails with `Permission Denied: Access forbidden. Not Authorized` (HTTP 403)
 -   The command fails with `Request Blocked:` and names the deployment's AWS WAF web ACL
@@ -955,11 +1010,11 @@ Run the listing the message names until it shows the outcome, and send the reque
 
 **Cause:**
 
-The VAMS proxy could not complete a call to the EDH REST API within its budget (the API answers within 29 seconds, so long EDH operations are reported as unknown rather than waited on). A launch never waits on EDH in the API call itself: it is retried in the background twice within twenty minutes, and a third transient failure records `ORPHANED` with `LAUNCH_ERROR`, so a slow cluster shows as a long `CREATING` rather than as an error from `create`. A launch the worker never settled stays `CREATING` until the reconciler's sweep closes it as `ORPHANED` with `CREATE_TIMED_OUT` 30 minutes after the record's last write, or 5 minutes after it once all three launch attempts have started; it can be deleted by its bootstrap id once 15 minutes have passed since its last change (`vamscli edh workstation delete BOOTSTRAP_ID --confirm`).
+The VAMS proxy could not complete a call to the EDH REST API within its budget (the API answers within 29 seconds, so long EDH operations are reported as unknown rather than waited on). A launch reads EDH's catalog in the API call itself, so a slow or unreachable cluster fails `create` with 502 before anything is launched. The launch itself does not wait on EDH: it is retried in the background twice within twenty minutes, and a third transient failure records `ORPHANED` with `LAUNCH_ERROR`, so a slow cluster shows as a long `CREATING` rather than as an error from `create`. A launch the worker never settled stays `CREATING` until the reconciler's sweep closes it as `ORPHANED` with `CREATE_TIMED_OUT` 30 minutes after the record's last write, or 5 minutes after it once all three launch attempts have started; it can be deleted by its bootstrap id once 15 minutes have passed since its last change (`vamscli edh workstation delete BOOTSTRAP_ID --confirm`).
 
 **Resolution:**
 
-1. Do not re-run a launch that is still `CREATING`; watch it with `vamscli edh workstation list`, selecting the row by its `bootstrapId` (the list shows its `sessionId` once EDH assigns one). A launch that ended `ORPHANED` is not retried by re-sending its `--bootstrap-id`: the API answers with the stored record unchanged and launches nothing. Delete the record and launch again without `--bootstrap-id` (a new key is generated); see [Launch Ended ORPHANED](#launch-ended-orphaned). Re-send a `create` with its original `--bootstrap-id` only when the first response was lost, to read the record it created instead of launching a second workstation:
+1. Do not re-run a launch that is still `CREATING`; watch it with `vamscli edh workstation list`, selecting the row by its `bootstrapId` (the list shows its `sessionId` once EDH assigns one). A launch that ended `ORPHANED` is not retried by re-sending its `--bootstrap-id`: the API answers with the stored record unchanged and launches nothing. Delete the record and launch again without `--bootstrap-id` (a new key is generated); see [Launch Ended ORPHANED](#launch-ended-orphaned). Re-send a `create` with its original `--bootstrap-id` only when the first response was lost, to read the record it created instead of launching a second workstation. `create` prints the bootstrap id before it sends the request, and a failed `create` names it in its error (`bootstrapId` under `--json-output`); look it up with `vamscli edh workstation get BOOTSTRAP_ID` first:
 
     ```bash
     vamscli edh workstation delete BOOTSTRAP_ID --confirm

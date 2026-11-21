@@ -180,7 +180,7 @@ Choose between two strategies based on the access level:
 
 The workflow-execution API surface splits into everyday operations and two administrative-only routes:
 
--   **Everyday (grant to standard users):** execute (`POST /workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`), list (`GET /workflows/executions`), details (`GET /workflows/executions/\{executionId\}/details`), abort (`DELETE /workflows/executions/\{executionId\}`), and re-run (`POST /workflows/executions/\{executionId\}/rerun`).
+-   **Everyday (grant to standard users):** execute (`POST /workflows/\{workflowDatabaseId\}/\{workflowId\}/execute`), list (`GET /workflows/executions`), the asset's own execution lists (`GET /database/\{databaseId\}/assets/\{assetId\}/workflows/executions` and `.../executions/\{workflowId\}`), details (`GET /workflows/executions/\{executionId\}/details`) with its paged metadata and files and the full results (`.../details/metadata`, `.../details/files`, `.../details/results`), abort (`DELETE /workflows/executions/\{executionId\}`), and re-run (`POST /workflows/executions/\{executionId\}/rerun`).
 -   **Administrative-only:** detailed execution **logs** (`GET /workflows/executions/\{executionId\}/logs`, full CloudWatch logs) and execution **permanent delete** (`DELETE /workflows/executions/\{executionId\}/permanent`).
 
 Because the everyday routes are granted via broad `/workflows` prefixes, withhold the two administrative routes with an explicit **`deny`** API constraint on paths ending in `/logs` (GET) and `/permanent` (DELETE) — a `deny` overrides the broad `allow`. Read-only roles that grant `/workflows` GET should likewise layer a GET `deny` on `/logs`. Only `database-admin.json` grants these two routes (via its single all-methods `/workflows` constraint).
@@ -237,7 +237,7 @@ Auth admin pages (restrict from non-admin): `/auth/constraints`, `/auth/roles`, 
 
 ### Common API Route Prefixes
 
-Read paths (GET): `/secure-config`, `/amplify-config`, `/auth/routes`, `/asset-links`, `/assets`, `/comments`, `/database`, `/metadata`, `/metadataschema`, `/pipelines`, `/search`, `/subscriptions`, `/check-subscription`, `/tags`, `/tag-types`, `/workflows`, `/buckets`
+Read paths (GET): `/secure-config`, `/auth/routes`, `/asset-links`, `/assets`, `/comments`, `/database`, `/metadataschema`, `/pipelines`, `/search`, `/subscriptions`, `/tags`, `/tag-types`, `/workflows`, `/buckets`. `GET /api/amplify-config` needs no grant (it is unauthenticated), and `/check-subscription` is POST only (see the non-mutating POST paths below)
 
 Write paths (POST/PUT for editors/admins): `/uploads`, `/ingest-asset` (admin only), `/unsubscribe`
 
@@ -247,7 +247,7 @@ Download as Zip paths (every template whose role downloads files): GET, POST and
 
 Add-on paths (GET; each is deployed only when its add-on is enabled, and a criterion for an undeployed route matches nothing): `/addon/physna/viewer` (the Physna viewer plugin; granted by every shipped template whose role views files)
 
-Admin paths: `/roles`, `/user-roles`, `/auth/constraints`, `/user/cognito`
+Admin paths: `/roles`, `/user-roles`, `/auth/constraints`, `/user/cognito`, the tenant-wide API key routes `/auth/api-keys` and `/auth/api-keys/{apiKeyId}` (the self-service `/auth/user/api-keys*` routes are not admin paths), and the audit log search routes under `/audit/` (`/audit/log-groups`, `/audit/queries*`), which also need an `auditLog` constraint per log group (see `audit-reader.json`)
 
 ### JSON Template Formatting Rules
 

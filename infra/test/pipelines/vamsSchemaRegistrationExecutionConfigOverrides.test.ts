@@ -24,6 +24,10 @@ import {
 } from "../../lib/nestedStacks/pipelines/constructs/vamsSchemaRegistration-construct";
 import { newTestApp } from "../support/testApp";
 
+// schemaHash of this bundle with no override, computed on development before the property existed.
+const ABSENT_OVERRIDE_SCHEMA_HASH =
+    "48386ce911b32e957d8566939e4e568916a493e623a0448fbb6fccf2c7043de2";
+
 function writeBundle(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vamsSchemaExecOverrides-"));
     fs.writeFileSync(
@@ -128,5 +132,43 @@ describe("VamsSchemaRegistration executionConfigOverrides", () => {
         expect(synthRegistration(bundleDir, { waitForCallback: "Enabled" }).schemaHash).toEqual(
             enabled.schemaHash
         );
+    });
+
+    test("a hash with no override equals the hash of a registration that never had the property", () => {
+        // The expected value is the hash the registration produced before executionConfigOverrides
+        // existed, computed on the base commit for this exact bundle and props.
+        const absent = synthRegistration(bundleDir);
+        expect(absent.schemaHash).toBe(ABSENT_OVERRIDE_SCHEMA_HASH);
+    });
+
+    test("a deploy-time token lambdaName synthesizes to a stable value and a hash that is stable", () => {
+        const withToken = (): Registration => {
+            const app = newTestApp();
+            const stack = new cdk.Stack(app, "S", {
+                env: { account: "111122223333", region: "us-west-2" },
+            });
+            const fn = new cdk.CfnParameter(stack, "FnName", { type: "String" });
+            new VamsSchemaRegistration(stack, "Reg", {
+                importFunctionName: "importer",
+                artefactsBucket: s3.Bucket.fromBucketName(stack, "Artefacts", "artefacts-bucket"),
+                vamsSchemaDir: bundleDir,
+                executionConfigOverrides: { lambdaName: fn.valueAsString },
+            });
+            const resources = app.synth().getStackByName("S").template.Resources as {
+                [key: string]: { Properties?: { [key: string]: unknown } };
+            };
+            const found = Object.values(resources).filter(
+                (r) => r.Properties?.schemaHash !== undefined
+            );
+            const props = found[0].Properties as { [key: string]: unknown };
+            return {
+                schemaHash: props.schemaHash as string,
+                executionConfigOverrides: JSON.stringify(props.executionConfigOverrides),
+                propertyNames: Object.keys(props),
+            };
+        };
+        const first = withToken();
+        expect(first.executionConfigOverrides).toContain("FnName");
+        expect(withToken().schemaHash).toEqual(first.schemaHash);
     });
 });

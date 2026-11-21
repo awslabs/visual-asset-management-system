@@ -169,9 +169,9 @@ def _scan_tree(root):
 # Reviewed sites the scan flags that are acceptable. Key: (module, function, digest of the call's
 # source); changing the call changes the digest and sends it back through review.
 ALLOWED_SITES = {
-    ("common/compliance/quarantineGuard.py", "quarantine_refusal", "363afb32"):
-        "passes the event to a route helper that returns the concrete path of a refused download "
-        "(an identifier); no request text is logged",
+    ("common/compliance/quarantineGuard.py", "quarantine_refusal", "11648e92"):
+        "passes the event to a route helper that returns the method and concrete path of a refused "
+        "download, copy or workflow launch (identifiers); no request text is logged",
     ("handlers/indexing/sqsBucketSync.py", "parse_event", "c072afb1"):
         "the Message field of an SQS or SNS wrapper around an S3 event notification (bucket and key "
         "names), logged when its JSON cannot be parsed; not typed user text",
@@ -204,9 +204,6 @@ ALLOWED_SITES = {
     ("handlers/workflows/sfn/processWorkflowExecutionOutput.py", "process_metadata_file", "046a464f"):
         "`body.get('message')` reads the 200 response of the metadata service, whose model default is "
         "the fixed text 'Success'; it holds no request text",
-    ("models/common.py", "authorization_error", "75e5a70a"):
-        "`errorBody` is the generic response body the handler returns (a fixed message), "
-        "not the request",
     ("models/common.py", "internal_error", "7fee03a8"):
         "`errorBody` is the generic response body the handler returns (a fixed message), "
         "not the request",

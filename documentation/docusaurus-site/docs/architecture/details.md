@@ -290,12 +290,7 @@ graph LR
 
 ### Configuration Resolution Order
 
-Configuration values resolve through a four-tier fallback chain:
-
-1. **CDK context** (`-c key=value` on command line)
-2. **config.json** file (`infra/config/config.json`)
-3. **Environment variables**
-4. **Hardcoded defaults** (in `getConfig()`)
+Most values come from `config.json` (`infra/config/config.json`), with defaults that `getConfig()` fills in for absent keys. A few values can also come from CDK context (`-c key=value`) or environment variables, in an order that differs by value: the environment comes before `config.json` for the admin and default role settings, and a boolean such as `useWaf` is true when any source says so. The [configuration reference](../deployment/configuration-reference.md) lists each value and its order.
 
 ### Feature Flags
 
@@ -320,9 +315,9 @@ An enabled add-on adds feature flags of its own, which are listed on the add-on'
 
 ## Nested Stack Dependency Chain
 
-The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, and AddonBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there. ApiBuilder3 is built only while `app.auditLogging.search.enabled` is `true` (the default; `false` in the EU Sovereign Cloud template).
+The following diagram shows the nested stacks that `CoreVAMSStack` builds and the deployment order declared between them. Each solid arrow is an explicit `addStackDependency()` call in `infra/lib/core-stack.ts`, drawn from the prerequisite stack to the stack that deploys after it; the stacks the root points at declare no dependency, except LocationService, which declares one on StaticWeb when the static web stack is built. RestApi renders the routes that ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, AddonBuilder, and CustomBuilder register into a single Amazon API Gateway REST API, so it deploys after each of them. The dashed arrow is declared only under a condition: AddonBuilder deploys after ApiBuilder only while an enabled add-on invokes a function built there. ApiBuilder3 is built only while `app.auditLogging.search.enabled` is `true` (the default; `false` in the EU Sovereign Cloud template).
 
-Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. The dotted arrow from PipelineBuilder to SearchBuilder is an explicit dependency declared only when `vectorSearch.enabled` is `true`, so the vector reindex custom resource runs after the system pipelines it launches exist. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, PipelineBuilder, AddonBuilder, RestApi, and StaticWeb are not built.
+Stacks also read each other's outputs (the Lambda layers, `storageResources`, `authResources`, and the VPC), and AWS CloudFormation orders each such reference implicitly. StaticWeb reads the REST API endpoint and `authResources`, and declares its dependencies on RestApi and AuthBuilder explicitly. The dotted arrow from PipelineBuilder to SearchBuilder is an explicit dependency declared only when `vectorSearch.enabled` is `true`, so the vector reindex custom resource runs after the system pipelines it launches exist. When `env.loadContextIgnoreVPCStacks` is `true`, ApiBuilder, ApiBuilder2, ApiBuilder3, SearchBuilder, PipelineBuilder, AddonBuilder, CustomBuilder, RestApi, and StaticWeb are not built.
 
 ```mermaid
 graph TD
@@ -361,6 +356,9 @@ graph TD
     RNB --> Addon
     APIBuild -.-> Addon
 
+    SRB --> Custom["CustomBuilder"]
+    RNB --> Custom
+
     SRB --> REST["RestApi"]
     AB --> REST
     APIBuild --> REST
@@ -368,6 +366,7 @@ graph TD
     APIBuild3 --> REST
     SearchB --> REST
     Addon --> REST
+    Custom --> REST
 
     SRB --> SW["StaticWeb<br/><i>Conditional</i>"]
     REST --> SW

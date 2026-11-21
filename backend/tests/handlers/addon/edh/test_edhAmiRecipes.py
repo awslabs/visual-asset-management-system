@@ -29,8 +29,8 @@ BUILD_TIMED_OUT = recipes.BUILD_TIMEOUT_MINUTES + 5
 FORBIDDEN = type("ForbiddenException", (Exception,), {})
 
 PARAMETER_MISSING = ClientError({"Error": {"Code": "ParameterNotFound", "Message": "missing"}}, "GetParameter")
-PARENT_UNREADABLE = ("not started: SSM parameter /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 "
-                     "could not be read (ParameterNotFound)")
+# The build row records the fixed refusal; the parameter name and error code are logged only.
+PARENT_UNREADABLE = "not started: the parent image's SSM parameter could not be read"
 
 ARN_BEFORE_CLAIMS = "arn:aws:imagebuilder:us-east-1:123456789012:image/x/1.0.0/7"
 
@@ -301,7 +301,8 @@ class TestAdminRecipes:
         body = {**RECIPE_BODY, "recipeId": "names-prefix",
                 "components": [RECIPE_BODY["components"][0], {"name": "big", "data": data}]}
         monkeypatch.setenv("EDH_SESSION_SECRET_PREFIX", "")
-        with pytest.raises(recipes.RecipeConflict, match="unresolved placeholder.*DEPLOY_sessionSecretPrefix"):
+        unresolved = "^a component document names a placeholder the recipe does not declare$"
+        with pytest.raises(recipes.RecipeConflict, match=unresolved):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("names-prefix") is None
         # A value as long as its token keeps the document at 16000 characters; one more is refused.
@@ -315,12 +316,14 @@ class TestAdminRecipes:
     def test_an_undeclared_placeholder_is_refused_at_create_and_at_update(self, world):
         body = {**RECIPE_BODY, "recipeId": "typo",
                 "components": [{"name": "baseline", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}]}
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        # The refusal names no placeholder from the recipe (Rule 11); the builder logs which.
+        refusal = "^a component document names a placeholder the recipe does not declare$"
+        with pytest.raises(recipes.RecipeConflict, match=refusal):
             recipes.create_admin_recipe(AmiRecipeRequestModel(**body), "carol")
         assert store.get_recipe("typo") is None
         admin_row = recipes.create_admin_recipe(
             AmiRecipeRequestModel(**{**body, "parameters": {"missing": "x"}}), "carol")
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        with pytest.raises(recipes.RecipeConflict, match=refusal):
             recipes.update_admin_recipe(admin_row, AmiRecipeRequestModel(**body), "dave")
         assert store.get_recipe("typo")["parameters"] == {"missing": "x"}
 
@@ -387,7 +390,7 @@ class TestDuplicateRecipes:
         with pytest.raises(recipes.RecipeConflict) as err:
             recipes.create_admin_recipe(
                 AmiRecipeRequestModel(**{**self.COPY, "stackName": self.SOURCE["stackName"]}), "carol")
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("al2023-copy") is None
 
     def test_without_duplicate_of_assets_are_still_refused(self, source):
@@ -449,7 +452,7 @@ class TestStackNameUniqueness:
         for name in ("VAMS AL2023 Desktop", "vams al2023 DESKTOP", "  VAMS AL2023 Desktop "):
             with pytest.raises(recipes.RecipeConflict) as err:
                 recipes.create_admin_recipe(AmiRecipeRequestModel(**{**self.MINE, "stackName": name}), "carol")
-            assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+            assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("mine") is None
         created = recipes.create_admin_recipe(
             AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop 2"}), "carol")
@@ -461,7 +464,17 @@ class TestStackNameUniqueness:
         with pytest.raises(recipes.RecipeConflict) as err:
             recipes.create_admin_recipe(
                 AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop"}), "carol")
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
+
+    def test_the_refusal_names_no_other_recipe_and_the_log_does(self, world, monkeypatch):
+        seeded()
+        log = MagicMock()
+        monkeypatch.setattr(recipes, "logger", log)
+        with pytest.raises(recipes.RecipeConflict) as err:
+            recipes.create_admin_recipe(
+                AmiRecipeRequestModel(**{**self.MINE, "stackName": "VAMS AL2023 Desktop"}), "carol")
+        assert "al2023-desktop" not in str(err.value)
+        assert "al2023-desktop" in " ".join(str(call.args[0]) for call in log.info.call_args_list)
 
     def test_update_refuses_another_recipes_stack_name_and_keeps_its_own(self, world):
         seeded()
@@ -471,7 +484,7 @@ class TestStackNameUniqueness:
             recipes.update_admin_recipe(
                 row, AmiRecipeRequestModel(**{**self.MINE, "stackName": "vams al2023 desktop"}), "dave")
 
-        assert str(err.value) == "stackName is already used by recipe 'al2023-desktop'"
+        assert str(err.value) == "stackName is already used by another recipe"
         assert store.get_recipe("mine")["stackName"] == "Mine"
         updated = recipes.update_admin_recipe(row, AmiRecipeRequestModel(**{**self.MINE, "rootSizeGb": 80}), "dave")
         assert updated["stackName"] == "Mine" and updated["rootSizeGb"] == 80
@@ -531,13 +544,15 @@ class TestStartBuild:
 
     def test_an_unresolvable_parent_is_a_conflict(self, world):
         row = seeded(parentImage="edhStack:Nope")
-        with pytest.raises(recipes.RecipeConflict, match="Nope"):
+        with pytest.raises(recipes.RecipeConflict) as err:
             recipes.start_build(row, "carol", only_if_changed=False)
+        assert str(err.value) == "EDH lists no stack of the recipe's kind with the parent image's name"
 
     def test_an_unresolved_component_placeholder_is_a_conflict(self, world):
         row = seeded(components=[{"name": "broken", "data": "schemaVersion: 1.0\n# ${PARAM_missing}\n"}])
-        with pytest.raises(recipes.RecipeConflict, match="PARAM_missing"):
+        with pytest.raises(recipes.RecipeConflict) as err:
             recipes.start_build(row, "carol", only_if_changed=False)
+        assert str(err.value) == "a component document names a placeholder the recipe does not declare"
         assert not store.list_builds(row["recipeId"])
 
 
@@ -560,6 +575,8 @@ class TestCompletion:
         assert world["edh"].register_software_stack.call_args.args[0] == "dcv"
         tags = {t["Key"]: t["Value"] for t in world["ctx"].ec2.create_tags.call_args.kwargs["Tags"]}
         assert tags["vams:edhAmiRecipe"] == "al2023-desktop"
+        # Image Builder tags the snapshots from the distribution configuration; VAMS tags the AMI only.
+        assert world["ctx"].ec2.create_tags.call_args.kwargs["Resources"] == ["ami-0abc0abc0abc0abc0"]
         assert tags[f"edh:visibility:{world['ctx'].cluster_id}"] == "true"
 
     def test_a_simulation_recipe_registers_a_target_node_stack(self, world):
@@ -583,7 +600,8 @@ class TestCompletion:
         assert deactivated == ["42", "43"]
         # keepVersions is 2: v1's AMI is gone, v2's and v3's stay.
         assert v1["amiDeregisteredAt"] and "amiDeregisteredAt" not in v2
-        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId="ami-0abc0abc0abc0abc0")
+        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId="ami-0abc0abc0abc0abc0",
+                                                                  DeleteAssociatedSnapshots=True)
 
     def test_a_failed_image_is_recorded_with_its_reason(self, world):
         row, build = self._built(world)
@@ -2204,8 +2222,8 @@ class TestAmisInUse:
 
         ec2 = world["ctx"].ec2
         assert pruned == [2]
-        ec2.deregister_image.assert_called_once_with(ImageId="ami-al2023-desktop-2")
-        ec2.delete_snapshot.assert_called_once_with(SnapshotId="snap-2")
+        ec2.deregister_image.assert_called_once_with(ImageId="ami-al2023-desktop-2", DeleteAssociatedSnapshots=True)
+        ec2.delete_snapshot.assert_not_called()
         v1 = store.get_build("al2023-desktop", 1)
         assert v1["status"] == status and v1["amiInUseBy"] == ["i-0a", "i-0b"]
         assert "amiDeregisteredAt" not in v1 and "retiredAt" not in v1 and "pruneWarning" not in v1
@@ -2300,7 +2318,8 @@ class TestAmisInUse:
         assert summary["pruned"] == 1 and summary["warnings"] == []
         assert done["status"] == store.STATUS_RETIRED and done["amiDeregisteredAt"] and done["retiredAt"]
         assert "amiInUseBy" not in done and "pruneWarning" not in done and "amiRemovalPending" not in done
-        ec2.delete_snapshot.assert_called_once_with(SnapshotId="snap-1")
+        ec2.deregister_image.assert_called_with(ImageId="ami-al2023-desktop-1", DeleteAssociatedSnapshots=True)
+        ec2.delete_snapshot.assert_not_called()
         world["ctx"].ib.delete_image.assert_called_once_with(imageBuildVersionArn=done["imageBuildVersionArn"])
         assert recipes.sweep()["pruned"] == 0
 
@@ -2346,7 +2365,7 @@ class TestAmisInUse:
         assert done["status"] == store.STATUS_RETIRED and done["amiDeregisteredAt"]
         assert done["retiredAt"] == retired["retiredAt"]
         assert "amiRemovalPending" not in done and "amiInUseBy" not in done
-        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId=v1["amiId"])
+        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId=v1["amiId"], DeleteAssociatedSnapshots=True)
         world["ctx"].ib.delete_image.assert_called_once_with(imageBuildVersionArn=v1["imageBuildVersionArn"])
         world["edh"].delete_software_stack.assert_called_once()
 
@@ -2359,8 +2378,8 @@ class TestAmisInUse:
         assert retired["status"] == store.STATUS_RETIRED and retired["retiredAt"] and retired["amiDeregisteredAt"]
         assert "amiRemovalPending" not in retired and "amiInUseBy" not in retired
         assert store.get_build("al2023-desktop", 1) == retired
-        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId=v1["amiId"])
-        world["ctx"].ec2.delete_snapshot.assert_called_once_with(SnapshotId="snap-1")
+        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId=v1["amiId"], DeleteAssociatedSnapshots=True)
+        world["ctx"].ec2.delete_snapshot.assert_not_called()
         world["ctx"].ib.delete_image.assert_called_once_with(imageBuildVersionArn=v1["imageBuildVersionArn"])
         assert world["ctx"].ec2.instance_filters[-1][0] == {"Name": "image-id", "Values": [v1["amiId"]]}
 
@@ -2441,16 +2460,27 @@ class TestAmisInUse:
         assert store._table().scan()["Items"] == []
         world["ctx"].ec2.deregister_image.assert_not_called()
 
+    def test_pruning_an_ami_already_gone_deletes_the_snapshot_its_build_recorded(self, world):
+        row = seeded(keepVersions=1)
+        self._ami_rows((2, store.STATUS_AVAILABLE), (1, store.STATUS_RETIRED))
+        world["ctx"].ec2.deregister_image.side_effect = AMI_NOT_FOUND
+
+        assert recipes.prune_amis(row) == [1]
+
+        world["ctx"].ec2.delete_snapshot.assert_called_once_with(SnapshotId="snap-1")
+        assert store.get_build("al2023-desktop", 1)["amiDeregisteredAt"]
+
     def test_pruning_does_not_write_back_a_build_row_deleted_during_the_deregistration(self, world):
         row = seeded(keepVersions=1)
         self._ami_rows((2, store.STATUS_AVAILABLE), (1, store.STATUS_RETIRED))
-        world["ctx"].ec2.deregister_image.side_effect = lambda **kwargs: self._recipe_deleted()
+        world["ctx"].ec2.deregister_image.side_effect = lambda **kwargs: self._recipe_deleted() or {}
 
         # The AMI is gone, so it counts as pruned.
         assert recipes.prune_amis(row) == [1]
 
         assert store._table().scan()["Items"] == []
-        world["ctx"].ec2.delete_snapshot.assert_called_once_with(SnapshotId="snap-1")
+        world["ctx"].ec2.deregister_image.assert_called_once_with(ImageId="ami-al2023-desktop-1",
+                                                                  DeleteAssociatedSnapshots=True)
 
     @pytest.mark.parametrize("moment", ["stack deactivation", "in-use check", "deregistration"])
     def test_a_retire_whose_build_row_a_recipe_delete_removes_answers_as_a_concurrent_delete(
@@ -2464,7 +2494,7 @@ class TestAmisInUse:
                 return ["i-desk"]
             monkeypatch.setattr(recipes.builder, "instances_using_ami", the_recipe_is_deleted_meanwhile)
         else:
-            world["ctx"].ec2.deregister_image.side_effect = lambda **kwargs: self._recipe_deleted()
+            world["ctx"].ec2.deregister_image.side_effect = lambda **kwargs: self._recipe_deleted() or {}
 
         with pytest.raises(recipes.RecipeConflict, match=recipes.RECIPE_DELETING):
             recipes.retire_build(row, v1)

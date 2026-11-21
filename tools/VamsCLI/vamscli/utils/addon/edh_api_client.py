@@ -9,6 +9,7 @@ before it has finished loading.
 """
 
 import re
+import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
@@ -33,6 +34,8 @@ from .edh_exceptions import (
     EdhUnavailableError, EdhOutcomeUnknownError, EdhStartInProgressError,
     EdhContainerJobNotFoundError, EdhAmiRecipeNotFoundError, EdhAmiRecipeBuildNotFoundError,
     EdhReservationFullError, EdhCapacityReservationNotFoundError, EdhDisplaySessionEndedError,
+    EdhQuotaExceededError,
+    EdhDesktopErrorError,
 )
 
 
@@ -64,6 +67,9 @@ EDH_RESERVATION_FULL_CODE = "RESERVATION_FULL"
 # The code a connect or a desktop sign-in is refused with when the workstation is running but its remote
 # display session has ended.
 EDH_DISPLAY_SESSION_ENDED_CODE = "DISPLAY_SESSION_ENDED"
+# The code a connect, a desktop sign-in or a start is refused with when EDH reports a workstation that has run in its
+# error state (its remote display stopped responding; its disk is kept).
+EDH_DESKTOP_ERROR_CODE = "DESKTOP_ERROR"
 
 # The 503 a launch answers when VAMS could not read the capacity reservation from EC2: EDH was not
 # called, so the generic "the EDH cluster did not answer" would misname the cause.
@@ -122,6 +128,14 @@ def _edh_ami_build_not_found(response, recipe_id: str, version: int) -> Optional
     if message == _EDH_AMI_RECIPE_BUILD_NOT_FOUND_MESSAGE:
         return EdhAmiRecipeBuildNotFoundError(f"AMI recipe '{recipe_id}' build v{version} not found")
     return None
+
+
+def _with_json_field(exc: Exception, name: str, value: Any) -> Exception:
+    """``exc`` carrying ``name`` in its own ``json_fields`` beside those of its class, for --json-output
+    and the MCP tool result; the class's dict is never changed."""
+    fields = getattr(exc, "json_fields", None)
+    exc.json_fields = {**(fields if isinstance(fields, dict) else {}), name: value}
+    return exc
 
 
 def _as_sentence(text: str) -> str:
@@ -194,7 +208,14 @@ class EdhAPIClientMixin:
                 return EdhReservationFullError(f"{operation} refused (409): {error_message}")
             if _edh_body_code(e.response) == EDH_DISPLAY_SESSION_ENDED_CODE:
                 return EdhDisplaySessionEndedError(f"{operation} refused (409): {error_message}")
+            if _edh_body_code(e.response) == EDH_DESKTOP_ERROR_CODE:
+                return EdhDesktopErrorError(f"{operation} refused (409): {error_message}")
             return EdhOperationError(f"{operation} refused (409): {error_message}")
+        if status_code == 429:
+            # _make_request resends a throttling 429 and raises RetryExhaustedError when it persists,
+            # so a 429 here is the add-on's quota refusal, which resending cannot clear.
+            hint = f" Run '{list_command}' to see what counts toward it." if list_command else ""
+            return EdhQuotaExceededError(f"{operation} refused (429): {_as_sentence(error_message)}{hint}")
         if list_command is not None and (
                 status_code == 504
                 or (status_code == 502 and _edh_body_flag(e.response, "outcomeUnknown"))):
@@ -249,6 +270,11 @@ class EdhAPIClientMixin:
             desktop back from EDH, lastError null, launchAttempts 0.
             The launch runs asynchronously; poll get_edh_workstation with the bootstrapId.
 
+        A bootstrapId is generated when ``data`` has none, and every business error this method raises
+        carries the one sent in its ``json_fields``: when the answer was lost, the launch may have been
+        accepted, and re-sending that id cannot launch a second workstation. A global error (a throttled,
+        blocked or refused request) is an answer that nothing was carried out and passes unchanged.
+
         Raises:
             InvalidEdhRequestError: When the request is rejected, among others with "instanceType does
                 not match the image's architecture" when the image's profile lists the type only under
@@ -260,24 +286,31 @@ class EdhAPIClientMixin:
             EdhReservationNotPermittedError: When the caller's role may see the capacity reservation
                 but not launch into it (403 RESERVATION_NOT_PERMITTED)
             EdhOperationError: When the launch is refused for the record's current state
+            EdhOutcomeUnknownError: When EDH did not confirm the launch (a gateway 504, or a flagged
+                502); it may have been accepted
             EdhUnavailableError: When the EDH cluster did not answer, or the capacity reservation
                 could not be read (503)
             AuthenticationError: When authentication fails
             APIError: When API call fails
         """
+        body = dict(data)
+        bootstrap_id = body.get('bootstrapId') or str(uuid.uuid4())
+        body['bootstrapId'] = bootstrap_id
         try:
-            response = self.post(API_EDH_WORKSTATIONS, data=data, include_auth=True,
+            response = self.post(API_EDH_WORKSTATIONS, data=body, include_auth=True,
                                  raise_http_errors=True)
             return response.json()
 
         except requests.exceptions.HTTPError as e:
-            raise self._edh_error(e, "Workstation launch")
+            raise _with_json_field(
+                self._edh_error(e, "Workstation launch", list_command=_EDH_WORKSTATION_LISTING),
+                'bootstrapId', bootstrap_id)
 
         except GlobalInfrastructureError:
             raise
 
         except Exception as e:
-            raise APIError(f"Failed to launch workstation: {e}")
+            raise _with_json_field(APIError(f"Failed to launch workstation: {e}"), 'bootstrapId', bootstrap_id)
 
     def get_edh_workstation(self, session_id: str) -> Dict[str, Any]:
         """
@@ -337,6 +370,8 @@ class EdhAPIClientMixin:
         Raises:
             EdhWorkstationNotFoundError: When the workstation is not found or not the caller's
             EdhOperationError: When the workstation cannot be started from its current state
+            EdhDesktopErrorError: When EDH reports the stopped workstation in its error state (HTTP 409,
+                code DESKTOP_ERROR); stop it, then start it again
             EdhStartInProgressError: When an earlier start of the workstation may still be under way
             EdhOutcomeUnknownError: When the start was not confirmed; it may be in progress
             EdhUnavailableError: When the EDH cluster did not answer
@@ -455,6 +490,8 @@ class EdhAPIClientMixin:
                 (HTTP 409, "Workstation is not ready for connection")
             EdhDisplaySessionEndedError: When the workstation is running but its remote display
                 session has ended (HTTP 409, code DISPLAY_SESSION_ENDED); stop it, then start it again
+            EdhDesktopErrorError: When EDH reports the workstation in its error state (HTTP 409, code
+                DESKTOP_ERROR); its disk is kept: wait a few minutes, or stop it, then start it again
             EdhUnavailableError: When the EDH cluster did not answer
             AuthenticationError: When authentication fails
             APIError: When API call fails
@@ -1638,6 +1675,7 @@ class EdhAPIClientMixin:
         Raises:
             InvalidEdhRequestError: When the request is rejected
             EdhOperationError: When the submission is refused
+            EdhQuotaExceededError: When EDH refused the job for a quota (429)
             EdhOutcomeUnknownError: When EDH did not confirm the submission; it may be in progress
             EdhUnavailableError: When the EDH cluster did not answer
             AuthenticationError: When authentication fails

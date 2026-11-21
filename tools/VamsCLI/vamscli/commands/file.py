@@ -19,7 +19,7 @@ from ..utils.exceptions import (
     UploadSequenceError, FileUploadError, FileNotFoundError, FileOperationError,
     InvalidPathError, FilePermissionError, FileAlreadyExistsError, 
     FileArchivedError, InvalidVersionError, AssetNotFoundError, InvalidAssetDataError,
-    DatabaseNotFoundError, APIError, UploadStatusNotFoundError
+    DatabaseNotFoundError, APIError, UploadStatusNotFoundError, GlobalInfrastructureError
 )
 from ..utils.file_processor import (
     FileInfo, collect_files_from_directory, collect_files_from_list,
@@ -231,7 +231,10 @@ def wait_for_async_ingestion(api_client, database_id: str, asset_id: str, upload
     passes (an upload still processing is marked timed_out). An upload whose status cannot be read
     (not found, for example a deployment without the status route, or an invalid request) is
     reported with status 'unknown' at once. Any other failure (a 5xx or a network error) is
-    transient: the upload is polled again on the next round, until the timeout."""
+    transient: the upload is polled again on the next round, until the timeout. A global error
+    (throttling past the retries, a sign-in that stopped working, a denial, a web ACL block) ends
+    the wait: the files are already uploaded, so each upload not yet settled is reported 'unknown'
+    with the error and the command to check it later, and the caller still prints the result."""
     deadline = clock() + max(0, int(timeout_seconds or 0))
     entries = {}
     pending = list(upload_ids)
@@ -239,6 +242,15 @@ def wait_for_async_ingestion(api_client, database_id: str, asset_id: str, upload
         for upload_id in list(pending):
             try:
                 body = api_client.get_upload_status(database_id, asset_id, upload_id)
+            except GlobalInfrastructureError as e:
+                log_debug(f"Upload status of {upload_id} could not be read, stopping the wait: {e}")
+                for unsettled in pending:
+                    entries[unsettled] = {
+                        "upload_id": unsettled, "status": "unknown", "files": [],
+                        "error": f"{type(e).__name__}: {e}",
+                        "check_command": f"vamscli file upload-status -d {database_id} -a {asset_id} -u {unsettled}",
+                    }
+                return [entries[uid] for uid in upload_ids]
             except (UploadStatusNotFoundError, InvalidAssetDataError) as e:
                 log_debug(f"Upload status of {upload_id} is not available: {e}")
                 entries[upload_id] = {"upload_id": upload_id, "status": "unknown", "files": [],
