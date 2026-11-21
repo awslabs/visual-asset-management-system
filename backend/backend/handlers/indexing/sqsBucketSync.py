@@ -41,6 +41,7 @@ from common.s3MetadataKeys import (
 from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
 )
+from common.assetLocations import fill_location_attributes
 from common.s3 import is_object_version_archived, region_routing_s3_client, region_routing_s3_resource
 from common.assetHistory import (
     CHANGE_SOURCE_UNARCHIVE_DIRECT,
@@ -866,8 +867,11 @@ def get_or_create_database_for_bucket(bucket_id: str, bucket_name: str, prefix: 
 ARCHIVED_RECORD_GONE = object()
 
 
-def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict):
+def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict, bucket_name: Optional[str] = None):
     """Restore an archived asset record after a direct S3 upload to its prefix.
+
+    `bucket_name` is the event's bucket, the bucket of `bucket_id`'s registration. The restored row gets
+    the location index attributes from it when the archived row lacks them (`fill_location_attributes`).
 
     DynamoDB-only unarchive: the asset record moves back from the
     {databaseId}#deleted partition to the live partition. Previously archived
@@ -920,6 +924,8 @@ def restore_archived_asset(bucket_id: str, asset_id: str, archived_asset: Dict):
             return ARCHIVED_RECORD_GONE
         restored = {k: v for k, v in current.items()
                     if k not in ('status', 'archivedAt', 'archivedBy', 'archivedReason')}
+        # A row the location index backfill has not reached gets the attributes on the copy.
+        fill_location_attributes(restored, bucket_name)
         restored['databaseId'] = live_db_id
         restored['unarchivedAt'] = utc_now().isoformat()
         restored['unarchivedBy'] = 'SYSTEM_USER'
@@ -1840,7 +1846,8 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
                         f"Object {object_key} no longer exists; not restoring archived asset {asset_id}"
                     )
                     return True, True, f"Skipped stale create event for archived asset {asset_id}"
-                restored_database_id = restore_archived_asset(bucket_id, asset_id, archived_asset)
+                restored_database_id = restore_archived_asset(bucket_id, asset_id, archived_asset,
+                                                              bucket_name=bucket_name)
                 if restored_database_id is ARCHIVED_RECORD_GONE:
                     # Deleted since the lookup: handled below like any other key with no asset.
                     logger.info(

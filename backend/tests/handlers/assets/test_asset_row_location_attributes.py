@@ -4,15 +4,16 @@
 """Every asset-row writer sets or keeps the location index attributes.
 
 `locationBucket` and `locationKey` (common/assetLocations.py) are what AssetLocationGSI indexes. An
-asset is created with them, and the writers that put a whole row back (archive, unarchive, the
-version reference, preview delete, the bucket-sync restore) must carry them over, or the asset drops
-out of the index. Two parts:
+asset is created with them, and the writers that put a whole row back (archive, unarchive, preview
+delete, the bucket-sync restore) must carry them over, or the asset drops out of the index, and give
+them to a row that lacks them (`fill_location_attributes`), so a copy the backfill's last pass did not
+see is indexed too. Two parts:
 
 - an inventory of every write on the asset table handle under backend/backend, found by reading
   the source: a new writer fails it until it is listed here, and a new whole-row put also needs a
   preservation test below;
-- one behaviour test per whole-row writer, each driven with a stored row that carries the
-  attributes.
+- behaviour tests per whole-row writer, driven with a stored row that carries the attributes and
+  with one that lacks them.
 
 The inventory finds writes made through a module's asset table handle (`asset_table`,
 `asset_storage_table`, a local `table = dynamodb.Table(asset_table_name)`). A helper that receives
@@ -250,28 +251,61 @@ class TestCreateAssetSetsTheAttributes:
         assert (row["locationBucket"], row["locationKey"]) == ("vams-assets", "asset-1/")
 
 
+@pytest.fixture
+def asset_service(monkeypatch):
+    """assetService with one stored asset row (`stored["row"]`) and the registration's bucket name
+    `vams-assets`."""
+    m = _load_asset_service()
+    stored = {"row": _stored_row()}
+    asset_table = MagicMock()
+    asset_table.get_item.side_effect = lambda Key, **_: (
+        {"Item": dict(stored["row"])} if Key["databaseId"] == stored["row"]["databaseId"] else {})
+    db_table = MagicMock()
+    db_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
+    for name, value in {
+        "asset_table": asset_table, "db_table": db_table,
+        "write_asset_history_record": MagicMock(), "send_subscription_email": MagicMock(),
+        "get_asset_bucket_details": MagicMock(return_value={"bucketName": "vams-assets"}),
+        "archive_multi_assetFiles": MagicMock(), "archive_file_preview": MagicMock(),
+        "unarchive_multi_assetFiles": MagicMock(return_value=0), "unarchive_file_preview": MagicMock(),
+        "update_asset_count": MagicMock(),
+    }.items():
+        monkeypatch.setattr(m, name, value)
+    return m, stored, asset_table
+
+
+def _without_index_attributes(row):
+    return {k: v for k, v in row.items() if k not in INDEX_ATTRIBUTES}
+
+
+def _wire_preview_delete(monkeypatch, row):
+    asset_table = MagicMock()
+    monkeypatch.setattr(_assetFiles, "asset_table", asset_table)
+    monkeypatch.setattr(_assetFiles, "get_asset_with_permissions", MagicMock(return_value=row))
+    monkeypatch.setattr(_assetFiles, "get_default_bucket_details",
+                        MagicMock(return_value={"bucketName": "vams-assets"}))
+    monkeypatch.setattr(_assetFiles, "delete_s3_object_all_versions", MagicMock(return_value=True))
+    monkeypatch.setattr(_assetFiles, "send_subscription_email", MagicMock())
+    return asset_table
+
+
+def _wire_bucket_sync_restore(monkeypatch, stored_archived_row):
+    m = _load_bucket_sync()
+    table = MagicMock()
+    table.get_item.side_effect = lambda Key, **_: (
+        {"Item": dict(stored_archived_row)} if Key.get("databaseId") == "db1#deleted"
+        else {"Item": {"databaseId": "db1"}})
+    dynamodb = MagicMock()
+    dynamodb.Table.return_value = table
+    monkeypatch.setattr(m, "dynamodb", dynamodb)
+    monkeypatch.setattr(m, "update_asset_count", MagicMock())
+    monkeypatch.setattr(m, "write_asset_history_record", MagicMock())
+    monkeypatch.setattr(m, "asset_cache", MagicMock())
+    return m, table
+
+
 @pytest.mark.unit
 class TestWholeRowWritersKeepTheAttributes:
-    @pytest.fixture
-    def asset_service(self, monkeypatch):
-        m = _load_asset_service()
-        stored = {"row": _stored_row()}
-        asset_table = MagicMock()
-        asset_table.get_item.side_effect = lambda Key, **_: (
-            {"Item": dict(stored["row"])} if Key["databaseId"] == stored["row"]["databaseId"] else {})
-        db_table = MagicMock()
-        db_table.get_item.return_value = {"Item": {"databaseId": "db1"}}
-        for name, value in {
-            "asset_table": asset_table, "db_table": db_table,
-            "write_asset_history_record": MagicMock(), "send_subscription_email": MagicMock(),
-            "get_asset_bucket_details": MagicMock(return_value={"bucketName": "vams-assets"}),
-            "archive_multi_assetFiles": MagicMock(), "archive_file_preview": MagicMock(),
-            "unarchive_multi_assetFiles": MagicMock(return_value=0), "unarchive_file_preview": MagicMock(),
-            "update_asset_count": MagicMock(),
-        }.items():
-            monkeypatch.setattr(m, name, value)
-        return m, stored, asset_table
-
     def test_archive(self, asset_service):
         m, _, asset_table = asset_service
         request = MagicMock(reason="cleanup")
@@ -301,33 +335,70 @@ class TestWholeRowWritersKeepTheAttributes:
         assert "locationBucket" not in update["UpdateExpression"] and "locationKey" not in update["UpdateExpression"]
 
     def test_preview_delete(self, monkeypatch):
-        asset_table = MagicMock()
-        monkeypatch.setattr(_assetFiles, "asset_table", asset_table)
-        monkeypatch.setattr(_assetFiles, "get_asset_with_permissions",
-                            MagicMock(return_value=_stored_row(previewLocation={"Key": "previews/a1/p.png"})))
-        monkeypatch.setattr(_assetFiles, "get_default_bucket_details",
-                            MagicMock(return_value={"bucketName": "vams-assets"}))
-        monkeypatch.setattr(_assetFiles, "delete_s3_object_all_versions", MagicMock(return_value=True))
-        monkeypatch.setattr(_assetFiles, "send_subscription_email", MagicMock())
+        asset_table = _wire_preview_delete(monkeypatch, _stored_row(previewLocation={"Key": "previews/a1/p.png"}))
         _assetFiles.delete_asset_preview("db1", "a1", {"tokens": ["u1"]})
         row = _put_item(asset_table)
         assert "previewLocation" not in row
         assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
 
     def test_bucket_sync_restore(self, monkeypatch):
-        m = _load_bucket_sync()
         archived = _stored_row(database_id="db1#deleted", status="archived")
-        table = MagicMock()
-        table.get_item.side_effect = lambda Key, **_: (
-            {"Item": dict(archived)} if Key.get("databaseId") == "db1#deleted" else {"Item": {"databaseId": "db1"}})
-        dynamodb = MagicMock()
-        dynamodb.Table.return_value = table
-        monkeypatch.setattr(m, "dynamodb", dynamodb)
-        monkeypatch.setattr(m, "update_asset_count", MagicMock())
-        monkeypatch.setattr(m, "write_asset_history_record", MagicMock())
+        m, table = _wire_bucket_sync_restore(monkeypatch, archived)
         # The caller's image predates the attributes; the row as stored carries them.
-        image = {k: v for k, v in archived.items() if k not in INDEX_ATTRIBUTES}
-        assert m.restore_archived_asset("b1", "a1", image) == "db1"
+        assert m.restore_archived_asset("b1", "a1", _without_index_attributes(archived)) == "db1"
         row = _put_item(table)
         assert row["databaseId"] == "db1"
         assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_stored_attributes_are_kept_as_stored(self, asset_service):
+        # A row that carries both attributes is written back with them, not recomputed from the
+        # registration (here a different bucket name).
+        m, _, asset_table = asset_service
+        m.get_asset_bucket_details = MagicMock(return_value={"bucketName": "another-name"})
+        m.archive_asset("db1", "a1", MagicMock(reason="cleanup"), {"tokens": ["u1"]})
+        assert {k: _put_item(asset_table)[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+
+@pytest.mark.unit
+class TestWholeRowWritersFillMissingAttributes:
+    """A row the backfill has not reached is written back WITH the attributes (L1): the backfill's
+    consistent verification scan is not a snapshot, so a copy written behind its cursor would
+    otherwise stay out of the index while the marker says complete."""
+
+    def test_archive(self, asset_service):
+        m, stored, asset_table = asset_service
+        stored["row"] = _without_index_attributes(_stored_row())
+        m.archive_asset("db1", "a1", MagicMock(reason="cleanup"), {"tokens": ["u1"]})
+        row = _put_item(asset_table)
+        assert row["databaseId"] == "db1#deleted"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_unarchive(self, asset_service):
+        m, stored, asset_table = asset_service
+        stored["row"] = _without_index_attributes(_stored_row(database_id="db1#deleted", status="archived"))
+        m.unarchive_asset("db1", "a1", MagicMock(reason="restore", unarchiveFiles=False), {"tokens": ["u1"]})
+        row = _put_item(asset_table)
+        assert row["databaseId"] == "db1"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_preview_delete(self, monkeypatch):
+        row = _without_index_attributes(_stored_row(previewLocation={"Key": "previews/a1/p.png"}))
+        asset_table = _wire_preview_delete(monkeypatch, row)
+        _assetFiles.delete_asset_preview("db1", "a1", {"tokens": ["u1"]})
+        assert {k: _put_item(asset_table)[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+
+    def test_bucket_sync_restore(self, monkeypatch):
+        # The registration's bucket name is the event's bucket: no extra registration read.
+        archived = _without_index_attributes(_stored_row(database_id="db1#deleted", status="archived"))
+        m, table = _wire_bucket_sync_restore(monkeypatch, archived)
+        assert m.restore_archived_asset("b1", "a1", archived, bucket_name="vams-assets") == "db1"
+        row = _put_item(table)
+        assert row["databaseId"] == "db1"
+        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+        table.query.assert_not_called()
+
+    def test_bucket_sync_restore_without_a_bucket_name_invents_nothing(self, monkeypatch):
+        archived = _without_index_attributes(_stored_row(database_id="db1#deleted", status="archived"))
+        m, table = _wire_bucket_sync_restore(monkeypatch, archived)
+        assert m.restore_archived_asset("b1", "a1", archived) == "db1"
+        assert not set(INDEX_ATTRIBUTES) & set(_put_item(table))

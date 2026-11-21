@@ -82,7 +82,7 @@ class TestProcessRecordRestoresArchivedAsset:
 
         assert success is True and should_index is True
         m.restore_archived_asset.assert_called_once_with(
-            "bucket-1", "x-asset-1", _archived_asset())
+            "bucket-1", "x-asset-1", _archived_asset(), bucket_name="asset-bucket")
         # Restore path must not run the fresh-create flow
         m.create_new_asset.assert_not_called()
         m.get_or_create_database_for_bucket.assert_not_called()

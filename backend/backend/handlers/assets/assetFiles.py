@@ -44,8 +44,8 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    contains, folder_listing_prefix, in_folder, is_folder_location, names_own_object, object_key_for,
-    relative_path_in,
+    contains, fill_location_attributes, folder_listing_prefix, in_folder, is_folder_location,
+    names_own_object, object_key_for, relative_path_in,
 )
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
@@ -4798,8 +4798,8 @@ def delete_asset_preview(databaseId: str, assetId: str, claims_and_roles: Dict) 
         # Clear the previewLocation from the asset record
         asset.pop('previewLocation', None)
         
-        # Update the asset record in DynamoDB
-        asset_table.put_item(Item=asset)
+        # Update the asset record in DynamoDB (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket))
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)

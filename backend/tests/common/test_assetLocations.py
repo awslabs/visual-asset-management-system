@@ -462,6 +462,35 @@ class TestIndexAttributes:
         assert al.location_attributes("", "a/") == {}
         assert al.location_attributes(None, "a/") == {}
 
+    def test_fill_location_attributes_sets_them_on_a_row_without_them(self):
+        row = {"databaseId": "db1", "assetId": "a1", "assetLocation": {"Key": "/a1/"}}
+        assert al.has_location_attributes(row) is False
+        assert al.fill_location_attributes(row, BUCKET) is row
+        assert (row[al.LOCATION_BUCKET_ATTRIBUTE], row[al.LOCATION_KEY_ATTRIBUTE]) == (BUCKET, "a1/")
+        assert al.has_location_attributes(row) is True
+
+    def test_fill_location_attributes_keeps_attributes_already_on_the_row(self):
+        row = _row("db1", "a1", "a1/")
+        before = dict(row)
+        assert al.fill_location_attributes(row, "another-bucket") == before
+
+    def test_fill_location_attributes_completes_a_row_with_one_of_them(self):
+        row = {"assetLocation": {"Key": "a1/"}, al.LOCATION_BUCKET_ATTRIBUTE: BUCKET}
+        al.fill_location_attributes(row, BUCKET)
+        assert row[al.LOCATION_KEY_ATTRIBUTE] == "a1/"
+
+    @pytest.mark.parametrize("row,bucket_name", [
+        ({"assetLocation": {"Key": "/"}}, BUCKET),      # the bucket root holds no key
+        ({"assetLocation": {}}, BUCKET),
+        ({}, BUCKET),
+        ({"assetLocation": "a1/"}, BUCKET),             # not a location map
+        ({"assetLocation": {"Key": "a1/"}}, None),      # no registration bucket name
+        ({"assetLocation": {"Key": "a1/"}}, ""),
+    ])
+    def test_fill_location_attributes_invents_nothing(self, row, bucket_name):
+        before = dict(row)
+        assert al.fill_location_attributes(row, bucket_name) == before
+
 
 @pytest.mark.unit
 class TestResolveOwner:

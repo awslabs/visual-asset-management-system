@@ -328,6 +328,27 @@ def location_attributes(bucket_name: Optional[str], location_key: Optional[str])
     return {LOCATION_BUCKET_ATTRIBUTE: bucket_name, LOCATION_KEY_ATTRIBUTE: location}
 
 
+def has_location_attributes(row: Optional[Dict[str, Any]]) -> bool:
+    """Whether an asset row carries both index attributes."""
+    return bool(row) and bool(row.get(LOCATION_BUCKET_ATTRIBUTE)) and bool(row.get(LOCATION_KEY_ATTRIBUTE))
+
+
+def fill_location_attributes(row: Dict[str, Any], bucket_name: Optional[str]) -> Dict[str, Any]:
+    """Give a whole asset row that is about to be written back the index attributes it lacks.
+
+    A row read before the backfill reached it has none, and the backfill's consistent verification
+    scan is not a snapshot: a copy written behind its cursor (an archive or unarchive) would stay out
+    of the index while the marker says complete. So each writer that puts a whole row back calls this
+    with the bucket name of the row's registration. A row that already carries both attributes is
+    left as it is, and a row whose location holds no key gets none. Returns `row`.
+    """
+    if has_location_attributes(row):
+        return row
+    location = row.get('assetLocation')
+    row.update(location_attributes(bucket_name, location.get('Key') if isinstance(location, dict) else None))
+    return row
+
+
 def candidate_locations(object_key: Optional[str]) -> List[str]:
     """The stored locations that could contain `object_key`, deepest first.
 
