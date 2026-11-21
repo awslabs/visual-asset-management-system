@@ -7,6 +7,11 @@ import React from "react";
 import "./AssetLinkMetadata.css";
 import { AssetLinkMetadata as AssetLinkMetadataType, TreeNodeItem } from "../types/AssetLinksTypes";
 import { MetadataContainer } from "../../../metadataV2";
+import { useAllowedRoutes } from "../../../../features/orchestration/permissions/useAllowedRoutes";
+
+// Removing a stored field of an asset link, by row delete or by a bulk-edit save that leaves it out,
+// needs DELETE on this route.
+const ASSET_LINK_METADATA_ROUTE = "/asset-links/{assetLinkId}/metadata";
 
 interface AssetLinkMetadataProps {
     assetLinkId: string;
@@ -38,6 +43,7 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
     onMetadataChange,
     initialMetadata = [],
 }) => {
+    const { can } = useAllowedRoutes();
     // Convert old format to new format if needed
     const convertedInitialData = initialMetadata.map((item) => ({
         metadataKey: item.metadataKey,
@@ -67,6 +73,8 @@ export const AssetLinkMetadata: React.FC<AssetLinkMetadataProps> = ({
             initialData={mode === "upload" ? convertedInitialData : undefined}
             onDataChange={mode === "upload" ? handleMetadataChange : undefined}
             restrictMetadataOutsideSchemas={restrictMetadataOutsideSchemas}
+            // A draft in the upload flow has nothing stored yet, so nothing to remove.
+            canDelete={mode === "upload" || can("DELETE", ASSET_LINK_METADATA_ROUTE)}
         />
     );
 };

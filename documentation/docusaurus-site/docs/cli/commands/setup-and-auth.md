@@ -30,11 +30,11 @@ vamscli setup <BASE_URL> [OPTIONS]
 
 ### What setup does
 
-1. Validates the base URL format (accepts any HTTP/HTTPS URL).
+1. Validates the base URL format: an HTTPS URL, or plain HTTP for `localhost` or a loopback address only.
 2. If the base URL is a direct Amazon API Gateway `execute-api` endpoint with no path, appends the REST API stage segment (`/api`) so the bootstrap calls resolve. A front (Amazon CloudFront or ALB) maps the bootstrap routes `/api/version` and `/api/amplify-config` onto the stage, so a fronted or custom-domain URL is used unchanged.
 3. Checks API version compatibility using the base URL.
 4. Fetches Amplify configuration from `<base-url>/api/amplify-config`.
-5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path).
+5. Extracts the Amazon API Gateway URL from the `api` field in the response (this value already includes the stage path), and refuses it under the same HTTPS rule as the base URL.
 6. Stores both the original base URL and extracted API Gateway URL locally.
 7. Sets the profile as active when configuration is saved.
 8. Clears existing authentication profiles (with `--force`).
@@ -177,7 +177,7 @@ Username/password sign-in works only for users that exist natively in the Amazon
 -   **Amazon Cognito federated to OIDC** (`useCognito.useOidc`) — same as SAML; the identity lives in the external provider.
 
 ```bash
-vamscli auth login --user-id user@example.com --token-override "your-token"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin
 ```
 
 Obtain the token from the identity provider or from the VAMS web application after signing in through the federated login button. Token override validates the token against the VAMS API rather than against a specific issuer, so a token from any of these providers works. A user pool with federation enabled still accepts username/password for its **native** users (for example the initial administrator), so an administrator can keep using `--username`.
@@ -601,7 +601,7 @@ vamscli profile switch production
 
 ```bash
 # Set override token
-vamscli auth login --user-id user@example.com --token-override "external_token" --expires-at "+7200"
+echo "$VAMS_TOKEN" | vamscli auth login --user-id user@example.com --token-override-stdin --expires-at "+7200"
 
 # Use commands normally
 vamscli assets list -d my-database

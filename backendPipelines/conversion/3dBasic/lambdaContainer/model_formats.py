@@ -19,11 +19,14 @@ import re
 import struct
 import subprocess
 import tempfile
+import time
 import zipfile
 
 import numpy as np
 
 import archive_guard
+import expansion_bounds
+import scene_limits
 import units_axes
 import usd_io
 import vertex_normals
@@ -137,6 +140,47 @@ def _check_3mf(path, work_dir):
                         check_xml_safe(handle)
                 except ValueError as e:
                     raise ValueError(f"{name} is not a 3MF package this pipeline reads: {member}: {e}")
+
+
+def check_collada_scene(path, name, max_triangles=None, max_nodes=None):
+    """Refuse a COLLADA file before ``trimesh`` reads it when its scene places more nodes than the
+    conversion bound (``expansion_bounds.CONVERSION_MAX_SCENE_NODES`` unless ``max_nodes`` is given),
+    places more triangles or vertices through instancing than the triangle budget allows beyond what
+    the file stores once, or places a node inside itself. ``trimesh`` builds a graph entry and a copy of
+    the vertices for every placement of every ``instance_node``, so the placements are counted from the
+    document in one linear pass first, as ``check_fbx_scene`` does for FBX."""
+    import scene_limits
+    limit = scene_limits.SceneLimit(
+        "COLLADA scene", max_triangles,
+        expansion_bounds.CONVERSION_MAX_SCENE_NODES if max_nodes is None else max_nodes)
+    try:
+        size = expansion_bounds.collada_scene_size(path, limit.max_nodes)
+    except expansion_bounds.ExpansionCycle:
+        raise ValueError(f"{name}: a node in the COLLADA scene places itself through instance_node, so the "
+                         f"scene cannot be converted.")
+    except ValueError as e:
+        raise ValueError(f"{name} could not be read as COLLADA: {e}")
+    if not limit.expect(size.nodes):
+        raise ValueError(f"{name}: the COLLADA scene expands to more than {limit.max_nodes:,} nodes, "
+                         f"more than this function converts.")
+    allowed_triangles = max(limit.max_triangles, size.stored_triangles)
+    if size.triangles > allowed_triangles:
+        raise ValueError(f"{name}: the COLLADA scene places more than {allowed_triangles:,} triangles through "
+                         f"instancing, more than this function converts.")
+    allowed_vertices = max(scene_limits.VERTICES_PER_TRIANGLE * limit.max_triangles, size.stored_vertices)
+    if size.vertices > allowed_vertices:
+        raise ValueError(f"{name}: the COLLADA scene places more than {allowed_vertices:,} vertices through "
+                         f"instancing, more than this function converts.")
+    return size
+
+
+def job_max_scene_nodes(job):
+    """The node bound a job carries (set from the task's memory), the default when it carries none."""
+    return int(job.get("max_scene_nodes") or expansion_bounds.CONVERSION_MAX_SCENE_NODES)
+
+
+# The share of the worker's time a USD scene may spend being read; the rest is for writing the output.
+USD_READ_TIME_SHARE = 0.75
 
 
 def fbx_meters_per_unit(path, scan_bytes=64 * 1024 ** 2):
@@ -282,11 +326,15 @@ def load_model(job, trimesh):
     path = job["input_file"]
     extension = os.path.splitext(job["input_name"])[1].lower()
     if extension in USD_EXTENSIONS:
-        scene, meters, up = usd_io.read_usd(path, job["input_dir"])
+        budget = float(job.get("tool_timeout_seconds") or 600) * USD_READ_TIME_SHARE
+        limit = scene_limits.SceneLimit(os.path.basename(path), max_nodes=job_max_scene_nodes(job))
+        scene, meters, up = usd_io.read_usd(path, job["input_dir"], limit=limit,
+                                            deadline=time.monotonic() + budget)
         return scene, meters, up
     declared_meters = declared_up = None
     if extension == '.dae':
         declared_meters, declared_up = _check_dae(path)
+        check_collada_scene(path, os.path.basename(path), max_nodes=job_max_scene_nodes(job))
     elif extension == '.3mf':
         _check_3mf(path, os.path.dirname(path))
     resolver = referenced_files.ConfinedResolver(
@@ -322,7 +370,27 @@ def apply_plan(loaded, plan):
     matrix = units_axes.transform_matrix(plan)
     if matrix is None:
         return
-    loaded.apply_transform(np.array(matrix, dtype=np.float64))
+    matrix = np.array(matrix, dtype=np.float64)
+    import trimesh
+    if isinstance(loaded, trimesh.Scene):
+        _apply_scene_transform(loaded, matrix)
+    else:
+        loaded.apply_transform(matrix)
+
+
+def _apply_scene_transform(scene, matrix):
+    """``Scene.apply_transform`` in time linear in the scene's nodes. trimesh's own reads each child's
+    matrix through the graph cache, which is rebuilt after every update, so a scene of many top-level
+    nodes took minutes. The edges below the base frame are read from the graph's own data first, then
+    updated as trimesh does (the same edges, the same matrices)."""
+    graph = scene.graph
+    base = graph.base_frame
+    edges = graph.transforms.edge_data
+    identity = np.eye(4)
+    combined = [(child, np.dot(matrix, edges[(base, child)].get("matrix", identity)))
+                for child in list(graph.transforms.children[base])]
+    for child, value in combined:
+        graph.update(frame_from=base, frame_to=child, matrix=value)
 
 
 def _meshes(loaded):

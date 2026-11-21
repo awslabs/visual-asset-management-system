@@ -297,6 +297,7 @@ describe("deploy-time trigger enable across the pipeline constructs", () => {
     test("the constructs that own a trigger still wire it", () => {
         expect(wiringTriggerEnabled).toEqual([
             "cadStepAgent-construct.ts",
+            "cogConvert-construct.ts",
             "coordinateTransform-construct.ts",
             "cosmos3-construct.ts",
             "cosmosPredict-construct.ts",

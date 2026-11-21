@@ -44,6 +44,7 @@ This software includes third party software subject to the following copyrights:
 | @dnd-kit/core                       | ^6.3.1        | MIT                     |
 | @dnd-kit/sortable                   | ^10.0.0       | MIT                     |
 | @dnd-kit/utilities                  | ^3.2.2        | MIT                     |
+| @geomatico/maplibre-cog-protocol    | ^0.10.0       | MIT                     |
 | @mapbox/mapbox-gl-draw              | ^1.4.1        | ISC                     |
 | @maplibre/maplibre-gl-geocoder      | ^1.5.0        | ISC                     |
 | @monaco-editor/react                | ^4.7.0        | MIT                     |
@@ -69,6 +70,7 @@ This software includes third party software subject to the following copyrights:
 | dompurify                           | ^3.4.17       | (MPL-2.0 OR Apache-2.0) |
 | fast-xml-parser                     | ^5.12.0       | MIT                     |
 | fcs                                 | ^0.1.3        | MIT                     |
+| geotiff                             | ^3.0.5        | MIT                     |
 | jodit                               | 4.13.10       | MIT                     |
 | jodit-react                         | ^5.3.21       | MIT                     |
 | localforage                         | ^1.10.0       | Apache-2.0              |
@@ -76,6 +78,7 @@ This software includes third party software subject to the following copyrights:
 | pako                                | 1.0.11        | (MIT AND Zlib)          |
 | papaparse                           | ^5.7.0        | MIT                     |
 | postcss                             | ^8.4.47       | MIT                     |
+| proj4                               | ^2.22.0       | MIT                     |
 | prop-types                          | ^15.8.1       | MIT                     |
 | react                               | ^18.3.1       | MIT                     |
 | react-data-grid                     | 7.0.0-beta.16 | MIT                     |
@@ -99,6 +102,8 @@ This software includes third party software subject to the following copyrights:
 | utif2                               | 4.1.0         | MIT                     |
 | vite                                | 8.3.5         | MIT                     |
 | zod                                 | ^4.6.7        | MIT                     |
+
+The GeoTIFF Map Viewer's raster libraries bring these transitive dependencies: `d3-scale` 4 and its `d3-*` and `internmap` dependencies (ISC), `quick-lru` (MIT), `@mapbox/sphericalmercator` 2 (BSD-3-Clause; its package.json declares only "BSD"), `pako` 2 (MIT AND Zlib), `lerc` 3 (Apache-2.0), `zstddec` (MIT AND BSD-3-Clause), `xml-utils` (CC0-1.0), `web-worker` (Apache-2.0), `parse-headers` (MIT), `@petamoriken/float16` (MIT), `wkt-parser` and `mgrs` (MIT).
 
 `jodit` is not declared directly — it arrives with `jodit-react` and the version shown is the one resolved in the lockfile. `fast-xml-parser` is carried transitively and pinned by the `overrides` block in `web/package.json`.
 
@@ -367,20 +372,24 @@ release's PyPI metadata.
 | aws-lambda-powertools              | 3.2.0       | MIT-0                                          | Lambda utilities                                                                |
 | boto3                              | 1.43.89     | Apache-2.0                                     | AWS SDK for Python                                                              |
 | botocore                           | 1.43.89     | Apache-2.0                                     | AWS SDK for Python (core)                                                       |
+| certifi                            | 2026.10.23  | MPL-2.0                                        | CA bundle (pyproj dependency)                                                   |
 | charset-normalizer                 | 3.5.1       | MIT                                            | Text encoding detection                                                         |
 | defusedxml                         | 0.7.1       | PSF-2.0                                        | Safe XML parsing                                                                |
 | et_xmlfile                         | 2.0.0       | MIT                                            | Streaming XML writer (openpyxl dependency)                                      |
 | imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                                   | FFmpeg wrapper for video frame extraction                                       |
 | jmespath                           | 1.1.0       | MIT                                            | JSON querying (boto3 dependency)                                                |
 | lxml                               | 6.1.3       | BSD-3-Clause                                   | XML processing (python-docx / python-pptx dependency)                           |
+| numpy                              | 2.5.5       | BSD-3-Clause AND 0BSD AND MIT AND Zlib         | Array library (tifffile); bundles OpenBLAS, libgfortran (GCC exception)         |
 | openpyxl                           | 3.1.5       | MIT                                            | Excel workbook text extraction                                                  |
 | Pillow                             | 13.0.0      | MIT-CMU                                        | Image processing                                                                |
+| pyproj                             | 3.8.0       | MIT                                            | Footprint reprojection; bundles PROJ, libcurl, libtiff, SQLite                  |
 | pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)             | PDF page rendering                                                              |
 | python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)               | Date parsing (boto3 dependency)                                                 |
 | python-docx                        | 1.2.0       | MIT                                            | Word document text extraction                                                   |
 | python-pptx                        | 1.0.2       | MIT                                            | PowerPoint document text extraction                                             |
 | s3transfer                         | 0.19.2      | Apache-2.0                                     | S3 transfer manager (boto3 dependency)                                          |
 | six                                | 1.17.0      | MIT                                            | Python 2/3 compatibility (dependency)                                           |
+| tifffile                           | 2026.11.16  | BSD-3-Clause                                   | TIFF header reading for GeoTIFF/COG facts                                       |
 | tinytag                            | 2.3.2       | MIT                                            | Audio and video metadata tags                                                   |
 | typing-extensions                  | 4.16.0      | PSF-2.0                                        | Typing backports                                                                |
 | urllib3                            | 2.8.0       | MIT                                            | HTTP client (boto3 dependency)                                                  |
@@ -402,6 +411,21 @@ release's PyPI metadata.
 | pyyaml    | >=6.0   | MIT            | Pipeline configuration parsing           |
 | structlog | >=24.0  | Apache-2.0/MIT | Structured logging                       |
 | boto3     | latest  | Apache-2.0     | AWS SDK for Python                       |
+
+### COG Conversion Pipeline
+
+**COG Conversion Pipeline Dependencies**
+
+| Name                | Version | License                        | Notes                                                                                             |
+| :------------------ | :------ | :----------------------------- | :------------------------------------------------------------------------------------------------ |
+| GDAL (libgdal-core) | 3.13.3  | MIT                            | `gdal_translate` with the COG driver, run as a separate process                                   |
+| PROJ                | 9.9.0   | MIT                            | Coordinate reference system reprojection (GDAL dependency)                                        |
+| libtiff             | 4.7.2   | libtiff (BSD-style)            | TIFF reading and writing (GDAL dependency)                                                        |
+| GEOS                | 3.15.0  | LGPL-2.1                       | Geometry library loaded by GDAL as a shared library, unmodified                                   |
+| libspatialite       | 5.1.0   | MPL-1.1 OR GPL-2.0 OR LGPL-2.1 | The conda-forge `lgpl` build, used under LGPL-2.1, loaded by GDAL as a shared library, unmodified |
+| boto3               | 1.44.4  | Apache-2.0                     | AWS SDK for Python                                                                                |
+
+The image is built in two stages: `condaforge/miniforge3` installs the exact conda-forge packages named in `backendPipelines/conversion/cogConvert/container/conda-explicit.txt`, and a Debian slim image receives only the finished environment. The `lgpl` build of libspatialite is pinned on purpose: the default `gpl` build adds librttopo (GPL-2.0), which this image does not contain. The pipeline runs only the GTiff and COG drivers. GEOS and libspatialite are present as unmodified shared libraries that GDAL loads for its vector drivers and are not called by this pipeline. No VAMS code is linked against them and none is modified or redistributed by this repository; each package's license files are kept in the image under `/opt/cog/licenses`.
 
 **laspy License Notice**
 
@@ -565,7 +589,7 @@ repository, and anyone adapting it takes on the model-licence acceptance obligat
 | NVIDIA Cosmos-Guardrail1       | 1.0                                                                         | NVIDIA Open Model License | Content safety blocklist and face filter (~1GB, shared across v1 and v2.5)                              |
 | NVIDIA Transformer Engine      | 2.2.0                                                                       | Apache-2.0                | Optimized transformer computation (updated for v2.5)                                                    |
 | flash-attn                     | 2.7.3                                                                       | BSD-3-Clause              | Flash attention for v2.5 flow-matching architecture                                                     |
-| NVIDIA APEX                    | latest                                                                      | BSD-3-Clause              | Mixed precision training utilities                                                                      |
+| NVIDIA APEX                    | 4db5403 (v1 reference container)                                            | BSD-3-Clause              | Mixed precision training utilities                                                                      |
 | PyTorch                        | 2.6.0                                                                       | BSD-3-Clause              | Deep learning framework                                                                                 |
 | FFmpeg (`ffmpeg`)              | Ubuntu `ffmpeg` package, installed at image build time (not version-pinned) | GPL-2.0-or-later          | Preview GIF generation from the generated video, run as a separate process; video I/O for the framework |
 | boto3                          | latest                                                                      | Apache-2.0                | AWS SDK for Python                                                                                      |
@@ -642,38 +666,46 @@ All six models listed above are gated on HuggingFace and require explicit licens
 
 ### Image to 3D Pipeline
 
-| Name                        | Version       | License                                                                      | Purpose                                                                            |
-| :-------------------------- | :------------ | :--------------------------------------------------------------------------- | :--------------------------------------------------------------------------------- |
-| Meta SAM 3D Objects         | latest        | Meta SAM License                                                             | Single-image to 3D mesh generation (commercial use permitted with obligations)     |
-| MoGe (`Ruicheng/moge-vitl`) | latest        | MIT                                                                          | Monocular depth and point-map estimation feeding SAM 3D Objects                    |
-| Stable-X Stable3DGen        | latest        | MIT                                                                          | Single-image to 3D geometry generation via normal bridging, default model          |
-| Stable-X StableNormal       | latest        | Apache-2.0                                                                   | Normal-map prediction feeding Stable3DGen                                          |
-| BiRefNet                    | latest        | MIT                                                                          | Background removal used by Stable3DGen when an image carries no alpha channel      |
-| Meta Segment Anything (SAM) | latest        | Apache-2.0                                                                   | Prompted background removal, when `BACKGROUND_REMOVAL` selects `sam`               |
-| Microsoft TRELLIS.2 (4B)    | 2.0           | MIT                                                                          | Single-image to 3D mesh generation (disabled by default)                           |
-| VAST-AI TripoSR             | latest        | MIT                                                                          | Fast single-image to 3D mesh generation                                            |
-| StepFun Step1X-3D           | cb5ac94       | Apache-2.0                                                                   | Single-image to 3D mesh generation with patent grant                               |
-| Tencent Hunyuan3D-2         | f8db630       | Tencent Hunyuan 3D 2.0 Community License Agreement -- **territorial**        | Single-image to 3D textured mesh generation (disabled by default)                  |
-| Blender                     | 4.5.13        | GPL-2.0-or-later                                                             | Headless 3D tool driven by the Blender agent (`blenderagent` image only)           |
-| OpenAI Codex CLI            | rust-v0.153.4 | Apache-2.0                                                                   | The coding agent that drives Blender (`blenderagent` image only)                   |
-| LiteLLM                     | 1.100.0       | MIT                                                                          | Loopback bridge from the Responses API to Amazon Bedrock Converse (`blenderagent`) |
-| MoGe-2                      | 0744441       | MIT; weights `Ruicheng/moge-2-vitl-normal` MIT; vendored DINOv2 Apache-2.0   | Depth estimate the scripted refit reads relief from (`blenderagent` image only)    |
-| utils3d                     | 3fab839       | MIT                                                                          | Geometry utilities MoGe-2 imports (`blenderagent` image only)                      |
-| PyTorch                     | 2.7.1         | BSD-3-Clause                                                                 | The runtime MoGe-2 runs on (`blenderagent` image only)                             |
-| NVlabs nvdiffrast           | v0.4.0        | NVIDIA Source Code License (1-Way Commercial) -- **non-commercial use only** | Differentiable rasterization, required by both the TRELLIS.2 and Step1X-3D images  |
-| trimesh                     | latest        | MIT                                                                          | Mesh I/O, hole filling, normal and winding repair, decimation                      |
-| networkx                    | latest        | BSD-3-Clause                                                                 | Graph traversal behind trimesh's hole filling                                      |
-| fast-simplification         | latest        | MIT                                                                          | Quadric decimation backend behind trimesh's face-budget reduction                  |
-| manifold3d                  | latest        | Apache-2.0                                                                   | Manifold and watertightness repair pass                                            |
-| rembg                       | latest        | MIT                                                                          | Background removal preprocessing                                                   |
-| xatlas                      | latest        | MIT                                                                          | UV atlas generation for texture export                                             |
-| onnxruntime-gpu             | latest        | MIT                                                                          | GPU inference runtime for background removal models                                |
-| numpy                       | latest        | BSD-3-Clause                                                                 | Numerical computing                                                                |
-| scipy                       | latest        | BSD-3-Clause                                                                 | Scientific computing (used by trimesh)                                             |
-| Pillow                      | latest        | HPND                                                                         | Image loading and validation                                                       |
-| boto3                       | latest        | Apache-2.0                                                                   | AWS SDK for Python                                                                 |
-| pymeshfix                   | latest        | GPL-3.0                                                                      | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting     |
-| PyMeshLab                   | latest        | GPL-3.0                                                                      | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting     |
+| Name                        | Version                                                                            | License                                                                                  | Purpose                                                                                                      |
+| :-------------------------- | :--------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------- |
+| Meta SAM 3D Objects         | f91db41                                                                            | Meta SAM License                                                                         | Single-image to 3D mesh generation (commercial use permitted with obligations)                               |
+| MoGe (`Ruicheng/moge-vitl`) | latest                                                                             | MIT                                                                                      | Monocular depth and point-map estimation feeding SAM 3D Objects                                              |
+| Stable-X Stable3DGen        | c29f668                                                                            | MIT                                                                                      | Single-image to 3D geometry generation via normal bridging, default model                                    |
+| Stable-X StableNormal       | 1b7203c                                                                            | Apache-2.0                                                                               | Normal-map prediction feeding Stable3DGen                                                                    |
+| Meta DINOv2                 | 7764ea0; checkpoint `dinov2_vitl14_reg4_pretrain`                                  | Apache-2.0, code and weights                                                             | StableNormal's backbone, cloned and its checkpoint downloaded at image build time (`stable3dgen` image only) |
+| BiRefNet                    | latest                                                                             | MIT                                                                                      | Background removal used by Stable3DGen when an image carries no alpha channel                                |
+| Meta Segment Anything (SAM) | latest                                                                             | Apache-2.0                                                                               | Prompted background removal, when `BACKGROUND_REMOVAL` selects `sam`                                         |
+| BRIA RMBG-2.0               | latest                                                                             | CC BY-NC 4.0 -- **non-commercial use only**; commercial use needs an agreement with BRIA | Background removal, when `BACKGROUND_REMOVAL` selects `rmbg2` or `TRELLIS2_PREPROCESS_IMAGE` is `true`       |
+| Microsoft TRELLIS.2 (4B)    | 2.0                                                                                | MIT                                                                                      | Single-image to 3D mesh generation (disabled by default)                                                     |
+| VAST-AI TripoSR             | 107cefd                                                                            | MIT                                                                                      | Fast single-image to 3D mesh generation                                                                      |
+| StepFun Step1X-3D           | cb5ac94                                                                            | Apache-2.0                                                                               | Single-image to 3D mesh generation with patent grant                                                         |
+| Tencent Hunyuan3D-2         | f8db630                                                                            | Tencent Hunyuan 3D 2.0 Community License Agreement -- **territorial**                    | Single-image to 3D textured mesh generation (disabled by default)                                            |
+| Blender                     | 4.5.13                                                                             | GPL-2.0-or-later                                                                         | Headless 3D tool driven by the Blender agent (`blenderagent` image only)                                     |
+| OpenAI Codex CLI            | rust-v0.153.4                                                                      | Apache-2.0                                                                               | The coding agent that drives Blender (`blenderagent` image only)                                             |
+| bubblewrap (`bwrap`)        | Codex CLI rust-v0.153.4 release binary                                             | LGPL-2.0-or-later                                                                        | The sandbox Codex CLI runs commands in where Landlock is unavailable (`blenderagent` image only)             |
+| ripgrep                     | Ubuntu 24.04 `ripgrep` package (installed at image build time, not version-pinned) | MIT OR Unlicense                                                                         | File listing and search the coding agent runs in its workspace (`blenderagent` image only)                   |
+| LiteLLM                     | 1.100.0                                                                            | MIT                                                                                      | Loopback bridge from the Responses API to Amazon Bedrock Converse (`blenderagent`)                           |
+| openai (OpenAI Python SDK)  | 2.54.0                                                                             | Apache-2.0                                                                               | Client the agent adapter checks the loopback bridge with (`blenderagent` image only)                         |
+| MoGe-2                      | 0744441                                                                            | MIT; weights `Ruicheng/moge-2-vitl-normal` MIT; vendored DINOv2 Apache-2.0               | Depth estimate the scripted refit reads relief from (`blenderagent` image only)                              |
+| utils3d                     | 3fab839                                                                            | MIT                                                                                      | Geometry utilities MoGe-2 imports (`blenderagent` image only)                                                |
+| PyTorch                     | by image, listed below the table                                                   | BSD-3-Clause                                                                             | Deep learning runtime of every model image; in `blenderagent`, the runtime MoGe-2 runs on                    |
+| NVlabs nvdiffrast           | v0.4.0                                                                             | NVIDIA Source Code License (1-Way Commercial) -- **non-commercial use only**             | Differentiable rasterization, required by both the TRELLIS.2 and Step1X-3D images                            |
+| trimesh                     | latest                                                                             | MIT                                                                                      | Mesh I/O, hole filling, normal and winding repair, decimation                                                |
+| networkx                    | latest                                                                             | BSD-3-Clause                                                                             | Graph traversal behind trimesh's hole filling                                                                |
+| fast-simplification         | latest                                                                             | MIT                                                                                      | Quadric decimation backend behind trimesh's face-budget reduction                                            |
+| manifold3d                  | latest                                                                             | Apache-2.0                                                                               | Manifold and watertightness repair pass                                                                      |
+| rembg                       | latest                                                                             | MIT                                                                                      | Background removal preprocessing                                                                             |
+| xatlas                      | latest                                                                             | MIT                                                                                      | UV atlas generation for texture export                                                                       |
+| onnxruntime-gpu             | latest                                                                             | MIT                                                                                      | GPU inference runtime for background removal models                                                          |
+| numpy                       | latest                                                                             | BSD-3-Clause                                                                             | Numerical computing                                                                                          |
+| scipy                       | latest                                                                             | BSD-3-Clause                                                                             | Scientific computing (used by trimesh)                                                                       |
+| Pillow                      | latest                                                                             | HPND                                                                                     | Image loading and validation                                                                                 |
+| boto3                       | 1.44.5 in `blenderagent`; unpinned (latest) in the other images                    | Apache-2.0                                                                               | AWS SDK for Python                                                                                           |
+| huggingface_hub             | 2.4.0 in `blenderagent`; elsewhere as each model's requirements resolve            | Apache-2.0                                                                               | Model weight download, held to pinned HuggingFace revisions                                                  |
+| pymeshfix                   | 0.18.1                                                                             | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
+| PyMeshLab                   | 2025.7.post1                                                                       | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
+
+PyTorch by image: 2.10.0 in `stable3dgen`; 2.11.0 in `triposr`, `step1x3d` and `hunyuan3d`; 2.6.0 in `trellis2`; 2.7.1 in `blenderagent`; and 2.5.1 in `sam3d`, where upstream's own requirements fix it (`torchaudio==2.5.1+cu121`). The model rows with a short commit are checked out at that commit when the image is built.
 
 **HuggingFace Pre-Approval Is a License Gate**
 
@@ -706,13 +738,22 @@ paid for in GPU time.
 
 `pymeshfix` and `PyMeshLab` are licensed under GPL-3.0 and are installed in every Image to 3D container image, so those images are subject to GPL-3.0 terms whichever backends a run selects through the `REPAIR_BACKENDS` pipeline setting. The default repair ladder walks only the permissively licensed `trimesh` (MIT) and `manifold3d` (Apache-2.0) rungs, but that does not change the license terms attaching to the images. GPL-3.0 is a strong copyleft license; review its terms with your legal team before deploying the Image to 3D pipeline, particularly if you redistribute the resulting container images.
 
-**Container Base Image**
+**Container Base Images**
 
-The Image to 3D pipeline containers use the NVIDIA CUDA 12.8.1 base image with cuDNN (`nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`), which is subject to the [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license). One image is built per enabled model, each adding that model's upstream repository and dependencies on top of the shared base.
+One image is built per enabled model, each adding that model's upstream repository and dependencies on top of its base image. The base images differ by model:
+
+| Image                                             | Base image                                           | License                                                                                                                                                                                                                               |
+| :------------------------------------------------ | :--------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `stable3dgen`, `triposr`, `step1x3d`, `hunyuan3d` | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`         | [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license)                                                                                                                     |
+| `blenderagent`                                    | `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`       | [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license)                                                                                                                     |
+| `trellis2`                                        | `nvidia/cuda:12.4.1-devel-ubuntu22.04`               | [NVIDIA Deep Learning Container License](https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license)                                                                                                                     |
+| `sam3d`                                           | `mambaorg/micromamba:1.5.8` (Debian `bookworm-slim`) | Apache-2.0 (image), BSD-3-Clause (micromamba); the CUDA 12.1 toolkit packages that upstream's conda environment installs are under the [NVIDIA CUDA Toolkit End User License Agreement](https://docs.nvidia.com/cuda/eula/index.html) |
 
 **Attribution Requirement**
 
 Meta SAM 3D Objects is covered by the Meta SAM License (last updated 19 November 2025), which requires that redistribution of the model, its weights, or a derivative be made under the same license terms with a copy of the agreement supplied alongside, and which carries trade-control obligations including a prohibition on ITAR-controlled, military, nuclear, espionage and weapons end uses. Its only acknowledgement duty applies to research publications; it requires no product attribution and grants no trademark rights. StepFun Step1X-3D, under Apache-2.0, requires that modified files be marked as changed and that the license and any `NOTICE` file be carried forward in redistributions. Microsoft TRELLIS.2, VAST-AI TripoSR, Stable-X Stable3DGen and BiRefNet, under MIT, require the copyright notice and license text to be retained. Stable-X StableNormal, under Apache-2.0, carries the same marking and notice obligations as Step1X-3D. Unlike TRELLIS.2, Stable3DGen depends on no NVIDIA-licensed rendering or voxelization component, so enabling it raises no NVIDIA redistribution question. Step1X-3D, however, does: its upstream requirements list `nvdiffrast` as a git dependency, so an image built for it carries nvdiffrast's terms alongside Apache-2.0. Those terms are the NVIDIA Source Code License (1-Way Commercial), whose Use Limitation reads "The Work and any derivative works thereof only may be used or intended for use non-commercially", with "non-commercially" defined as "for research or evaluation purposes only and not for any direct or indirect monetary gain". The carve-out permitting commercial use is NVIDIA's own. A deployment that charges for output produced through the TRELLIS.2 or Step1X-3D images, or that uses them in a revenue-generating service, is outside that limitation regardless of the models' own permissive licenses -- so both are research and evaluation paths until the dependency is removed or separately licensed. This is not visible in either model's own license: Step1X-3D's was found when its first image build failed compiling nvdiffrast, and the dependency set of every image should be audited for other NVIDIA-licensed components on the same basis. Stable3DGen carries none, which is what makes it the only model here usable commercially as built.
+
+BRIA RMBG-2.0 is licensed under Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0) for non-commercial use, and its model card states that commercial use is subject to a commercial agreement with BRIA. It is not the default background remover: a run uses it only when its template sets `BACKGROUND_REMOVAL` to `rmbg2` or `TRELLIS2_PREPROCESS_IMAGE` to `true`. The weights are downloaded at run time rather than built into an image, but a run that selects it uses them under those terms, so a commercial deployment needs the BRIA agreement before selecting it. Meta DINOv2, the backbone of StableNormal's normal predictor, is Apache-2.0 in code and weights. The Stable3DGen image carries a checkout of its repository at a pinned commit and the `dinov2_vitl14_reg4_pretrain` checkpoint, so its license and notice are carried forward with that image.
 
 Tencent Hunyuan3D-2 is licensed differently again, and the difference is territorial rather than
 field-of-use. The Tencent Hunyuan 3D 2.0 Community License Agreement grants a royalty-free licence "for any
@@ -733,7 +774,7 @@ users. Note also that the upstream source files carry an older "Tencent Hunyuan 
 Agreement" header which the repository's own `LICENSE` file supersedes; review both before relying on
 either.
 
-The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-later as a tool the agent runs in a separate process; the models the agent writes are its own output, not derivatives of Blender, so the GPL attaches to redistributing that image rather than to the meshes -- the same position as the GPL-3.0 repair rungs. **OpenAI Codex CLI** (Apache-2.0) is pinned to one release and used without an OpenAI account or key; the foundation model is reached only through Amazon Bedrock, under Amazon Bedrock's terms for the model the deployment configures, on the deployment's own IAM role. **LiteLLM** (MIT) runs inside the container on loopback. The scripted refit's depth model, **MoGe-2**, is MIT in code and weights (`Ruicheng/moge-2-vitl-normal`), with a vendored DINOv2 under Apache-2.0, and runs on **PyTorch** (BSD-3-Clause) and **utils3d** (MIT); it is ungated. Retain the Codex, LiteLLM, MoGe-2, utils3d and PyTorch notices in redistributions.
+The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-later as a tool the agent runs in a separate process; the models the agent writes are its own output, not derivatives of Blender, so the GPL attaches to redistributing that image rather than to the meshes -- the same position as the GPL-3.0 repair rungs. **OpenAI Codex CLI** (Apache-2.0) is pinned to one release and used without an OpenAI account or key; the foundation model is reached only through Amazon Bedrock, under Amazon Bedrock's terms for the model the deployment configures, on the deployment's own IAM role. **bubblewrap** (LGPL-2.0-or-later) ships as a separate binary in the same pinned Codex CLI release and is the sandbox Codex runs the agent's commands in on a kernel without Landlock; it runs as its own process, and the LGPL's source-availability terms attach to redistributing it with the image. **ripgrep** (MIT OR Unlicense) is installed from the Ubuntu package archive for the agent's file listing and search. **LiteLLM** (MIT) runs inside the container on loopback. The scripted refit's depth model, **MoGe-2**, is MIT in code and weights (`Ruicheng/moge-2-vitl-normal`), with a vendored DINOv2 under Apache-2.0, and runs on **PyTorch** (BSD-3-Clause) and **utils3d** (MIT); it is ungated. Retain the Codex, bubblewrap, ripgrep, LiteLLM, MoGe-2, utils3d and PyTorch notices in redistributions.
 
 **HuggingFace Model Access**
 
@@ -834,3 +875,19 @@ This software includes third party software subject to the following copyrights:
 | rich       | >=14.2.0   | MIT          |
 | tqdm       | >=4.67.1   | MPL-2.0/MIT  |
 | defusedxml | >=0.7.1    | Python-2.0   |
+
+## THIRD PARTY COMPONENTS - TOOLS (VAMSMCP)
+
+---
+
+This software includes third party software subject to the following copyrights:
+
+**VamsMCP Python Dependencies**
+
+| Name         | Version                                      | License                    |
+| :----------- | :------------------------------------------- | :------------------------- |
+| mcp          | >=1.10.0,<3.0.0                              | MIT                        |
+| pydantic     | >=2.11.0,<3.0.0                              | MIT                        |
+| requests     | >=2.25.0                                     | Apache-2.0                 |
+| PyJWT        | ==2.15.1 (with the `crypto` extra)           | MIT                        |
+| cryptography | >=3.4.0 (required by PyJWT's `crypto` extra) | Apache-2.0 OR BSD-3-Clause |

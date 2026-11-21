@@ -46,6 +46,7 @@ describe("CodeBuild build triggers", () => {
     test("[control] every CodeBuild construct is found", () => {
         expect(CONSTRUCTS.map((f) => path.basename(f)).sort()).toEqual([
             "cadStepAgentCodeBuild-construct.ts",
+            "cogConvertCodeBuild-construct.ts",
             "coordinateTransformCodeBuild-construct.ts",
             "cosmosCodeBuild-construct.ts",
             "gr00tCodeBuild-construct.ts",

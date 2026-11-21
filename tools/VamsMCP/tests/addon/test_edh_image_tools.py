@@ -78,7 +78,7 @@ def _sentences(text):
     ("get_edh_workstation", "get_edh_workstation", ("s-1",)),
     ("list_edh_admin_instances", "list_edh_admin_instances", ()),
     ("start_edh_workstation", "start_edh_workstation", ("s-1",)),
-    ("stop_edh_workstation", "stop_edh_workstation", ("s-1",)),
+    ("stop_edh_workstation", "stop_edh_workstation", ("s-1", True)),
     ("renew_edh_workstation", "renew_edh_workstation", ("s-1",)),
     ("delete_edh_workstation", "delete_edh_workstation", ("s-1",)),
 ])

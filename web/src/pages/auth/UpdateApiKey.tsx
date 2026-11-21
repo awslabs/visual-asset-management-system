@@ -58,6 +58,9 @@ export default function UpdateApiKey({
         expiresTime: "23:59:59",
         isActive: true,
     });
+    // The expiration as the form opened, so an unchanged one is not sent: the API checks a sent
+    // expiration again, and refuses a past one, which would block every edit of an expired key.
+    const [initialExpiry, setInitialExpiry] = useState({ date: "", time: "23:59:59" });
 
     useEffect(() => {
         if (open && apiKey) {
@@ -79,6 +82,7 @@ export default function UpdateApiKey({
                 expiresTime: expiresTime,
                 isActive: apiKey.isActive === "true",
             });
+            setInitialExpiry({ date: expiresDate, time: expiresTime });
             setFormError("");
         }
     }, [open, apiKey]);
@@ -90,6 +94,12 @@ export default function UpdateApiKey({
         userMode && formState.expiresDate
             ? latestUserApiKeyExpiryTime(formState.expiresDate, latestExpiryMs)
             : END_OF_DAY_TIME;
+    // A self-service key whose window from creation has ended offers no date in the picker.
+    const tomorrow = new Date();
+    tomorrow.setHours(0, 0, 0, 0);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const userExpiryWindowEnded =
+        !!userMode && !isUserApiKeyExpiryDateEnabled(tomorrow, latestExpiryMs);
     const expiryTimeError =
         userMode &&
         formState.expiresDate &&
@@ -108,10 +118,13 @@ export default function UpdateApiKey({
             if (formState.description !== undefined) {
                 body.description = formState.description;
             }
-            if (formState.expiresDate) {
+            const expiryChanged =
+                formState.expiresDate !== initialExpiry.date ||
+                (!!formState.expiresDate && formState.expiresTime !== initialExpiry.time);
+            if (expiryChanged && formState.expiresDate) {
                 const time = formState.expiresTime || "23:59:59";
                 body.expiresAt = `${formState.expiresDate}T${time}Z`;
-            } else if (!userMode) {
+            } else if (expiryChanged && !userMode) {
                 // Admin mode only: send empty string to clear expiration.
                 // User keys always require an expiration date.
                 body.expiresAt = "";
@@ -204,7 +217,9 @@ export default function UpdateApiKey({
                     <FormField
                         label="Expiration Date"
                         constraintText={
-                            userMode
+                            userExpiryWindowEnded
+                                ? `This key's ${USER_API_KEY_MAX_EXPIRATION_DAYS}-day expiration window has ended, so its date cannot be changed. You can still change its description or deactivate it; create a new key to keep access.`
+                                : userMode
                                 ? `Required. Maximum ${USER_API_KEY_MAX_EXPIRATION_DAYS} days from the key's creation date. Create a new key to extend beyond it.`
                                 : "Optional. Update the expiration date for this API key. Clear to remove expiration."
                         }

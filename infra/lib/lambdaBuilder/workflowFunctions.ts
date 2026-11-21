@@ -959,11 +959,25 @@ export function buildExecuteWorkflowV2Function(
                 ? "true"
                 : "false",
             EXECUTE_WORKFLOW_TIMEOUT_SECONDS: EXECUTE_WORKFLOW_TIMEOUT.toSeconds().toString(),
+            // A caller's run is refused when an input file's asset is quarantined, as a download is
+            // (common/compliance/quarantineGuard.py); the asset-state table name resolves from SSM.
+            ...(config.app.compliance.quarantineBlocksDownload && {
+                COMPLIANCE_QUARANTINE_BLOCKS_DOWNLOAD: "true",
+            }),
         },
     });
 
     for (const statement of executeWorkflowDynamoStatements(storageResources)) {
         fun.addToRolePolicy(statement);
+    }
+    if (config.app.compliance.quarantineBlocksDownload) {
+        // check_quarantine_block reads one asset-state row by key per input asset.
+        fun.addToRolePolicy(
+            dynamoStatement(
+                ["GetItem"],
+                [storageResources.dynamo.complianceAssetStateStorageTable.tableArn]
+            )
+        );
     }
     // Concurrency locks: taken before the state machine starts (a conflicting row whose holder has no
     // main execution row, read above, may be taken over), released when a launch fails after acquiring.

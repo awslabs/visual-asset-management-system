@@ -519,6 +519,37 @@ def test_an_edh_mutation_edh_did_not_confirm_is_returned_as_its_own_error_type(c
         "error": "unanswered", "error_type": "EdhUnavailableError"}
 
 
+def test_a_quota_refusal_is_returned_as_its_own_error_type(client, gated):
+    """An agent tells EDH's quota refusal from throttling by error_type: resending cannot clear it."""
+    message = ("Container job submission refused (429): The EDH quota for this operation has been reached. "
+               "Run 'vamscli edh container job list' to see what counts toward it.")
+    client.api.submit_edh_container_job.side_effect = edh_exceptions.EdhQuotaExceededError(message)
+    assert gated["submit_edh_container_job"]("render-def", "render-1", "batch", "gpu-queue") == {
+        "error": message, "error_type": "EdhQuotaExceededError"}
+
+
+def test_a_launch_whose_answer_was_lost_returns_the_bootstrap_id_it_sent(monkeypatch):
+    """Through vamscli's real client: the agent gets the id to look the launch up by and re-send."""
+    import requests
+
+    client, sent = _recording_client(monkeypatch)
+    response = MagicMock()
+    response.status_code = 504
+    response.content = b'{"message": "Endpoint request timed out"}'
+    response.json.return_value = {"message": "Endpoint request timed out"}
+
+    def lost(endpoint, *args, **kwargs):
+        sent.append(("post", endpoint, kwargs["data"]["bootstrapId"]))
+        raise requests.exceptions.HTTPError("504", response=response)
+
+    monkeypatch.setattr(client.api, "post", lost)
+    tools = _register(client, enable_writes=True, enable_destructive=True)
+    result = tools["create_edh_workstation"]("12", "g5.2xlarge", "Design desk", 200, "linux")
+    assert result["error_type"] == "EdhOutcomeUnknownError" and result["outcomeUnknown"] is True
+    assert result["bootstrapId"] == sent[0][2]
+    assert "get_edh_workstation" in _docstring_of("create_edh_workstation")
+
+
 def test_a_missing_recipe_is_reported_as_the_recipe_not_found_error(monkeypatch):
     """The tool reports the CLI client's typed error, so an agent tells a recipe that does not exist
     from a failed request by `error_type`."""
@@ -709,8 +740,28 @@ def test_update_edh_admin_settings_refuses_empty_call_without_touching_client(cl
 )
 def test_edh_session_tools_forward_the_session_id_and_return_the_record(client, gated, tool, method):
     getattr(client.api, method).return_value = {"sessionId": "s-1", "state": "x"}
-    assert gated[tool]("s-1") == {"sessionId": "s-1", "state": "x"}
+    # stop_edh_workstation sends nothing without confirm=True (test_stop_without_confirm_...).
+    kwargs = {"confirm": True} if tool == "stop_edh_workstation" else {}
+    assert gated[tool]("s-1", **kwargs) == {"sessionId": "s-1", "state": "x"}
     getattr(client.api, method).assert_called_once_with("s-1")
+
+
+def test_stop_without_confirm_returns_an_error_and_calls_nothing(client, gated):
+    """A client-side interlock the owner chose for this tool: the agent confirms with the user and
+    calls again with confirm=True; until then no request is made."""
+    result = gated["stop_edh_workstation"]("s-1")
+    assert result["error_type"] == "ValueError"
+    assert "Confirm with the user" in result["error"]
+    assert "confirm=True" in result["error"]
+    client.api.stop_edh_workstation.assert_not_called()
+    assert gated["stop_edh_workstation"]("s-1", confirm=False)["error_type"] == "ValueError"
+    client.api.stop_edh_workstation.assert_not_called()
+
+
+def test_stop_with_confirm_stops(client, gated):
+    client.api.stop_edh_workstation.return_value = {"sessionId": "s-1", "activity": "stopping"}
+    assert gated["stop_edh_workstation"]("s-1", confirm=True) == {"sessionId": "s-1", "activity": "stopping"}
+    client.api.stop_edh_workstation.assert_called_once_with("s-1")
 
 
 # --- Admin image tools -------------------------------------------------------------------------

@@ -490,3 +490,45 @@ describe("viewer counts in the documentation", () => {
         for (const count of counts) expect(count).toBe(total);
     });
 });
+
+describe("TIFF viewers side by side (#1599 with #1576)", () => {
+    const image = byId("tiff-tga-viewer");
+    const map = byId("geotiff-map-viewer");
+    const offered = (extensions: string[], isMultiFile: boolean) =>
+        viewers
+            .filter(
+                (v) => !v.isPreviewViewer && admitsVisualizeSelection(v, extensions, isMultiFile)
+            )
+            .sort((a, b) => a.priority - b.priority)
+            .map((v) => v.name);
+
+    it("gives the two viewers distinct names and ids", () => {
+        expect(image.name).not.toBe(map.name);
+        expect(image.id).not.toBe(map.id);
+        expect(map.name).toBe("GeoTIFF Map Viewer");
+    });
+
+    it("offers both for one .tif and .tiff file, the image viewer first", () => {
+        for (const ext of [".tif", ".tiff"]) {
+            expect(offered([ext], false)).toEqual(["TIFF/TGA Image Viewer", "GeoTIFF Map Viewer"]);
+        }
+    });
+
+    it("offers only the map viewer for several TIFF files", () => {
+        expect(offered([".tif", ".tif"], true)).toEqual(["GeoTIFF Map Viewer"]);
+    });
+
+    it("never hides the map viewer behind the image viewer's decode limits", () => {
+        // The limits are enforced inside the image viewer (it shows a notice); selection is by
+        // extension only, so a file above 100 megapixels still reaches the map viewer.
+        expect(image.customParameters.maxDecodePixels).toBe(100000000);
+        expect(map.priority).toBeGreaterThanOrEqual(image.priority);
+        expect(offered([".tif"], false)).toContain("GeoTIFF Map Viewer");
+        expect(map.customParameters?.maxDecodePixels).toBeUndefined();
+    });
+
+    it("limits the map viewer to the location services feature, and the image viewer to none", () => {
+        expect(map.featuresEnabledRestriction).toEqual(["LOCATIONSERVICES"]);
+        expect(image.featuresEnabledRestriction).toBeUndefined();
+    });
+});

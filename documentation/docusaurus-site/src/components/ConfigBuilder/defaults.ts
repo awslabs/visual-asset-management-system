@@ -13,12 +13,12 @@
  *
  * Keep them byte-for-byte in sync with those files. `makeDefaultConfig()`
  * returns a deep clone so callers can freely mutate. GovCloud differs from
- * Commercial in the values buildGovCloud() sets (FIPS, KMS, govCloud, VPC,
- * OpenSearch serverless-vs-provisioned, Location Service, ALB-vs-CloudFront,
- * vector search off, the system GenAI pipeline off with a GovCloud model id).
- * EU Sovereign Cloud is GovCloud with the values buildEuSovereign() sets
- * (region, FIPS off, aws-eusc certificate ARN, amazonaws.eu ECR URIs, empty
- * embedding and analysis model ids).
+ * Commercial in the values buildGovCloud() sets (FIPS, KMS, govCloud, VPC with
+ * cross-Region S3 endpoints off, OpenSearch serverless-vs-provisioned, Location
+ * Service, ALB-vs-CloudFront, vector search off, the system GenAI pipeline off
+ * with a GovCloud model id). EU Sovereign Cloud is GovCloud with the values
+ * buildEuSovereign() sets (region, FIPS off, aws-eusc certificate ARN,
+ * amazonaws.eu ECR URIs, empty embedding and analysis model ids).
  */
 
 import type { ConfigShape, Profile } from "./types";
@@ -158,6 +158,7 @@ const IMAGE_TO_3D_DEFAULT = {
         "g5.8xlarge",
     ],
     maxVCpus: 48,
+    modelCacheGeneration: 0,
     models: {
         sam3d: { enabled: false },
         stable3dgen: { enabled: true },
@@ -332,6 +333,12 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterWithVAMS: true,
                 autoRegisterAutoTriggerOnFileUpload: false,
             },
+            useCogConversion: {
+                enabled: false,
+                useCodeBuild: false,
+                autoRegisterWithVAMS: true,
+                autoRegisterAutoTriggerOnFileUpload: false,
+            },
             useGenAiCadStepAgent: {
                 enabled: false,
                 runtime: "agentcore",
@@ -340,7 +347,7 @@ const COMMERCIAL: ConfigShape = {
                 autoRegisterAutoTriggerOnFileUpload: false,
                 bedrockModelId: "global.anthropic.claude-sonnet-5-5",
                 openAi: { modelId: "", apiKeySecretArn: "" },
-                allowInternetResearch: true,
+                allowInternetResearch: false,
                 bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
                 agentCore: {
                     warmSessionSlots: 0,
@@ -540,7 +547,7 @@ const COMMERCIAL: ConfigShape = {
 };
 
 /**
- * The GovCloud preset is the Commercial preset with the ~12 GovCloud-specific
+ * The GovCloud preset is the Commercial preset with the ~13 GovCloud-specific
  * overrides applied. Building it from a clone guarantees the two stay
  * structurally identical except for the documented differences.
  */
@@ -550,6 +557,9 @@ function buildGovCloud(): ConfigShape {
     cfg.app.useKmsCmkEncryption.enabled = true;
     cfg.app.govCloud.enabled = true;
     cfg.app.useGlobalVpc.enabled = true;
+    // Cross-Region AWS PrivateLink to Amazon S3 exists in the commercial partition only, and
+    // getConfig() refuses this flag elsewhere once a bucket in another Region is added.
+    cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
     cfg.app.openSearch.useServerless.enabled = false;
     cfg.app.openSearch.useServerless.nextGen = false;
     cfg.app.openSearch.useServerless.allowPublic = false;

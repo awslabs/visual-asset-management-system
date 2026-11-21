@@ -92,9 +92,13 @@ LISTING_STATE_ATTRIBUTES = ("assetNameSort", "assetSearchText")
 # queued evaluation is judged against the moment the binding reached the record.
 BINDING_APPLY_STAMP_ATTRIBUTE = "bindingApplyId"
 BINDING_APPLIED_AT_ATTRIBUTE = "bindingAppliedAt"
+# When a binding last changed on the record, which evaluations begun before it may not write past
+# (`evaluationEngine.BINDING_CHANGED_AT_FIELD`).
+BINDING_CHANGED_AT_ATTRIBUTE = "bindingChangedAt"
 # Every asset-state attribute no API answer returns.
 PRIVATE_STATE_ATTRIBUTES = LISTING_STATE_ATTRIBUTES + (BINDING_APPLY_STAMP_ATTRIBUTE,
-                                                       BINDING_APPLIED_AT_ATTRIBUTE)
+                                                       BINDING_APPLIED_AT_ATTRIBUTE,
+                                                       BINDING_CHANGED_AT_ATTRIBUTE)
 
 
 def state_record_answer(record: Dict[str, Any]) -> Dict[str, Any]:

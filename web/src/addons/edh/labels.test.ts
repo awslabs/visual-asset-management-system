@@ -3,7 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { gpuLabel, hasGpus, hoursWord, isStartStalled, leaseRemaining, updatedAgo } from "./labels";
+import {
+    gpuLabel,
+    hasGpus,
+    hoursWord,
+    isLaunchStalled,
+    isStartStalled,
+    leaseRemaining,
+    updatedAgo,
+} from "./labels";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -142,6 +150,29 @@ describe("isStartStalled", () => {
         ["ACTIVE", null, "START_STALLED", false],
     ] as const)("%s, activity %s, lastError %s -> %s", (state, activity, lastError, expected) => {
         expect(isStartStalled({ state, activity, lastError })).toBe(expected);
+    });
+});
+
+describe("isLaunchStalled", () => {
+    it.each([
+        ["CREATING", null, "LAUNCH_STALLED", true],
+        ["CREATING", undefined, "LAUNCH_STALLED", true],
+        // One that reports an activity is moving again.
+        ["CREATING", "starting", "LAUNCH_STALLED", false],
+        // A stalled start is its own case.
+        ["CREATING", null, "START_STALLED", false],
+        ["CREATING", null, null, false],
+        // EDH placing or failing the desktop moves the row out of CREATING and clears the code.
+        ["ACTIVE", null, "LAUNCH_STALLED", false],
+        ["ORPHANED", null, "LAUNCH_STALLED", false],
+    ] as const)("%s, activity %s, lastError %s -> %s", (state, activity, lastError, expected) => {
+        expect(isLaunchStalled({ state, activity, lastError })).toBe(expected);
+    });
+
+    it("is never a stalled start (control)", () => {
+        expect(
+            isStartStalled({ state: "CREATING", activity: null, lastError: "LAUNCH_STALLED" })
+        ).toBe(false);
     });
 });
 

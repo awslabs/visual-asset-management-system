@@ -131,12 +131,20 @@ export default function UploadPreview({
         return planned;
     }, [planned, view, existingChecked]);
 
+    // The Errors and Existing views can empty while files remain, so each says what it lacks.
+    const emptyText =
+        planned.length === 0
+            ? "No files selected"
+            : view === "errors"
+            ? "No files with errors"
+            : "No files at existing paths";
+
     const { items, actions, collectionProps, filterProps, paginationProps, filteredItemsCount } =
         useCollection(visible, {
             filtering: {
                 filteringFunction: (item, text) =>
                     item.finalPath.toLowerCase().includes(text.toLowerCase()),
-                empty: <Box textAlign="center">No files selected</Box>,
+                empty: <Box textAlign="center">{emptyText}</Box>,
                 noMatch: <Box textAlign="center">No files match the filter</Box>,
             },
             pagination: { pageSize: 50 },

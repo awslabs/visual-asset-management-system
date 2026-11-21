@@ -21,6 +21,7 @@ import * as path from "path";
 import { Template } from "aws-cdk-lib/assertions";
 import { Preview3dThumbnailConstruct } from "../../lib/nestedStacks/pipelines/preview/3dThumbnail/constructs/preview3dThumbnail-construct";
 import { PcPotreeViewerConstruct } from "../../lib/nestedStacks/pipelines/preview/pcPotreeViewer/constructs/pcPotreeViewer-construct";
+import { CogConvertConstruct } from "../../lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct";
 import { CoordinateTransformConstruct } from "../../lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/coordinateTransform-construct";
 import { SystemGenAiMetadataConstruct } from "../../lib/nestedStacks/pipelines/system/genAiMetadata/constructs/systemGenAiMetadata-construct";
 import { ZipArchiveConstruct } from "../../lib/nestedStacks/pipelines/utility/zipArchive/constructs/zipArchive-construct";
@@ -309,6 +310,49 @@ describe("system/genAiMetadata openPipeline registration environment", () => {
         expect(env.BATCH_JOB_DEFINITION_NAME).toBeUndefined();
         // The producer's BATCH_STATE_NAME literal still names FargateRenderJob, which this ASL lacks;
         // the absent env above is what keeps that container entry out of the registration.
+    });
+});
+
+describe("conversion/cogConvert executeBatchJob registration environment", () => {
+    let template: Template;
+
+    beforeAll(() => {
+        const h = makePipelineHarness("CogConvertEnvStack", (c) => {
+            c.app.pipelines.useCogConversion.enabled = true;
+            // Sources the container image from an ECR repository instead of a local Docker build.
+            c.app.pipelines.useCogConversion.useCodeBuild = true;
+            c.app.pipelines.useCogConversion.autoRegisterWithVAMS = false;
+        });
+        new CogConvertConstruct(h.stack, "CogConvertPipeline", {
+            config: h.config,
+            vpc: h.vpc,
+            pipelineSubnets: h.subnets,
+            pipelineSecurityGroups: h.securityGroups,
+            lambdaCommonBaseLayer: h.lambdaCommonBaseLayer,
+            assetAuxiliaryBucket: h.assetAuxiliaryBucket,
+            storageResources: h.storage,
+            kmsKey: h.kmsKey,
+            importGlobalPipelineWorkflowV2FunctionName: "importGlobalPipelineWorkflow",
+        });
+        template = Template.fromStack(h.stack);
+    });
+
+    test("the job-submitting lambda registers the vended group beside its job definition name", () => {
+        const env = registeringLambdaEnv(template, "executeBatchJob.lambda_handler");
+        const jobDefinitionId = expectDerivedJobDefinitionName(template, env.BATCH_JOB_DEFINITION);
+        expectVendedGroupRegistration(
+            template,
+            jobDefinitionId,
+            env.BATCH_JOB_LOG_GROUP_NAME,
+            env.BATCH_JOB_LOG_GROUP_ARN
+        );
+    });
+
+    test("the stage the producer declares is a state of the machine", () => {
+        expectDeclaredStagesInAsl(
+            template,
+            path.join(PRODUCERS, "conversion", "cogConvert", "lambda", "executeBatchJob.py")
+        );
     });
 });
 

@@ -8,8 +8,9 @@ export type EdhOsFamily = "linux" | "windows";
 
 /**
  * Why a launch ended ORPHANED, why the lease sweep stopped the desktop, why a start of a stopped
- * desktop left it STOPPED, or (`START_STALLED`, on a CREATING row) that EDH accepted a start and has
- * not finished it after 30 minutes. The service stores these codes and never EDH's own wording.
+ * desktop left it STOPPED, or, on a CREATING row, that EDH accepted a start and has not finished it
+ * after 30 minutes (`START_STALLED`) or has not placed a new launch after 3 hours
+ * (`LAUNCH_STALLED`). The service stores these codes and never EDH's own wording.
  */
 export type WorkstationLastError =
     | "USER_NOT_PROVISIONED"
@@ -23,7 +24,8 @@ export type WorkstationLastError =
     | "RESERVATION_FULL"
     | "RESERVATION_ENDED"
     | "START_FAILED"
-    | "START_STALLED";
+    | "START_STALLED"
+    | "LAUNCH_STALLED";
 
 /**
  * What a workstation is doing, as the service derives it on every read, whatever `state` says:
@@ -36,7 +38,7 @@ export type WorkstationActivity = "starting" | "stopping";
  * Why a start of a stopped desktop left it STOPPED: the AWS error code EDH's refusal named (e.g.
  * `InsufficientInstanceCapacity`) and the Availability Zone the desktop's instance, and so its disk,
  * is in. Each is absent when it was not read. Kept until the next start is accepted. On a start the
- * sweep found stalled (`lastError` `START_STALLED`) it carries `observedAt`, and the zone when read,
+ * sweep found stalled (`lastError` `START_STALLED` or `LAUNCH_STALLED`) it carries `observedAt`, and the zone when read,
  * but no `errorCode`: EDH reported none.
  */
 export interface StartFailure {

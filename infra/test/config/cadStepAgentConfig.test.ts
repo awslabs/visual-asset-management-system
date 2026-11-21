@@ -248,7 +248,8 @@ describe("useGenAiCadStepAgent getConfig() rules", () => {
             autoRegisterAutoTriggerOnFileUpload: false,
             bedrockModelId: Config.GENAI_DEFAULT_BEDROCK_MODEL_ID,
             openAi: { modelId: "", apiKeySecretArn: "" },
-            allowInternetResearch: true,
+            // Off unless the deployment opts in (#1703).
+            allowInternetResearch: false,
             bedrockGuardrail: { guardrailId: "", guardrailVersion: "" },
             agentCore: {
                 warmSessionSlots: 0,

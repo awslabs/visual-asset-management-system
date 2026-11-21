@@ -13,6 +13,7 @@ import {
     normaliseHref,
     webRouteChecksFor,
 } from "./navigationRegistry";
+import { ALLOWED_API_ROUTES_CACHED_EVENT } from "../FedAuth/allowedApiRoutesCache";
 
 /** The menu item id of Sign out, which App.tsx handles in the menu's onItemClick. */
 export const SIGN_OUT_ITEM_ID = "signout";
@@ -22,43 +23,61 @@ type CheckState = "loading" | "allowed" | "failed";
 /** The id prefix of a page item; App.tsx navigates the hash router for the current page's item. */
 export const PAGE_ITEM_ID_PREFIX = "page:";
 
-/** The route path the browser is on ("#/auth/api-keys/?mode=user" is "/auth/api-keys"). */
-export function currentRoutePath(hash: string = window.location.hash): string {
-    return normaliseHref(hash || "#/");
+/** The `?query` of a hash href, as parameters ("#/auth/api-keys/?mode=user" gives mode=user). */
+function hashQuery(href: string): URLSearchParams {
+    const query = href.split("?")[1];
+    return new URLSearchParams(query ? query.split("#")[0] : "");
 }
 
 /**
- * One registry link as a menu-dropdown item. The page the user is on is shown as the current page.
- * Cloudscape's public menu items have no current-page state (no `aria-current`), so it is a checked
- * checkbox item: a check mark and `aria-checked` for assistive technologies, and still selectable. A
- * checkbox item takes no `href`, so App.tsx follows it through `onItemClick`. Every other page stays
- * a link. The match is on the route path, so the query (`?mode=user`) does not matter.
+ * Whether `href` names the page at `currentHash`: the route paths match (`normaliseHref`, so a
+ * trailing slash does not matter) and every query parameter the href sets has the same value in
+ * the current hash, so "#/auth/api-keys/?mode=user" is the user view of the API keys page and not
+ * its admin view. The API keys page keeps `?mode=` on the view it shows.
  */
-function linkItem(
-    entry: NavEntry,
-    currentPath: string | null
-): ButtonDropdownProps.Item | ButtonDropdownProps.CheckboxItem {
+export function isCurrentPage(href: string, currentHash: string): boolean {
+    if (href === "" || normaliseHref(href) !== normaliseHref(currentHash || "#/")) return false;
+    const current = hashQuery(currentHash);
+    return Array.from(hashQuery(href).entries()).every(
+        ([key, value]) => current.get(key) === value
+    );
+}
+
+/**
+ * One registry link as a menu-dropdown item. The page the user is on stays a link and is marked as
+ * the current page: Cloudscape's public menu items have no current-page state (no `aria-current`),
+ * so it carries a "Current page" label tag and says so in its accessible name. A toggle item would
+ * be announced as a checked checkbox, which this is not.
+ */
+function linkItem(entry: NavEntry, currentHash: string | null): ButtonDropdownProps.Item {
     const href = entry.href ?? "";
     const id = `${PAGE_ITEM_ID_PREFIX}${href}`;
-    if (currentPath !== null && href !== "" && normaliseHref(href) === currentPath) {
-        return { id, text: entry.text ?? "", itemType: "checkbox", checked: true };
+    const text = entry.text ?? "";
+    if (currentHash !== null && isCurrentPage(href, currentHash)) {
+        return {
+            id,
+            text,
+            href: entry.href,
+            labelTag: "Current page",
+            ariaLabel: `${text}, current page`,
+        };
     }
-    return { id, text: entry.text ?? "", href: entry.href };
+    return { id, text, href: entry.href };
 }
 
 /** Allowed profile entries as menu items: a section is a group headed by its text. */
 export function toMenuItems(
     entries: NavEntry[],
-    currentPath: string | null = null
+    currentHash: string | null = null
 ): ButtonDropdownProps.ItemOrGroup[] {
     return entries.map((entry) =>
         entry.type === "section"
             ? {
                   id: `group:${entry.text}`,
                   text: entry.text ?? "",
-                  items: (entry.items ?? []).map((item) => linkItem(item, currentPath)),
+                  items: (entry.items ?? []).map((item) => linkItem(item, currentHash)),
               }
-            : linkItem(entry, currentPath)
+            : linkItem(entry, currentHash)
     );
 }
 
@@ -70,8 +89,8 @@ export function toMenuItems(
  * (`checkWebRoutesAllowed`, batched and cached), so this adds no `auth/routes` call. The menu fails
  * closed: page links appear only once the check has succeeded, and Sign out always works. The top bar
  * lives outside the HashRouter and has no Retry control, so a failed check is retried on the next
- * `hashchange`; every `hashchange` also re-renders, so a link gated on the API allowed-routes
- * listing (`requiresApiRoute`) appears once that listing is cached. The check runs again when the
+ * `hashchange`; every `hashchange`, and every new allowed-routes listing the auth flow caches,
+ * also re-renders, so a link gated on that listing (`requiresApiRoute`) appears once it is cached. The check runs again when the
  * deployment's feature switches change, so an entry restricted to a switch
  * (`featuresEnabledRestriction`) appears once the secure config carrying it lands.
  */
@@ -114,11 +133,18 @@ export function useProfileMenuItems(): ButtonDropdownProps.ItemOrGroup[] {
         return () => window.removeEventListener("hashchange", onHashChange);
     }, [state]);
 
+    // A link gated on the API allowed-routes listing appears once the auth flow caches it.
+    useEffect(() => {
+        const onListingCached = () => setHashTick((value) => value + 1);
+        window.addEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+        return () => window.removeEventListener(ALLOWED_API_ROUTES_CACHED_EVENT, onListingCached);
+    }, []);
+
     const pageItems =
         state === "allowed"
             ? toMenuItems(
                   allowedEntriesFor("profile", allowedPaths, enabledFeatures),
-                  currentRoutePath()
+                  window.location.hash || "#/"
               )
             : [];
     return [...pageItems, { id: SIGN_OUT_ITEM_ID, text: "Sign out" }];

@@ -23,6 +23,8 @@ import {
     useWorkstations,
 } from "./queries";
 import { EdhRequestError } from "./outcome";
+import { toTuple } from "../../../features/orchestration/api/client";
+import { createAppQueryClient, MAX_QUERY_RETRIES } from "../../../utils/queryRetry";
 import type { WorkstationRecord } from "../types";
 
 jest.mock("./workstations", () => ({
@@ -226,6 +228,8 @@ describe("isTransitionalWorkstation", () => {
     it("treats a stalled start as settled, and a creating row with any other code as transitional", () => {
         const creating = { state: "CREATING", connectionAvailable: false, activity: null } as const;
         expect(isTransitionalWorkstation({ ...creating, lastError: "START_STALLED" })).toBe(false);
+        // So is a new launch EDH has not placed after 3 hours.
+        expect(isTransitionalWorkstation({ ...creating, lastError: "LAUNCH_STALLED" })).toBe(false);
         expect(isTransitionalWorkstation({ ...creating, lastError: null })).toBe(true);
         // The service reports no activity on a stalled row; were it to report one, the row moves.
         expect(
@@ -734,5 +738,35 @@ describe("useWorkstationMutations", () => {
 
         expect(workstationService.startWorkstation).toHaveBeenCalledWith("s-1");
         expect(workstationService.deleteWorkstation).toHaveBeenCalledWith("s-1");
+    });
+});
+
+// The EDH list hooks throw through the shared callService, which keeps the HTTP status, so the app's
+// query client sends a final answer once and retries only a transient failure.
+describe("useWorkstations with the app query client", () => {
+    beforeEach(() => jest.clearAllMocks());
+
+    const refusedWith = (status: number) => () =>
+        toTuple(() => Promise.reject(Object.assign(new Error(`HTTP ${status}`), { status })));
+
+    it("sends a 403 once and shows it at once", async () => {
+        (workstationService.listWorkstations as jest.Mock).mockImplementation(refusedWith(403));
+        const { result } = renderHook(() => useWorkstations(), {
+            wrapper: wrapperFor(createAppQueryClient()),
+        });
+
+        await waitFor(() => expect(result.current.isError).toBe(true));
+        expect(workstationService.listWorkstations).toHaveBeenCalledTimes(1);
+        expect((result.current.error as any).status).toBe(403);
+    });
+
+    it("[control] retries a 503", async () => {
+        (workstationService.listWorkstations as jest.Mock).mockImplementation(refusedWith(503));
+        const { result } = renderHook(() => useWorkstations(), {
+            wrapper: wrapperFor(createAppQueryClient()),
+        });
+
+        await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
+        expect(workstationService.listWorkstations).toHaveBeenCalledTimes(MAX_QUERY_RETRIES + 1);
     });
 });

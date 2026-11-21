@@ -73,6 +73,12 @@ def recipe_path(recipe_id="al2023-desktop", *rest):
     return "/".join([RECIPES_PATH, recipe_id, *rest])
 
 
+def _recipe_object(recipe_id, os_family):
+    """The edhImage enforcement dict of an AMI recipe route: the recipe id, no stack id or name."""
+    return {"object__type": "edhImage", "edhImageId": "", "edhStackName": "", "edhRecipeId": recipe_id,
+            "edhOsFamily": os_family}
+
+
 @pytest.mark.unit
 class TestTierOne:
     def test_a_tier1_denial_is_403(self, monkeypatch):
@@ -90,12 +96,12 @@ class TestTierOne:
 @pytest.mark.unit
 class TestRecipes:
     def test_list_filters_by_tier2_and_returns_views(self, monkeypatch):
-        fakes = install(monkeypatch, enforce=lambda obj, act: obj["edhImageId"] == "al2023-desktop" and act == "GET")
+        fakes = install(monkeypatch, enforce=lambda obj, act: obj["edhRecipeId"] == "al2023-desktop" and act == "GET")
         response = service.lambda_handler(make_event("GET", RECIPES_PATH), {})
         items = response_body(response)["Items"]
         assert response["statusCode"] == 200 and items[0]["latestBuild"] == BUILD
         fakes.enforcer.enforce.assert_called_with(
-            {"object__type": "edhImage", "edhImageId": "al2023-desktop", "edhOsFamily": "linux"}, "GET")
+            _recipe_object("al2023-desktop", "linux"), "GET")
 
     def test_create_answers_201_with_the_view(self, monkeypatch):
         fakes = install(monkeypatch, recipe=None)
@@ -123,13 +129,37 @@ class TestRecipes:
         assert service.lambda_handler(make_event("GET", recipe_path("nope"), path_params={"recipeId": "nope"}), {})["statusCode"] == 404
         assert service.lambda_handler(make_event("GET", recipe_path("Bad_Id"), path_params={"recipeId": "Bad_Id"}), {})["statusCode"] == 400
 
+    @pytest.mark.parametrize("method,action", [("GET", "GET"), ("PUT", "PUT"), ("DELETE", "DELETE")])
+    def test_a_caller_limited_to_one_os_family_gets_one_answer_for_a_missing_and_a_refused_recipe(
+            self, monkeypatch, method, action):
+        # The role may act on Linux recipes only; the stored recipe is a Windows one.
+        def linux_only(obj, act):
+            return obj.get("edhOsFamily") == "linux"
+        body = {**RECIPE_BODY, "recipeId": "ignored"} if method == "PUT" else None
+        answers = []
+        for stored in ({**RECIPE, "osFamily": "windows"}, None):
+            install(monkeypatch, recipe=stored, enforce=linux_only)
+            response = service.lambda_handler(
+                make_event(method, recipe_path("team-recipe"), body=body, path_params={"recipeId": "team-recipe"}), {})
+            answers.append((response["statusCode"], response_body(response)))
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 403
+
+    def test_a_caller_allowed_on_every_os_family_is_told_a_recipe_is_missing(self, monkeypatch):
+        fakes = install(monkeypatch, recipe=None)
+        response = service.lambda_handler(
+            make_event("GET", recipe_path("nope"), path_params={"recipeId": "nope"}), {})
+        assert response["statusCode"] == 404
+        decided = {(call.args[0]["edhOsFamily"], call.args[1]) for call in fakes.enforcer.enforce.call_args_list}
+        assert {("linux", "GET"), ("windows", "GET")} <= decided
+
     def test_put_uses_the_put_action_and_the_path_id(self, monkeypatch):
         fakes = install(monkeypatch)
         response = service.lambda_handler(
             make_event("PUT", recipe_path(), body={**RECIPE_BODY, "recipeId": "ignored"}, path_params={"recipeId": "al2023-desktop"}), {})
         assert response["statusCode"] == 200
         fakes.enforcer.enforce.assert_called_with(
-            {"object__type": "edhImage", "edhImageId": "al2023-desktop", "edhOsFamily": "linux"}, "PUT")
+            _recipe_object("al2023-desktop", "linux"), "PUT")
         existing, model, user = fakes.recipes.update_admin_recipe.call_args.args
         assert model.recipeId == "al2023-desktop"
 
@@ -175,8 +205,8 @@ class TestDuplicate:
         assert response["statusCode"] == 201
         fakes.store.get_recipe.assert_called_once_with("al2023-desktop")
         assert [call.args for call in fakes.enforcer.enforce.call_args_list] == [
-            ({"object__type": "edhImage", "edhImageId": "al2023-copy", "edhOsFamily": "linux"}, "POST"),
-            ({"object__type": "edhImage", "edhImageId": "al2023-desktop", "edhOsFamily": "windows"}, "GET"),
+            (_recipe_object("al2023-copy", "linux"), "POST"),
+            (_recipe_object("al2023-desktop", "windows"), "GET"),
         ]
         model, user = fakes.recipes.create_admin_recipe.call_args.args
         assert model.duplicateOf == "al2023-desktop" and user == ADMIN
@@ -219,6 +249,19 @@ class TestDuplicate:
         assert response["statusCode"] == 409
         assert response_body(response)["message"] == "the recipe to duplicate does not exist"
         fakes.recipes.create_admin_recipe.assert_not_called()
+
+    def test_a_caller_who_may_not_read_the_source_gets_one_answer_whether_or_not_it_exists(self, monkeypatch):
+        # POST on the new (Linux) recipe; GET on Linux recipes only. The stored source is a Windows one.
+        def enforce(obj, act):
+            return obj.get("edhOsFamily") == "linux"
+        answers = []
+        for stored in (SOURCE_RECIPE, None):
+            fakes = install(monkeypatch, recipe=stored, enforce=enforce)
+            response = service.lambda_handler(make_event("POST", RECIPES_PATH, body=COPY_BODY), {})
+            answers.append((response["statusCode"], response_body(response)))
+            fakes.recipes.create_admin_recipe.assert_not_called()
+        assert answers[0] == answers[1]
+        assert answers[0][0] == 403
 
     def test_an_invalid_source_id_is_400(self, monkeypatch):
         fakes = install(monkeypatch, recipe=SOURCE_RECIPE)

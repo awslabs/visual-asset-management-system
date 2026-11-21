@@ -20,8 +20,20 @@ by partition and entitlement.
 **The agent is confined by construction, not by instruction.** Codex runs its commands under its own
 sandbox in ``workspace-write`` mode, with ``/tmp`` and ``$TMPDIR`` deliberately excluded from the writable
 set, so the only place it can write is the workspace this adapter creates -- which sits outside ``/tmp``
-precisely so the pipeline's own working directories are out of reach. Its commands have no network. The
-workspace is wiped before every run. The Blender-side tools refuse to write outside it as well.
+precisely so the pipeline's own working directories are out of reach. Its commands have no network and no
+task credentials: Codex starts with an allowlisted environment (``CODEX_INHERITED_ENV`` plus this run's
+values), the AWS calls are made by the bridge and the image broker outside it, and Codex's environment
+policy keeps the bridge key it sends to the bridge out of the commands. The workspace is wiped before every
+run. The Blender-side tools refuse to write outside it as well.
+
+The sandbox is Codex's Landlock + seccomp backend (``features.use_legacy_landlock``), not its default
+bubblewrap one: bubblewrap needs an unprivileged user namespace, which an unprivileged container does not
+get, and the job runs unprivileged as uid 10000. Landlock makes the filesystem read-only except the
+workspace, and the seccomp filter refuses network sockets. Codex accepts that backend only when the
+workspace's ``.git``, ``.agents`` and ``.codex`` already exist (it cannot otherwise mark them read-only), so
+the workspace is created with all three, empty; Landlock does not make them read-only, and nothing reads
+them back: the workspace is not a repository, and Codex loads its configuration from ``CODEX_HOME`` and its
+instructions from ``AGENTS.md`` once, at start.
 
 **Completion is a set of files, not a message.** The agent's instructions make the deliverable
 ``output/model.glb`` plus ``output/DONE.json``, and this adapter checks for the mesh, loads it, and fails
@@ -43,6 +55,7 @@ import json
 import os
 import secrets
 import shutil
+import socket
 
 from agent_broker import ImageEditBroker
 import signal
@@ -78,12 +91,45 @@ MAX_PROMPT_IMAGES = 6
 # workspace with no network; it is not a run setting, because the only other mode removes the confinement.
 SANDBOX_MODE = "workspace-write"
 
+# Present in the workspace before Codex starts, empty. Codex's Landlock backend runs a workspace-write
+# sandbox only when these exist (see the module docstring); without them every command is refused.
+SANDBOX_METADATA_DIRS = (".git", ".agents", ".codex")
+
+# The only variables of the job's own environment that Codex starts with; everything else it gets is this
+# run's (codex_process_env). What Codex holds, the commands it runs can see, so the job's task credentials
+# (AWS_CONTAINER_CREDENTIALS_*), the Hugging Face token and the rest of the Batch environment stay with the
+# bridge and the image broker, which make the AWS calls.
+CODEX_INHERITED_ENV = (
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "USER", "LOGNAME", "SHELL",
+    "LD_LIBRARY_PATH", "VIRTUAL_ENV", "PYTHONUNBUFFERED", "U2NET_HOME", "BLENDERAGENT_ROOT",
+)
+
 # The alias the bridge exposes to Codex. Codex asks for this name; LiteLLM maps it to the Bedrock model.
 BRIDGE_MODEL_ALIAS = "agent"
 # How long one model call may go without progress before the bridge and Codex give it up and Codex
 # retries it with its history. A call the model completes takes seconds to about two minutes; a stream
 # Bedrock never finishes would otherwise wait out the run budget.
 BRIDGE_CALL_TIMEOUT_SECONDS = 180
+# Starts of the bridge on a freshly picked port before the run fails. Another process can take the port
+# between free_loopback_port reading it and the bridge binding it; the bridge then exits and the next
+# start picks another.
+BRIDGE_START_ATTEMPTS = 3
+
+
+class BridgeExited(RuntimeError):
+    """The bridge process ended before it was ready, for example because its port was taken."""
+
+
+def free_loopback_port() -> int:
+    """A loopback port no process holds when it is read, for this run's model bridge.
+
+    Batch places several Blender agent jobs on one CPU instance and they share the host's network, so a
+    fixed port lets only the first run's bridge bind it.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
 
 # What a run does: the agent alone, the scripted refit alone, or the refit and then the agent from its result.
 RUN_MODES = ("agent", "refit", "refit-agent")
@@ -174,7 +220,7 @@ def bedrock_runtime_endpoint(region: str) -> str:
         from botocore.config import Config
 
         retry_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
-        return boto3.client("bedrock-runtime", region_name=region, config=retry_config).meta.endpoint_url
+        return str(boto3.client("bedrock-runtime", region_name=region, config=retry_config).meta.endpoint_url)
     except Exception as e:  # pragma: no cover - only without boto3 or a region
         logger.warning(f"Could not resolve the bedrock-runtime endpoint: {e}")
         return f"https://bedrock-runtime.{region}.amazonaws.com"
@@ -186,7 +232,9 @@ def litellm_config(model_id: str, region: str) -> dict:
     ``bedrock/converse/`` forces the Converse route whatever LiteLLM's model map knows about the id, which
     matters for a model newer than the installed LiteLLM. ``drop_params`` discards request fields the
     provider does not take rather than failing the call; Codex sends several that only OpenAI's own
-    endpoint understands.
+    endpoint understands. The bedrock-runtime endpoint is given explicitly, as botocore resolves it for
+    the Region's partition: LiteLLM picks the DNS suffix from a Region-prefix table that does not cover
+    every partition (the AWS European Sovereign Cloud's is ``amazonaws.eu``).
     """
     return {
         "model_list": [{
@@ -194,6 +242,7 @@ def litellm_config(model_id: str, region: str) -> dict:
             "litellm_params": {
                 "model": f"bedrock/converse/{model_id}",
                 "aws_region_name": region,
+                "aws_bedrock_runtime_endpoint": bedrock_runtime_endpoint(region),
             },
         }],
         "litellm_settings": {
@@ -209,14 +258,28 @@ def litellm_config(model_id: str, region: str) -> dict:
     }
 
 
+def codex_process_env(parent: Dict[str, str], run_env: Dict[str, str]) -> Dict[str, str]:
+    """The whole environment Codex starts with: CODEX_INHERITED_ENV from the job, then this run's values.
+
+    An allowlist, not a filter: a variable the job definition adds later stays out until it is named here.
+    The bridge key is in ``run_env`` because Codex sends it to the bridge (``env_key``); Codex's own
+    environment policy, with shell snapshots off, keeps it out of the commands (see codex_config).
+    """
+    env = {name: parent[name] for name in CODEX_INHERITED_ENV if name in parent}
+    env.update(run_env)
+    return env
+
+
 def codex_config(bridge_url: str, bridge_key_env: str, reasoning_effort: str) -> str:
     """Codex's config.toml for this run, written fresh into a per-run CODEX_HOME.
 
     The provider block is what points Codex at the bridge rather than at OpenAI. The sandbox block is what
     keeps the agent inside its workspace: ``exclude_slash_tmp`` and ``exclude_tmpdir_env_var`` remove the
-    default writable carve-outs, so writable means the workspace and nothing else. The environment policy
-    keeps credentials out of every command the agent runs -- the bridge key is read by Codex itself, not by
-    the commands, and AWS credentials are the bridge's business.
+    default writable carve-outs, so writable means the workspace and nothing else.
+
+    The commands' environment is Codex's own (codex_process_env, which holds no AWS credentials) minus what
+    ``shell_environment_policy`` excludes, which removes the bridge key. ``shell_snapshot`` is off because a
+    snapshot replays the variables Codex's shell started with in front of every command, past that policy.
     """
     return f'''# Written per run by the image-to-3D pipeline. Nothing here persists between runs.
 model = "{BRIDGE_MODEL_ALIAS}"
@@ -243,6 +306,12 @@ stream_idle_timeout_ms = {BRIDGE_CALL_TIMEOUT_SECONDS * 1000}
 network_access = false
 exclude_tmpdir_env_var = true
 exclude_slash_tmp = true
+
+[features]
+# Landlock + seccomp instead of bubblewrap, which needs a user namespace the unprivileged job does not get.
+use_legacy_landlock = true
+# A shell snapshot re-exports Codex's own variables before every command, past the policy below.
+shell_snapshot = false
 
 [shell_environment_policy]
 inherit = "all"
@@ -364,7 +433,37 @@ class BlenderAgentAdapter(ModelAdapter):
             path.mkdir(parents=True, exist_ok=True)
         for sub in ("refs", "start", "tools", "scripts", "renders", "textures", "output", "requests"):
             (dirs["workspace"] / sub).mkdir(exist_ok=True)
+        for name in SANDBOX_METADATA_DIRS:
+            (dirs["workspace"] / name).mkdir(exist_ok=True)
         return dirs
+
+    @staticmethod
+    def _codex_run_env(dirs: Dict[str, Path], bridge_key_env: str, bridge_key: str, render_engine: str,
+                       render_samples: int) -> Dict[str, str]:
+        """This run's own variables for Codex, on top of codex_process_env's allowlist."""
+        workspace = dirs["workspace"]
+        return {
+            "CODEX_HOME": str(dirs["codex_home"]),
+            bridge_key_env: bridge_key,
+            # Blender and anything else that writes to a home directory land inside the writable
+            # root rather than in a real home the sandbox would refuse.
+            "HOME": str(dirs["home"]),
+            "XDG_CONFIG_HOME": str(workspace / ".config"),
+            "XDG_CACHE_HOME": str(workspace / ".cache"),
+            # Blender writes a session directory under the system temp path, which the sandbox denies
+            # -- its log showed the fallback to /tmp. Pointing TMPDIR into the workspace keeps that
+            # inside the one writable root. The sandbox does not ADD this path as a writable root
+            # (exclude_tmpdir_env_var); it does not need to, since the workspace already is one.
+            "TMPDIR": str(workspace / ".tmp"),
+            "TMP": str(workspace / ".tmp"),
+            "TEMP": str(workspace / ".tmp"),
+            "AGENT_WORKSPACE": str(workspace),
+            # Where agent_gate.py finds the pipeline's own gate and silhouette code to run on a model.
+            "PIPELINE_CODE_DIR": str(Path(__file__).resolve().parents[1]),
+            "AGENT_RENDER_ENGINE": render_engine,
+            "AGENT_RENDER_SAMPLES": str(render_samples),
+            "PYTHONUTF8": "1",
+        }
 
     @staticmethod
     def _stage_references(workspace: Path, prepared: Sequence[str], originals: Sequence[str]) -> List[str]:
@@ -417,22 +516,64 @@ class BlenderAgentAdapter(ModelAdapter):
         )  # nosemgrep: dangerous-subprocess-use-audit
         return process
 
+    def _start_ready_bridge(self, bridge_dir: Path, model_id: str, region: str, port_setting: int, key: str,
+                            env: dict):
+        """Start this run's bridge and wait until it answers with this run's key; returns (process, port).
+
+        ``port_setting`` 0 picks a free loopback port for each start and starts again on another when the
+        bridge exits before it is ready (its port was taken in between); a positive value is used as it is,
+        once.
+        """
+        attempts = BRIDGE_START_ATTEMPTS if port_setting == 0 else 1
+        for attempt in range(1, attempts + 1):
+            port = port_setting or free_loopback_port()
+            process = self._start_bridge(bridge_dir, model_id, region, port, key, env)
+            try:
+                self._wait_for_bridge(port, key, process, bridge_dir / "bridge.log")
+                return process, port
+            except Exception as e:
+                _stop_process(process)
+                if not isinstance(e, BridgeExited) or attempt == attempts:
+                    raise
+                logger.warning(f"The model bridge exited before it was ready on port {port}; starting it on "
+                               f"another (attempt {attempt + 1} of {attempts})")
+        raise AssertionError("unreachable")  # pragma: no cover
+
     @staticmethod
-    def _wait_for_bridge(port: int, process: subprocess.Popen, log_path: Path, timeout: int = 120) -> None:
+    def _wait_for_bridge(port: int, key: str, process: subprocess.Popen, log_path: Path,
+                         timeout: int = 120) -> None:
+        """Return once the bridge on ``port`` lists its models for this run's key.
+
+        The key is what proves the answer comes from this run's bridge: another run's bridge on the same
+        host refuses it, and so is never taken for this one.
+        """
+        import urllib.error
         import urllib.request
 
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+        refused = False
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                raise RuntimeError(
+                raise BridgeExited(
                     f"The model bridge exited with code {process.returncode} before it was ready. "
                     f"Last of its log:\n{_tail(log_path)}")
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/liveliness", timeout=3):
-                    return
+                with urllib.request.urlopen(request, timeout=3) as response:  # nosec B310 - loopback only
+                    if response.status == 200:
+                        return
+            except urllib.error.HTTPError as e:
+                # Any 4xx is a bridge that answered and refused this run's key: LiteLLM 1.100.0 without a
+                # database answers a foreign key with 400 ("No connected db."), not 401.
+                refused = refused or 400 <= e.code < 500
             except Exception:
-                time.sleep(2)
-        raise RuntimeError(f"The model bridge did not become ready within {timeout}s:\n{_tail(log_path)}")
+                pass
+            time.sleep(2)
+        detail = (" A bridge on that port answered and refused this run's key, so it is not this run's."
+                  if refused else "")
+        raise RuntimeError(
+            f"The model bridge did not become ready on port {port} within {timeout}s.{detail}\n{_tail(log_path)}")
 
     # ------------------------------------------------------------------ run
 
@@ -542,7 +683,11 @@ class BlenderAgentAdapter(ModelAdapter):
         render_engine = str(setting(params, "BLENDERAGENT_RENDER_ENGINE", "CYCLES")).upper()
         render_samples = int(setting(params, "BLENDERAGENT_RENDER_SAMPLES", 32))
         guidance = str(setting(params, "BLENDERAGENT_GUIDANCE", "")).strip()
-        bridge_port = int(setting(params, "BLENDERAGENT_BRIDGE_PORT", 4000))
+        # 0, the default, gives each run a free loopback port; a positive value fixes the port, which two runs
+        # Batch places on one instance cannot share.
+        bridge_port_setting = int(setting(params, "BLENDERAGENT_BRIDGE_PORT", 0))
+        if bridge_port_setting < 0 or bridge_port_setting > 65535:
+            raise ValueError(f"BLENDERAGENT_BRIDGE_PORT must be 0 or a port number, not {bridge_port_setting}")
         target_size = float(setting(params, "TARGET_SIZE_MM", 0) or 0)
 
         dirs = self._fresh_root()
@@ -595,11 +740,11 @@ class BlenderAgentAdapter(ModelAdapter):
         bridge_key = "sk-" + secrets.token_hex(24)
         bridge_key_env = "BLENDERAGENT_BRIDGE_KEY"
         base_env = {k: v for k, v in os.environ.items() if k != "HF_TOKEN"}
-        bridge = self._start_bridge(dirs["bridge"], model_id, region, bridge_port, bridge_key, base_env)
         started = time.monotonic()
+        bridge, bridge_port = self._start_ready_bridge(dirs["bridge"], model_id, region, bridge_port_setting,
+                                                       bridge_key, base_env)
         broker = None
         try:
-            self._wait_for_bridge(bridge_port, bridge, dirs["bridge"] / "bridge.log")
             logger.info(f"Model bridge ready on 127.0.0.1:{bridge_port} -> {model_id}")
             # The agent's one route to an image model: request files in its workspace, served here with
             # the task role. Its own commands keep having no network and no credentials.
@@ -610,29 +755,9 @@ class BlenderAgentAdapter(ModelAdapter):
                 codex_config(f"http://127.0.0.1:{bridge_port}/v1", bridge_key_env, reasoning),
                 encoding="utf-8")
 
-            agent_env = dict(base_env)
-            agent_env.update({
-                "CODEX_HOME": str(dirs["codex_home"]),
-                bridge_key_env: bridge_key,
-                # Blender and anything else that writes to a home directory land inside the writable
-                # root rather than in a real home the sandbox would refuse.
-                "HOME": str(dirs["home"]),
-                "XDG_CONFIG_HOME": str(workspace / ".config"),
-                "XDG_CACHE_HOME": str(workspace / ".cache"),
-                # Blender writes a session directory under the system temp path, which the sandbox denies
-                # -- its log showed the fallback to /tmp. Pointing TMPDIR into the workspace keeps that
-                # inside the one writable root. The sandbox does not ADD this path as a writable root
-                # (exclude_tmpdir_env_var); it does not need to, since the workspace already is one.
-                "TMPDIR": str(workspace / ".tmp"),
-                "TMP": str(workspace / ".tmp"),
-                "TEMP": str(workspace / ".tmp"),
-                "AGENT_WORKSPACE": str(workspace),
-                # Where agent_gate.py finds the pipeline's own gate and silhouette code to run on a model.
-                "PIPELINE_CODE_DIR": str(Path(__file__).resolve().parents[1]),
-                "AGENT_RENDER_ENGINE": render_engine,
-                "AGENT_RENDER_SAMPLES": str(render_samples),
-                "PYTHONUTF8": "1",
-            })
+            agent_env = codex_process_env(
+                dict(os.environ),
+                self._codex_run_env(dirs, bridge_key_env, bridge_key, render_engine, render_samples))
             # The home the sandbox will not let the agent write to is still where HOME points for the
             # bridge; the agent gets its own.
             (workspace / ".config").mkdir(exist_ok=True)
@@ -690,11 +815,7 @@ class BlenderAgentAdapter(ModelAdapter):
                 broker.join(timeout=10)
                 if broker.served:
                     logger.info(f"Image edits served for the agent: {broker.served}")
-            bridge.terminate()
-            try:
-                bridge.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                bridge.kill()
+            _stop_process(bridge)
         elapsed = time.monotonic() - started
 
         # The deliverable, checked as a file rather than believed from the message.
@@ -836,6 +957,15 @@ def _tail(path: Path, lines: int = 40) -> str:
         return "\n".join(content[-lines:])
     except OSError:
         return "(no log)"
+
+
+def _stop_process(process: subprocess.Popen, grace_seconds: int = 20) -> None:
+    """Terminate a child process, and kill it if it has not exited after the grace period."""
+    process.terminate()
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
 
 
 def _read_json(path: Path):

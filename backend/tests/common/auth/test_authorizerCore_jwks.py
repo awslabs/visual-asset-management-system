@@ -317,3 +317,43 @@ class TestFetchTimeouts:
         # The point of the constant is that it is not None; a None timeout is the defect.
         assert isinstance(core.JWKS_FETCH_TIMEOUT_SECONDS, (int, float))
         assert core.JWKS_FETCH_TIMEOUT_SECONDS > 0
+
+
+@pytest.mark.unit
+class TestDiscoveryFallbackIsShortLived:
+    """A failed OpenID discovery falls back to {issuer}/.well-known/jwks.json. That fallback is
+    retried after the refetch floor, not kept for the hour a discovered URI is kept, so an IdP
+    that publishes its keys elsewhere recovers once discovery answers again."""
+
+    @staticmethod
+    def _discovery(jwks_uri):
+        response = MagicMock()
+        response.json.return_value = {"jwks_uri": jwks_uri}
+        return response
+
+    def test_discovery_runs_again_once_the_fallback_has_aged_past_the_floor(self):
+        failing = MagicMock(side_effect=core.requests.exceptions.ConnectionError("down"))
+        with patch.object(core.requests, "get", failing):
+            assert core.get_jwks_uri_for_external_idp(ISSUER) == f"{ISSUER}/.well-known/jwks.json"
+
+        # Age the cached fallback past the floor (and well short of the hour).
+        core.jwks_uri_cache[ISSUER]["expiry"] -= core.JWKS_MIN_REFETCH_INTERVAL_SECONDS + 1
+        with patch.object(core.requests, "get", MagicMock(return_value=self._discovery(f"{ISSUER}/keys"))):
+            assert core.get_jwks_uri_for_external_idp(ISSUER) == f"{ISSUER}/keys"
+
+    def test_the_fallback_is_kept_no_longer_than_the_floor(self):
+        before = time.time()
+        failing = MagicMock(side_effect=core.requests.exceptions.ConnectionError("down"))
+        with patch.object(core.requests, "get", failing):
+            core.get_jwks_uri_for_external_idp(ISSUER)
+        assert core.jwks_uri_cache[ISSUER]["expiry"] <= time.time() + core.JWKS_MIN_REFETCH_INTERVAL_SECONDS
+        assert core.jwks_uri_cache[ISSUER]["expiry"] >= before
+
+    def test_a_discovered_uri_is_still_cached_for_the_hour(self):
+        with patch.object(core.requests, "get", MagicMock(return_value=self._discovery(f"{ISSUER}/keys"))):
+            core.get_jwks_uri_for_external_idp(ISSUER)
+        # The control: a discovered URI is served from the cache without another request.
+        core.jwks_uri_cache[ISSUER]["expiry"] -= core.JWKS_MIN_REFETCH_INTERVAL_SECONDS + 1
+        unused = MagicMock(side_effect=AssertionError("discovery should not run"))
+        with patch.object(core.requests, "get", unused):
+            assert core.get_jwks_uri_for_external_idp(ISSUER) == f"{ISSUER}/keys"

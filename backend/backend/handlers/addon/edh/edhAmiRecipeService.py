@@ -24,7 +24,7 @@ from models.common import (
     validation_error, general_error, authorization_error,
     VAMSGeneralErrorResponse, validation_error_message,
 )
-from models.addon.edh import AmiRecipeRequestModel, edh_recipe_id_pattern
+from models.addon.edh import EDH_OS_FAMILIES, AmiRecipeRequestModel, edh_recipe_id_pattern
 from .common.edhIdentity import SYSTEM_USER_ID
 from .common import edhAmiRecipes as recipes
 from .common.edhClient import EdhError, map_edh_error_to_response
@@ -48,9 +48,13 @@ def _enforcer():
 
 
 def _image_auth_object(recipe_id, os_family):
+    """The edhImage enforcement dict for an AMI recipe: exactly the matrix fields, as strings. A recipe is
+    named by ``edhRecipeId``; the image fields (stack id and name) are empty on every recipe route."""
     return {
         "object__type": IMAGE_OBJECT_TYPE,
-        "edhImageId": str(recipe_id if recipe_id is not None else ""),
+        "edhImageId": "",
+        "edhStackName": "",
+        "edhRecipeId": str(recipe_id if recipe_id is not None else ""),
         "edhOsFamily": str(os_family if os_family is not None else ""),
     }
 
@@ -58,6 +62,13 @@ def _image_auth_object(recipe_id, os_family):
 def _allowed(recipe, action):
     return len(claims_and_roles.get("tokens", [])) > 0 and _enforcer().enforce(
         _image_auth_object(recipe["recipeId"], recipe.get("osFamily")), action)
+
+
+def _allowed_whatever_the_os_family(recipe_id, action):
+    """Whether the caller may take ``action`` on a recipe with this id of every OS family. A recipe that
+    does not exist is decided this way: a caller who passes is told it is missing, any other caller gets the
+    refusal a recipe it may not act on gets, so the two read alike."""
+    return all(_allowed({"recipeId": recipe_id, "osFamily": os_family}, action) for os_family in EDH_OS_FAMILIES)
 
 
 def _parse_body(event):
@@ -91,6 +102,8 @@ def _recipe_or_error(event, action):
         return None, validation_error(body={'message': 'recipeId is invalid'}, event=event)
     recipe = store.get_recipe(recipe_id)
     if recipe is None:
+        if not _allowed_whatever_the_os_family(recipe_id, action):
+            return None, authorization_error()
         return None, general_error(status_code=404, body={'message': 'Recipe not found'}, event=event)
     if not _allowed(recipe, action):
         return None, authorization_error()
@@ -124,6 +137,8 @@ def create_recipe(event):
     if model.duplicateOf:
         original = store.get_recipe(model.duplicateOf)
         if original is None:
+            if not _allowed_whatever_the_os_family(model.duplicateOf, "GET"):
+                return authorization_error()
             return _conflict(event, recipes.DUPLICATE_SOURCE_MISSING)
         if not _allowed(original, "GET"):
             return authorization_error()

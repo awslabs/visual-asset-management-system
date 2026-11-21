@@ -51,6 +51,8 @@ RECIPE_ID_TAKEN = "recipeId is already in use"
 ASSETS_SHIPPED_ONLY = "assets are only supported on shipped recipes"
 DUPLICATE_SOURCE_MISSING = "the recipe to duplicate does not exist"
 DUPLICATE_ASSETS_FIXED = "the assets of a duplicated recipe cannot be changed"
+# Names no other recipe: the caller may not be allowed on it. The other recipe's id is logged.
+STACK_NAME_TAKEN = "stackName is already used by another recipe"
 # An admin recipe duplicated from another names it, and keeps that recipe's bundled files.
 DUPLICATED_FROM_FIELD = "duplicatedFrom"
 BUNDLED_FILE_FIELDS = ("assets", "assetPrefix")
@@ -293,7 +295,8 @@ def _require_unique_stack_name(recipe_id: str, stack_name: str) -> None:
     wanted = _stack_name_key(stack_name)
     for other in store.list_recipes():
         if other["recipeId"] != recipe_id and _stack_name_key(other.get("stackName")) == wanted:
-            raise RecipeConflict(f"stackName is already used by recipe '{other['recipeId']}'")
+            logger.info(f"stackName of recipe {recipe_id} is already used by recipe {other['recipeId']}")
+            raise RecipeConflict(STACK_NAME_TAKEN)
 
 
 def create_admin_recipe(model: AmiRecipeRequestModel, user_id: str, *,
@@ -614,7 +617,7 @@ def _complete(recipe: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     if not build:
         return {"outcome": "already-handled", "version": version}
     try:
-        builder.tag_ami(ctx, described["amiId"], described["snapshotIds"], builder.ami_tags(recipe, ctx))
+        builder.tag_ami(ctx, described["amiId"], builder.ami_tags(recipe, ctx))
         build = register_build(recipe, build)
     except Exception as err:
         logger.exception(f"{recipe_id} v{version}: completion failed")
@@ -676,7 +679,7 @@ def retry_registration(recipe: Dict[str, Any], build: Dict[str, Any], *, automat
     try:
         if build.get("amiId"):
             ctx = _ctx()
-            builder.tag_ami(ctx, build["amiId"], build.get("snapshotIds", []), builder.ami_tags(recipe, ctx))
+            builder.tag_ami(ctx, build["amiId"], builder.ami_tags(recipe, ctx))
         build = register_build(recipe, build, automatic=automatic)
     except Exception as err:
         logger.exception(f"{recipe_id} v{version}: retry registration failed")

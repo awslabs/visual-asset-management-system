@@ -222,8 +222,7 @@ CATALOG_IMAGES = {'Items': [
 
 DUPLICATED = {"recipeId": "team-desktop", "source": "admin", "duplicatedFrom": "al2023-desktop",
               "assets": [{"id": "vamscli", "repoPath": "tools/VamsCLI"}]}
-STACK_NAME_TAKEN = ("AMI recipe creation refused (409): stackName is already used by recipe "
-                    "'al2023-desktop'")
+STACK_NAME_TAKEN = "AMI recipe creation refused (409): stackName is already used by another recipe"
 
 # The client's error for a recipe delete the service refuses while a build's AMI removal is pending.
 DELETE_REFUSED = "AMI recipe deletion refused (409): a build's AMI removal is pending"
@@ -367,6 +366,40 @@ class TestWorkstationCreate:
             assert 'Workstation launch accepted' in result.output
             assert 'CREATING' in result.output
 
+    def test_create_names_the_bootstrap_id_before_it_sends(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].create_edh_workstation.return_value = WORKSTATION
+            result = cli_runner.invoke(cli, self.ARGS)
+            sent = mocks['api_client'].create_edh_workstation.call_args.args[0]['bootstrapId']
+            assert f"(bootstrap id {sent})" in result.output
+
+    def test_a_launch_not_confirmed_names_its_bootstrap_id_for_a_safe_retry(self, cli_runner, generic_command_mocks):
+        from vamscli.utils.addon.edh_exceptions import EdhOutcomeUnknownError
+
+        launch_id = '0b8f1c2e-7d4a-4f3e-9c1b-2a3d4e5f6a7b'
+        error = EdhOutcomeUnknownError("Workstation launch not confirmed (504): EDH did not confirm the request.")
+        error.json_fields = {**EdhOutcomeUnknownError.json_fields, 'bootstrapId': launch_id}
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].create_edh_workstation.side_effect = error
+            result = cli_runner.invoke(cli, self.ARGS + ['--bootstrap-id', launch_id, '--json-output'])
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data['bootstrapId'] == launch_id and data['outcomeUnknown'] is True
+
+            text = cli_runner.invoke(cli, self.ARGS + ['--bootstrap-id', launch_id])
+            assert text.exit_code == 1
+            assert f"vamscli edh workstation get {launch_id}" in text.output
+            assert f"--bootstrap-id {launch_id}" in text.output
+
+    def test_a_launch_refused_before_sending_gets_no_retry_hint(self, cli_runner, generic_command_mocks):
+        from vamscli.utils.exceptions import RouteNotDeployedError
+
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].create_edh_workstation.side_effect = RouteNotDeployedError("No deployed API route")
+            result = cli_runner.invoke(cli, self.ARGS)
+            assert result.exit_code == 1
+            assert "may have been accepted" not in result.output
+
     def test_create_forwards_an_explicit_bootstrap_id_and_the_windows_family(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].create_edh_workstation.return_value = WORKSTATION
@@ -462,6 +495,9 @@ class TestWorkstationCreate:
 
 
 class TestWorkstationGetStartStop:
+    # `stop` asks before it stops; these tests pass --yes so they reach the API call.
+    EXTRA = {"get": [], "start": [], "stop": ['--yes']}
+
     @pytest.mark.parametrize(
         "command,method,message",
         [("get", "get_edh_workstation", "Workstation retrieved"),
@@ -472,7 +508,7 @@ class TestWorkstationGetStartStop:
             self, cli_runner, generic_command_mocks, command, method, message):
         with generic_command_mocks('addon.edh') as mocks:
             getattr(mocks['api_client'], method).return_value = WORKSTATION
-            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1'])
+            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1'] + self.EXTRA[command])
             assert result.exit_code == 0
             getattr(mocks['api_client'], method).assert_called_once_with('s-1')
             assert message in result.output
@@ -484,7 +520,8 @@ class TestWorkstationGetStartStop:
     def test_json_output_is_the_raw_record(self, cli_runner, generic_command_mocks, command, method):
         with generic_command_mocks('addon.edh') as mocks:
             getattr(mocks['api_client'], method).return_value = WORKSTATION
-            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1', '--json-output'])
+            result = cli_runner.invoke(cli, ['edh', 'workstation', command, 's-1', '--json-output']
+                                       + self.EXTRA[command])
             assert result.exit_code == 0
             assert json.loads(result.output) == WORKSTATION
 
@@ -561,10 +598,62 @@ class TestWorkstationGetStartStop:
         with generic_command_mocks('addon.edh') as mocks:
             mocks['api_client'].stop_edh_workstation.side_effect = EdhOperationError(
                 "Workstation stop refused (409): Workstation has no EDH session")
-            result = cli_runner.invoke(cli, ['edh', 'workstation', 'stop', 'b-1'])
+            result = cli_runner.invoke(cli, ['edh', 'workstation', 'stop', 'b-1', '--yes'])
             assert result.exit_code != 0
             assert 'EDH Error' in result.output
             assert 'no EDH session' in result.output
+
+
+class TestWorkstationStopConfirmation:
+    """`edh workstation stop` asks before it stops, unless --yes; --yes is required in JSON mode."""
+
+    ARGS = ['edh', 'workstation', 'stop', 's-1']
+
+    def test_a_declined_prompt_sends_nothing(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            result = cli_runner.invoke(cli, self.ARGS, input='n\n')
+            assert result.exit_code == 1
+            mocks['api_client'].stop_edh_workstation.assert_not_called()
+            text = ' '.join(result.output.split())
+            assert "Stop workstation 's-1'? Its open applications close; its disk is kept" in text
+            assert "'vamscli edh workstation start s-1' starts it again" in text
+            assert 'Workstation stop requested' not in result.output
+
+    def test_an_accepted_prompt_stops(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].stop_edh_workstation.return_value = WORKSTATION
+            result = cli_runner.invoke(cli, self.ARGS, input='y\n')
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].stop_edh_workstation.assert_called_once_with('s-1')
+            assert 'Stop workstation' in result.output
+            assert 'Workstation stop requested' in result.output
+
+    def test_yes_stops_without_a_prompt(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            mocks['api_client'].stop_edh_workstation.return_value = WORKSTATION
+            result = cli_runner.invoke(cli, self.ARGS + ['--yes'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].stop_edh_workstation.assert_called_once_with('s-1')
+            assert 'Stop workstation' not in result.output
+
+    def test_json_output_without_yes_refuses_with_one_error_object(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('addon.edh') as mocks:
+            result = cli_runner.invoke(cli, self.ARGS + ['--json-output'])
+            assert result.exit_code == 1
+            mocks['api_client'].stop_edh_workstation.assert_not_called()
+            assert json.loads(result.output) == {
+                "error": "Confirmation required",
+                "message": "Stopping a workstation requires the --yes flag",
+                "sessionId": "s-1",
+            }
+
+    def test_the_help_names_the_prompt_and_the_flag(self, cli_runner):
+        result = cli_runner.invoke(cli, ['edh', 'workstation', 'stop', '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert '--yes' in text
+        assert 'asks before it stops' in text
+        assert 'stop SESSION_ID --yes --json-output' in text
 
 
 class TestWorkstationNotConfirmed:
@@ -576,7 +665,7 @@ class TestWorkstationNotConfirmed:
 
     @pytest.mark.parametrize("command,method,extra", [
         ("start", "start_edh_workstation", []),
-        ("stop", "stop_edh_workstation", []),
+        ("stop", "stop_edh_workstation", ['--yes']),
         ("delete", "delete_edh_workstation", ['--confirm'])])
     def test_the_message_names_the_listing_and_the_exit_is_non_zero(
             self, cli_runner, generic_command_mocks, command, method, extra):
@@ -1907,6 +1996,30 @@ class TestAmiRecipeNotFound:
             result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "get", "team-desktop", "--json-output"])
             assert result.exit_code == 1
             assert json.loads(result.output) == {"error": RECIPE_NOT_FOUND, "error_type": "EdhAmiRecipeNotFoundError"}
+
+    def test_a_retry_that_failed_again_exits_1_with_the_reason(self, cli_runner, generic_command_mocks):
+        build = {"recipeId": "team-desktop", "version": 7, "status": "REGISTER_FAILED",
+                 "error": "EDH rejected the stack"}
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].register_edh_ami_recipe_build.return_value = build
+            text = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "register", "team-desktop", "7"])
+            assert text.exit_code == 1
+            assert "Registration failed again: EDH rejected the stack" in text.output
+            assert "Build registered in EDH" not in text.output
+            result = cli_runner.invoke(
+                cli, ["edh", "admin", "ami-recipe", "register", "team-desktop", "7", "--json-output"])
+            assert result.exit_code == 1
+            assert json.loads(result.output) == {
+                "error": "Registration failed again: EDH rejected the stack", "error_type": "EdhOperationError",
+                "status": "REGISTER_FAILED", "registrationError": "EDH rejected the stack"}
+
+    def test_a_retry_that_registered_the_build_succeeds(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("addon.edh") as mocks:
+            mocks["api_client"].register_edh_ami_recipe_build.return_value = {
+                "recipeId": "team-desktop", "version": 7, "status": "AVAILABLE"}
+            result = cli_runner.invoke(cli, ["edh", "admin", "ami-recipe", "register", "team-desktop", "7"])
+            assert result.exit_code == 0
+            assert "Build registered in EDH" in result.output
 
     def test_register_of_a_missing_build_in_json_mode_is_one_error_object(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("addon.edh") as mocks:

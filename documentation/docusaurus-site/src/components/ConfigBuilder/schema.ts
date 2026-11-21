@@ -1185,6 +1185,38 @@ const CORE_FIELDS: FieldMeta[] = [
             !!getByPath(c, "app.pipelines.useConversionCoordinateTransform.enabled"),
     },
     {
+        path: "app.pipelines.useCogConversion.enabled",
+        label: "TIF to COG conversion",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Convert a georeferenced TIFF into a Cloud Optimized GeoTIFF in EPSG:3857 so the Search map can draw it. Requires VPC.",
+    },
+    {
+        path: "app.pipelines.useCogConversion.useCodeBuild",
+        label: "TIF to COG — build via CodeBuild",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.autoRegisterWithVAMS",
+        label: "TIF to COG — auto-register",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
+        path: "app.pipelines.useCogConversion.autoRegisterAutoTriggerOnFileUpload",
+        label: "TIF to COG — auto-trigger on upload",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useCogConversion.enabled"),
+    },
+    {
         path: "app.pipelines.useGenAiCadStepAgent.enabled",
         label: "GenAI CAD STEP agent",
         input: "boolean",
@@ -1263,7 +1295,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "pipelines-standard",
         advanced: true,
-        help: "Deployment master switch for the agent's web search and page fetch tools.",
+        help: "Deployment master switch for the agent's web search and page fetch tools. Off by default. When on, the agent sends search queries written from the run's design prompt to third-party web search engines (the ddgs metasearch library, not an AWS service) and fetches public web pages. Always off in GovCloud and EU Sovereign: synth refuses true there.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useGenAiCadStepAgent.enabled"),
     },
     {
@@ -2194,6 +2226,16 @@ const CORE_FIELDS: FieldMeta[] = [
         min: 1,
         visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
     },
+    {
+        path: `${IMAGETO3D}.modelCacheGeneration`,
+        label: "Image to 3D — model cache generation",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 0,
+        help: "Raise by one and deploy to start every model on an empty weight cache (new EFS directory and S3 prefix). Runs already in flight keep the old cache; remove it yourself afterwards.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
     ...imageTo3dModelFields.map((f) => ({
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.enabled`),
@@ -2536,7 +2578,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "compliance",
         advanced: true,
-        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy.",
+        help: "Seeds the GLOBAL default-compliance-schema (a warn-level metadata rule against the default asset metadata schema) at deploy. When unset, it follows app.metadataSchema.autoLoadDefaultAssetSchema.",
     },
     {
         path: "app.compliance.quarantineBlocksDownload",
@@ -2544,7 +2586,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "compliance",
         advanced: true,
-        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
+        help: "When on, a quarantined asset cannot be downloaded, its files cannot be copied to another asset and a user's workflow run cannot take them as input, unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
 

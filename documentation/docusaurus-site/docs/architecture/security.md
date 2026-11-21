@@ -243,7 +243,8 @@ VAMS uses the Casbin policy engine to enforce fine-grained attribute-based acces
 flowchart TD
     REQ["Incoming Request"] --> AUTH["Custom Lambda Authorizer"]
     AUTH -->|Valid JWT| HANDLER["Lambda Handler"]
-    AUTH -->|Invalid| DENY1["403 Forbidden"]
+    AUTH -->|Credential not accepted| DENY0["401 Unauthorized"]
+    AUTH -->|IP not allowed or user has no roles| DENY1["403 Forbidden"]
 
     HANDLER --> CLAIMS["Extract User Claims + Roles"]
     CLAIMS --> T1{"Tier 1: API Route Auth"}
@@ -281,7 +282,7 @@ The following fields can be used in ABAC policy rules:
 | `metadataSchemaName`       | Metadata schema name                                                                                                  |
 | `metadataSchemaEntityType` | Metadata entity type                                                                                                  |
 | `complianceSchemaName`     | Compliance schema name                                                                                                |
-| `complianceState`          | Asset compliance state (for example `quarantined`)                                                                    |
+| `complianceState`          | Asset compliance state (for example `quarantined`); set on the quarantine routes and one asset's state read only      |
 | `cascadeId`                | Compliance cascade identifier                                                                                         |
 | `auditLogGroup`            | Audit log group key, on the `auditLog` object type; the seeded `admin` role is the only role that holds it by default |
 | `object__type`             | Entity type for Tier 2 enforcement                                                                                    |

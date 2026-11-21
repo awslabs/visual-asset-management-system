@@ -1,11 +1,10 @@
 """The compliance tools.
 
-Two response shapes. The schema and pending-cascade listings return their WHOLE list in one
-response under a route-specific field with no ``message`` envelope and no continuation token
-(``paginate()`` would find zero rows and ``unwrap_message`` has nothing to unwrap). Every other
-list — the evaluation history, the two audit trails, the quarantine listing — is a real
+Every list — the schemas, the cascades, the evaluation history, the two audit trails, the
+quarantine listing — is a real
 ``maxItems`` / ``startingToken`` / ``NextToken`` page that reads its page size from ``maxItems``
-rather than ``pageSize``; the database overview and the bindings read are paged the same way but
+rather than ``pageSize``, with no ``message`` envelope; the database overview and the bindings read
+are paged the same way but
 returned as the route's own page, because their summary fields describe the full set. Each is
 asserted against a literal payload, not a MagicMock's default.
 
@@ -68,23 +67,80 @@ SCHEMA = {
 }
 
 
-# --- Single-response listings ---------------------------------------------------
+# --- The schema listing is a real page keyed on maxItems -------------------------
 
 
-def test_list_compliance_schemas_lifts_the_schemas_field_onto_items(mock_client):
-    mock_client.api.list_compliance_schemas.return_value = {"schemas": [SCHEMA]}
+def test_list_compliance_schemas_reads_the_schemas_field_and_forwards_the_page(real_paginate_client):
+    real_paginate_client.api.list_compliance_schemas.return_value = {"schemas": [SCHEMA]}
     result = server.list_compliance_schemas()
     assert result["Items"] == [SCHEMA]
     assert result["count"] == 1
     assert "truncated" not in result
-    mock_client.api.list_compliance_schemas.assert_called_once_with(database_id=None)
+    real_paginate_client.api.list_compliance_schemas.assert_called_once_with(
+        database_id=None,
+        max_items=min(server.CONFIG.page_size, server.MAX_COMPLIANCE_LISTING_PAGE_SIZE),
+        starting_token=None,
+    )
 
 
-def test_list_compliance_schemas_forwards_the_database_filter(mock_client):
-    mock_client.api.list_compliance_schemas.return_value = {"schemas": []}
+def test_list_compliance_schemas_forwards_the_database_filter_on_every_page(real_paginate_client):
+    real_paginate_client.api.list_compliance_schemas.side_effect = [
+        {"schemas": [], "NextToken": "page-2"},
+        {"schemas": [SCHEMA]},
+    ]
     result = server.list_compliance_schemas(database_id="db1")
-    assert result == {"Items": [], "count": 0}
-    mock_client.api.list_compliance_schemas.assert_called_once_with(database_id="db1")
+    # A page the caller may read nothing of is empty while a token remains; the walk keeps going.
+    assert result["Items"] == [SCHEMA]
+    assert result["pages"] == 2
+    calls = real_paginate_client.api.list_compliance_schemas.call_args_list
+    assert [c.kwargs["database_id"] for c in calls] == ["db1", "db1"]
+    assert [c.kwargs["starting_token"] for c in calls] == [None, "page-2"]
+
+
+def test_list_compliance_schemas_stops_at_max_items_and_returns_the_token(real_paginate_client):
+    real_paginate_client.api.list_compliance_schemas.return_value = {
+        "schemas": [SCHEMA], "NextToken": "page-2"}
+    result = server.list_compliance_schemas(max_items=1, starting_token="page-1")
+    assert result["truncated"] is True
+    assert result["NextToken"] == "page-2"
+    assert "starting_token='page-2'" in result["note"]
+    kwargs = real_paginate_client.api.list_compliance_schemas.call_args.kwargs
+    assert (kwargs["max_items"], kwargs["starting_token"]) == (1, "page-1")
+
+
+def test_list_compliance_schemas_carries_the_create_scopes_through(real_paginate_client):
+    """`createScopes` is on every page of a listing without a database; an empty list is an answer."""
+    real_paginate_client.api.list_compliance_schemas.side_effect = [
+        {"schemas": [SCHEMA], "createScopes": [], "NextToken": "page-2"},
+        {"schemas": [], "createScopes": []},
+    ]
+    assert server.list_compliance_schemas()["createScopes"] == []
+    real_paginate_client.api.list_compliance_schemas.side_effect = None
+    real_paginate_client.api.list_compliance_schemas.return_value = {"schemas": []}
+    assert "createScopes" not in server.list_compliance_schemas(database_id="db1")
+
+
+def test_list_compliance_schemas_never_asks_for_more_than_the_route_cap(mock_client):
+    mock_client.config = MagicMock(page_size=10_000, max_pages=1)
+    mock_client.unwrap_message = server.VamsClient.unwrap_message
+    mock_client.paginate = lambda *args, **kwargs: server.VamsClient.paginate(
+        mock_client, *args, **kwargs
+    )
+    mock_client.api.list_compliance_schemas.return_value = {"schemas": []}
+    server.list_compliance_schemas()
+    assert (
+        mock_client.api.list_compliance_schemas.call_args.kwargs["max_items"]
+        == server.MAX_COMPLIANCE_LISTING_PAGE_SIZE
+    )
+
+
+def test_list_compliance_schemas_docstring_describes_the_bounded_walk_and_the_token():
+    docstring = _docstring_of("list_compliance_schemas")
+    assert "truncated" in docstring
+    assert "NextToken" in docstring
+    assert "starting_token" in docstring
+    assert "no paging" not in docstring.lower()
+    assert "whole list" not in docstring.lower()
 
 
 def test_list_compliance_cascades_reads_its_field_and_forwards_the_filters(real_paginate_client):
@@ -100,25 +156,6 @@ def test_list_compliance_cascades_reads_its_field_and_forwards_the_filters(real_
         max_items=min(server.CONFIG.page_size, server.MAX_COMPLIANCE_LISTING_PAGE_SIZE),
         starting_token=None,
     )
-
-
-def test_single_response_list_keeps_the_other_top_level_fields():
-    """The helper carries a page's non-list fields through, so nothing a route reports is lost."""
-    result = server._single_response_list({"schemas": [{"schemaName": "s1"}], "databaseId": "db1"}, "schemas")
-    assert result == {"databaseId": "db1", "Items": [{"schemaName": "s1"}], "count": 1}
-
-
-def test_single_response_list_tolerates_a_missing_or_non_list_field():
-    assert server._single_response_list({}, "schemas") == {"Items": [], "count": 0}
-    assert server._single_response_list({"schemas": None}, "schemas")["Items"] == []
-
-
-@pytest.mark.parametrize("tool", ["list_compliance_schemas"])
-def test_whole_list_tools_take_no_paging_parameters(tool):
-    """These routes return everything in one response; a paging knob would silently do nothing."""
-    parameters = inspect.signature(getattr(server, tool)).parameters
-    assert "starting_token" not in parameters
-    assert "max_items" not in parameters
 
 
 # --- The audit trail is a real page keyed on maxItems ---------------------------
@@ -758,6 +795,32 @@ def test_sweep_docstring_names_the_skipped_and_remaining_counts():
     assert "not authorized" in docstring
 
 
+@pytest.mark.parametrize("tool", ["sweep_compliance_schema", "evaluate_database_compliance"])
+def test_the_sweep_docstrings_continue_on_the_token_not_the_remaining_count(tool):
+    """A call reads under a time budget and can report 0 remaining while a token is present."""
+    docstring = _docstring_of(tool)
+    assert "while `NextToken` is present, call again" in docstring.replace("While", "while")
+    assert "can be 0 while more remain" in docstring
+    assert "`assetsRemaining` is above 0" not in docstring
+
+
+def test_the_evaluate_docstring_describes_the_dry_run():
+    docstring = _docstring_of("evaluate_asset_compliance")
+    assert "DRY RUN" in docstring
+    assert "`dryRun`" in docstring
+    assert "no `evaluationId`" in docstring
+    assert "nothing recorded" in docstring
+    assert "`pipelineRulesNotRun`" in docstring
+    assert "read access to that schema" in docstring
+    assert "GLOBAL" in docstring
+
+
+def test_the_schema_write_docstrings_name_the_scope_move_refusal():
+    assert "refused while the schema is bound in another" in _docstring_of("update_compliance_schema")
+    assert "a database scope is refused while the name is bound in another database" in _docstring_of(
+        "create_compliance_schema")
+
+
 def test_sweep_and_cascade_docstrings_say_a_superseded_asset_is_not_a_failure():
     """An agent reading a sweep or cascade must not report an asset a newer evaluation superseded
     as an evaluation error."""
@@ -1056,10 +1119,10 @@ def test_the_schema_save_docstring_names_the_run_rights_refusal(gated):
     assert "Not authorized to run the workflow of pipeline rule" in _docstring_of(
         "create_compliance_schema")
     client.api.create_compliance_schema.side_effect = PermissionError(
-        "Access forbidden. Not authorized to run the workflow of pipeline rule 'convert'")
+        "Access forbidden. Not authorized to run the workflow of pipeline rule rules[0]")
     result = srv.create_compliance_schema("s", schema_body={"schemaFormat": "vams-rules-v1",
                                                             "rules": {}})
-    assert "pipeline rule 'convert'" in str(result)
+    assert "pipeline rule rules[0]" in str(result)
 
 
 def test_the_history_tool_explains_an_evaluation_closed_without_a_verdict():

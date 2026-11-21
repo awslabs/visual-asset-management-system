@@ -11,29 +11,37 @@
 # terms against the deployment before distributing an image built from this file. The Stable3DGen model
 # reaches a comparable result with no NVIDIA-licensed component and is the default for that reason.
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04@sha256:da6791294b0b04d7e65d87b7451d6f2390b4d36225ab0701ee7dfec5769829f5
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# The upstream repo is pinned to a reviewed commit so the image is reproducible. An empty value clones
-# the default branch, which makes the build non-reproducible.
+# Non-root runtime user (the #327 design), created first so HOME is /home/vams for every step below:
+# anything a build step writes under HOME (git-lfs's .gitconfig, tool caches) lands where uid 10000 can
+# reach it at run time.
+RUN groupadd -g 10000 vams && \
+    useradd -u 10000 -g 10000 -m -d /home/vams -s /bin/bash vams
+ENV HOME=/home/vams
+
+# The upstream repo is pinned to a reviewed commit so the image is reproducible; each clone below fails
+# the build if HEAD is anything other than its pin.
 # pragma: allowlist nextline secret
-ARG TRELLIS2_COMMIT="75fbf0183001ed9876c8dbb35de6b68552ee08bd"
+ARG TRELLIS2_COMMIT=75fbf0183001ed9876c8dbb35de6b68552ee08bd
 # The two out-of-tree CUDA extensions upstream builds from source, pinned for the same reason.
 # pragma: allowlist nextline secret
-ARG CUMESH_COMMIT="12289e1062f0603f2f0d0771b02e1395d247f26f"
+ARG CUMESH_COMMIT=12289e1062f0603f2f0d0771b02e1395d247f26f
 # pragma: allowlist nextline secret
-ARG FLEXGEMM_COMMIT="6dd94a859c26ee8246888502eada3dd8ad85532e"
-# nvdiffrast is taken at the tag upstream names.
-ARG NVDIFFRAST_TAG="v0.4.0"
+ARG FLEXGEMM_COMMIT=6dd94a859c26ee8246888502eada3dd8ad85532e
+# nvdiffrast at the commit its v0.4.0 tag (the one upstream names) points at. A tag can be moved, so the
+# commit is what is checked.
+ARG NVDIFFRAST_COMMIT=253ac4fcea7de5f396371124af597e6cc957bfae
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects which
 # rungs it walks through the template's REPAIR_BACKENDS setting.
 ARG ENABLE_GPL_MESH_REPAIR=true
 
 # Install system dependencies. The GL/EGL libraries back nvdiffrast's offscreen rendering and
 # pymeshlab's plugins; cmake and ninja build the CUDA extensions; libjpeg-dev backs the imaging stack.
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     build-essential \
     cmake \
     curl \
@@ -57,9 +65,13 @@ RUN apt-get update && apt-get install -y \
 
 RUN git lfs install
 
-# Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
+# Install AWS CLI v2 at a fixed version, checked against its SHA-256 before it is installed. A
+# --build-arg that moves the version has to move the digest with it.
+ARG AWS_CLI_VERSION=2.36.39
+ARG AWS_CLI_SHA256=2b337174417c159f8fd825637841f5425308108bd6f99681664409fb0d7ebe01
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip" -o "awscliv2.zip" && \
+    echo "${AWS_CLI_SHA256}  awscliv2.zip" | sha256sum -c - && \
+    unzip -q awscliv2.zip && \
     ./aws/install && \
     rm -rf aws awscliv2.zip
 
@@ -137,19 +149,25 @@ print('transformers', transformers.__version__, 'exposes DINOv3ViTModel.layer as
 # cleanly and then fails on a missing symbol at run time.
 RUN set -eux; \
     abi=$(python -c "import torch; print('TRUE' if torch._C._GLIBCXX_USE_CXX11_ABI else 'FALSE')"); \
-    url="https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/flash_attn-2.7.3+cu12torch2.6cxx11abi${abi}-cp310-cp310-linux_x86_64.whl"; \
+    case "$abi" in \
+        TRUE) sha=d7d5ccad1cc385bd9d49f8ab61901948f7aa054f3ce9bec5c5a72e0305290017 ;; \
+        FALSE) sha=64ba4ed4a8c4c9b79d8a0959ebe3ffd6f7ea707ae222dbebe6a864237ac0e475 ;; \
+    esac; \
+    wheel="flash_attn-2.7.3+cu12torch2.6cxx11abi${abi}-cp310-cp310-linux_x86_64.whl"; \
     echo "installing flash-attn for cxx11abi=${abi}"; \
-    pip install --no-cache-dir "$url"; \
+    curl -fsSL -o "/tmp/${wheel}" "https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.3/${wheel}"; \
+    echo "${sha}  /tmp/${wheel}" | sha256sum -c -; \
+    pip install --no-cache-dir "/tmp/${wheel}"; \
+    rm -f "/tmp/${wheel}"; \
     python -c "import flash_attn; print('flash_attn', flash_attn.__version__)"
 
 # Clone TRELLIS.2. The o-voxel extension ships inside the repository, so the checkout comes first.
 RUN git clone --recurse-submodules https://github.com/microsoft/TRELLIS.2.git /opt/trellis2 && \
-    if [ -n "$TRELLIS2_COMMIT" ]; then \
-        git -C /opt/trellis2 checkout "$TRELLIS2_COMMIT" && \
-        git -C /opt/trellis2 submodule update --init --recursive; \
-    else \
-        echo "WARNING: TRELLIS2_COMMIT is unset; this image tracks the default branch and is not reproducible"; \
-    fi
+    cd /opt/trellis2 && \
+    git checkout --detach ${TRELLIS2_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${TRELLIS2_COMMIT}" && \
+    git submodule update --init --recursive && \
+    git rev-parse HEAD > /opt/trellis2/VAMS_UPSTREAM_COMMIT
 WORKDIR /opt/trellis2
 
 # The four CUDA extensions upstream builds, each with build isolation off so they compile against the
@@ -161,18 +179,22 @@ WORKDIR /opt/trellis2
 # the CodeBuild volume out of space at the last step of the build, and every byte also lands in the
 # image AWS Batch pulls before each job.
 RUN git clone --recursive https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh && \
-    if [ -n "$CUMESH_COMMIT" ]; then \
-        git -C /tmp/extensions/CuMesh checkout "$CUMESH_COMMIT" && \
-        git -C /tmp/extensions/CuMesh submodule update --init --recursive; \
-    fi && \
+    cd /tmp/extensions/CuMesh && \
+    git checkout --detach ${CUMESH_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${CUMESH_COMMIT}" && \
+    git submodule update --init --recursive && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/CuMesh.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
     pip install --no-cache-dir /tmp/extensions/CuMesh --no-build-isolation && \
     rm -rf /tmp/extensions/CuMesh
 
 RUN git clone --recursive https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM && \
-    if [ -n "$FLEXGEMM_COMMIT" ]; then \
-        git -C /tmp/extensions/FlexGEMM checkout "$FLEXGEMM_COMMIT" && \
-        git -C /tmp/extensions/FlexGEMM submodule update --init --recursive; \
-    fi && \
+    cd /tmp/extensions/FlexGEMM && \
+    git checkout --detach ${FLEXGEMM_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${FLEXGEMM_COMMIT}" && \
+    git submodule update --init --recursive && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/FlexGEMM.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
     pip install --no-cache-dir /tmp/extensions/FlexGEMM --no-build-isolation && \
     rm -rf /tmp/extensions/FlexGEMM
 
@@ -190,7 +212,12 @@ assert s is not None, 'o_voxel is not installed'; print('o_voxel installed at', 
     rm -rf /tmp/extensions/o-voxel
 
 # nvdiffrast carries NVIDIA source-code licence terms; see the licensing note at the top of this file.
-RUN git clone -b "$NVDIFFRAST_TAG" https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast && \
+RUN git clone https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast && \
+    cd /tmp/extensions/nvdiffrast && \
+    git checkout --detach ${NVDIFFRAST_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${NVDIFFRAST_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/nvdiffrast.VAMS_UPSTREAM_COMMIT && \
+    cd / && \
     pip install --no-cache-dir /tmp/extensions/nvdiffrast --no-build-isolation && \
     rm -rf /tmp/extensions/nvdiffrast
 
@@ -218,10 +245,11 @@ names = ('cumesh', 'flex_gemm', 'o_voxel', 'trellis2'); \
 missing = [m for m in names if u.find_spec(m) is None]; \
 assert not missing, f'not installed: {missing}'; print('gpu-only packages installed:', ', '.join(names))"
 
-# GPL-3.0 mesh-repair rungs, installed only when the operator opts in
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix pymeshlab; \
+        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -257,19 +285,33 @@ print('trimesh', trimesh.__version__, 'torch', torch.__version__, 'numpy', numpy
 # re-fetching 176 MB on every run and taking longer than the reconstruction itself. Pointing the
 # variable at a baked-in copy removes the download entirely.
 ENV U2NET_HOME=/opt/rembg
+# Checked against its SHA-256; it is the same file rembg's own download checks by MD5.
+ARG U2NET_SHA256=8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491
 RUN mkdir -p /opt/rembg && \
     curl -fsSL -o /opt/rembg/u2net.onnx \
     https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx && \
-    python -c "import os; p='/opt/rembg/u2net.onnx'; size=os.path.getsize(p); \
-assert size > 150_000_000, f'the u2net weights are only {size} bytes'; print('u2net', size, 'bytes')"
+    echo "${U2NET_SHA256}  /opt/rembg/u2net.onnx" | sha256sum -c -
 
 # VAMS container code
 COPY __init__.py __main__.py model_manager.py preprocess.py framing.py generate.py benchmark.py meshcleanup.py printfeatures.py texturing.py export.py agent_broker.py config.json entrypoint.sh /opt/ml/code/
 COPY models /opt/ml/code/models
 COPY vams_utils /opt/ml/code/vams_utils
+COPY hfguard /opt/ml/code/hfguard
 # Strip CRLF line endings from entrypoint.sh in case the source was bundled from a Windows working
 # tree; otherwise the shebang becomes `/bin/bash\r` and the kernel returns ENOENT on exec.
-RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh
+# COPY keeps the build host's mode bits, so a checkout made under umask 077 or 027 would leave files
+# the runtime user cannot read: a+rX normalizes them.
+RUN sed -i 's/\r$//' /opt/ml/code/entrypoint.sh && chmod +x /opt/ml/code/entrypoint.sh && \
+    chmod -R a+rX /opt/ml/code
+# The upstream checkout is the working directory of the model's process, and an upstream tool may
+# create files relative to it. Group vams and mode 1775 let the runtime user add entries while the
+# sticky bit keeps the root-owned sources as they are. HOME belongs to the runtime user.
+RUN chgrp vams /opt/trellis2 && chmod 1775 /opt/trellis2 && chown -R vams:vams /home/vams
+# Every HuggingFace download in this image is held to its pinned commit (hfguard/hf_pins.py). Checked
+# at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
+# on its first run.
+RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
 
 WORKDIR /opt/ml/code
+USER 10000:10000
 ENTRYPOINT ["/opt/ml/code/entrypoint.sh"]
