@@ -350,6 +350,15 @@ describe("CI workflow", () => {
             );
         });
 
+        test("the 3D Basic golden job also runs the suite on the Batch target", () => {
+            const golden = job("conversion-3dbasic-golden");
+            expect(golden).toMatch(/GOLDEN_TARGET: batch/);
+            expect(golden).toMatch(/timeout-minutes: 30\n/);
+            expect(
+                runCommands(golden).filter((command) => command.includes("run_golden.sh"))
+            ).toHaveLength(2);
+        });
+
         const job = (name: string): string =>
             new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
                 text

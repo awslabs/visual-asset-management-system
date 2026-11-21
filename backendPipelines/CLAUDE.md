@@ -567,6 +567,77 @@ that pipeline's `consolidated_handler.py` and `openPipeline.py` takes its `error
 limit, and converts a non-string with `str()`. `tests/test_rapidpipeline_eks_task_failure_bounds.py`
 holds every call to that form with a syntax-tree guard; it is durable, not temporary.
 
+**3D Basic Conversion image: the AWS Batch tier (#1732).** One image source builds two targets
+(`docker build --target lambda|batch`; no `--target` builds `lambda`, the last stage, which is the function image
+unchanged). Everything up to the `base-with-code` stage is shared (glibc, Assimp binary, locked wheels, the
+`ENABLE_STEP_INPUT` argument, the conversion code); the `batch` target adds `USER 10001:10001` and
+`ENTRYPOINT ["python", "-u", "batch_entry.py"]`, because a Batch job definition overrides a command and not an
+entrypoint. The conversion is one function, `convert(data)` in `lambda.py`, which `lambda_handler` calls after the
+envelope checks and `batch_entry.py` calls through `conversion_service.load_implementation()` (`lambda` is a
+keyword, so no module imports that file by name). Do not copy conversion logic into the entry points.
+
+-   **Where the limits come from.** `size_check.memory_limit_bytes` reads `VAMS_TASK_MEMORY_MIB` on a Batch task and
+    `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` on Lambda; `size_check.compute_tier` names the tier. The Batch job sizes are
+    `size_check.BATCH_TASK_SIZES` ((4 vCPU, 30 GiB), (8, 60), (16, 120)); the launcher's `computeTier.JOB_SIZES` and the
+    CDK construct's ladder, both added with the infrastructure change, must equal it. The attempt's
+    time comes from `VAMS_ATTEMPT_DEADLINE` (epoch seconds) or `VAMS_ATTEMPT_SECONDS`
+    (`conversion_service.attempt_deadline_epoch`, four hours by default). The scene triangle budget
+    (`size_check.triangle_budget`, passed to the worker as `job["max_triangles"]`) is the constant 30 million on Lambda
+    and `(0.9 x task memory - 300 MiB) / 270 bytes` on a Batch task (measured 266 to 279 bytes per triangle, USD to GLB),
+    divided by the output's factor in `size_check.SCENE_TRIANGLE_FACTOR_BY_OUTPUT` (STL 1.45), never below 30 million. The vendored `scene_limits.py` is unchanged: the callers pass the budget in.
+-   **Named results instead of errors.** The state machine sends `allowEscalation: true` on the Lambda attempt of a
+    deployment with the tier. Then `convert()` returns `{"escalate": true, "reason": "size" | "memory" | "time", ...}`
+    (`conversion_service.escalation_result`) for an input over the function's limits, a worker ended by SIGKILL
+    (`WorkerKilledForMemory`), a worker out of time (`WorkerOutOfTime`) and a referenced file over the limits; the
+    result carries the input's size, the size check's limit for each Batch job size and the memory a retry must
+    exceed, so the launcher's `computeTier.choose_job_size` picks a size without holding any factor. An OPTIONAL
+    referenced file the function's limits leave out (a large texture) also escalates when the flag is set, so the
+    Batch run can include it; the job is sized from the input plus the declared (`HeadObject`) sizes of every
+    referenced file found, fetched or not (`FetchReport.declared_bytes`), so the larger run does not skip it again.
+    Without the flag the run completes as an incomplete conversion, as before. A 3MF whose declared uncompressed size
+    (`size_check.check_uncompressed_size`, after the download and before any parse) is over the function's limit
+    escalates the same way, with `inputBytes` the declared uncompressed size and the per-uncompressed-byte limits
+    of each job size (`size_check.uncompressed_limits_by_task_memory`), but only when the largest job size admits
+    it; otherwise it stays the refusal. Scene-expansion refusals (the COLLADA placement pre-count, the USD arc
+    count before `Stage.Open`, the USD walk's node bound and deadline, `expansion_bounds.py`) never escalate:
+    they bound the scene's structure, not the memory a larger task adds. On a Batch task the node bound and the
+    3MF limit follow `VAMS_TASK_MEMORY_MIB` through `size_check.memory_limit_bytes()`, the COLLADA pre-count and
+    the USD walk take the task's triangle budget, and the USD walk's deadline is 75 percent of the attempt's
+    worker time. Without the flag
+    (a deployment without the tier, a direct invocation, the Batch task itself) the same conditions raise the errors
+    they always raised, with the same text. A format limit no memory lifts (`conversion_service.check_format_limit`: a PLY over
+    4 GiB, whose loader keeps a 32-bit size) is refused before any download on both tiers and never escalated.
+-   **Writer and reader bounds, both tiers.** `usd_io.check_array_bounds` runs before `write_usd` creates a stage:
+    a `.usda` array whose text reaches 2 GB is refused (usd-core's text writer drops, without an error, any one array
+    whose text is 2^31 bytes or more; measured whole at 2,146,875,055 bytes and dropped at 2,175,000,055, so the limit
+    is the text size and not an entry count: ints are counted by their digits, a vec3f at 40 bytes, a vec2f at 27), and
+    a `.usdc` or `.usdz` array over 0x7E000000 bytes (the
+    LZ4 block limit) is refused because the crate would write and then fail at read. convert-linked to `.usda` applies
+    the same text bound to each layer it will export (`check_layer_array_text`: ints counted by digits, other types
+    estimated per entry, the message says "estimated"; the first `LAYER_SAMPLES_CHECKED` time samples of each
+    attribute are read; a layer that cannot be opened is refused by name), before any file is written. The worker turns a crate's
+    decompression failure into a `ValueError` saying the file could not be read (`conversion_worker.translate_error`).
+-   **Worker environment.** `conversion_service.is_scrubbed` lists what the child never receives (`AWS_*`, `ECS_*`,
+    `VAMS_*`, including `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` and `ECS_CONTAINER_METADATA_URI*`, which on Fargate
+    address the job role's credentials); `worker_environment` applies it on top of the passthrough list.
+-   **Run document.** `conversion-run.json` (`vams.conversion3dBasic.run/v1`: tier, task memory and vCPU, seconds per
+    phase, and for a continued run its reason) is written under the run's results folder only when the request carries
+    `allowEscalation` (a deployment with the tier) or the run is on Batch, so a deployment without the tier writes
+    nothing new. A failed Batch run also writes it, with `failed: true` and the error line, then fails as before; a
+    failed Lambda run writes none (its error is in the workflow).
+-   **Launcher.** Not in this change. The Lambdas of the callback form (`conversion/3dBasic/lambda/`:
+    `vamsExecuteConversion3dBasicPipeline`, `openPipeline`, `constructPipeline`, `selectJobSize`, `pipelineEnd`, the
+    selector `computeTier`, the vendored `manifestHelper` and `customLogging`) arrive with the infrastructure that deploys
+    them (config, VPC, Batch resources, state machine, registration override), because their `states:SendTaskFailure`
+    grant comes from that builder. The container's contract with them is fixed here: the converter never receives the
+    workflow's task token, the Batch task gets only locations in `VAMS_CONVERSION_EVENT`, and the job role has no
+    `states:` permission. The job definition must set `linuxParameters.initProcessEnabled` (the entry runs as PID 1
+    and does not reap orphaned grandchildren such as Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the
+    S3 clients read the Region at import).
+-   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
+    (Lambda) and `GOLDEN_TARGET=batch tests/golden/run_golden.sh` (the same 176 cells, one container run each, plus
+    `tests/test_3dbasic_hostile_inputs_golden.py` on both).
+
 **On the SUCCESS path, report the outcome and not the job's output.** A `SendTaskSuccess` output and the
 lambda's own return value both land in the execution record, which is durable and readable by anyone who
 can read the execution — and on a run that worked, a third-party tool's stdout has no diagnostic value
