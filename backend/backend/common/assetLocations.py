@@ -30,6 +30,12 @@ than with the prefix match alone. Code that decides whether two locations overla
 ``locations_share_key``: two locations can hold a common key that neither location key
 names (``a/x`` and ``a/x.previewFile`` both hold ``a/x.previewFile.previewFile.z``).
 
+A file belongs to the deepest stored location that contains it. A location of another asset can lie
+inside an asset's location (releases before the create-time conflict check allowed it): the keys that
+deeper location holds are that asset's, so the containing asset's file operations leave them alone.
+``deeper_holder`` and ``held_by`` decide it for a key given the nested locations (pure);
+``nested_locations_of`` reads those locations for one asset location (index or registration walk).
+
 The functions above are pure: no AWS calls.
 
 The location index. Every asset row, live and archived, also carries two attributes, written
@@ -217,6 +223,10 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
 
 # The refusal of a workflow output at a single-file asset's own file path. The upload completion answers it
 # per file, and output processing repeats it in the run's error, since the user can act on it.
+# The answer to an upload, a workflow output or a file operation whose target path lies in the location of
+# another asset nested in the asset's location: those keys are that asset's.
+NESTED_PATH_REFUSAL = "This path is not available in this asset"
+
 OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
                            "Write the output under another file name or folder.")
 
@@ -333,6 +343,37 @@ def in_folder(location: Optional[str], relative_folder: Optional[str], object_ke
 # entry in a folder named ``preview`` (``{key}/preview/x.glb``) sits inside the object's ``preview/``
 # folder, at ``{databaseId}/{key}/preview/x.glb/preview/...``.
 # ---------------------------------------------------------------------------
+
+
+def is_nested_in(location: Optional[str], other: Optional[str]) -> bool:
+    """Whether ``other`` is a stored location nested in ``location``: they hold a common key and ``other`` is
+    the deeper (longer) one, so every key they share is ``other``'s. A location is not nested in itself."""
+    loc = normalize_location(location)
+    nested = normalize_location(other)
+    return len(nested) > len(loc) and locations_share_key(loc, nested)
+
+
+def deeper_holder(location: Optional[str], nested_locations, object_key: Optional[str]) -> Optional[str]:
+    """The location among ``nested_locations`` (a set of locations nested in ``location``) that holds
+    ``object_key`` and is deeper than ``location``, the deepest one when several do; None when no nested
+    location holds the key. Reads only the key's candidate locations, so the cost does not grow with the
+    number of nested locations."""
+    if not nested_locations:
+        return None
+    depth = len(normalize_location(location))
+    key = normalize_location(object_key)
+    for candidate in candidate_locations(key):
+        if len(candidate) <= depth:
+            return None
+        if candidate in nested_locations and contains(candidate, key):
+            return candidate
+    return None
+
+
+def held_by(location: Optional[str], nested_locations, object_key: Optional[str]) -> bool:
+    """Whether ``object_key`` is the file of the asset stored at ``location``: the location contains it and
+    no location nested in it (``nested_locations``) holds it."""
+    return contains(location, object_key) and deeper_holder(location, nested_locations, object_key) is None
 
 
 def aux_bucket_file_base(database_id: Optional[str], file_key: Optional[str]) -> str:
@@ -853,6 +894,177 @@ def load_bucket_locations(table, bucket: str) -> BucketLocations:
         if 'LastEvaluatedKey' not in response:
             return BucketLocations(entries)
         query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+#######################
+# Nested locations
+#######################
+
+# Pages read for the locations nested in one asset location before the index is treated as unable to
+# answer for it (the caller keeps the rule that does not use the index).
+MAX_NESTED_LOCATION_PAGES = 50
+# How long a read operation reuses the nested locations it read for a location in this container.
+NESTED_LOCATIONS_TTL_SECONDS = 10
+BUCKET_ID_INDEX_NAME = "BucketIdGSI"
+
+
+class NestedLocations:
+    """The stored locations of other assets, live and archived, nested in one asset location
+    (``is_nested_in``). ``holds(key)`` says whether a key is the asset's own file; ``keep(key)`` whether a
+    key the location already contains is (no nested location holds it). Empty when nothing is nested, or
+    when the caller keeps the behaviour that does not look for nested locations."""
+
+    def __init__(self, location: Optional[str], entries: Iterable[LocationEntry] = (), source: str = "none"):
+        self.location = normalize_location(location)
+        self.entries: Tuple[LocationEntry, ...] = tuple(
+            e for e in entries if is_nested_in(self.location, e.location))
+        self.locations = frozenset(e.location for e in self.entries)
+        self.source = source
+
+    def __bool__(self) -> bool:
+        return bool(self.locations)
+
+    def __len__(self) -> int:
+        return len(self.locations)
+
+    def holder(self, object_key: Optional[str]) -> Optional[str]:
+        """The nested location that holds the key, or None."""
+        return deeper_holder(self.location, self.locations, object_key)
+
+    def holds(self, object_key: Optional[str]) -> bool:
+        return held_by(self.location, self.locations, object_key)
+
+    def keep(self, object_key: Optional[str]) -> bool:
+        return self.holder(object_key) is None
+
+    def keep_aux(self, database_id: Optional[str], aux_key: Optional[str]) -> bool:
+        """Whether an auxiliary-bucket key under this asset's ``{databaseId}/`` base is not a nested asset's:
+        a nested asset of the same database keeps the auxiliary data under its own file bases."""
+        live = (database_id or "").replace(ARCHIVED_DATABASE_SUFFIX, "")
+        key = aux_key or ""
+        return not any(entry.database_id.replace(ARCHIVED_DATABASE_SUFFIX, "") == live
+                       and key.startswith(aux_bucket_file_base(live, entry.location))
+                       for entry in self.entries)
+
+
+def _nested_prefixes(location: str) -> List[str]:
+    """The index prefixes under which every location nested in ``location`` sorts: the folder itself, or for a
+    single file its companion folder and its preview stem (its ``.previewFile`` partners included)."""
+    if location.endswith('/'):
+        return [location]
+    return [location + '/', location + PREVIEW_FILE_PATTERN[:-1]]
+
+
+def nested_locations_in_index(table, bucket: str, location: Optional[str],
+                              max_pages: Optional[int] = None) -> NestedLocations:
+    """The locations nested in ``location`` in ``bucket``, from the location index (live and archived rows),
+    read to the end of each prefix. Raises RuntimeError when a prefix does not finish within ``max_pages``
+    (default MAX_NESTED_LOCATION_PAGES). Callers must not act on it before ``index_ready()`` is True."""
+    max_pages = max_pages or MAX_NESTED_LOCATION_PAGES
+    loc = normalize_location(location)
+    if not bucket or not loc:
+        return NestedLocations(loc, source="index")
+    client, table_name = table.meta.client, table.name
+    entries: List[LocationEntry] = []
+    for prefix in _nested_prefixes(loc):
+        query_kwargs = _index_query_kwargs(table_name, '#b = :b AND begins_with(#k, :p)',
+                                           {':b': bucket, ':p': prefix})
+        for _ in range(max_pages):
+            response = client.query(**query_kwargs)
+            entries.extend(_entry_from_item(item) for item in response.get('Items', []))
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+        else:
+            raise RuntimeError(f"Nested location query did not finish within {max_pages} pages")
+    return NestedLocations(loc, entries, source="index")
+
+
+def nested_locations_in_rows(rows: Iterable[Dict[str, Any]], location: Optional[str]) -> NestedLocations:
+    """The locations nested in ``location`` among asset rows (live and archived) of the registrations of its
+    bucket, by their stored ``assetLocation.Key``. Used before the index is ready."""
+    entries = []
+    for row in rows or ():
+        stored = normalize_location(((row or {}).get('assetLocation') or {}).get('Key'))
+        if stored:
+            entries.append(LocationEntry(database_id=str(row.get('databaseId', '')),
+                                         asset_id=str(row.get('assetId', '')),
+                                         bucket_id=str(row.get('bucketId', '')), location=stored))
+    return NestedLocations(location, entries, source="registrationWalk")
+
+
+def registration_rows(table, bucket_ids: Iterable[str]) -> Iterator[Dict[str, Any]]:
+    """Every asset row, live and archived, of each bucket registration (``BucketIdGSI``), paged to the end."""
+    client = table.meta.client
+    for bucket_id in dict.fromkeys(b for b in (bucket_ids or ()) if b):
+        query_kwargs = {
+            'TableName': table.name,
+            'IndexName': BUCKET_ID_INDEX_NAME,
+            'KeyConditionExpression': '#b = :b',
+            'ExpressionAttributeNames': {'#b': 'bucketId'},
+            'ExpressionAttributeValues': {':b': bucket_id},
+        }
+        while True:
+            response = client.query(**query_kwargs)
+            yield from response.get('Items', [])
+            if 'LastEvaluatedKey' not in response:
+                break
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+_nested_cache: Dict[Tuple[str, str, str], Tuple[float, NestedLocations]] = {}
+_nested_cache_lock = threading.Lock()
+
+
+def clear_nested_locations_cache() -> None:
+    with _nested_cache_lock:
+        _nested_cache.clear()
+
+
+def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_table_name: Optional[str] = None,
+                        destructive: bool = False, bucket_ids: Iterable[str] = (),
+                        clock: Callable[[], float] = time.monotonic) -> NestedLocations:
+    """The locations of other assets nested in one asset's ``location`` in ``bucket``: the keys they hold are
+    not that asset's files.
+
+    Once ``index_ready()`` is True they come from the location index. Before, a ``destructive`` operation
+    (archive, unarchive or permanent delete of the asset, a folder delete, archive or move) walks the asset
+    rows of ``bucket_ids``, the registrations of the bucket; any other operation finds none, as before the
+    index. A location the index cannot answer for within ``MAX_NESTED_LOCATION_PAGES`` takes the same
+    pre-index rule. A non-destructive answer is reused for NESTED_LOCATIONS_TTL_SECONDS in this container;
+    a destructive one is always read fresh. Other read errors are raised.
+    """
+    loc = normalize_location(location)
+    if not bucket or not loc:
+        return NestedLocations(loc)
+    table_name = asset_table_name or getattr(table, 'name', '')
+    ready = index_ready(table_name)
+    if not ready and not (destructive and bucket_ids):
+        return NestedLocations(loc)
+    cache_key = (table_name, bucket, loc)
+    if not destructive:
+        with _nested_cache_lock:
+            cached = _nested_cache.get(cache_key)
+        if cached and clock() - cached[0] < NESTED_LOCATIONS_TTL_SECONDS:
+            return cached[1]
+    nested = None
+    if ready:
+        try:
+            nested = nested_locations_in_index(table, bucket, loc)
+        except RuntimeError as e:
+            logger.warning(f"The location index cannot list the locations nested in {loc} ({e}); "
+                           "keeping the rule that does not use it")
+    if nested is None:
+        nested = (nested_locations_in_rows(registration_rows(table, bucket_ids), loc)
+                  if destructive and bucket_ids else NestedLocations(loc))
+    if not destructive:
+        with _nested_cache_lock:
+            if len(_nested_cache) >= LOOKUP_CACHE_MAX_ENTRIES:
+                _nested_cache.clear()
+            _nested_cache[cache_key] = (clock(), nested)
+    if nested:
+        logger.info(f"{len(nested)} other asset location(s) lie inside {loc}; their files are left out")
+    return nested
 
 
 #######################

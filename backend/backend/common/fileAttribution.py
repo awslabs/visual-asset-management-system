@@ -39,9 +39,11 @@ from common.assetLocations import (
     RESOLVED_AMBIGUOUS,
     RESOLVED_FOUND,
     RESOLVED_TOO_DEEP,
+    NestedLocations,
     Resolution,
     derive_location,
     index_ready,
+    nested_locations_of,
     normalize_base_prefix,
     normalize_location,
     relative_path_in,
@@ -426,3 +428,33 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
                 return attribution
 
     return _from_first_folder(asset_table, buckets_table, bucket_name, key, include_archived)
+
+
+#######################
+# Nested asset locations
+#######################
+
+def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[str, Any]], bucket_name: str,
+                              location: Optional[str] = None, *, destructive: bool = False,
+                              asset_table_name: Optional[str] = None) -> NestedLocations:
+    """The stored locations of other assets nested in `asset`'s location (`location`, else its stored one) in
+    `bucket_name`: the files they hold are theirs, and `asset`'s own file operations leave them alone.
+
+    See `assetLocations.nested_locations_of`. Before the location index is ready a `destructive` operation
+    walks the rows of every registration of the bucket (the asset's own registration first); the
+    registrations are read only when that walk runs."""
+    row = asset or {}
+    if location is None:
+        location = (row.get('assetLocation') or {}).get('Key')
+
+    def bucket_ids():
+        yield row.get('bucketId')
+        try:
+            for registration in registrations_of_bucket(buckets_table, bucket_name):
+                yield registration.get('bucketId')
+        except Exception as e:
+            logger.warning(f"The registrations of bucket {bucket_name} could not be read for the nested "
+                           f"location walk; walking the asset's own registration: {type(e).__name__}")
+
+    return nested_locations_of(asset_table, bucket_name, location, asset_table_name=asset_table_name,
+                               destructive=destructive, bucket_ids=bucket_ids())

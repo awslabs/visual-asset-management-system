@@ -4,9 +4,9 @@
 """In-memory asset and bucket registration tables for tests of `common.fileAttribution` and its callers.
 
 `AttributionAssetTable` serves what the module and `common.assetLocations` read from the asset table:
-`get_item` by primary key, `query` on `assetIdGSI` (a boto3 `Key(...).eq(...)` condition) and the
-`AssetLocationGSI` lookups on `meta.client`. `AttributionBucketsTable` serves `query` by `bucketId` and on
-`bucketNameGSI`. Both page with a LastEvaluatedKey after every `page_size` items when one is given, so a
+`get_item` by primary key, `query` on `assetIdGSI` (a boto3 `Key(...).eq(...)` condition), and the
+`AssetLocationGSI` lookups and `BucketIdGSI` walks on `meta.client`. `AttributionBucketsTable` serves
+`query` by `bucketId` and on `bucketNameGSI`. Both page with a LastEvaluatedKey after every `page_size` items when one is given, so a
 caller that reads only the first page misses rows. Every read is recorded in `reads`.
 """
 
@@ -85,6 +85,11 @@ class AttributionAssetTable:
     def _index_query(self, **kwargs):
         with self._lock:
             self.reads.append(('index', kwargs.get('IndexName'), kwargs))
+        if kwargs['IndexName'] == al.BUCKET_ID_INDEX_NAME:
+            assert kwargs['KeyConditionExpression'] == '#b = :b', kwargs
+            bucket_id = kwargs['ExpressionAttributeValues'][':b']
+            matches = sorted((r for r in self.rows if r.get('bucketId') == bucket_id), key=lambda r: r['assetId'])
+            return _page([dict(r) for r in matches], kwargs, self.page_size)
         assert kwargs['IndexName'] == al.LOCATION_INDEX_NAME
         values = kwargs['ExpressionAttributeValues']
         indexed = [r for r in self.rows
