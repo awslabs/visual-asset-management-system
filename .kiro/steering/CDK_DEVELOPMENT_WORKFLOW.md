@@ -2253,7 +2253,7 @@ what ends it. Either way the state's pipelineEnd ends the run's job itself:
 `batch:ListJobs` and `batch:TerminateJob` on `job/*`, and its handler's `end_batch_job_after_state_timeout`
 terminates the unfinished job with the run's job name on `States.Timeout`. Image to 3D, Video SOP/BOM, the
 3D thumbnail tiers, Potree and the 3D Basic Conversion Batch tier use it (the 3D Basic `pipelineEnd` does
-not end the job after a state timeout yet, so Step Functions' end of the `.sync` job at the bound is the
+not end the job after a state timeout, so Step Functions' end of the `.sync` job at the bound is the
 only one there); the NVIDIA, splat toolbox and metadata labeling constructs predate
 it. Tests: `infra/test/pipelines/batchStateTimeoutChain.test.ts`,
 `backendPipelines/tests/test_pipeline_end_ends_timed_out_batch_job.py`.
