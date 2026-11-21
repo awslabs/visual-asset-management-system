@@ -50,33 +50,29 @@ def _file(relative_key):
     return {"relativeKey": relative_key, "versionId": "s3v1", "size": 1, "etag": "e"}
 
 
+def _left(client):
+    return {key for key, _ in _entries(client, "db1/")}
+
+
 @pytest.mark.unit
 class TestAssetVersionRevertOfASingleFileAsset:
-    def test_a_version_holding_only_the_object_keeps_every_companion_entrys_viewer_data(self, aux_s3):
+    def test_a_revert_deletes_only_the_reverted_files_own_viewer_data(self, aux_s3):
         for key in (OBJECT_DATA, COMPANION_DATA, PREVIEW_FOLDER_COMPANION_DATA):
             _put(aux_s3, key)
         with patch.object(assetVersions, "s3_client", aux_s3), \
                 patch.object(assetVersions, "asset_aux_bucket_name", AUX_BUCKET):
-            result = _revert([_file("/inner.txt")])
-        assert result.success
-        left = {key for key, _ in _entries(aux_s3, "db1/")}
-        assert OBJECT_DATA not in left
-        assert COMPANION_DATA in left and PREVIEW_FOLDER_COMPANION_DATA in left
+            # A version holding only the object: the companion entries keep their viewer data
+            assert _revert([_file("/inner.txt")]).success
+            assert _left(aux_s3) == {COMPANION_DATA, PREVIEW_FOLDER_COMPANION_DATA}
 
-    def test_a_reverted_companion_entry_loses_its_own_viewer_data_only(self, aux_s3):
-        for key in (OBJECT_DATA, COMPANION_DATA, PREVIEW_FOLDER_COMPANION_DATA):
-            _put(aux_s3, key)
-        with patch.object(assetVersions, "s3_client", aux_s3), \
-                patch.object(assetVersions, "asset_aux_bucket_name", AUX_BUCKET):
+            # A version holding the companion entry in the folder named preview: only its data goes
+            _put(aux_s3, OBJECT_DATA)
             _revert([_file("/preview/cloud.ply")])
-        left = {key for key, _ in _entries(aux_s3, "db1/")}
-        assert PREVIEW_FOLDER_COMPANION_DATA not in left
-        assert OBJECT_DATA in left and COMPANION_DATA in left
+            assert _left(aux_s3) == {OBJECT_DATA, COMPANION_DATA}
 
-    def test_control_a_folder_asset_deletes_the_reverted_files_data(self, aux_s3):
-        _put(aux_s3, "db1/proj/a/x.txt/preview/PotreeViewer/metadata.json")
-        _put(aux_s3, "db1/proj/a/y.txt/preview/PotreeViewer/metadata.json")
-        with patch.object(assetVersions, "s3_client", aux_s3), \
-                patch.object(assetVersions, "asset_aux_bucket_name", AUX_BUCKET):
+            # Control: a folder asset deletes the reverted file's data and nothing else
+            _put(aux_s3, "db1/proj/a/x.txt/preview/PotreeViewer/metadata.json")
+            _put(aux_s3, "db1/proj/a/y.txt/preview/PotreeViewer/metadata.json")
             _revert([_file("/x.txt")], location="proj/a/")
-        assert {key for key, _ in _entries(aux_s3, "db1/")} == {"db1/proj/a/y.txt/preview/PotreeViewer/metadata.json"}
+            assert "db1/proj/a/x.txt/preview/PotreeViewer/metadata.json" not in _left(aux_s3)
+            assert "db1/proj/a/y.txt/preview/PotreeViewer/metadata.json" in _left(aux_s3)

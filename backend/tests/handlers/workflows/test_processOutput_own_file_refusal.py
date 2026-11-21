@@ -9,11 +9,17 @@ reason appeared nowhere a user reads. The run's error now carries that refusal a
 any other per-file error still stays out of it.
 """
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.handlers.workflows.test_processOutput_ingestion_outcome import (
+# Table names output processing reads at import, so the file also runs on its own
+for _name in ("WORKFLOW_STORAGE_TABLE_V2_NAME", "WORKFLOW_EXECUTION_CONFIGURATION_STORAGE_TABLE_NAME",
+              "WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE_NAME", "WORKFLOW_EXECUTION_LOCKS_STORAGE_TABLE_NAME"):
+    os.environ.setdefault(_name, f"t-{_name.lower()}")
+
+from tests.handlers.workflows.test_processOutput_ingestion_outcome import (  # noqa: E402
     FILES_PREFIX, _asset_patches, _event, po,
 )
 
