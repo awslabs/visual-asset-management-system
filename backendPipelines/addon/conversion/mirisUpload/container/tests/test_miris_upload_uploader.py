@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from miris_uploader import MirisClient, MirisError, _redact_response  # noqa: E402
+from miris_uploader import MirisClient, MirisError  # noqa: E402
 
 BASE = "https://app.miris.test"
 KEY = "test-integration-key-xxx"
@@ -89,14 +89,6 @@ def test_poll_until_terminal_raises_on_an_error_state_and_on_timeout():
     responses.replace(responses.GET, ASSET_URL, json={"id": UUID, "state": "processing_preview"})
     with pytest.raises(TimeoutError):
         client.poll_until_terminal(UUID, timeout_seconds=0, poll_interval_seconds=0)
-
-
-def test_redact_response_masks_the_credentials_without_mutating_its_input():
-    original = {"id": "x", "access_key_id": "AK", "secret_key": "SK", "session_token": "ST", "endpoint_url": "e"}
-    redacted = _redact_response(original)
-    assert redacted == {"id": "x", "access_key_id": "<redacted>", "secret_key": "<redacted>",
-                        "session_token": "<redacted>", "endpoint_url": "e"}
-    assert original["secret_key"] == "SK"
 
 
 @responses.activate

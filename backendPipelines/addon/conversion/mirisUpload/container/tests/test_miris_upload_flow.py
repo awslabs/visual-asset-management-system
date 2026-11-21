@@ -267,3 +267,70 @@ def test_every_exit_code_has_a_user_facing_reason_in_the_end_lambda():
     assert set(codes.values()) | {1} <= reasons, sorted(set(codes.values()) - reasons)
     # Nor a reason for a code the container does not exit with.
     assert reasons <= set(codes.values()) | {1}, sorted(reasons - set(codes.values()) - {1})
+
+
+@pytest.mark.parametrize("field, value", [
+    ("id", "../../v1/asset"), ("id", ""), ("id", None),
+], ids=["path-traversal", "empty", "missing"])
+def test_an_unusable_asset_id_fails_before_anything_is_uploaded(entry, capsys, field, value):
+    from miris_uploader import MirisError
+
+    client = _client()
+    client.start_upload.return_value = {**_start_response(), field: value}
+    put, write_metadata = MagicMock(), MagicMock()
+    with patch.object(entry, "_put_artifact", put), pytest.raises(MirisError, match="asset id"):
+        _run(entry, client, write_metadata)
+
+    put.assert_not_called()
+    write_metadata.assert_not_called()
+    client.mark_upload_complete.assert_not_called()
+    assert _kept_asset_logs(capsys.readouterr().out) == []
+
+
+@pytest.mark.parametrize("field, value, problem", [
+    ("endpoint_url", "http://s3.example.test", "endpoint"),
+    ("endpoint_url", None, "endpoint"),
+    ("upload_path", "https://miris-uploads/ws/up", "upload path"),
+    ("upload_path", "s3://", "upload path"),
+], ids=["plain-http-endpoint", "no-endpoint", "upload-path-not-s3", "upload-path-without-bucket"])
+def test_an_unusable_upload_location_uploads_nothing_and_keeps_the_asset(entry, capsys, field, value, problem):
+    from miris_uploader import MirisError
+
+    client = _client()
+    client.start_upload.return_value = {**_start_response(), field: value}
+    write_metadata = MagicMock()
+    with patch.object(entry.boto3, "client") as s3_client, pytest.raises(MirisError, match=problem):
+        _run(entry, client, write_metadata)
+
+    s3_client.assert_not_called()
+    write_metadata.assert_not_called()
+    assert [log["asset_uuid"] for log in _kept_asset_logs(capsys.readouterr().out)] == [UUID]
+
+
+def test_the_start_response_is_logged_by_an_allowlist(entry, capsys):
+    client = _client()
+    client.start_upload.return_value = {
+        **_start_response(), "extra": {"credential": "nested-secret"}, "token": "top-secret"}
+    with patch.object(entry, "_put_artifact"):
+        _run(entry, client)
+
+    output = capsys.readouterr().out
+    assert _logs(output, "start_upload") == [{
+        "msg": "start_upload", "asset_uuid": UUID, "region": "us-west-1",
+        "endpoint_host": "s3.example.test"}]
+    for secret in ("nested-secret", "top-secret", "SK", "ST", "miris-uploads"):
+        assert secret not in output
+
+
+def test_a_kept_asset_logs_only_the_type_of_an_error_that_is_not_a_miris_error(entry, capsys):
+    from botocore.exceptions import ClientError
+
+    client = _client()
+    error = ClientError({"Error": {"Code": "AccessDenied", "Message": "upload detail s3://secret"}}, "PutObject")
+    with patch.object(entry, "_put_artifact", side_effect=error), pytest.raises(ClientError):
+        _run(entry, client)
+
+    output = capsys.readouterr().out
+    assert _kept_asset_logs(output) == [
+        {"msg": "miris_asset_kept", "asset_uuid": UUID, "error": "ClientError"}]
+    assert "s3://secret" not in output

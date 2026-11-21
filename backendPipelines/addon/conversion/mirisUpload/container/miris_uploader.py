@@ -46,14 +46,6 @@ DEFAULT_MAX_ATTEMPTS = 5
 BACKOFF_BASE_SECONDS = 2
 BACKOFF_CAP_SECONDS = 30
 
-_REDACTED_KEYS = ("access_key_id", "secret_key", "session_token")
-
-
-def _redact_response(resp: dict) -> dict:
-    """Return a copy of `resp` with secret-triple keys replaced by `<redacted>`."""
-    return {k: ("<redacted>" if k in _REDACTED_KEYS else v) for k, v in resp.items()}
-
-
 class MirisError(Exception):
     """Raised on any non-2xx Miris API response from a required call."""
 

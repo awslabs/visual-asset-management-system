@@ -27,9 +27,11 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
+import urllib.parse
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -37,7 +39,7 @@ from botocore.exceptions import ClientError
 import dependency_manifest
 import memory_budget
 import preflight
-from miris_uploader import MirisClient, MirisError, _redact_response
+from miris_uploader import MirisClient, MirisError
 from stream_metadata import (
     build_stream_metadata_body,
     metadata_object_key,
@@ -118,12 +120,38 @@ def _sha256_of_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _stripped_upload_path(upload_path: str) -> tuple[str, str]:
+_UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _stripped_upload_path(upload_path) -> tuple[str, str]:
     """Parse 's3://bucket/prefix' → ('bucket', 'prefix') (no trailing /)."""
-    assert upload_path.startswith("s3://"), upload_path
-    rest = upload_path[5:]
-    bucket, _, prefix = rest.partition("/")
+    bucket, _, prefix = (upload_path[5:] if isinstance(upload_path, str) else "").partition("/")
+    if not isinstance(upload_path, str) or not upload_path.startswith("s3://") or not bucket:
+        raise MirisError("POST /v1/asset returned an upload path that is not an s3:// URI")
     return bucket, prefix.rstrip("/")
+
+
+def _checked_asset_id(start: dict) -> str:
+    """The Miris asset id from the POST /v1/asset response, which must be a UUID."""
+    asset_id = start.get("id")
+    if not isinstance(asset_id, str) or not _UUID_PATTERN.match(asset_id):
+        raise MirisError("POST /v1/asset returned an asset id that is not a UUID")
+    return asset_id
+
+
+def _endpoint_host(start: dict):
+    """The host of the response's upload endpoint, or None."""
+    endpoint = start.get("endpoint_url")
+    return urllib.parse.urlparse(endpoint).hostname if isinstance(endpoint, str) else None
+
+
+def _check_upload_location(start: dict) -> None:
+    """The upload endpoint must be an https URL and the upload path an s3:// URI."""
+    endpoint = start.get("endpoint_url")
+    if not isinstance(endpoint, str) or urllib.parse.urlparse(endpoint).scheme != "https" \
+            or not _endpoint_host(start):
+        raise MirisError("POST /v1/asset returned an upload endpoint that is not an https URL")
+    _stripped_upload_path(start.get("upload_path"))
 
 
 def _download_version(s3, bucket: str, key: str, local: str, version_id: str) -> None:
@@ -402,9 +430,12 @@ def run_miris_upload(client, *, name, tags, upload_local, upload_filename, conte
         total_bytes=size,
         tags=tags,
     )
-    _log("start_upload", resp=_redact_response(start))
-    asset_uuid = start["id"]
+    asset_uuid = _checked_asset_id(start)
+    # Named fields only: the response also carries temporary upload credentials.
+    _log("start_upload", asset_uuid=asset_uuid, region=start.get("region"),
+         endpoint_host=_endpoint_host(start))
     try:
+        _check_upload_location(start)
         _put_artifact(start, upload_local, upload_filename, content_type)
 
         client.mark_upload_complete(asset_uuid)
@@ -431,7 +462,9 @@ def run_miris_upload(client, *, name, tags, upload_local, upload_filename, conte
         else:
             _log("generate_triggered", state=gen.get("state"))
     except BaseException as e:
-        _log("miris_asset_kept", asset_uuid=asset_uuid, error=str(e))
+        # A MirisError's text is the request and status only; another error can carry request details.
+        _log("miris_asset_kept", asset_uuid=asset_uuid,
+             error=str(e) if isinstance(e, MirisError) else type(e).__name__)
         raise
     return asset_uuid
 
