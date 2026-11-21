@@ -61,6 +61,15 @@ s3://vams-assets-bucket/assets/scan-001/
     scan-001/textures/normal.png
 ```
 
+A file belongs to the deepest stored location that contains it. Earlier releases could create an asset whose
+location sits inside another asset's folder (VAMS now refuses such a location when an asset is created). The
+files under that inner location are the inner asset's: the containing asset does not list, show, download,
+zip, archive, unarchive, delete, version, move or overwrite them, and a path of the containing asset that
+leads into the inner location answers as a file the containing asset does not have. Each asset's own
+permissions decide who may act on its files. Until the `assetLocationIndex` migration step has run after an
+upgrade, only archiving, unarchiving and permanently deleting an asset, and deleting or archiving a folder,
+look for nested assets.
+
 ## Updating an asset
 
 After creation, the following asset fields can be updated:
