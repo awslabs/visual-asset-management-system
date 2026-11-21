@@ -3,11 +3,10 @@
 
 """Every read of the stamp metadata keys (`databaseid`, `assetid`) in backend code is a reviewed one.
 
-The stamp is what bucket sync's metadata self-copy wrote onto directly written objects. Attribution no
-longer depends on it: consumers resolve a file's asset through `common.fileAttribution` (the record's
+The stamp is the metadata earlier releases of bucket sync copied onto directly written objects. Attribution
+does not depend on it: consumers resolve a file's asset through `common.fileAttribution` (the record's
 binding, the location index), and read the stamp only as a fallback while the location index is not
-ready. This guard is what lets the self-copy be removed safely: a new read of the stamp keys anywhere
-else fails here until it is reviewed and listed.
+ready. A new read of the stamp keys anywhere else fails here until it is reviewed and listed.
 
 Writes are not reads: VAMS sets the ids on the objects it writes itself (uploads, file copies and moves,
 pipeline outputs, exports), at write time. Those are listed in WRITERS for the record and not enforced.
@@ -40,7 +39,6 @@ WRITERS = {
     "handlers/assets/uploadFile.py": "uploads set the ids on the objects they write",
     "handlers/workflows/sfn/processWorkflowExecutionOutput.py": "pipeline outputs set the ids",
     "handlers/assets/assetExportService.py": "the export manifest names the ids",
-    "handlers/indexing/sqsBucketSync.py": "the metadata self-copy writes the stamp",
 }
 
 
