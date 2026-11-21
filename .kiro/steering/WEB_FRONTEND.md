@@ -285,7 +285,7 @@ web/
         VideoViewerPlugin/
         VntanaViewerPlugin/
 
-    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.5
+    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.11
       index.ts
       config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
       core/                 # SearchProviderRegistry.ts, providerAvailability.ts,
@@ -296,15 +296,19 @@ web/
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx
       common-components.tsx
+      cogRaster/            # Shared GeoTIFF/COG raster code of the GeoTIFF Map Viewer and the Search map's Show raster
+                            #   (rasterResolver.ts, cogProtocol.ts, placedImage.ts, RasterLayerManager.ts)
       constants/            # apiKeys.ts authRoutes.ts featuresEnabled.ts fileFormats.ts
       helpers/              # labels.ts tableCounterStrings.ts
-      utils/                # utils.ts fileSize.ts
+      utils/                # utils.ts fileSize.ts,
+                            #   maplibreWorker.ts (setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts)
 
     constants/
       uploadLimits.ts
 
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
-                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page),
+                            #   useWebRouteAllowed.ts (does the POST /auth/routes decision allow a path)
 
     layout/
       navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
@@ -319,7 +323,6 @@ web/
       queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
       fileExtensionValidation.ts
       fileHandleCompat.ts
-      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
@@ -344,6 +347,8 @@ web/
 ---
 
 `common/constants/fileFormats.ts` is the one definition of the formats and size the web shows as a file's own preview: `previewFileFormats` (mirrors the backend's `ALLOWED_PREVIEW_FILE_EXTENSIONS`; `.tga`, `.tif` and `.tiff` are never in it because browsers cannot display them), `PREVIEW_FILE_SIZE_LIMIT_BYTES` (5 MiB) and `isSelfPreviewable(fileName, size)` (extension in the list and size known and STRICTLY under the limit). The search thumbnail (`FilePreviewThumbnailCell.tsx`) and the file details panel call the helper instead of repeating the check, and the 3D thumbnail pipeline writes no preview for such a file. Drift tests pin the lists and the limit to the backend and the container.
+
+The file page (`components/single/ViewFile.tsx`) builds the viewer's single-file entry with `buildSingleViewerEntry` (`components/single/singleViewerEntry.ts`). On the Preview tab the entry carries the preview file's key and NO version ID: a preview file is its own S3 object, the source file's S3 version ID does not exist for it, and an empty version ID asks for its current version. Every viewer takes the entry from that one place; never pass the source version ID with a preview key. The Preview / File choices (`viewerOptions`) are derived with `useMemo` from the file the page holds (`singleFileInfo.previewFile`, multi-file mode) once the asset details have loaded; never build them inside the asset-details effect, because the file read can answer after it. A choice the options no longer offer falls back to the default, and `FileVersionsTable` carries the page's `previewFile` in the navigation state of a version it opens. Because a preview is requested without a version, it is the preview of the file's latest version, so for an older file version the tab shows the `OLDER_VERSION_PREVIEW_NOTICE` alert (`previewIsOfLatestVersionOnly`, decided from the file's version list, reusing the versions the direct-path load already read and asking once otherwise; no notice for the latest version, an asset-version view, or a link that names no version; when the latest version cannot be read and the link names a file version, the notice shows, so a possibly older version's preview is never presented as that version's).
 
 ## 3. Critical Rules
 
@@ -1377,7 +1382,7 @@ Mirrors `web/src/visualizerPlugin/CLAUDE.md` "Three.js Selection Highlight".
 
 Mirrors `web/src/visualizerPlugin/CLAUDE.md` "Three.js Referenced Files". Every Three.js format that names other files goes through one resolver, `assetDependencyResolver.ts`; never fetch a referenced file anywhere else.
 
-The viewer reads the main file and every referenced file from a presigned S3 URL that the authorized download route issues (`downloadAsset` through `core/presignedFetch.ts`, which caches a URL in memory for at most 60 seconds and never past its own `X-Amz-Expires`, less a margin of 10 seconds or 20 percent of its lifetime, whichever is smaller; `clearStoredSession()` clears the cache on every sign-out), with no `Authorization` header and no credentials. It does not follow the streaming route, whose 307 to the presigned URL is a cross-origin redirect that an external bucket's CORS rule refuses. A refused presign shows the API's own answer through `streamFailure.ts`; an error status from S3 itself is worded as an unavailable or expired link (`PresignedReadError`), after one re-presign when a reused URL got a 403, and is never shown as a VAMS permission or not-found answer. The presign request carries the viewer's abort signal. Needle USD, ThatOpen IFC, Cesium and VEERUM still read the streaming route.
+The viewer reads the main file and every referenced file from a presigned S3 URL that the authorized download route issues (`downloadAsset` through `core/presignedFetch.ts`, which caches a URL in memory for at most 60 seconds and never past its own `X-Amz-Expires`, less a margin of 10 seconds or 20 percent of its lifetime, whichever is smaller; `clearStoredSession()` clears the cache on every sign-out), with no `Authorization` header and no credentials. It does not follow the streaming route, whose 307 to the presigned URL is a cross-origin redirect that an external bucket's CORS rule refuses. A refused presign shows the API's own answer through `streamFailure.ts`; an error status from S3 itself is worded as an unavailable or expired link (`PresignedReadError`), after one re-presign when a reused URL got a 403, and is never shown as a VAMS permission or not-found answer. The presign request carries the viewer's abort signal (`apiClient` and `downloadAsset` accept `signal`). Each load run owns its `AbortController`, which its cleanup aborts when the viewer closes or is given other files; an `AbortError` while that controller is aborted is the run's own cancellation, so the load stops without logging or listing the file, and every other error is logged and shown (#1643). The Needle USD and ThatOpen IFC viewers read their main file (and, for Needle USD, every dependency it downloads) the same way, through `fetchPresignedFile` (#1630). The Cesium viewer reads every tileset file the same way through a request hook (`CesiumViewerPlugin/presignedStreamReads.ts`, #1630) that wraps `Cesium.Resource._Implementations.loadWithXhr` and `createImage` while the viewer is mounted and turns a URL under the viewer's stream-route prefix into a presign call; when `Resource._Implementations` is missing, the hook logs a warning and the viewer falls back to the streaming route, and a decoded `.` or `..` key segment is never presigned and goes to the streaming route. VEERUM still reads the streaming route (its vendor library exposes no hook), so an external bucket used with it needs `null` in its CORS `AllowedOrigins` (`external-s3-setup.md`, Step 2).
 
 -   `assetDependencyResolver.ts`: path rules (relative to the naming file; nothing above the asset root, absolute, or with a scheme is fetched), named limits (`DEPENDENCY_LIMITS`), one download per key, presigned-URL reads (`core/presignedFetch.ts`), and the `LoadingManager` URL modifier: resolved names map to blob URLs, `blob:`/`data:` pass through, anything else gets a transparent placeholder and is recorded for the viewer's notice. `revokeAll()` runs in viewer cleanup.
 -   `dependencyLoading.ts`: `loadWithDependencies()` per format (glTF URI rewrite, OBJ `mtllib` + `MTLLoader`, COLLADA `<init_from>` pre-scan, 3DS/FBX probe parse). A USD load with no mesh, point or line throws `USD_NO_GEOMETRY_MESSAGE`, which the component shows instead of an empty canvas.
@@ -1387,7 +1392,7 @@ The viewer reads the main file and every referenced file from a presigned S3 URL
 
 ---
 
-### 8.5 Search Provider Registry
+### 8.11 Search Provider Registry
 
 The search page is a set of **search provider** views under `src/searchPlugin/`, built the same way as the viewer plugins: a JSON catalog (`config/searchProviderConfig.json`), a manifest (`providers/manifest.ts`) so Vite sees every provider chunk, a singleton `core/SearchProviderRegistry.ts` (lazy `import.meta.glob` loading; availability read from `appCache` config), a pure `core/providerAvailability.ts` Jest can import, `core/useSearchProvidersReady.ts`, and `components/SearchTabsHost.tsx`. The host renders the page title row, then the active provider's body, loaded through `lazyWithRetry` like a route page. The title row holds the one h1 ("Assets and Files", or "Assets for <databaseId>" on a database route, in the deployment's asset synonym; `searchPageTitle`) and, when more than one provider is available, the view switch on its right: a Cloudscape `SegmentedControl` labelled `Page view` (Cloudscape shows it as a select below 688 px). The active view is the `?tab=` hash query, written with `replace`; an unknown or absent value selects the default view. Only the active body is mounted, and it receives `databaseId`, `isActive`, `assetActionDisabledReasons` and `titleSlots`. A body renders no page heading of its own: it portals its title-row content into `titleSlots.info` (beside the h1, the Search view's result count) and `titleSlots.actions` (before the switch, **Clear all filters**), and the asset list passes `hidePageHeading` to `ListPage`. The switch sits outside the body, so the control the user pressed stays mounted and keeps focus across a switch. Availability is `{ "always": true }` or `{ "anyOf": [ { "featureEnabled": X } | { "featureDisabled": X } ] }` over `featuresEnabled`; the lowest priority number is the default view. There is no runtime registration API and no add-on or fork lane for providers: adding a provider is a source change in the three places `manifest.ts` lists, plus a row here. The catalog holds the core providers only, so the switch is always a segmented control.
 

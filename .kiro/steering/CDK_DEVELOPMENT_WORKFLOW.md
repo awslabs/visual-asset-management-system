@@ -461,9 +461,14 @@ export interface ConfigPublic {
             };
         };
         // assetBuckets: createNewBucket, defaultNewBucketSyncDatabaseId, useS3TransferAcceleration (created default + auxiliary bucket; commercial partition only; default false),
+        // useS3TransferAcceleration rules: validateS3TransferAcceleration() (booleans only; the VPC-endpoint rule applies only when
+        // the created or auxiliary bucket is accelerated); ACCELERATE_ALLOWS_IP_RANGE_RESTRICTION in config.ts and ConfigBuilder
+        // validation.ts decides IP ranges together; docs deployment/s3-transfer-acceleration.md
         // externalAssetBuckets (bucketArn, baseAssetsPrefix, defaultSyncDatabaseId,
         // optional bucketAccountId/bucketRegion/bucketKmsKeyArn; bucketArn must be exactly
-        // arn:<partition>:s3:::<name> with no * or ?, key prefix or path, #1650),
+        // arn:<partition>:s3:::<name> with no * or ?, key prefix or path, and a 3-63 character legacy-charset name the CDK
+        // bucket import accepts: EXTERNAL_BUCKET_ARN_PATTERN / assertExternalBucketArnShape(), mirrored as ConfigBuilder rule
+        // externalbucket-arn-shape, #1650),
         // presignedUrlNetworkRestrictions (allowedIpRanges/allowedVpceIds; mutually exclusive;
         // non-empty list adds a presigned-only bucket policy Deny to the created asset + auxiliary buckets)
         // pipelines.useMediaPreviews: {enabled, autoRegisterAutoTriggerOnFileUpload, downscaleSelfPreviewableImages}, a sibling of
@@ -761,6 +766,8 @@ The compliance trigger consumes the asset and file indexer topics through its ow
 
 The compliance jobs that continue themselves (a deleted database's compliance move, a database binding change applied in the background) run in `complianceJobs` from `ComplianceJobQueue` + `ComplianceJobDLQ` (`buildComplianceJobQueue`, in the storage stack beside the trigger queue; batch 1, `maxConcurrency` 2, visibility 6 x the 5-minute timeout, 3 receives, no topic subscription). Only that Lambda sets `RecursiveLoop: Allow` (`complianceJobRecursiveLoop`, `aws` and `aws-eusc` only); each job stops itself at a run limit derived from its size instead, and the trigger keeps the detection on. Senders: the binding service, the database service and the job Lambda; the trigger sends nothing and drops a job message found on its own queue; `infra/test/platform/complianceJobQueue.test.ts` pins the queues, the event source and every role's SQS grants.
 
+`app.compliance.autoLoadDefaultSchema` (default `true`; an unset value follows `metadataSchema.autoLoadDefaultAssetSchema`) seeds the GLOBAL `default-compliance-schema` (a `warn`-level `vams-rules-v1` metadata rule against the seeded `defaultAsset` metadata schema) through `DynamoDbComplianceSchemaDefaultsConstruct`, a Lambda-backed custom resource (handler `backend/backend/handlers/compliance/complianceDefaultSchemaSeed.py`, granted `dynamodb:PutItem` on the schema table and no other DynamoDB action, plus `globalLambdaEnvironmentsAndPermissions` and `grantAuditLogWritePermissions` for its `complianceSchemaSeed` audit record and no authorization table, in the VPC under `useForAllLambdas`). Its properties are the table name and the row without a timestamp, so two synths of the same source emit the same template and the seed runs only when the resource is created or the row changes; the handler stamps `registeredAt` when it writes and puts on the condition that the key does not exist, treating an existing row as success, so an existing row is never overwritten and Delete leaves it (tests: `infra/test/storage/complianceAssetStateIndexesAndSeed.test.ts`, `backend/tests/handlers/compliance/test_complianceDefaultSchemaSeed.py`). It requires `app.metadataSchema.autoLoadDefaultAssetSchema` (`getConfig()` rejects true/false; mirrored in ConfigBuilder `validation.ts`). Claude Code counterpart: `infra/CLAUDE.md`, the `app.compliance` entry of the configuration notes.
+
 ### **Dependency Management Standards**
 
 #### **Rule 8: Proper Stack Dependencies**
@@ -960,7 +967,7 @@ A container job role usually reads every asset bucket, so a path written inside 
 
 -   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
--   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a complete run writes none, and a failed write is a WARNING, never a failed run.
+-   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a prim type the loader does not draw (points, curves, patches, planes, tetrahedral meshes) is named in the log and added to the same document as `counts.skippedPrimTypes` and `skippedPrims` only when present (the final document is held to the size cap by shortening the file list; a document without them is unchanged), so the document of every other run is unchanged; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `backendPipelines/preview/3dThumbnail/container/preview_pipeline/format_handlers/splat_handler.prepare_lcc2` is the worked example.
 -   To render a whole scene, use `resolve()` in the same module rather than the thumbnail's one-pass `fetch_referenced_files`: discovery downloads only the documents that name further files and sizes the rest with HeadObject, pinning each version it returned; the fetch then downloads at those versions, so a file replaced mid-run never mixes two versions into one scene. Between the phases a caller can compare the predicted bytes with its budget and re-route the run (the SYSTEM GenAI Blender branch hands an over-budget scene to its Fargate job). Every bound stops the walk instead of failing it, and the run receives a `DependencyReport` (fetched, missing, refused, cycles, the bound that stopped it, the graph) for its manifest. The SYSTEM GenAI Blender image carries a byte-identical copy as `containers/blender/scene_dependencies.py`, pinned by `system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`: edit the thumbnail module, then `cp` it over the copy.
 -   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported in the thumbnail's incomplete preview, since its FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`); the scene report `resolve()` returns still lists a missing one, because Blender's FBX importer loads them. Each collector entry is `(name, percent_encoded, required, kind)`: a three-element entry reads its third element as `required`. Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
@@ -975,7 +982,7 @@ An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expand
 A pipeline whose facts all live in a file's header (a TIFF's directories) reads that header by ranged GETs of the S3 object at the run's version, never the whole file and never a pixel. `media_extractors/raster.py` is the worked example, over `media_extractors/s3_ranged.RangedS3Reader` (a seekable file object that serves a read from the bytes a previous GET returned and refuses a read past its byte or request bound):
 
 -   Walk the structure with `struct` under limits before a library decodes anything: a directory count, the entries in one directory, the bytes of any single array the library loads whole (tifffile loads the strip and tile offset arrays, strings and `SubIFDs` eagerly), and a total for all of them. Compare every declared count and offset with the object's size before reading or allocating, so a tag that claims gigabytes is refused by arithmetic and not by running out of memory.
--   A header past a limit is described from what the walk read and flagged (`offsetsTruncated: true`), not failed; a file that is not the format falls back to the `other` class with a warning that names the reason.
+-   A header past a limit, or bytes that are not the format, end the header read without failing the run. For a TIFF neither result is georeferenced, so the handler gives the `.tif` or `.tiff` the `image` path and keeps no `sys_raster` (`handler.py`: only a result `raster.is_georeferenced` accepts keeps the `raster` class); `offsetsTruncated` stays internal to `extract_raster`.
 -   Decode the first image with the library only when the walk passed, and hand the library the reader positioned at 0 (tifffile takes a file object's current position as the start of the file). A library's convenience default can invent a value (tifffile reports `nodata` 0 for a file with no `GDAL_NODATA` tag): read the tag itself.
 -   A footprint comes from one shared helper (`media_extractors/geo_reproject.py`): longitude-first axis order, edges densified, an antimeridian crossing cut into a `MultiPolygon`, no footprint for an extent containing a pole, and no footprint (never an assumed WGS84) for a CRS that does not resolve.
 
@@ -1003,6 +1010,168 @@ A Batch/Fargate container sizes its work to the limits of the task it runs in ra
 -   Download with a `TransferConfig` (parallel ranged GETs) on a client whose `max_pool_connections` is at least its `max_concurrency` (`utils/s3_utils.py`): botocore pools 10 connections, and urllib3 discards the connection of each concurrent request beyond the pool and reconnects. Stream line-oriented inputs from S3 (`get_object` + `iter_chunks`, resuming with a `Range` header after a dropped stream) and sample as they are read (`format_handlers/point_streams.py`).
 -   Log a compute-tier environment variable when the orchestration sets one, but never branch on it; log each phase's duration (`utils/timing.py`).
 
+### **3D Basic Conversion Image: How a Model Is Read and Written**
+
+Paths are under `backendPipelines/conversion/3dBasic/` unless they are named in full.
+
+The 3D Basic Conversion applies these rules in `conversion/3dBasic/lambdaContainer/referenced_files.py`
+(`resolve_reference` for the path rules, one collector per format, `ConfinedResolver`). It FAILS on a
+glTF/GLB buffer (the geometry) and skips a material library or texture image with a warning naming it
+(`Reference.required`).
+A skipped name is never in the resolver's set, and every name looked up counts toward the file limit,
+found or not. Real-trimesh coverage runs in a child interpreter (`tests/test_3dbasic_real_conversions.py`)
+since sibling modules stub `trimesh`.
+
+The 3dBasic Lambda-container pipeline logs through `lambdaContainer/common/logger.py`, which is **not**
+in the `customLogging/logger.py` byte-identity set and redacts only `authorization`. Its handler
+therefore checks `TaskToken` before it logs anything and never logs the event
+(`tests/test_3dbasic_task_token_logging.py`). The 3dBasic
+`.dockerignore` keeps `tests/`, the lock and project files and caches out of its `COPY . .`.
+
+`lambdaContainer/lambda.py` is the handler
+and does all Amazon S3 traffic; the parsing runs elsewhere:
+
+-   `requirements.txt` is the export of the image's lock **with hashes**, and the Dockerfile installs it with
+    `pip install --require-hashes`. The image is a uv project (`pyproject.toml`, `uv.lock`; the optional STEP
+    input is the `step` group, exported to `requirements-step.txt`): re-lock and re-export it as the developer
+    guide's "Add or change a dependency" section says (Managing Python Dependencies in `developer/setup.md`),
+    and bump the base image digest as the Dockerfile comment says. The lock covers Linux and macOS and CPython
+    3.12 to 3.14, so the hashed export installs on a developer machine too.
+    `tests/test_3dbasic_image_build_inputs.py` holds the two files, the hashes and the install flag together.
+-   `size_check.py` refuses an input before it is downloaded. The handler reads the size with `HeadObject` at
+    the launch version and compares it with a limit derived from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and the
+    free space of `/tmp`, using a per-format expansion factor (`MEMORY_EXPANSION_FACTORS`). The factors are the
+    peak resident memory of a load and export divided by the input size, measured with the installed
+    trimesh and numpy; re-measure them when either moves a major version (the module docstring lists the
+    method and the figures). The same limit, less the input, bounds the files that carry geometry (buffers,
+    material libraries). Texture images are budgeted apart, by decoded pixels (`texture_budget_bytes`,
+    `TEXTURE_MEMORY_FACTOR`; `referenced_files.decoded_image_bytes` reads the header only), because an image's
+    memory follows its pixels and not its file size. A reference left out for size is collected in
+    `FetchReport.skipped_for_size`, and `lambda.incomplete_message` puts it in the run's completion message
+    (the handler's `body`), so a run never reports plain success with fewer textures.
+-   `conversion_worker.py` loads and exports the model in a child process started by `run_worker`: scrubbed
+    environment (`worker_environment`: no `AWS_*`, `HOME=/tmp`), `RLIMIT_AS` set to the function memory plus
+    `ADDRESS_SPACE_OVERHEAD_BYTES` (OpenBLAS reserves about 1.5 GB of address space at start, so a limit at the
+    function memory alone refuses inputs the size check allows), and a wall-clock limit from
+    `context.get_remaining_time_in_millis()` less `WORKER_RESERVE_SECONDS`. The worker imports neither boto3 nor
+    trimesh at module level and creates no AWS client. A format added to the handler is parsed in
+    `convert_model`, never in `lambda.py`. An OBJ output gets its materials renamed `material_<n>` first
+    (`rename_materials`), because trimesh 5 writes a texture file and the `newmtl` line from the material's own
+    name, which a glTF leaves free text (`/`, `:`, `..` broke the export); GLB and glTF outputs keep the names.
+    A non-user worker failure logs the child's traceback from `worker.stderr` and the run's error is a generic
+    message (the detail stays in the log); the work folder's path is stripped from every reported message. The
+    worker is a fresh interpreter per run (about 0.4 s of start and imports); do not fork it from the handler,
+    which would hand it the function's credentials in memory.
+    Hardening the parent keeps (each has a test in `tests/test_3dbasic_worker_hardening.py`): `lambda.py` calls
+    `prctl(PR_SET_DUMPABLE, 0)` at import so the child cannot read `/proc/<ppid>/environ` or attach to it;
+    `exported_files` uploads only regular files with one name (`os.lstat`, `S_ISREG`, `st_nlink == 1`) and fails
+    the run on anything else; `reap_stray_processes` (Lambda only) kills every other process of the user that
+    started after the function process, so nothing outlives the worker; `conversion_worker.apply_limits` fails
+    the job when `RLIMIT_AS`, `RLIMIT_FSIZE` (`size_check.file_size_limit_bytes`) or `RLIMIT_CORE` cannot be
+    set; the input is read with `IfMatch` (the ETag the size check read) or its pinned version, and its size is
+    compared with that check; `remove_work_dir` removes the work folder or fails the run.
+    Residual exposure: the child shares the user and the network namespace of the function, so it can reach
+    any network the function reaches, including the Lambda runtime API (a fixed loopback address, which does
+    not return credentials). Process isolation here cannot close that without extra capabilities.
+-   `scene_limits.py`, `archive_guard.py` and `xml_guard.py` are vendored from the 3D thumbnail container
+    (`preview/3dThumbnail/container/preview_pipeline/`), because a build context holds only its own directory.
+    `tests/test_3dbasic_vendored_guards.py` compares each with its canonical file apart from the import lines; a
+    fix goes into both.
+-   Handler-flow tests replace `run_worker` with `tests/inprocess_worker.py`, which runs `convert_model` with a
+    stubbed trimesh. The real worker is covered by `tests/test_3dbasic_worker_process.py` and the real
+    conversions; the built image by the golden suite below.
+-   `tests/test_3dbasic_golden_round_trip.py` converts a generated fixture of every accepted input format to every
+    written output format with the built image under the Lambda runtime interface emulator, against moto for
+    Amazon S3. `tests/golden/run_golden.sh` builds the image and runs it (the `conversion-3dbasic-golden` job in
+    `ci.yml` does the same); `GOLDEN_DUMP_DIR` writes the outputs, so two images compare byte for byte. A format
+    added to `SUPPORTED_INPUT_FORMATS` or `SUPPORTED_OUTPUT_FORMATS` needs its fixture or column there.
+-   Formats beyond what trimesh reads and writes by itself are in `model_formats.py` (load and export, called by
+    `convert_model`) and `usd_io.py` (OpenUSD on `usd-core`, imported only when a USD file is read or written, so the
+    worker's other runs do not pay for it). Every XML document (a DAE file, the parts of a 3MF) goes through
+    `xml_guard`'s hardened parser (`model_formats.check_xml_safe`, a streaming parse that builds no tree) and a 3MF
+    package through `archive_guard.check_archive` before a loader reads them. A USD file's layer references are walked
+    by `usd_io.confine_dependencies` before the stage opens (relative, inside the input's directory, among the fetched
+    files, at most `MAX_LAYERS` layers and `MAX_DEPTH` deep); a layer that fails the walk fails the run, a texture
+    that fails it is left out and logged. A scene read from USD is bounded with `SceneLimit` and fails, rather than
+    truncates, when it expands past it. The OpenUSD validators (`UsdValidation`, since `ComplianceChecker` is not in
+    the `usd-core` wheel) run over every written USD file in `tests/test_3dbasic_usd_and_guards.py`; a new USD
+    attribute type that the validators reject is a test failure, as `varname` as `token` was.
+-   Units and up axis are `units_axes.py` (pure functions, no model library): `Options.from_config` reads the four
+    optional input-configuration keys (`sourceUnits`, `targetUnits`, `sourceUpAxis`, `targetUpAxis`; a missing or
+    empty value is the default), `validate_request` refuses an illegal combination before the download, and `plan`
+    returns the scale, rotation and what the output declares (`worker` applies it with `apply_transform` and writes
+    it into the USD stage, the DAE `<unit>` and `<up_axis>`, or the 3MF `unit` attribute). glTF is metres and Y up and
+    3MF is Z up whatever is asked. The values and defaults are the template enums; `tests/test_vams_schema_bundle.py`
+    reads them out of `units_axes.py` and compares. The default options must not change an existing conversion.
+-   The references of USD layers and packages, COLLADA documents and FBX files are read by
+    `reference_collectors.py`, vendored definition by definition from the thumbnail's `dependencies.py`
+    (`tests/test_3dbasic_reference_collectors.py` compares each with its canonical source; a fix goes into both).
+    They run in the worker child as a `mode: scan` job: `referenced_files.fetch_referenced_files` takes a `scan`
+    callable, and `lambda.py` passes one that batches every queued file of a scanned format into one child run, so
+    no USD or XML parse happens in the process that holds the credentials. For those formats nothing is required:
+    a reference that cannot be used is recorded in `FetchReport.skipped_entries` with its kind, and the worker
+    (`usd_io.confine_dependencies`) removes every asset path of a loose layer that is not a fetched local file
+    with `UsdUtils.ModifyAssetPaths` before the stage opens, which is what makes skipping safe. A `.usdz` cannot
+    be edited, so an unsafe layer path in one still fails. REFERENCE_HANDLING and MISSING_REFERENCES are parsed
+    by `units_axes.Options` with the unit options; `validate_request` refuses package without `.usdz`,
+    convert-linked without a USD layer input and `.usdc`/`.usda` output, and either with a unit or axis
+    change. `incomplete_result.py` writes `conversion-incomplete.json` (the shape and caps of
+    `preview-incomplete.json`) to the manifest's `outputs.results` prefix and builds the completion message
+    and the MISSING_REFERENCES fail refusal.
+-   FBX is read by the Assimp command-line tool (`/opt/assimp/bin/assimp`), which the Dockerfile's
+    `assimp-builder` stage compiles on the same base image digest from a shallow clone of the release tag,
+    failing unless `git rev-parse HEAD` is the pinned `ASSIMP_COMMIT` (Assimp publishes no prebuilt Linux tool
+    and no source archive of its own; GitHub's generated tag archives are not byte-stable, so pin a commit,
+    never an archive hash; `ASSIMP_REPO` is the mirror override; the tool also needs the assbin and assxml
+    exporters to link). Before it runs, `model_formats.check_fbx_scene` sizes the scene with `fbx_scene.py`
+    (vendored byte for byte from the thumbnail's `format_handlers/fbx_scene.py`, drift-tested in
+    `tests/test_3dbasic_vendored_guards.py`) against `SceneLimit` and `MAX_FBX_NESTING_DEPTH`.
+    `model_formats._load_fbx` runs it from the worker child, so it inherits the child's limits and scrubbed
+    environment, converts to GLB in a folder beside the input and loads that through the `ConfinedResolver`;
+    the unit comes from the file's `UnitScaleFactor` (`fbx_meters_per_unit`), Assimp applies the up axis.
+-   COLLADA and USD scenes are sized from the file before their loader expands them: see "Sizing COLLADA and USD Scenes Before They Load" below.
+-   STEP is opt-in: `ENABLE_STEP_INPUT` (build argument and environment variable, from
+    `app.pipelines.useConversion3dBasic.enableStepInput`) installs `requirements-step.txt` (the export of the
+    lock's `step` group). `lambda.py` refuses a STEP run before any S3 call when the variable is
+    not `true`. `step_limits.py` is the thumbnail CAD handler's placement count, vendored with a drift test in
+    `tests/test_3dbasic_step_input.py`. cascadio writes metres and keeps Z up. `run_golden.sh` with
+    `GOLDEN_STEP=1` builds and tests the STEP image and asserts the default image holds no Open CASCADE files.
+-   `model_formats.prune_for_output` removes curves (kept for glTF/GLB only) and points beside triangles (for
+    the triangle-only outputs) before an export: a STEP file's edges and annotations load that way.
+-   The image has no SciPy, and trimesh falls back to O(vertices x faces) loops for some work without it,
+    above all `Trimesh.vertex_normals`. Outputs that always write normals (USD, COLLADA) take them from
+    `vertex_normals.angle_weighted_vertex_normals` (NumPy, the same weighting); do not read
+    `mesh.vertex_normals` on the conversion path, and do not fill the normal cache for OBJ/PLY/glTF, whose
+    exporters write normals only when cached. `tests/test_3dbasic_no_scipy.py` converts a 163,842-vertex mesh
+    to every output in a child with SciPy blocked, under a time bound; this suite's CI environment is built
+    from `requirements.txt` and has no SciPy either.
+-   A loose USD output's companions are written beside the layer, and every reference a loose layer holds is
+    written with the path the file will have once the write-back inserts the run's output path extension
+    (the manifest's `outputTarget.fileBaseExecutionPathExtension`) before each file's own name
+    (`usd_io.placed_reference`, used by `write_usd` and `convert_linked` as they write). Never reopen a
+    written layer to fix its paths afterwards: a large layer loaded a second time under the worker's
+    address-space limit crashes the run (rule 7). `normalize_output_path_extension` and
+    `apply_output_path_extension` in `usd_io.py` are vendored from
+    `backend/backend/common/workflows/outputPathExtension.py` (drift test in
+    `tests/test_3dbasic_output_prefix.py`). `usd_io.dependency_graph` (convert-linked) follows composition
+    arcs, value clips and asset-typed attributes only, never layer or prim metadata such as a component's
+    `assetInfo` identifier.
+-   `size_check.OUTPUT_EXPANSION_FACTORS` (by output, then input) applies instead of `MEMORY_EXPANSION_FACTORS`
+    where an output needs clearly more memory per input byte (USD and COLLADA). Each entry is the pair's
+    measured peak per input byte times 1.26, the margin the input factors keep. Measure in the built image (no
+    SciPy), and keep the peak at the limit under about 85 percent of the function memory: a 330 MB STL admitted
+    for USDA peaked at 5,307 of 5,308 MB before the table existed. The function runs at 10,240 MB
+    (`CONVERSION_MEMORY_SIZE_MB` in `conversion3dBasicFunctions.ts`, not the shared `LAMBDA_MEMORY_SIZE`); the
+    factors are per input byte, so they hold at any memory, but check a changed memory size with the
+    worker's own limits (`RLIMIT_AS` = memory + 2 GiB) and keep `CONVERSION_EPHEMERAL_STORAGE` above every
+    memory limit (the disk check divides free `/tmp` by 4.5). The refusal names the output format. A format
+    added to the handler needs its input factor and the pairs that need more.
+-   Tests that convert real files (`test_3dbasic_new_formats.py`, `test_3dbasic_units_axes.py`,
+    `test_3dbasic_usd_and_guards.py`) need real trimesh and usd-core, so `tests/conftest.py` imports them before the
+    modules that stub `trimesh` in `sys.modules` are collected.
+
+Claude Code counterpart: `backendPipelines/CLAUDE.md`, "Files a Model Input References" ("3D Basic Conversion image: how a model is read and written"). The pipeline development rule 5 below carries the image's logging rules.
+
 ### **Sizing COLLADA and USD Scenes Before They Load (3D Basic Conversion)**
 
 The 3D Basic Conversion sizes a COLLADA or USD scene from the file before its loader expands it (`backendPipelines/conversion/3dBasic/lambdaContainer/expansion_bounds.py`, container-only):
@@ -1026,6 +1195,88 @@ Claude Code counterpart: `backendPipelines/CLAUDE.md`, "Files a Model Input Refe
 -   **GDAL.** Conda packages come from `container/conda-explicit.txt` (every package by URL and SHA-256, no solver), Python from the hashed `requirements.txt` exported from `container/uv.lock` (`pyproject.toml` beside it); GDAL runs as an argument list on two absolute local paths, with an allow-listed environment (no credentials or task token), sidecar discovery and the PROJ network off. Disk is checked before the download (the object plus a GiB) and again once the output grid is estimated from a warped VRT (twice the uncompressed output, because a compressed input can become a far larger COG); GDAL's cache and threads come from the task's limits (`VAMS_TASK_MEMORY_MIB`, set by the job definition). A raster straddling longitude 180 is refused (`convert.check_antimeridian`), a source with nodata and no alpha goes through a mask-band VRT (`convert.prepare_source`) so GDAL does not rewrite valid pixels, and the entry point handles SIGTERM (kill GDAL, `SendTaskFailure`, exit 143). The job role reads asset buckets and writes only under `{prefix}pipelines/*/*/output/*` (the first two segments name the workflow's FIRST pipeline and job and the execution id is per run, so a per-run prefix is not possible for a Batch task role). A task failure keeps `error` a short name (`CogConvertRefused`, `CogConvertFailed`) and puts the text in `cause`: Step Functions rejects an `error` over 256 characters, which leaves the VAMS execution RUNNING (`utils/aws/sfn.py` bounds both and retries a rejected call with a minimal payload; `pipelineEnd` forwards the container's `Cause` to the external task). the runtime image is a slim Debian that receives only `/opt/cog`.
 
 Claude Code counterpart: `backendPipelines/CLAUDE.md`, "A Pipeline That Writes a Derived File Beside Its Input (TIF to COG Conversion)".
+
+### **3D Basic Conversion Image: The AWS Batch Tier (#1732)**
+
+Paths are under `backendPipelines/conversion/3dBasic/` unless they are named in full. The CDK side is the "3D Basic Conversion Batch tier (#1732)" paragraph below.
+
+One image source builds two targets
+(`docker build --target lambda|batch`; no `--target` builds `lambda`, the last stage, which is the function image
+unchanged). Everything up to the `base-with-code` stage is shared (glibc, Assimp binary, locked wheels, the
+`ENABLE_STEP_INPUT` argument, the conversion code); the `batch` target adds `USER 10001:10001` and
+`ENTRYPOINT ["python", "-u", "batch_entry.py"]`, because a Batch job definition overrides a command and not an
+entrypoint. The conversion is one function, `convert(data)` in `lambda.py`, which `lambda_handler` calls after the
+envelope checks and `batch_entry.py` calls through `conversion_service.load_implementation()` (`lambda` is a
+keyword, so no module imports that file by name). Do not copy conversion logic into the entry points.
+
+-   **Where the limits come from.** `size_check.memory_limit_bytes` reads `VAMS_TASK_MEMORY_MIB` on a Batch task and
+    `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` on Lambda; `size_check.compute_tier` names the tier. The Batch job sizes are
+    `size_check.BATCH_TASK_SIZES` ((4 vCPU, 30 GiB), (8, 60), (16, 120)); the launcher's `computeTier.JOB_SIZES` and the
+    CDK construct's ladder, both added with the infrastructure change, must equal it. The attempt's
+    time comes from `VAMS_ATTEMPT_DEADLINE` (epoch seconds) or `VAMS_ATTEMPT_SECONDS`
+    (`conversion_service.attempt_deadline_epoch`, four hours by default). The scene triangle budget
+    (`size_check.triangle_budget`, passed to the worker as `job["max_triangles"]`) is the constant 30 million on Lambda
+    and `(0.9 x task memory - 300 MiB) / 270 bytes` on a Batch task (measured 266 to 279 bytes per triangle, USD to GLB),
+    divided by the output's factor in `size_check.SCENE_TRIANGLE_FACTOR_BY_OUTPUT` (STL 1.45), never below 30 million. The vendored `scene_limits.py` is unchanged: the callers pass the budget in.
+-   **Named results instead of errors.** The state machine sends `allowEscalation: true` on the Lambda attempt of a
+    deployment with the tier. Then `convert()` returns `{"escalate": true, "reason": "size" | "memory" | "time", ...}`
+    (`conversion_service.escalation_result`) for an input over the function's limits, a worker ended by SIGKILL
+    (`WorkerKilledForMemory`), a worker out of time (`WorkerOutOfTime`) and a referenced file over the limits; the
+    result carries the input's size, the size check's limit for each Batch job size and the memory a retry must
+    exceed, so the launcher's `computeTier.choose_job_size` picks a size without holding any factor. An OPTIONAL
+    referenced file the function's limits leave out (a large texture) also escalates when the flag is set, so the
+    Batch run can include it; the job is sized from the input plus the declared (`HeadObject`) sizes of every
+    referenced file found, fetched or not (`FetchReport.declared_bytes`), so the larger run does not skip it again.
+    Without the flag the run completes as an incomplete conversion, as before. A 3MF whose declared uncompressed size
+    (`size_check.check_uncompressed_size`, after the download and before any parse) is over the function's limit
+    escalates the same way, with `inputBytes` the declared uncompressed size and the per-uncompressed-byte limits
+    of each job size (`size_check.uncompressed_limits_by_task_memory`), but only when the largest job size admits
+    it; otherwise it stays the refusal. Scene-expansion refusals (the COLLADA placement pre-count, the USD arc
+    count before `Stage.Open`, the USD walk's node bound and deadline, `expansion_bounds.py`) never escalate:
+    they bound the scene's structure, not the memory a larger task adds. On a Batch task the node bound and the
+    3MF limit follow `VAMS_TASK_MEMORY_MIB` through `size_check.memory_limit_bytes()`, the COLLADA pre-count and
+    the USD walk take the task's triangle budget, and the USD walk's deadline is 75 percent of the attempt's
+    worker time. Without the flag
+    (a deployment without the tier, a direct invocation, the Batch task itself) the same conditions raise the errors
+    they always raised, with the same text. A format limit no memory lifts (`conversion_service.check_format_limit`: a PLY over
+    4 GiB, whose loader keeps a 32-bit size) is refused before any download on both tiers and never escalated.
+-   **Writer and reader bounds, both tiers.** `usd_io.check_array_bounds` runs before `write_usd` creates a stage:
+    a `.usda` array whose text reaches 2 GB is refused (usd-core's text writer drops, without an error, any one array
+    whose text is 2^31 bytes or more; measured whole at 2,146,875,055 bytes and dropped at 2,175,000,055, so the limit
+    is the text size and not an entry count: ints are counted by their digits, a vec3f at 40 bytes, a vec2f at 27), and
+    a `.usdc` or `.usdz` array over 0x7E000000 bytes (the
+    LZ4 block limit) is refused because the crate would write and then fail at read. convert-linked to `.usda` applies
+    the same text bound to each layer it will export (`check_layer_array_text`: ints counted by digits, other types
+    estimated per entry, the message says "estimated"; the first `LAYER_SAMPLES_CHECKED` time samples of each
+    attribute are read; a layer that cannot be opened is refused by name), before any file is written. The worker turns a crate's
+    decompression failure into a `ValueError` saying the file could not be read (`conversion_worker.translate_error`).
+-   **Worker environment.** `conversion_service.is_scrubbed` lists what the child never receives (`AWS_*`, `ECS_*`,
+    `VAMS_*`, including `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` and `ECS_CONTAINER_METADATA_URI*`, which on Fargate
+    address the job role's credentials); `worker_environment` applies it on top of the passthrough list.
+-   **Run document.** `conversion-run.json` (`vams.conversion3dBasic.run/v1`: tier, task memory and vCPU, seconds per
+    phase, and for a continued run its reason) is written under the run's results folder only when the request carries
+    `allowEscalation` (a deployment with the tier) or the run is on Batch, so a deployment without the tier writes
+    nothing new. It also carries `peakWorkerMemoryMiB`, the largest peak resident memory a conversion worker reported (measured; `requiredMemoryMiB` is the size check's estimate). A failed Batch run also writes it, with `failed: true` and the error line (`pipelineEnd` reads that line to tell the workflow why a job failed, dropping the exception type of user-facing errors, and summarises the job's status reason and exit code when there is none), then fails as before; a
+    failed Lambda run writes none (its error is in the workflow).
+-   **Launcher.** `conversion/3dBasic/lambda/` holds the callback form's Lambdas, deployed only with
+    `useConversion3dBasic.batchTier.enabled`: `vamsExecuteConversion3dBasicPipeline` (what the workflow calls, in
+    place of the converter), `openPipeline` (starts the state machine, registers the converter and Batch container
+    log sources), `selectJobSize` and `constructPipeline` (the tier selector and the job's `VAMS_CONVERSION_EVENT`),
+    `pipelineEnd` (the only function that answers the workflow's task token), the selector module `computeTier`, and the
+    vendored `manifestHelper` and `customLogging`. The builders are in
+    `infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/conversion3dBasicLauncherFunctions.ts`, each with
+    its own `states:SendTaskFailure` grant (`infra/test/pipelines/taskTokenFailureGrants.test.ts`). The container's
+    contract with them: the converter never receives the workflow's task token, the Batch task gets only locations in
+    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets
+    `linuxParameters.initProcessEnabled` (the entry runs as PID 1 and does not reap orphaned grandchildren such as
+    Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
+    ladder (4/30, 8/60, 16/120) is one list in `size_check.BATCH_TASK_SIZES`, `computeTier.JOB_SIZES` and
+    `CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES` in `infra/config/config.ts`; tests compare them.
+-   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
+    (Lambda) and `GOLDEN_TARGET=batch tests/golden/run_golden.sh` (the same 176 cells, one container run each, plus
+    `tests/test_3dbasic_hostile_inputs_golden.py` on both).
+
+Claude Code counterpart: `backendPipelines/CLAUDE.md`, "3D Basic Conversion image: the AWS Batch tier (#1732)".
 
 ### **Reporting Failure on a Task-Token Pipeline**
 
@@ -1558,9 +1809,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
-    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
+    Which group that is depends on the compute family. The ten **Fargate** job definitions (coordinate
+    transform, COG conversion, the 3D Basic Conversion Batch tier, Blender renderer, 3D thumbnail, PDAL,
+    Potree, video SOP/BOM extraction, zip archive, and the GenAI CAD STEP agent on its `fargate` runtime)
+    write through the `awslogs` driver to a VAMS-owned,
     KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
@@ -2056,6 +2308,12 @@ their asset files into `./`: the image creates `logs` and `outputs` for the user
 which also pins the Isaac Lab release its write paths were read from.
 See `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes".
 
+#### **Read an Upstream Tool's Output Layout From Its Source**
+
+What an upstream tool writes is a second thing to read from its source rather than from memory (#1315). Isaac Lab's three RL libraries lay a run out differently (`rsl_rl`: `model_<n>.pt` in the run folder; `rl_games`: `nn/*.pth`; `skrl`: `checkpoints/agent_<n>.pt` and `best_agent.pt`), and a pipeline that globbed one library's files finished green with an empty `checkpoints/` folder for the others. The layouts live in one table per side: `CHECKPOINT_PATTERNS` in `backendPipelines/simulation/isaacLabTraining/container/utils/training/checkpoints.py` (what the container uploads) and `CHECKPOINT_RANKING` in `lambda/openPipeline.py` (which file an evaluation without a `checkpointPath` picks, per library). A lambda test asserts the two agree, and `container/tests/test_checkpoint_layouts.py` builds a log tree per library. An Isaac Lab release bump (the base image tag, `ISAAC_LAB_VERSION`) means re-reading `scripts/reinforcement_learning/<library>/{train,play}.py` at that tag and editing those two tables, not the upload code. The EFS access point mounted at `/mnt/efs/checkpoints` is not written by training today (`train.py` takes no log-root argument and writes under `<cwd>/logs`); only the upload's search roots mention it.
+
+See `backendPipelines/CLAUDE.md`, "A Non-Root Container Owns Every Folder It Writes" (its last paragraph).
+
 #### **Container Lambda Handler Pattern**
 
 A pipeline's VAMS-facing `vamsExecute` Lambda reads its inputs from the workflow manifest, not from the event body. The Step Functions task body (`stepfunctions_builder.py`) carries only the workflow-execution identity, the I/O bucket, the executing-user fields, `inputManifestS3Location`, `inputConfigurationS3Location`, and `TaskToken` when the pipeline is registered with `waitForCallback: "Enabled"`. The handler resolves input files, output paths and asset identity with `manifestHelper.resolve_pipeline_inputs`, then invokes the pipeline's `openPipeline` Lambda, which starts the pipeline state machine (`vamsExecute` → `openPipeline` → `constructPipeline` → container task → `pipelineEnd`). The full pattern — output paths, `assetId` threading, sub-process registration and failure reporting — is in `backendPipelines/CLAUDE.md` and the `/add-pipeline` skill (`.claude/commands/add-pipeline.md`).
@@ -2257,6 +2515,12 @@ The agent's notes and self-assessment go on the execution through `GenerationRes
 
 17. **A Feature Tracks Its Own Workflow Runs; Core Never Names a Pipeline** (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" and `infra/CLAUDE.md`): A feature that runs a workflow tracks it by storing the `workflowExecutionId` on its own record and reading the run status from the existing execution tracking (execution rows, read-time reconcile, the status-change rule) when its own record is read; it does not register a callback with the workflow core. Core workflow code never names or calls a specific pipeline. Clean up a feature's leftover artefacts with S3 lifecycle rules (e.g. abort incomplete multipart uploads) rather than a terminal hook. A system run's trigger value is the feature's own `System-<Identifier>` string (format checked by `systemPipelines.is_system_trigger`), never a value added to a core list; `backend/tests/handlers/workflows/test_system_pipeline_hooks.py` fails when `lambdaBuilder/workflowFunctions.ts` or the backend workflow core names a feature-specific trigger.
 18. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`. (mirrors `backendPipelines/CLAUDE.md` "Adding a New Processing Pipeline" item 22)
+
+#### **A Batch GPU Compute Environment's Instance Types Must Be Able to Run Its Job**
+
+AWS Batch accepts a compute environment whose instance types cannot hold the job and then leaves the job `RUNNABLE` with no error, so the check is made at synthesis. Two precedents in `infra/config/config.ts`: the Cosmos 3 tiers (`validateInstanceTypeGpuCount()`, against `GPU_COUNT_BY_INSTANCE_TYPE`) and Isaac Lab (`validateIsaacLabInstanceTypes()`, against `ISAAC_LAB_CAPABLE_INSTANCE_SPECS` and the `ISAAC_LAB_JOB_*` constants that the job definition also reads). Each type must offer the job's vCPUs, GPUs and **registered** memory (`estimatedRegisteredMemoryMiB()`: the ECS agent registers about 97% of installed memory less 32 MiB, so a 32 GiB type never holds a 32,768 MiB job). A type the tables do not know is a warning, a known-too-small type is an error. Set `useOptimalInstanceClasses: false` on a GPU-only environment, or the CDK adds the CPU-only `optimal` class. Size a warm floor (`minvCpus`) from the job, not from one instance type's name. A new accelerated size goes into both tables and into `documentation/docusaurus-site/src/components/ConfigBuilder/validation.ts`, which mirrors them by hand. Tests: `infra/test/pipelines/isaacLabInstancePool.test.ts`, `infra/test/pipelines/cosmos3InstanceTypeGpuCount.test.ts`.
+
+Claude Code counterpart: `infra/CLAUDE.md`, "A Batch GPU Compute Environment's Instance Types Must Be Able to Run Its Job".
 
 #### **Pipeline Configuration Rules**
 

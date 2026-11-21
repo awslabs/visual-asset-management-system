@@ -213,8 +213,9 @@ VamsCLIError (base)
     RoleError (+ 4 subclasses)
     ConstraintError (+ 5 subclasses)
     UserRoleError (+ 4 subclasses)
+    AuditSearchError (+ 5 subclasses)
     ComplianceError (+ 3 subclasses: ComplianceSchemaNotFoundError, ComplianceCascadeNotFoundError, InvalidComplianceDataError)
-    EdhError (+ 18 subclasses; add-on, in utils/addon/edh_exceptions.py)
+    EdhError (+ 19 subclasses; add-on, in utils/addon/edh_exceptions.py)
     ProfileAlreadyExistsError
 ```
 
@@ -884,7 +885,7 @@ Follow this checklist:
 
     - Check whether `tools/VamsMCP/vams_mcp/server.py` calls the `APIClient` method you changed, and update the call site
     - Add an `@mcp.tool(title="...", annotations=<CONST>)` + `@tool_result` function for a new method agents should be able to use, in the correct gate section (read at top, writes under `if CONFIG.enable_writes:`, destructive under `if CONFIG.enable_destructive:`), with that tier's annotation constant and an agent-facing description within the budget (`tools/VamsMCP/CLAUDE.md` Rules 11-14)
-    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
+    - Confirm the pagination `items_key` still matches the endpoint's list field. Read the handler's response model rather than checking against a list of names: the names in use today are `Items`, `items`, `versions`, `metadata`, and the compliance fields `evaluations`, `entries`, `quarantinedAssets`, `schemas`, `cascades`. `VamsClient.paginate()` also unwraps the legacy `message` envelope
     - Verify the new `def` is unique and correctly positioned. The tools are module-level functions, so a duplicate name silently shadows the earlier one and a `def` placed after the `if __name__` entrypoint or outside its gate block never executes — the tool goes missing with no import error. `tests/test_server_tools.py` asserts the source layout for this
     - Add the tool to the `tools/VamsMCP/README.md` tool list (and the `autoApprove` sample if it is a safe read)
     - Place the tool in a tool set in `tools/VamsMCP/vams_mcp/toolsets.py` (`tools/VamsMCP/CLAUDE.md` Rule 17): `tests/test_toolsets.py` fails on a tool in no set and on a set past 100 tools
@@ -978,7 +979,7 @@ An add-on's commands use an add-on lane that mirrors the fork lane above. Upstre
 `tools/VamsCLI/uv.lock` and `tools/VamsMCP/uv.lock` are development, CI and audit files. The published packages keep their ranged dependencies (`pyproject.toml` `[project] dependencies`, `setup.py` `install_requires`, the hand-written `requirements*.txt`) and their setuptools build, so installing either with pip never needs uv and is not pinned to the lock. Do not narrow a range or raise a lower bound to move a locked version; that changes what every user installs.
 
 -   Run the uv version `[tool.uv] required-version` names: `uvx --from uv==0.13.8 uv ...`. The `vamscli-test` and `vamsmcp-test` CI jobs install from the lock (`uv sync --frozen --extra dev`), and the `python-dependency-audit` job checks both locks.
--   Move a locked package: `uv lock --upgrade-package <package>` (one flag per package), then re-export `requirements.lock`. A range edit goes into `pyproject.toml`, `setup.py` and `requirements.txt` together (`tests/test_packaging_manifests.py`), then `uv lock`.
+-   Move a locked package: `uv lock --upgrade-package <package>` (one flag per package), then re-export `requirements.lock`. VamsMCP's lock resolves VamsCLI's dependencies too, so a package both locks hold (the shared packages are at the same versions today) is moved in both in the same change; no test compares the two locks. A range edit goes into `pyproject.toml`, `setup.py` and `requirements.txt` together (`tests/test_packaging_manifests.py`), then `uv lock`.
 -   `requirements.lock` is a hashed export of `uv.lock` (runtime dependencies plus the `build` group, which must equal `[build-system] requires`): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The EDH AMI recipes install it with `--require-hashes --only-binary :all:`; the audit regenerates it and fails when it is stale. Never edit it by hand.
 -   The hand-written ranged files are listed under `rangedInputs` in `.github/python-lock-exemptions.json`, each with a reason; a new hand-written `requirements*.txt` beside a lock fails the CI test unless it is a uv export. The audit fails an entry that is stale, has no `uv.lock` beside it, names a package the lock does not hold, or is installed or copied by a Dockerfile, AMI recipe, workflow, script or CDK bundling command. Keep the list to the VamsCLI files. The audit also covers every group and extra of the lock, so the `dev` extras of both packages are checked.
 -   VamsMCP's lock resolves `vamscli` from `../VamsCLI` (`[tool.uv.sources]`, editable), because vamscli is not on PyPI; that setting is not part of the published metadata, and the audit leaves the local package out of the export it audits.
