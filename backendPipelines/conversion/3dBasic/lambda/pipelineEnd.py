@@ -60,9 +60,9 @@ def results_location(event):
     return bucket, key if key.endswith("/") else key + "/"
 
 
-def container_failure_message(event):
-    """The error text the Batch task's entry wrote to ``conversion-run.json`` (``failed`` true) under the
-    run's results folder, cleaned for the user, or None when the document is missing or says nothing."""
+def run_document(event):
+    """``conversion-run.json`` from the run's results folder as a dict, or None when it is missing or
+    unreadable."""
     location = results_location(event)
     if not location:
         return None
@@ -72,10 +72,17 @@ def container_failure_message(event):
                               config=retry_config)
         body = client.get_object(Bucket=bucket, Key=prefix + RUN_DOCUMENT_FILENAME)["Body"].read(65536)
         document = json.loads(body)
-    except Exception as e:  # noqa: BLE001 - the summary of the job's own status stands in
-        logger.warning(f"The job's failure document could not be read ({type(e).__name__})")
+    except Exception as e:  # noqa: BLE001 - the caller has a fallback for a missing document
+        logger.warning(f"The job's run document could not be read ({type(e).__name__})")
         return None
-    message = document.get("message") if isinstance(document, dict) and document.get("failed") is True else None
+    return document if isinstance(document, dict) else None
+
+
+def container_failure_message(event):
+    """The error text the Batch task's entry wrote to ``conversion-run.json`` (``failed`` true) under the
+    run's results folder, cleaned for the user, or None when the document is missing or says nothing."""
+    document = run_document(event)
+    message = document.get("message") if document and document.get("failed") is True else None
     if not isinstance(message, str) or not message.strip():
         return None
     for name in USER_TEXT_TYPES:
@@ -126,14 +133,20 @@ def failure_cause(error, container_message=None):
 
 
 def success_output(event):
-    """The task output of a successful run. A Lambda attempt that converted but left referenced files
-    out answers a message in place of ``Success``; it travels as ``message``, as a preview run that
-    produced nothing reports its reason."""
+    """The task output of a successful run. A run that converted but left referenced files out answers
+    a message in place of ``Success``; it travels as ``message``, as a preview run that produced nothing
+    reports its reason. A Lambda attempt returns it in its payload. A Batch job (the run went through
+    constructPipeline) writes it to ``conversion-run.json``, which is read here."""
     output = {'status': 'Pipeline Success'}
     attempt = event.get('attempt') if isinstance(event.get('attempt'), dict) else {}
     payload = attempt.get('Payload') if isinstance(attempt.get('Payload'), dict) else {}
     body = payload.get('body')
-    if isinstance(body, str) and body and body != 'Success' and payload.get('escalate') is not True:
+    if isinstance(event.get('construct'), dict):
+        document = run_document(event) or {}
+        body = document.get('message') if document.get('failed') is not True else None
+    elif payload.get('escalate') is True:
+        body = None
+    if isinstance(body, str) and body and body != 'Success':
         output['message'] = body[:2000]
     return output
 
