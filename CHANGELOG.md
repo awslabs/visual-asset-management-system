@@ -56,7 +56,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Troubleshooting
 
-## [2.7.0] (2026-11-20)
+## [2.7.0] (2026-12-18)
 
 ### Major Change Summary:
 
