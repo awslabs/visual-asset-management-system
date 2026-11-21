@@ -478,3 +478,49 @@ class TestAKeyTheIndexCannotAnswerFor:
         m.lambda_handler_deleted({"Records": [_sqs("d1", _deleted("projects/alpha/x.glb"))]}, MagicMock())
         m.delete_file_metadata_on_s3_delete.assert_not_called()
         assert [r["s3"]["object"]["key"] for r in _sns_records(m)] == ["projects/alpha/x.glb"]
+
+
+@pytest.mark.unit
+class TestARegistrationRootAsset:
+    """A legacy asset stored at its registration's prefix holds every key under it. With its row in the
+    location index (the real `resolve_owner` and `find_conflicts` over an in-memory index), a direct write
+    under it that the fast path misses is attributed to it, and an auto-create of a folder under it is
+    refused. An asset at the bucket root holds no key and is not in the index, so it blocks nothing."""
+
+    def _wire_index(self, m, rows):
+        from tests.common.fileAttributionFakes import AttributionAssetTable
+        _wire(m, ready=True)
+        m.asset_bucket_prefix = "assets/"
+        table = AttributionAssetTable(rows)
+        m.dynamodb.Table.return_value = table
+        m.resolve_owner = al.resolve_owner
+        m.find_conflicts = al.find_conflicts
+        al.clear_location_cache()
+        return table
+
+    def _root(self, location="assets/"):
+        from tests.common.fileAttributionFakes import asset_row
+        return asset_row("db1", "root", "bucket-1", location, BUCKET)
+
+    def test_a_direct_write_under_it_is_attributed_to_it(self):
+        m = _load()
+        self._wire_index(m, [self._root()])
+        result = m.process_s3_record(_record("assets/x/model.glb"), receive_count=1)
+        assert result[:2] == (True, True)
+        m.create_new_asset.assert_not_called()
+        [row] = _history_rows(m)
+        assert (row["databaseId:assetId:filePath"], row["resolvedBy"]) == ("db1:root:/x/model.glb", "locationIndex")
+        assert _tagged(m) == [(BUCKET, "assets/x/model.glb", "db1", "root")]
+
+    def test_an_auto_create_of_a_folder_under_it_is_refused(self):
+        m = _load()
+        table = self._wire_index(m, [self._root()])
+        refusal = m.auto_create_refusal(table, BUCKET, "assets/x/")
+        assert refusal is not None and "db1:root at assets/" in refusal
+
+    def test_a_bucket_root_asset_is_not_indexed_and_refuses_nothing(self):
+        m = _load()
+        root = self._root(location="")
+        assert al.LOCATION_KEY_ATTRIBUTE not in root
+        table = self._wire_index(m, [root])
+        assert m.auto_create_refusal(table, BUCKET, "assets/x/") is None
