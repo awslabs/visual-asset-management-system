@@ -51,7 +51,8 @@ import base64
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import quote
@@ -73,6 +74,7 @@ from common.apiRoutes import (
 )
 from common.constants import UNALLOWED_FILE_EXTENSION_LIST, UNALLOWED_MIME_LIST
 from common.downloadEligibility import (
+    ARCHIVED_STORAGE_CLASSES,
     MSG_FILE_NOT_FOUND,
     MSG_FILE_TYPE_NOT_ALLOWED,
     MSG_VERSION_ARCHIVED,
@@ -194,11 +196,17 @@ register_bucket_region(aux_bucket_name, deployment_region())
 
 USER_ASSET_INDEX = "UserAssetIndex"
 ASSET_INDEX = "AssetIndex"
-# The member recheck of a finished archive (_recheck_members): at most this many members are
-# head-checked; a larger archive is checked from one listing of the asset's prefix, within the time
-# bound. Either bound exceeded refuses the link (fails closed).
+# The member recheck of a finished archive (_recheck_members): an archive of at most this many members
+# has each member head-checked; a larger one is checked from listings of the folders that hold its
+# members, current objects only. Both run on the head-check pool within the time bound; a check that
+# does not finish in time signs nothing and answers 503 (try again), never the archived-or-deleted
+# refusal.
 SHARED_RECHECK_HEAD_MAX_FILES = HEAD_CHECK_MAX_FILES
 SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_MAX_SECONDS", "15"))
+
+
+class MemberCheckIncomplete(Exception):
+    """The member recheck's time bound ran out before every member was confirmed."""
 
 
 class ZipRefusal(VAMSGeneralErrorResponse):
@@ -1293,11 +1301,60 @@ def _current_member_ok(bucket, key):
     return bool(validateUnallowedFileExtensionAndContentType(key, head.get("ContentType", "")))
 
 
+def _folder_members_ok(bucket, folder, wanted, deadline) -> bool:
+    """Whether every member in one folder is still downloadable, from a listing of the folder's own
+    current objects (ListObjectsV2 with a "/" delimiter, so neither subfolders nor old versions are
+    read). Each member must be listed (an archived or deleted file's current version is a delete
+    marker, which is not), not in an archive storage class and not a blocked type. Stops once every
+    member is confirmed; raises MemberCheckIncomplete when the deadline passes between pages."""
+    found = set()
+    kwargs = {"Bucket": bucket, "Prefix": folder, "Delimiter": "/", "MaxKeys": 1000}
+    while True:
+        if time.monotonic() > deadline:
+            raise MemberCheckIncomplete()
+        response = s3.list_objects_v2(**kwargs)
+        for obj in response.get("Contents", []) or []:
+            key = obj.get("Key", "")
+            if key not in wanted:
+                continue
+            if obj.get("StorageClass") in ARCHIVED_STORAGE_CLASSES:
+                return False
+            if not validateUnallowedFileExtensionAndContentType(key, ""):
+                return False
+            found.add(key)
+        if len(found) == len(wanted) or not response.get("IsTruncated"):
+            return len(found) == len(wanted)
+        kwargs["ContinuationToken"] = response.get("NextContinuationToken", "")
+
+
+def _all_true_within(check, items, deadline) -> bool:
+    """``check`` over ``items`` on the head-check pool: True when every call answers True, False at
+    the first False. Raises MemberCheckIncomplete when the deadline passes first; calls not started
+    are cancelled and the ones running are not waited for."""
+    pool = ThreadPoolExecutor(max_workers=max(1, HEAD_CHECK_WORKERS))
+    try:
+        futures = [pool.submit(check, item) for item in items]
+        try:
+            for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
+                if not future.result():
+                    return False
+        except FuturesTimeoutError:
+            raise MemberCheckIncomplete() from None
+        return True
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def _recheck_members(asset, row) -> bool:
     """Download eligibility of a finished archive at request time, the requester's own or another
-    user's: every member file must still be present, not archived and not a blocked type in the asset
-    (#1124's rules, as a file download applies them). Fails closed on anything it cannot confirm,
-    including the time bound."""
+    user's: every member file must still be present, not archived and not a blocked type in the asset,
+    as a file download applies them. False when a member fails, or when the archive's member record
+    or the asset's location cannot be read. Raises MemberCheckIncomplete when the time bound runs out
+    before every member is confirmed.
+
+    Up to SHARED_RECHECK_HEAD_MAX_FILES members are head-checked (which also reads ``vams-status``
+    and the content type). A larger archive is checked from listings of its members' own folders,
+    which confirm presence, storage class and file extension."""
     members = _read_resolved_members(row)
     if not members:
         return False
@@ -1312,34 +1369,15 @@ def _recheck_members(asset, row) -> bool:
                 for rel in members]
     except VAMSGeneralErrorResponse:
         return False
-    if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
-        with ThreadPoolExecutor(max_workers=max(1, HEAD_CHECK_WORKERS)) as pool:
-            return all(pool.map(lambda k: _current_member_ok(bucket, k), keys))
-    # A large archive: one listing of the asset's prefix, latest state per key.
-    wanted, ok = set(keys), set()
     deadline = time.monotonic() + SHARED_RECHECK_MAX_SECONDS
-    kwargs = {"Bucket": bucket, "Prefix": base_key, "MaxKeys": 1000}
-    while True:
-        if time.monotonic() > deadline:
-            return False
-        response = s3.list_object_versions(**kwargs)
-        for marker in response.get("DeleteMarkers", []) or []:
-            if marker.get("IsLatest") and marker.get("Key") in wanted:
-                return False
-        for version in response.get("Versions", []) or []:
-            key = version.get("Key", "")
-            if not version.get("IsLatest") or key not in wanted:
-                continue
-            if version.get("StorageClass") in ("GLACIER", "DEEP_ARCHIVE"):
-                return False
-            if not validateUnallowedFileExtensionAndContentType(key, ""):
-                return False
-            ok.add(key)
-        if not response.get("IsTruncated"):
-            break
-        kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
-        kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
-    return ok == wanted
+    if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
+        return _all_true_within(lambda key: _current_member_ok(bucket, key), keys, deadline)
+    folders = {}
+    for key in keys:
+        folders.setdefault(key[:key.rfind("/") + 1], set()).add(key)
+    return _all_true_within(
+        lambda folder: _folder_members_ok(bucket, folder[0], folder[1], deadline),
+        list(folders.items()), deadline)
 
 
 def get_job(event, database_id, asset_id, request_id):
@@ -1381,7 +1419,17 @@ def job_url(event, database_id, asset_id, request_id):
     row = _reconcile(row)
     if row.get("status") != zd.STATUS_SUCCEEDED:
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
-    if not _recheck_members(asset, row):
+    try:
+        members_ok = _recheck_members(asset, row)
+    except MemberCheckIncomplete:
+        logger.warning(f"Zip download {request_id}: member check did not finish within "
+                       f"{SHARED_RECHECK_MAX_SECONDS} s; nothing signed")
+        # AUDIT LOG: the members could not all be confirmed in time; the caller may try again.
+        log_action(event, "zipDownloadUrl", outcome="failed", reason="internal",
+                   database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)
+        return general_error(status_code=503, body={"message": zd.MSG_ARCHIVE_CHECK_INCOMPLETE},
+                             event=event)
+    if not members_ok:
         # AUDIT LOG: the archive refused because a member is no longer downloadable.
         log_action(event, "zipDownloadUrl", outcome="failed", reason="validation",
                    database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)

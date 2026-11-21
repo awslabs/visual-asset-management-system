@@ -141,6 +141,10 @@ MSG_ARCHIVED_IN_SELECTION = ("The selection includes an archived or deleted item
 # is already built, so there is no selection left to change; the create keeps MSG_ARCHIVED_IN_SELECTION.
 MSG_ARCHIVE_FILE_UNAVAILABLE = ("A file in this archive has since been archived or deleted. Restore it, "
                                 "or create a new zip download without it.")
+# The download URL's answer when the archive's files could not all be checked within the time bound
+# (answered 503): nothing is known to be wrong with the archive, so the caller tries again.
+MSG_ARCHIVE_CHECK_INCOMPLETE = ("The files in this archive could not be checked right now. "
+                                "Try again in a moment.")
 MSG_NOT_PRODUCED = "The archive was not produced"
 MSG_JOB_FAILED = "The archive job failed"
 MSG_JOB_TIMED_OUT = "The archive job timed out"

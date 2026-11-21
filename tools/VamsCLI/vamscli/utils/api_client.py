@@ -4670,7 +4670,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             ZipDownloadExpiredError: When the archive is no longer stored (410)
             InvalidZipDownloadRequestError: When the asset is no longer distributable, or a file
                 in the archive is no longer downloadable
-            APIError: When the API call fails
+            APIError: When the API call fails, including a 503 when the archive's files could not
+                all be checked in time (the server's message says to try again)
         """
         endpoint = route_path(
             API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,

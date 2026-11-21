@@ -16,6 +16,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import types
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
@@ -190,6 +192,21 @@ class FakeS3:
         self.aborted = []
         self.puts = {}
         self.presigned = []
+        # Every listing call, as (operation, Prefix, Delimiter). Each one advances `clock` by
+        # page_seconds: a test that reads time from the clock (use_clock) gives a listing page the
+        # cost it has against Amazon S3 without waiting for it.
+        self.list_calls = []
+        self.page_seconds = 0.0
+        self.clock = 0.0
+        self._clock_lock = threading.Lock()
+
+    def _listed(self, operation, prefix, delimiter=None):
+        self.list_calls.append((operation, prefix, delimiter))
+        with self._clock_lock:
+            self.clock += self.page_seconds
+
+    def monotonic(self):
+        return self.clock
 
     def add(self, key, size=10, version="v1", bucket=ASSET_BUCKET, content_type="model/gltf-binary",
             storage_class="STANDARD", metadata=None, delete_marker=False):
@@ -216,15 +233,59 @@ class FakeS3:
         return head
 
     def list_object_versions(self, Bucket, Prefix, MaxKeys=1000, KeyMarker="", VersionIdMarker="", **_):
+        """Every version and delete marker under Prefix, MaxKeys entries a page (key order, newest
+        version first), continued from KeyMarker and VersionIdMarker as Amazon S3 does."""
+        self._listed("list_object_versions", Prefix)
+        entries = [(key, v, i == 0) for (bucket, key), versions in sorted(self.objects.items())
+                   if bucket == Bucket and key.startswith(Prefix) for i, v in enumerate(versions)]
+        start = 0
+        if KeyMarker:
+            after = [n for n, (key, v, _) in enumerate(entries) if key == KeyMarker
+                     and (not VersionIdMarker or v["VersionId"] == VersionIdMarker)]
+            start = after[-1] + 1 if after else next(
+                (n for n, (key, _, _) in enumerate(entries) if key > KeyMarker), len(entries))
+        page = entries[start:start + MaxKeys]
         versions, markers = [], []
-        for (bucket, key), entries in sorted(self.objects.items()):
-            if bucket != Bucket or not key.startswith(Prefix):
+        for key, v, latest in page:
+            item = {"Key": key, "VersionId": v["VersionId"], "IsLatest": latest,
+                    "Size": v["Size"], "StorageClass": v["StorageClass"]}
+            (markers if v["DeleteMarker"] else versions).append(item)
+        result = {"Versions": versions, "DeleteMarkers": markers,
+                  "IsTruncated": start + MaxKeys < len(entries)}
+        if result["IsTruncated"]:
+            result["NextKeyMarker"], result["NextVersionIdMarker"] = page[-1][0], page[-1][1]["VersionId"]
+        return result
+
+    def list_objects_v2(self, Bucket, Prefix="", Delimiter=None, MaxKeys=1000, ContinuationToken=None,
+                        **_):
+        """The current objects under Prefix (a key whose newest version is a delete marker is not
+        listed), MaxKeys entries a page in key order. With a Delimiter, a deeper key is rolled up into
+        its CommonPrefixes entry, as Amazon S3 does."""
+        self._listed("list_objects_v2", Prefix, Delimiter)
+        rows, rolled_up = [], set()
+        for (bucket, key), versions in sorted(self.objects.items()):
+            if bucket != Bucket or not key.startswith(Prefix) or versions[0]["DeleteMarker"]:
                 continue
-            for i, v in enumerate(entries):
-                item = {"Key": key, "VersionId": v["VersionId"], "IsLatest": i == 0,
-                        "Size": v["Size"], "StorageClass": v["StorageClass"]}
-                (markers if v["DeleteMarker"] else versions).append(item)
-        return {"Versions": versions, "DeleteMarkers": markers, "IsTruncated": False}
+            rest = key[len(Prefix):]
+            if Delimiter and Delimiter in rest:
+                common = Prefix + rest.split(Delimiter, 1)[0] + Delimiter
+                if common not in rolled_up:
+                    rolled_up.add(common)
+                    rows.append((common, None))
+                continue
+            v = versions[0]
+            rows.append((key, {"Key": key, "Size": v["Size"], "StorageClass": v["StorageClass"]}))
+        rows.sort(key=lambda row: row[0])
+        start = 0
+        if ContinuationToken:
+            start = next((n for n, (name, _) in enumerate(rows) if name > ContinuationToken), len(rows))
+        page = rows[start:start + MaxKeys]
+        result = {"Contents": [obj for _, obj in page if obj],
+                  "CommonPrefixes": [{"Prefix": name} for name, obj in page if not obj],
+                  "KeyCount": len(page), "IsTruncated": start + MaxKeys < len(rows)}
+        if result["IsTruncated"]:
+            result["NextContinuationToken"] = page[-1][0]
+        return result
 
     def put_object(self, Bucket, Key, Body, **kwargs):
         self.puts[(Bucket, Key)] = Body
@@ -446,6 +507,14 @@ def land_archive(env, row, size=10, token=UPLOAD_TOKEN, version="v1"):
     record_upload_token(row)
     env.s3.add(row["archiveKey"], size=size, bucket=AUX, version=version,
                metadata={env.zd.ARCHIVE_UPLOAD_TOKEN_METADATA: token})
+
+
+def use_clock(env, monkeypatch, page_seconds):
+    """The service reads time.monotonic from the fake bucket's clock, which each listing page
+    advances by page_seconds; time.sleep is unchanged."""
+    env.s3.page_seconds = page_seconds
+    monkeypatch.setattr(env.svc, "time", types.SimpleNamespace(monotonic=env.s3.monotonic,
+                                                               sleep=time.sleep))
 
 
 def write_resolved_manifest(env, row, members=("/a.glb",)):
