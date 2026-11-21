@@ -1,0 +1,19 @@
+[project]
+name = "cosmos-transfer-pipeline"
+version = "0.1.0"
+description = "Cosmos Transfer pipeline container image: the VAMS-owned requirements"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "nvidia-nccl-cu12>=2.26",
+]
+
+# The image installs the committed, hashed requirements-nccl.lock with `uv pip install --require-hashes
+# --only-binary :all:` into the virtual environment that upstream's own uv.lock created. It is exported from
+# uv.lock (`uv export`, command in its header); uv is a development and CI tool only here, and the image's own
+# use of uv is upstream's. Only this package is locked: upstream's environment (torch, CUDA wheels, everything
+# `uv sync --locked` installs) comes from upstream's lock at the pinned commit.
+[tool.uv]
+package = false
+required-version = "==0.13.8"
+exclude-newer = "7 days"
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
