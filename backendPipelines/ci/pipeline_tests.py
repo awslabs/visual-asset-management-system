@@ -14,8 +14,9 @@ from, in install order:
 
 1. ``requirements-common.txt`` beside this file: pytest plus the Lambda base layer packages the
    pipeline Lambdas import at runtime. It is exported from ``uv.lock`` in this directory.
-2. The nearest ``requirements.txt`` (or, for a container whose Dockerfile installs a hashed
-   ``requirements.lock``, that file) above the tests directory, stopping below the pipeline's use-case
+2. The nearest ``requirements.txt`` above the tests directory (or ``requirements.lock``, only where a
+   ``uv.lock`` sits beside it: the hashed export a container Dockerfile installs; a pip-compile lock of a
+   GPU image is not installed on a CPU runner), stopping below the pipeline's use-case
    directory (``lambda/requirements.txt``, ``container/requirements.txt``). Where the directory has a
    ``uv.lock`` this file is its pinned export (``uv export``), so the suite runs on the locked versions
    for this runner's Python. The coordinate transform lock forks by Python version: its image is
@@ -156,14 +157,17 @@ def included_file(entry: str) -> Optional[Path]:
 
 
 def own_requirements(tests_dir: Path) -> Optional[Path]:
-    """The nearest requirements.txt (or requirements.lock) above ``tests_dir``, below the use-case directory."""
+    """The nearest requirements.txt above ``tests_dir``, below the use-case directory.
+
+    A ``requirements.lock`` counts only beside a ``uv.lock``: it is then the hashed uv export of the project.
+    Other ``.lock`` files (the pip-compile locks of the GPU images) are not installed on a CPU runner."""
     # backendPipelines/<use case>/<pipeline>/... : stop before reaching the use-case directory.
     stop = len(PIPELINES_ROOT.parts) + 1
     current = tests_dir.parent
     while len(current.parts) > stop:
         for name in ("requirements.txt", "requirements.lock"):
             candidate = current / name
-            if candidate.is_file():
+            if candidate.is_file() and (name == "requirements.txt" or (current / "uv.lock").is_file()):
                 return candidate
         current = current.parent
     return None
