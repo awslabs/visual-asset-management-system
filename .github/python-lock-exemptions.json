@@ -32,12 +32,7 @@
         {
             "path": "backendPipelines/3dRecon/splatToolbox/container/requirements.txt",
             "reason": "Upstream-owned: the Splat Toolbox sync copies upstream's container/requirements.txt over this file on every cdk synth, so it cannot be a uv export. The image is upstream's Dockerfile, which does not install it; only the pipeline test runner does.",
-            "plannedIn": "not planned: upstream-owned file (#1741 PR 6 / #1808)"
-        },
-        {
-            "path": "backendPipelines/3dRecon/splatToolbox/container/vams_utils/requirements.txt",
-            "reason": "boto3 and botocore for the Splat Toolbox utils package; no Dockerfile installs it, and a uv project beside the upstream-owned requirements.txt is not possible.",
-            "plannedIn": "not planned: see container/requirements.txt (#1741 PR 6 / #1808)"
+            "plannedIn": "not planned: upstream-owned file (#1741 / #1808)"
         },
         {
             "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",

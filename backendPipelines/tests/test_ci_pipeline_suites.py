@@ -101,13 +101,9 @@ def test_every_suite_setting_names_a_discovered_directory_and_a_reason(settings,
     for path, entry in settings.items():
         assert path in discovered, f"{path} has settings but holds no test module; remove the entry"
         assert entry, f"{path} has an empty settings entry"
-        assert set(entry) <= {"extraRequirements", "headlessDisplay", "ownRequirements"}, f"{path}: unknown setting {sorted(entry)}"
+        assert set(entry) <= {"extraRequirements", "headlessDisplay"}, f"{path}: unknown setting {sorted(entry)}"
         for name, setting in entry.items():
             assert setting.get("reason", "").strip(), f"{path}: {name} has no reason"
-        if "ownRequirements" in entry:
-            # The opt-out is only meaningful where the runner would otherwise install a requirements file.
-            tests_dir = runner.REPO_ROOT / path
-            assert runner.own_requirements(tests_dir) is not None, f"{path}: ownRequirements skips nothing; remove it"
         if "extraRequirements" in entry:
             requirements = entry["extraRequirements"].get("requirements", [])
             assert requirements and all(r.strip() for r in requirements), f"{path}: no extraRequirements"
@@ -214,17 +210,3 @@ def test_the_workflow_runs_every_group():
     groups = re.search(r"^\s+group: \[([0-9, ]+)\]\s*$", workflow, re.M)
     assert groups, "the pipeline test job has no group matrix"
     assert [int(g) for g in groups.group(1).split(",")] == list(range(1, runner.GROUP_COUNT + 1))
-
-
-def test_own_requirements_setting_skips_the_nearest_requirements_file(monkeypatch):
-    """A directory with an ``ownRequirements`` entry installs only the common requirements (and extras)."""
-    target = "backendPipelines/genAi/imageTo3d/container/tests"
-    plain = {s.rel: s for s in runner.suites()}[target]
-    assert any(p.name == "requirements.txt" for p in plain.requirement_files)
-
-    settings = runner.load_settings()
-    monkeypatch.setattr(
-        runner, "load_settings", lambda: {**settings, target: {"ownRequirements": {"reason": "test"}}}
-    )
-    opted_out = {s.rel: s for s in runner.suites()}[target]
-    assert opted_out.requirement_files == (runner.COMMON_REQUIREMENTS,)

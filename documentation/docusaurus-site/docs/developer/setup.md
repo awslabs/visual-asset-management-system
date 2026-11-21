@@ -186,7 +186,7 @@ uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
 
-Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. The requirements files with no lock are the GPU images' not yet moved: the GR00T image's (after #1812 merges) and the Isaac Lab training image's (after #1669, PR #1736, merges); they are hand-maintained pip files, edited directly, and listed under `exemptions` in `.github/python-lock-exemptions.json` until the image moves to a uv project. The published command-line packages have locks; their hand-written ranged files are covered in [Published packages: VamsCLI and VamsMCP](#published-packages-vamscli-and-vamsmcp).
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no lock (the GPU pipeline images) are hand-maintained pip files and are edited directly; each one is listed under `exemptions` in `.github/python-lock-exemptions.json` until it gets a lock. The published command-line packages have locks; their hand-written ranged files are covered in [Published packages: VamsCLI and VamsMCP](#published-packages-vamscli-and-vamsmcp).
 
 #### Published packages: VamsCLI and VamsMCP
 
@@ -224,12 +224,9 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
--   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project (today the GR00T image's four requirements files, the Isaac Lab training image's two and Splat Toolbox's two, whose `container/requirements.txt` is upstream's file and is overwritten at every synth);
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
 -   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
--   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos images other than Transfer's NCCL wheel, the GR00T image until it moves to a lock, and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. The GPU images lock only the sets VAMS owns:
-    -   Image to 3D: the shared `requirements.txt` of all seven model images. Each model's own requirements (torch, the CUDA extensions, the upstream repository's packages) are installed by its Dockerfile before or after it and can move a locked package (TripoSR pins trimesh 4.0.5, so its Dockerfile reasserts the floor; TRELLIS.2 and SAM 3D install the shared set after upstream and restore numpy).
-    -   Splat Toolbox: not locked. Its `container/requirements.txt` is copied from upstream on every synth, and the image is upstream's Dockerfile.
-    -   Cosmos Transfer: only the NCCL wheel added to upstream's environment; upstream's own `uv.lock` is installed by `uv sync --locked`.
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, only Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment) is locked. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), GR00T (after PR #1812 merges), Isaac Lab training (after #1669, PR #1736, merges), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`).;
 -   packages that come with a container base image or the Lambda runtime;
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
 
