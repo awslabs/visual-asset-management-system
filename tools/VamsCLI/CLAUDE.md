@@ -103,10 +103,12 @@ tools/VamsCLI/
     test_*.py                # One file per command group or behavior area
     industry/                # Engineering BOM and PLM command tests (engineering/bom/, engineering/plm/)
     addon/                   # Add-on command and client tests (test_edh.py, test_edh_client.py, test_edh_capacity_reservations.py, test_edh_start_status.py, test_edh_workstation_image.py)
-  requirements.txt           # Runtime dependencies; matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
-  requirements-build.txt     # The [build-system] requires of pyproject.toml
-  requirements.lock          # Hashed lock of both, which the EDH Linux AMI recipes install; regenerate with the
-                             #   uv command in its header after a dependency change (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
+  requirements.txt           # Runtime dependencies (ranged, hand-written); matches pyproject.toml and setup.py (tests/test_packaging_manifests.py)
+  requirements-dev.txt       # Dev extra (ranged, hand-written)
+  requirements-build.txt     # The [build-system] requires of pyproject.toml (ranged, hand-written)
+  uv.lock                    # uv's resolution of the ranges, for development, CI and the audit; never used by `pip install vamscli`
+  requirements.lock          # Hashed `uv export` of uv.lock (runtime + `build` group), which the EDH Linux AMI recipes install;
+                             #   regenerate with the command in its header (infra/test/addon/edh/edhAmiRecipeLocks.test.ts)
 ```
 
 ### Command Groups (27 core + add-on groups)
@@ -970,6 +972,16 @@ An add-on's commands use an add-on lane that mirrors the fork lane above. Upstre
 5. If the API client should raise it: add the mapping in `api_client.py`
 
 ---
+
+### Updating Python Dependencies (uv)
+
+`tools/VamsCLI/uv.lock` and `tools/VamsMCP/uv.lock` are development, CI and audit files. The published packages keep their ranged dependencies (`pyproject.toml` `[project] dependencies`, `setup.py` `install_requires`, the hand-written `requirements*.txt`) and their setuptools build, so installing either with pip never needs uv and is not pinned to the lock. Do not narrow a range or raise a lower bound to move a locked version; that changes what every user installs.
+
+-   Run the uv version `[tool.uv] required-version` names: `uvx --from uv==0.13.8 uv ...`. The `vamscli-test` and `vamsmcp-test` CI jobs install from the lock (`uv sync --frozen --extra dev`), and the `python-dependency-audit` job checks both locks.
+-   Move a locked package: `uv lock --upgrade-package <package>` (one flag per package), then re-export `requirements.lock`. A range edit goes into `pyproject.toml`, `setup.py` and `requirements.txt` together (`tests/test_packaging_manifests.py`), then `uv lock`.
+-   `requirements.lock` is a hashed export of `uv.lock` (runtime dependencies plus the `build` group, which must equal `[build-system] requires`): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The EDH AMI recipes install it with `--require-hashes --only-binary :all:`; the audit regenerates it and fails when it is stale. Never edit it by hand.
+-   The hand-written ranged files are listed under `rangedInputs` in `.github/python-lock-exemptions.json`, each with a reason; a new hand-written `requirements*.txt` beside a lock fails the CI test unless it is a uv export. The audit fails an entry that is stale, has no `uv.lock` beside it, names a package the lock does not hold, or is installed or copied by a Dockerfile, AMI recipe, workflow, script or CDK bundling command. Keep the list to the VamsCLI files. The audit also covers every group and extra of the lock, so the `dev` extras of both packages are checked.
+-   VamsMCP's lock resolves `vamscli` from `../VamsCLI` (`[tool.uv.sources]`, editable), because vamscli is not on PyPI; that setting is not part of the published metadata, and the audit leaves the local package out of the export it audits.
 
 ## Templates
 
