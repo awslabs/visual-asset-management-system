@@ -147,7 +147,9 @@ describe("preview/3dThumbnail openPipeline registration environment", () => {
     });
 });
 
-describe("conversion/3dBasic openPipeline registration environment (Batch tier)", () => {
+// openPipeline registers the state machine and the converter Lambda; constructPipeline registers the
+// container, once the job size (and so the Batch state) is known.
+describe("conversion/3dBasic launcher registration environment (Batch tier)", () => {
     let template: Template;
 
     beforeAll(() => {
@@ -167,8 +169,8 @@ describe("conversion/3dBasic openPipeline registration environment (Batch tier)"
         template = Template.fromStack(nested);
     });
 
-    test("registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
-        const env = registeringLambdaEnv(template, "openPipeline.lambda_handler");
+    test("constructPipeline registers the vended group its job definition writes to, under the job definition's own stream prefix", () => {
+        const env = registeringLambdaEnv(template, "constructPipeline.lambda_handler");
         const jobDefinitionId = expectDerivedJobDefinitionName(
             template,
             env.BATCH_JOB_DEFINITION_NAME
@@ -181,12 +183,15 @@ describe("conversion/3dBasic openPipeline registration environment (Batch tier)"
         );
     });
 
-    test("every stage name the producer declares is a state of the machine", () => {
-        expectDeclaredStagesInAsl(
-            template,
-            path.join(PRODUCERS, "conversion", "3dBasic", "lambda", "openPipeline.py")
-        );
-    });
+    test.each(["openPipeline.py", "constructPipeline.py"])(
+        "every stage name %s declares is a state of the machine",
+        (producer) => {
+            expectDeclaredStagesInAsl(
+                template,
+                path.join(PRODUCERS, "conversion", "3dBasic", "lambda", producer)
+            );
+        }
+    );
 });
 
 describe("preview/pcPotreeViewer openPipeline registration environment", () => {

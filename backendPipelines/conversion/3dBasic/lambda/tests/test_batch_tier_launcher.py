@@ -200,7 +200,7 @@ class TestOpenPipeline:
         assert sent["conversionRequest"] == {
             "inputManifestS3Location": "s3://aux/manifests/E1/m.json",
             "inputConfigurationS3Location": "s3://aux/configs/E1/c.json",
-            "workflowExecutionId": "E1"}
+            "workflowExecutionId": "E1", "pipelineExecutionId": "E1.p"}
         assert sent["externalSfnTaskToken"] == TOKEN
         assert TOKEN not in json.dumps(sent["conversionRequest"])
         assert sent["computeTier"] == "auto" and sent["maxMemoryGiB"] == 120
@@ -249,21 +249,31 @@ class TestOpenPipeline:
         assert response["statusCode"] == 500
         assert sfn.send_task_failure.call_count == 1
 
-    def test_the_log_sources_of_both_tiers_are_registered(self):
+    def test_the_state_machine_and_lambda_attempt_log_sources_are_registered(self):
         mod = _load("openPipeline")
         events = MagicMock()
         with patch.object(mod, "events_client", events), \
                 patch.object(mod, "ORCHESTRATION_BUS_NAME", "bus"), \
                 patch.object(mod, "STATE_MACHINE_LOG_GROUP_NAME", "/sm"), \
-                patch.object(mod, "CONVERTER_LOG_GROUP_NAME", "/aws/lambda/converter"), \
-                patch.object(mod, "BATCH_JOB_LOG_GROUP_NAME", "/aws/vendedlogs/Pipelines/job"), \
-                patch.object(mod, "BATCH_JOB_DEFINITION_NAME", "ConversionJob"):
-            mod.register_sub_execution("bus", "vams.pipeline.E1.p", "arn:exec", "arn:sm")
+                patch.object(mod, "CONVERTER_LOG_GROUP_NAME", "/aws/lambda/converter"):
+            mod.register_sub_execution("bus", "vams.execution.E1.pipeline.P1", "arn:exec", "arn:sm")
         detail = json.loads(events.put_events.call_args.kwargs["Entries"][0]["Detail"])
         sources = {(log["sourceType"], log.get("stageName", "")) for log in detail["logs"]}
-        assert sources == {("stateMachine", ""), ("lambda", "ConversionLambdaAttempt"), ("batch", "ConversionBatchJob")}
-        batch = [log for log in detail["logs"] if log["sourceType"] == "batch"][0]
-        assert batch["logStreamPrefix"] == "ConversionJob/default/"
+        # The Batch container's source is registered by constructPipeline, under the state the run takes.
+        assert sources == {("stateMachine", ""), ("lambda", "ConversionLambdaAttempt")}
+
+    def test_the_converter_request_and_the_state_machine_carry_the_pipeline_execution_id(self):
+        # The converter's group is read for lines carrying BOTH execution ids, so the converter needs this one.
+        _, sfn, _ = self._run(_open_event(orchestrationEventPrefix="vams.execution.E1.pipeline.P1"))
+        sent = json.loads(sfn.start_execution.call_args.kwargs["input"])
+        assert sent["conversionRequest"]["pipelineExecutionId"] == "P1"
+        assert sent["conversionRequest"]["workflowExecutionId"] == "E1"
+        assert sent["orchestrationEventPrefix"] == "vams.execution.E1.pipeline.P1"
+
+    def test_without_an_orchestration_prefix_the_request_has_no_pipeline_execution_id(self):
+        _, sfn, _ = self._run(_open_event(orchestrationEventPrefix=""))
+        assert "pipelineExecutionId" not in json.loads(sfn.start_execution.call_args.kwargs["input"])[
+            "conversionRequest"]
 
 
 @pytest.mark.unit
@@ -298,6 +308,70 @@ class TestConstructPipeline:
         with pytest.raises(ValueError, match="too large"):
             mod.lambda_handler({"conversionRequest": {"inputManifestS3Location": "s3://aux/" + "k" * 7000}}, MagicMock())
 
+    def test_the_job_request_carries_the_pipeline_execution_id(self):
+        mod = _load("constructPipeline")
+        request = mod.conversion_event({"workflowExecutionId": "E1", "pipelineExecutionId": "P1"})
+        assert request == {"workflowExecutionId": "E1", "pipelineExecutionId": "P1"}
+
+    STATE_NAMES = {"30720": "ConversionBatchJob", "61440": "ConversionBatchJob8Vcpu",
+                   "122880": "ConversionBatchJob16Vcpu"}
+
+    def _register(self, selection, prefix="vams.execution.E1.pipeline.P1", bus="bus"):
+        mod = _load("constructPipeline")
+        events = MagicMock()
+        with patch.object(mod, "events_client", events), \
+                patch.object(mod, "ORCHESTRATION_BUS_NAME", bus), \
+                patch.object(mod, "BATCH_JOB_LOG_GROUP_NAME", "/aws/vendedlogs/Pipelines/Conversion3dBasic"), \
+                patch.object(mod, "BATCH_JOB_LOG_GROUP_ARN", "arn:aws:logs:us-east-1:1:log-group:/x:*"), \
+                patch.object(mod, "BATCH_JOB_DEFINITION_NAME", "Conversion3dBasicJob"), \
+                patch.object(mod, "BATCH_STATE_NAMES", self.STATE_NAMES):
+            mod.lambda_handler({"jobName": "J", "orchestrationEventPrefix": prefix,
+                                "conversionRequest": {"workflowExecutionId": "E1"}, "selection": selection},
+                               MagicMock())
+        return events
+
+    @pytest.mark.parametrize("memory,state", [(30720, "ConversionBatchJob"), (61440, "ConversionBatchJob8Vcpu"),
+                                              (122880, "ConversionBatchJob16Vcpu")])
+    def test_the_container_log_is_registered_under_the_state_each_job_size_runs(self, memory, state):
+        events = self._register({"jobSize": {"vcpu": 0, "memoryMiB": memory}, "escalationReason": "size"})
+        entry = events.put_events.call_args.kwargs["Entries"][0]
+        assert entry["Source"] == "vams.execution.E1.pipeline.P1"
+        assert entry["DetailType"] == "pipeline.execution.register"
+        detail = json.loads(entry["Detail"])
+        assert detail["pipelineExecutionId"] == "P1"
+        assert detail["logs"] == [{
+            "logGroupArn": "arn:aws:logs:us-east-1:1:log-group:/x:*",
+            "logGroupName": "/aws/vendedlogs/Pipelines/Conversion3dBasic",
+            "logStreamName": "",
+            "logStreamPrefix": "Conversion3dBasicJob/default/",
+            "stageName": state,
+            "sourceType": "batch",
+            "label": "Conversion job container (AWS Batch)",
+        }]
+        assert "subExecution" not in detail
+
+    def test_an_unmapped_size_registers_the_state_the_choice_defaults_to(self):
+        events = self._register({})
+        assert json.loads(events.put_events.call_args.kwargs["Entries"][0]["Detail"])["logs"][0]["stageName"] == \
+            "ConversionBatchJob"
+
+    @pytest.mark.parametrize("prefix,bus", [("", "bus"), ("vams.no-pipeline-marker", "bus"),
+                                            ("vams.execution.E1.pipeline.P1", "")])
+    def test_without_a_pipeline_execution_or_a_bus_nothing_is_registered(self, prefix, bus):
+        events = self._register({"jobSize": {"memoryMiB": 61440}}, prefix=prefix, bus=bus)
+        events.put_events.assert_not_called()
+
+    def test_a_failed_registration_does_not_fail_the_run(self):
+        mod = _load("constructPipeline")
+        events = MagicMock()
+        events.put_events.side_effect = Exception("throttled")
+        with patch.object(mod, "events_client", events), patch.object(mod, "ORCHESTRATION_BUS_NAME", "bus"), \
+                patch.object(mod, "BATCH_JOB_LOG_GROUP_NAME", "/g"), \
+                patch.object(mod, "BATCH_JOB_DEFINITION_NAME", "Conversion3dBasicJob"):
+            result = mod.lambda_handler({"orchestrationEventPrefix": "vams.execution.E1.pipeline.P1",
+                                         "conversionRequest": {"workflowExecutionId": "E1"}}, MagicMock())
+        assert result["status"] == "STARTING"
+
 
 @pytest.mark.unit
 class TestPipelineEnd:
@@ -322,6 +396,34 @@ class TestPipelineEnd:
     def test_no_message_when_there_is_none_to_report(self, payload):
         sfn = self._run({"externalSfnTaskToken": TOKEN, "attempt": {"Payload": payload}})
         assert "message" not in json.loads(sfn.send_task_success.call_args.kwargs["output"])
+
+    def _batch_success(self, document):
+        """A run that went through constructPipeline and a Batch state, after an escalated Lambda attempt."""
+        mod = _load("pipelineEnd")
+        sfn = MagicMock()
+        s3 = MagicMock()
+        if document is None:
+            s3.get_object.side_effect = RuntimeError("NoSuchKey")
+        else:
+            s3.get_object.return_value = {"Body": MagicMock(read=lambda n=None: json.dumps(document).encode())}
+        event = {"externalSfnTaskToken": TOKEN,
+                 "outputS3AssetResultsPath": "s3://abkt/pipelines/p/J/output/E1/results/",
+                 "attempt": {"Payload": {"escalate": True, "body": "too large"}},
+                 "construct": {"conversionEvent": "{}"}}
+        with patch.object(mod, "sfn", sfn), patch.object(mod.boto3, "client", return_value=s3):
+            mod.lambda_handler(event, MagicMock())
+        return json.loads(sfn.send_task_success.call_args.kwargs["output"]), s3
+
+    def test_an_incomplete_message_from_the_batch_job_reaches_the_task_output(self):
+        output, s3 = self._batch_success({"tier": "batch", "message": "Converted m.gltf, but 1 file ..."})
+        assert output == {"status": "Pipeline Success", "message": "Converted m.gltf, but 1 file ..."}
+        assert s3.get_object.call_args.kwargs["Key"] == "pipelines/p/J/output/E1/results/conversion-run.json"
+
+    @pytest.mark.parametrize("document", [{"tier": "batch"}, {"message": "Success"}, None, [],
+                                          {"failed": True, "message": "x"}])
+    def test_a_complete_batch_run_or_no_document_reports_no_message(self, document):
+        output, _ = self._batch_success(document)
+        assert output == {"status": "Pipeline Success"}
 
     def test_a_failure_reports_the_error_text_not_a_pointer_to_the_log(self):
         cause = json.dumps({"errorMessage": "model.step is 1,500.0 MB, over the 1,011.0 MB limit for converting"})
