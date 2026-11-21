@@ -734,7 +734,9 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
         setShowPreviewModal(true);
     };
 
-    if (!state?.initialResult) {
+    // Before the first answer, unless the first search failed: the table then says it did not finish
+    // rather than loading forever.
+    if (!state?.initialResult && !state?.searchFailed) {
         return <div>Loading..</div>;
     }
 
@@ -1080,19 +1082,27 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     stickyHeader={true}
                     wrapLines={false}
                     empty={
-                        <EmptyState
-                            title="No matches"
-                            subtitle="We can't find a match."
-                            action={
-                                <Button
-                                    onClick={() => {
-                                        dispatch({ type: "query-criteria-cleared" });
-                                    }}
-                                >
-                                    Clear filter
-                                </Button>
-                            }
-                        />
+                        state?.searchFailed ? (
+                            // The search did not answer: no filter is the cause, so there is no action.
+                            <EmptyState
+                                title="No results to show"
+                                subtitle="The search did not finish."
+                            />
+                        ) : (
+                            <EmptyState
+                                title="No matches"
+                                subtitle="We can't find a match."
+                                action={
+                                    <Button
+                                        onClick={() => {
+                                            dispatch({ type: "query-criteria-cleared" });
+                                        }}
+                                    >
+                                        Clear filter
+                                    </Button>
+                                }
+                            />
+                        )
                     }
                     columnDefinitions={enhancedColumnDefinitions}
                     selectedItems={state?.selectedItems}
@@ -1138,11 +1148,13 @@ function SearchPageListView({ state, dispatch, onShowToast, onCreateAsset }: Sea
                     visibleColumns={state?.tablePreferences?.visibleContent}
                     loading={state.loading}
                     loadingText="Loading"
-                    items={state?.result?.hits?.hits?.map((hit: any) => ({
-                        ...hit._source,
-                        _id: hit._id,
-                        explanation: hit.explanation,
-                    }))}
+                    items={
+                        state?.result?.hits?.hits?.map((hit: any) => ({
+                            ...hit._source,
+                            _id: hit._id,
+                            explanation: hit.explanation,
+                        })) ?? []
+                    }
                     sortingColumn={
                         state?.tableSort?.sortingField
                             ? {

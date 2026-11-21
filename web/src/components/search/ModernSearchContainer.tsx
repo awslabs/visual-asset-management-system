@@ -34,6 +34,11 @@ import { ResizableSplitter } from "../filemanager/components/ResizableSplitter";
 import { initializePluginRegistry } from "../../visualizerPlugin";
 import Synonyms from "../../synonyms";
 
+// What the page says above the results when the newest search failed (an API error, a 504 timeout or a
+// network failure) and no answer is on screen, so the empty results never read as "No matches".
+export const SEARCH_FAILED_NOTICE_HEADER = "Search did not finish";
+export const SEARCH_FAILED_NOTICE = "No results are shown. Try again.";
+
 const ModernSearchContainer: React.FC<SearchContainerProps> = ({
     mode = "full",
     initialFilters,
@@ -428,6 +433,11 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
         updatePreferences({ sidebarWidth: width });
     };
 
+    // The newest search failed and no answer is on screen (the first search of the page, or the first
+    // after Clear All Filters): the page says the search failed instead of showing an empty result. The
+    // error clears when the next search starts.
+    const searchFailed = !!searchState.error && !searchState.result;
+
     // Calculate pagination values
     const totalResults = getTotalResultCount(searchState.result);
     const currentPage = 1 + Math.floor(searchState.pagination.from / preferences.pageSize);
@@ -604,6 +614,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                             showPreviewThumbnails: preferences.showThumbnails,
                             showMapThumbnails: preferences.showMapThumbnails,
                             useMapView: useMapView,
+                            // The search failed with no answer on screen: the empty table says so, as
+                            // the notice above it does, instead of "No matches" with a Clear filter action.
+                            searchFailed,
                         }}
                         onShowToast={showSuccess}
                         onCreateAsset={handleCreateAsset}
@@ -737,6 +750,9 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                             showPreviewThumbnails: preferences.showThumbnails,
                             showMapThumbnails: preferences.showMapThumbnails,
                             useMapView: useMapView,
+                            // The search failed with no answer on screen: the empty table says so, as
+                            // the notice above it does, instead of "No matches" with a Clear filter action.
+                            searchFailed,
                         }}
                         onShowToast={showSuccess}
                         onCreateAsset={handleCreateAsset}
@@ -930,6 +946,21 @@ const ModernSearchContainer: React.FC<SearchContainerProps> = ({
                                 <Alert type="info" statusIconAriaLabel="Info">
                                     Showing the first {SEARCH_RESULT_WINDOW.toLocaleString()}{" "}
                                     results; refine your search
+                                </Alert>
+                            </Box>
+                        )}
+
+                        {/* A failed search with no answer on screen, said in the page as well as in the "Search
+                            failed" toast, so the empty results do not read as "no matches". */}
+                        {searchFailed && (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert
+                                    type="error"
+                                    header={SEARCH_FAILED_NOTICE_HEADER}
+                                    statusIconAriaLabel="Error"
+                                    data-testid="search-failed-notice"
+                                >
+                                    {SEARCH_FAILED_NOTICE}
                                 </Alert>
                             </Box>
                         )}
