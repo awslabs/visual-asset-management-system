@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "GR00T fine-tuning pipeline container image: what the image installs besides Isaac-GR00T itself"
 requires-python = ">=3.10,<3.11"
 dependencies = [
-    # Isaac-GR00T's own dependencies, the `base` extra included, read from its pyproject.toml at the commit
-    # [tool.uv.sources] names. That commit must equal the Dockerfile's STABLE_COMMIT (a jest test checks).
+    # Isaac-GR00T's own dependencies, the `base` extra included: read from its pyproject.toml at the commit
+    # [tool.uv.sources] pins, which must equal the Dockerfile's STABLE_COMMIT (a jest test checks).
     "gr00t[base]",
     # What the image installs besides Isaac-GR00T's own dependencies.
     "pip",
@@ -27,20 +27,11 @@ build = [
     "setuptools_scm[toml]>=6.2",
 ]
 
-# The image installs the committed, hashed requirements.lock and requirements-build.lock with `uv pip install
-# --require-hashes`. Both are exported from uv.lock (`uv export`, command in their headers). uv is a development
-# and CI tool only here; the image's own uv is the Dockerfile's pinned copy. requirements.lock leaves out `gr00t`
-# (`--no-emit-package gr00t`), which the Dockerfile installs from the pinned clone without dependencies.
 [tool.uv]
 package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
-
-# The two packages named below were uploaded less than seven days before this lock; they are the versions the
-# image already ships, so the cutoff is lifted for them. Remove each entry once its release is older than seven
-# days: cloudpickle after 2026-11-25, grpcio after 2026-11-25.
 exclude-newer-package = { cloudpickle = "2026-11-18T10:27:18Z", grpcio = "2026-11-18T04:28:01Z" }
 environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-
 [tool.uv.sources]
 gr00t = { git = "https://github.com/NVIDIA/Isaac-GR00T", rev = "db107f03d165060998df166292578f1d7fb3c79a" }
