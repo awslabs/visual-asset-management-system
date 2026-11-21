@@ -2125,7 +2125,7 @@ paths:
                         - Version parameters are not allowed for assetPreview downloads.
                         - No download URLs could be generated for the requested files (bulk request where every path was invalid).
                         - Ambiguous alias: multiple versions share this alias.
-                        - Asset, asset version, or file not found (also when no asset version carries the specified alias).
+                        - Asset version or file not found (also when no asset version carries the specified alias).
                         - Asset not distributable.
                         - Asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`.
                     content:
@@ -2133,7 +2133,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Not authorized to download this asset, whether or not it exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found (`Asset not found`); answered only to a caller allowed to download the asset."
                     content:
                         application/json:
                             schema:
@@ -2913,14 +2919,14 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to stream this asset or asset not distributable.
+                    description: Not authorized to stream this asset, whether or not it exists; or, for a caller allowed to stream it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: |
-                        Not found. Possible reasons:
+                        Not found, answered only to a caller allowed to stream the asset. Possible reasons:
                         - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
@@ -3036,14 +3042,14 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to access this asset or asset not distributable.
+                    description: Not authorized to access this asset, whether or not it exists; or, for a caller allowed to access it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: |
-                        Not found. Possible reasons:
+                        Not found, answered only to a caller allowed to access the asset. Possible reasons:
                         - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
@@ -3183,13 +3189,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to stream this asset.
+                    description: Not authorized to stream this asset, whether or not it exists; or, for a caller allowed to stream it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or file not found.
+                    description: Asset or file not found; answered only to a caller allowed to stream the asset.
                     content:
                         application/json:
                             schema:
@@ -3278,13 +3284,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to access this asset.
+                    description: Not authorized to access this asset, whether or not it exists; or, for a caller allowed to access it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or file not found.
+                    description: Asset or file not found; answered only to a caller allowed to access the asset.
                     content:
                         application/json:
                             schema:

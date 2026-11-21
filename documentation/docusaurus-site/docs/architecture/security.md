@@ -122,7 +122,7 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
 -   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
 -   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names, or `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds) when the lookup resolves to no roles
--   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes
+-   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes. With `authProvider.authorizerOptions.allowedIpRanges` set, both are 0, so API Gateway caches no authorizer decision
 -   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
@@ -588,7 +588,7 @@ Two headers are available only on the CloudFront path. `Cross-Origin-Embedder-Po
 
 ## IP Range Restrictions
 
-The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.
+The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation. API Gateway then caches no authorizer decision, so the authorizer runs on every API request.
 
 ## Presigned URL Network Restrictions
 

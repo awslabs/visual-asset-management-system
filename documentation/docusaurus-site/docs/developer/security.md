@@ -119,7 +119,7 @@ Every handler calls `request_to_claims(event)` (`handlers/auth/__init__.py`) as 
 }
 ```
 
-It then calls the customizable `customAuthClaimsCheckOverride` hook. If that hook raises, VAMS fails closed by dropping `roles` rather than passing unfiltered claims through.
+It then calls the customizable `customAuthClaimsCheckOverride` hook. If that hook raises, VAMS fails closed: the error is logged, the claims are marked `claimsCheckFailed` with `roles` emptied, and a `CasbinEnforcer` built from marked claims refuses every Tier 1 and Tier 2 check, so the request is answered `403`.
 
 Internal Lambda-to-Lambda invocations carry no authorizer context. These pass `{'lambdaCrossCall': {'userName': ...}}` and short-circuit to a claims structure with the supplied user (defaulting to the reserved `SYSTEM_USER`), empty roles, and `mfaEnabled` defaulting to `True`. Because cross-call events bypass JWT verification, IAM permissions on direct Lambda invocation are the security boundary for who can construct one.
 
@@ -208,9 +208,9 @@ Resolving MFA here rather than in each handler is what keeps identity-provider a
 
 ### Claims check — `customAuthClaimsCheckOverride`
 
-Called by `request_to_claims` after the claims structure is assembled from the authorizer context, receiving that structure and the request event, and returning the structure to use. Use it for handler-time claims restrictions — for example, dropping roles when a claim indicates a restricted session, or mapping an external attribute into `externalAttributes`.
+Called by `request_to_claims` after the claims structure is assembled from the authorizer context, receiving that structure and the request event, and returning the structure to use. Use it to refuse a request (raise; VAMS then answers `403`, as described below), to map an external attribute into `externalAttributes`, or to set `mfaEnabled` to `false`, which withholds the caller's roles that require MFA for that request.
 
-MFA state is already resolved before this hook runs, so read `claims_and_roles["mfaEnabled"]` rather than re-deriving it. VAMS fails closed around this hook: if it raises, `roles` is emptied rather than passing the unfiltered structure through, so a broken hook cannot grant more access than intended.
+MFA state is already resolved before this hook runs, so read `claims_and_roles["mfaEnabled"]` rather than re-deriving it. VAMS fails closed around this hook: if it raises, the request is denied with `403` (see [Stage 3](#stage-3-the-handler-converts-context-into-claims)), and the denial is recorded against the caller's user ID.
 
 ### Login profile — `customAuthProfileLoginWriteOverride`
 
