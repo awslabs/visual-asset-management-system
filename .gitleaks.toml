@@ -211,4 +211,10 @@ regexes = [
     # Private-key stub in test_audit_search_redaction_export_matcher.py that the redaction matcher is
     # tested against: a PEM header and a body of a few characters, which no key can be. Listed in full.
     '''\-\-\-\-\-BEGIN\ RSA\ PRIVATE\ KEY\-\-\-\-\-\\nMIIEowIBAAKCAQEA\\n\-\-\-\-\-END\ RSA\ PRIVATE\ KEY\-\-\-\-\-''',  # pragma: allowlist secret
+
+    # CURRENT_KEY and NEW_KEY of backend/tests/handlers/addon/edh/test_edhRootKeySync.py as they stand in
+    # the file's history (the tree now uses made-up words): owner-confirmed test sentinel, 2026-11-21.
+    # One entry per key, the exact 32-character value anchored on both quotes.
+    '''["]Kq3ZtR8mWv2NpXc7LbYd5HsJf9GaUe4E["]''',  # pragma: allowlist secret
+    '''["]Pz7XwQ2rTn5VbMc8LkJh3GdFs6AyUe9R["]''',  # pragma: allowlist secret
 ]
