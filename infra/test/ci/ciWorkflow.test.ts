@@ -381,6 +381,16 @@ describe("CI workflow", () => {
             expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(/^GROUP_COUNT = 3$/m);
         });
 
+        test("the pipeline test jobs install the pinned uv before the runner builds environments with it", () => {
+            const pipelines = job("pipelines-test");
+            const uv = pipelines.indexOf("astral-sh/setup-uv@");
+            const run = pipelines.indexOf("python backendPipelines/ci/pipeline_tests.py run");
+            expect(uv).toBeGreaterThanOrEqual(0);
+            expect(run).toBeGreaterThan(uv);
+            expect(pipelines).toContain('version: "0.13.8"');
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toContain('[uv, "venv"');
+        });
+
         test("each pipeline group installs the system packages the runner names, before its tests", () => {
             const pipelines = job("pipelines-test");
             const install = pipelines.indexOf(

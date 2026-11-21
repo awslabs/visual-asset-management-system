@@ -3,7 +3,7 @@
 
 """Make the container's handler importable without installing the container's own dependencies.
 
-`requirements.txt` here declares `pydantic>=2.0`, plus pyproj, open3d, pye57, laspy and structlog. The
+`pyproject.toml` here declares `pydantic>=2.0`, plus pyproj, open3d, pye57, laspy and structlog. The
 repository's backend runs on pydantic **1.10.13** in the same interpreter, so installing this container's
 requirements alongside it breaks every backend test. These tests therefore run against the shared
 interpreter and stub exactly one module: `coord_xform.pipeline`, the only place the heavy geospatial chain

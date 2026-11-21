@@ -48,7 +48,7 @@ python -m pytest tests -q                       # full run in a CadQuery venv
 python fetch_fixtures.py                        # optional: lets the FM8, FM9 and FM10 golden checks run too
 ```
 
-A CadQuery venv is a Python 3.12 virtual environment with the container's requirements: `pip install -r ../container/requirements.txt pyyaml pytest`.
+A CadQuery venv is a Python 3.12 virtual environment with the container's requirements: `pip install -r ../container/requirements.lock pyyaml pytest`.
 
 ## Offline runs (agent on this host)
 

@@ -301,14 +301,18 @@ describe("Python dependency lock coverage (control)", () => {
                 UV_EXPORT_HEADER + "\n#    uv export -o requirements.txt\nidna==3.0\n",
             // A header-less, hand-edited export and a new hand-written file beside the lock.
             "layer/requirements-dev.txt": "idna==2.0\n",
+            // A hashed export a Dockerfile installs: covered with the header, reported without it.
+            "layer/requirements.lock":
+                UV_EXPORT_HEADER +
+                "\n#    uv export -o requirements.lock\nidna==3.0 \\\n    --hash=sha256:00\n",
+            "layer/requirements-pip-compile.lock": "idna==3.0 \\\n    --hash=sha256:00\n",
             "layer/requirements-extra.txt": "jinja2==2.10\n",
-            "layer/requirements.lock": "idna==2.0 \\\n    --hash=sha256:00\n",
             "unlocked/requirements.txt": "idna==2.0\n",
         };
         expect(headerlessExports(Object.keys(tree), (f) => tree[f]).sort()).toEqual([
             "layer/requirements-dev.txt",
             "layer/requirements-extra.txt",
-            "layer/requirements.lock",
+            "layer/requirements-pip-compile.lock",
         ]);
     });
 
@@ -560,7 +564,7 @@ describeWithGit("Python dependency lock coverage", () => {
         }
     });
 
-    test("every requirements*.txt beside a uv.lock is a uv export", () => {
+    test("every requirements*.txt and requirements*.lock beside a uv.lock is a uv export", () => {
         const headerless = headerlessExports(tracked, read, rangedInputs);
         if (headerless.length > 0) {
             throw new Error(

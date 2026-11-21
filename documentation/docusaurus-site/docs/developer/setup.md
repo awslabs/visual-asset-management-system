@@ -173,15 +173,20 @@ uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requi
 uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
 
-# The 3D Basic Conversion image installs with `pip --require-hashes`, so its exports keep the hashes;
-# the optional STEP input (cascadio) is the `step` dependency group, exported to its own file
+# A container image that installs with `pip --require-hashes` keeps the hashes in its export; the
+# optional STEP input of the 3D Basic Conversion image (cascadio) is the `step` dependency group,
+# exported to its own file
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-emit-project --only-group step --no-annotate -o requirements-step.txt
+
+# Five pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
+# coordinate transform, Potree): the same hashed export, written to that name
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
 ```
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
 
-Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them (the GPU pipeline images and the published command-line packages) are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
 
 #### Published packages: VamsCLI and VamsMCP
 
@@ -199,14 +204,14 @@ The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS
 
 #### New layer, pipeline or package
 
-A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails any Python dependency file the audit does not cover: a `pyproject.toml` that declares dependencies or a top-level `requirements*.txt` with no `uv.lock` beside it, and, anywhere, a `Pipfile`, a `setup.py` or `setup.cfg` with `install_requires`, an `*.in` file, a pip-compile `requirements*.lock`, a `constraints*.txt`, or a file in a `requirements/` folder. It also fails a `requirements*.txt` beside a `uv.lock` that does not start with the uv export header. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
+A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails any Python dependency file the audit does not cover: a `pyproject.toml` that declares dependencies or a top-level `requirements*.txt` or `requirements*.lock` with no `uv.lock` beside it, and, anywhere, a `Pipfile`, a `setup.py` or `setup.cfg` with `install_requires`, an `*.in` file, a pip-compile `requirements*.lock` with no `uv.lock` beside it, a `constraints*.txt`, or a file in a `requirements/` folder. It also fails a `requirements*.txt` or `requirements*.lock` beside a `uv.lock` that does not start with the uv export header. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
 
 #### The CI dependency audit
 
 The `python-dependency-audit` job in `.github/workflows/ci.yml` runs `.github/scripts/python_dependency_audit.py`. For every directory with a tracked `uv.lock` it:
 
 1. runs `uv lock --check`, which fails when `pyproject.toml` changed without a re-lock;
-2. requires every top-level `requirements*.txt` in the directory to be a uv export (a file without the `uv export` header fails), regenerates each one from its header command, and fails when the result differs from the committed file;
+2. requires every top-level `requirements*.txt` and `requirements*.lock` in the directory to be a uv export (a file without the `uv export` header fails), regenerates each one from its header command, and fails when the result differs from the committed file;
 3. audits the exports with [pip-audit](https://pypi.org/project/pip-audit/) against the PyPI advisory database, and fails on every advisory not on the allowlist. A run that cannot reach the advisory service fails as well.
 
 Run the same checks locally from the repository root, with the pinned uv on `PATH` (for example installed with `uv self update 0.13.8`, or the standalone installer for that version):
@@ -219,7 +224,8 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
--   the files listed in `.github/python-lock-exemptions.json`, including the hash-locked `requirements*.lock` files that `uv pip compile` produces for some pipeline containers, until each moves to a uv project;
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
+-   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
 -   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
 -   packages that come with a container base image or the Lambda runtime;
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
