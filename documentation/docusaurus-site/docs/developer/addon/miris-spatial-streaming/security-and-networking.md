@@ -8,7 +8,7 @@ sidebar_label: Security and networking
 
 The status route needs Tier 1 `GET` on `/addon/miris/asset-status` and the viewer key route Tier 1 `POST` on `/addon/miris/viewer-key`. Both need Tier 2 `GET` on the asset. The Database Admin, Database User, Database Read-Only, and Global Read-Only permission templates grant both routes, and the seeded `basicReadOnly` role gains them when the add-on is enabled. A custom role, or one imported from an earlier copy of a template, needs constraints that allow both routes. See [Permissions Model](../../../concepts/permissions-model.md#add-on-routes).
 
-The viewer key route returns a key only for an asset the core download and stream routes would serve; see [Which assets can be streamed and uploaded](./how-it-works.md#which-assets-can-be-streamed-and-uploaded).
+The viewer key route returns a key only for an asset the core download and stream routes would serve. In `static` mode every key it returns is the same deployment key, so the check decides who receives it, not which Miris assets it can stream; see [Which assets can be streamed and uploaded](./how-it-works.md#which-assets-can-be-streamed-and-uploaded).
 
 ## Data sent to Miris
 

@@ -28,7 +28,7 @@ The pipeline auto-registers as a GLOBAL pipeline and workflow, both with the ID 
 -   **On demand.** Select one of the asset's USD files in the file manager, choose **Automation**, then **Execute Workflow**, and pick the **Miris Spatial Streaming Upload** workflow with its **Stream with Miris** template.
 -   **From the Miris viewer**, with its **Stream with Miris** button (see [Viewer plugin](./how-it-works.md#viewer-plugin)).
 
-The workflow takes exactly one file; a whole-asset (`/`) or folder selection is rejected. A run on an asset that is not distributable, or is quarantined while `app.compliance.quarantineBlocksDownload` is `true`, fails before anything is claimed or sent to Miris (see [Which assets can be streamed and uploaded](./how-it-works.md#which-assets-can-be-streamed-and-uploaded)). A manual run uploads that file; an automatic run uploads the asset's [root USD file](#how-the-root-is-chosen). The pipeline records the stream metadata on the file it uploads.
+The workflow takes exactly one file; a whole-asset (`/`) or folder selection is rejected. A run on an asset that is not distributable, or is quarantined while `app.compliance.quarantineBlocksDownload` is `true`, fails before anything is claimed or sent to Miris. The check runs once, when the run starts, and does not remove what is already in Miris; when an asset is quarantined, delete its Miris assets (see [Which assets can be streamed and uploaded](./how-it-works.md#which-assets-can-be-streamed-and-uploaded)). A manual run uploads that file; an automatic run uploads the asset's [root USD file](#how-the-root-is-chosen). The pipeline records the stream metadata on the file it uploads.
 
 ### Duplicate uploads and re-runs
 
