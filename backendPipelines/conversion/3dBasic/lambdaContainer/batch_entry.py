@@ -21,12 +21,16 @@ credentials):
 Exit status 0 is a finished conversion; its last stdout line is ``VAMS_CONVERSION_RESULT: <message>``
 (``Success`` or the incomplete-conversion message). Any failure prints one line naming the error, so the job's log
 carries the same text a Lambda run's error would, and exits 1; the state machine reports the failure to
-the workflow.
+the workflow. A missing task memory exits 2, and a Linux task that cannot be made non-dumpable exits 3
+before any conversion runs rather than leave the credential endpoint readable. A stop signal (SIGTERM
+or SIGINT) ends the task at once through the handler below, so the worker is signalled, its strays are
+reaped, and the task exits 143 (SIGTERM) instead of being killed after the stop timeout.
 """
 
 import ctypes
 import json
 import os
+import signal
 import sys
 
 import conversion_service
@@ -79,6 +83,26 @@ def harden_process():
         return False
 
 
+def _install_stop_handlers():
+    """Map SIGTERM and SIGINT to a clean exit, so a stopped job ends at once instead of after the stop
+    timeout. This process is the task's PID 1, where the kernel delivers no default action for either
+    signal: without a handler a ``TerminateJob`` (or ``docker stop``) waits the whole stop timeout and
+    then SIGKILLs the task (exit 137), leaving the conversion worker and its children running until
+    then. ``sys.exit(128 + signum)`` raises ``SystemExit``, so ``run_worker``'s and ``main``'s
+    ``finally`` blocks still run (the worker is signalled, its strays reaped) and the task exits 143 on
+    SIGTERM. Handlers can only be set from the main thread; off it the call is a no-op, which is
+    harmless here because the entry point runs on the main thread."""
+
+    def _stop(signum, frame):  # noqa: ARG001 - the handler signature is fixed by ``signal``
+        sys.exit(128 + signum)
+
+    try:
+        signal.signal(signal.SIGTERM, _stop)
+        signal.signal(signal.SIGINT, _stop)
+    except (ValueError, OSError, AttributeError):  # not the main thread; leave the defaults in place
+        pass
+
+
 def reap_orphans():
     """Reap every descendant reparented to this process (PID 1 of the task), so no zombie is left.
     Orphans reparent to PID 1 by the kernel; ``lambda.run_worker`` already signals strays after each
@@ -96,8 +120,17 @@ def reap_orphans():
 
 def main(environ=None, implementation=None):
     environ = os.environ if environ is None else environ
-    # Before the conversion worker exists: close this process's /proc entry to a same-user reader.
-    harden_process()
+    # Before the conversion worker exists: end at once on a stop signal, and close this process's
+    # /proc entry to a same-user reader. On Linux the non-dumpable step is a precondition of the run,
+    # not best effort -- if it cannot be done the task's credential endpoint would stay readable
+    # through /proc/1/environ, so the run is refused rather than started. Off Linux the call reports
+    # unavailable and the run proceeds (a developer machine has no such endpoint).
+    _install_stop_handlers()
+    hardened = harden_process()
+    if sys.platform.startswith("linux") and not hardened:
+        print(ERROR_PREFIX + "could not make PID 1 non-dumpable; refusing to run so the task's "
+              "credential endpoint is never left readable through /proc/1/environ.", file=sys.stderr)
+        return 3
     if not size_check.task_memory_bytes(environ):
         print(ERROR_PREFIX + f"{size_check.TASK_MEMORY_VARIABLE} is not set; this entry runs on an AWS "
               f"Batch task only.", file=sys.stderr)
