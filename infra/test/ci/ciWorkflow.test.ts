@@ -328,7 +328,7 @@ describe("CI workflow", () => {
 
         test("a requirements file beside a lock that is not a uv export fails the audit", () => {
             expect(script).toContain(
-                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.txt$")'
+                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.(txt|lock)$")'
             );
             expect(script).toContain("is not a uv export");
         });
@@ -386,13 +386,20 @@ describe("CI workflow", () => {
             );
         });
 
-        test("the VamsMCP suite installs VamsCLI before itself, then runs pytest", () => {
-            const commands = runCommands(job("vamsmcp-test"));
-            const cli = commands.indexOf("pip install -e ../VamsCLI");
-            const mcp = commands.indexOf('pip install -e ".[dev]"');
-            expect(cli).toBeGreaterThanOrEqual(0);
-            expect(mcp).toBeGreaterThan(cli);
-            expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
+        test("the VamsCLI and VamsMCP suites install from their uv.lock, then run pytest", () => {
+            const uvSetup =
+                /uses: astral-sh\/setup-uv@[0-9a-f]{40} # v\d+\.\d+\.\d+\n\s+with:\n\s+version: "\d+\.\d+\.\d+"\n\s+checksum: [0-9a-f]{64}\b/;
+            ["vamscli-test", "vamsmcp-test"].forEach((name) => {
+                const body = job(name);
+                expect(body).toMatch(uvSetup);
+                const commands = runCommands(body);
+                const sync = commands.indexOf("uv sync --frozen --extra dev --python 3.12");
+                expect(sync).toBeGreaterThanOrEqual(0);
+                // The venv goes on PATH, so the pytest steps below run in the locked environment.
+                expect(commands).toContain('echo "$PWD/.venv/bin" >> "$GITHUB_PATH"');
+                expect(commands.some((command) => /^pytest\b/.test(command))).toBe(true);
+                expect(commands.some((command) => /pip install/.test(command))).toBe(false);
+            });
         });
 
         test("the suite jobs and the 3D Basic golden job carry a timeout", () => {
