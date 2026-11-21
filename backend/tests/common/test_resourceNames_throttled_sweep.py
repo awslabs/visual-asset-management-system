@@ -350,7 +350,7 @@ class TestSweepClient:
 class TestProgressInsideTheBudget:
     """R3: a throttled page is retried from its own NextToken, and the pages already read are kept."""
 
-    PARAMETERS = dict({f"dynamoTables/t{i:02d}": f"v{i}" for i in range(25)},
+    PARAMETERS = dict({"dynamoTables/t%02d" % i: f"v{i}" for i in range(25)},
                       **{"dynamoTables/assetStorage": "asset-table"})
 
     @pytest.mark.parametrize("throttled_calls, expected_tokens", [
@@ -531,7 +531,7 @@ class TestSweepLogging:
     def test_a_completed_sweep_logs_one_line_with_counts_and_no_values(self, rn, clock, monkeypatch):
         recorder = RecordingLogger()
         monkeypatch.setattr(rn, "logger", recorder)
-        parameters = {f"dynamoTables/table{i:02d}": f"value-marker-{i:02d}" for i in range(11)}
+        parameters = {"dynamoTables/table%02d" % i: "value-marker-%02d" % i for i in range(11)}
         parameters["dynamoTables/assetStorage"] = "value-marker-asset"
         install(rn, monkeypatch, FakeSsm(parameters=parameters))
 
