@@ -1260,8 +1260,10 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     failed Lambda run writes none (its error is in the workflow).
 -   **Launcher.** `conversion/3dBasic/lambda/` holds the callback form's Lambdas, deployed only with
     `useConversion3dBasic.batchTier.enabled`: `vamsExecuteConversion3dBasicPipeline` (what the workflow calls, in
-    place of the converter), `openPipeline` (starts the state machine, registers the converter and Batch container
-    log sources), `selectJobSize` and `constructPipeline` (the tier selector and the job's `VAMS_CONVERSION_EVENT`),
+    place of the converter), `openPipeline` (starts the state machine, registers its log and the converter's, and passes the
+    pipeline execution id to the converter, which logs it beside the workflow execution id), `selectJobSize`
+    and `constructPipeline` (the tier selector, and the job's `VAMS_CONVERSION_EVENT` and the container log
+    source, registered under the Batch state the run is routed to),
     `pipelineEnd` (the only function that answers the workflow's task token), the selector module `computeTier`, and the
     vendored `manifestHelper` and `customLogging`. The builders are in
     `infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/conversion3dBasicLauncherFunctions.ts`, each with
