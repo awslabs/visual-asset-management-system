@@ -86,8 +86,9 @@ import backend.backend.handlers  # noqa: E402,F401
 def _fresh_edh_module_state(monkeypatch):
     """The module-level singletons and caches the EDH handlers lean on start empty and are emptied
     again after each test: the client's Secrets Manager handle, HTTP pool, root key and CA bundle, the SSM
-    resource-name cache and back-off state (restored after the test), the capacity-reservation module's cache of EDH's private-subnet zones, whose SSM
-    client is a stand-in holding no parameter (zones unknown) unless a test installs its own, and the workstation
+    resource-name cache and back-off state (restored after the test), the capacity-reservation
+    module's cache of EDH's private-subnet zones, whose SSM client is a stand-in holding no parameter
+    (zones unknown) unless a test installs its own, and the workstation
     service's cache of EC2's instance-type facts. Imported lazily so
     the environment above is in place first, and by the package paths every EDH test and support module
     patches."""
