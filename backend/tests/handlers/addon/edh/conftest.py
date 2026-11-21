@@ -86,7 +86,7 @@ import backend.backend.handlers  # noqa: E402,F401
 def _fresh_edh_module_state(monkeypatch):
     """The module-level singletons and caches the EDH handlers lean on start empty and are emptied
     again after each test: the client's Secrets Manager handle, HTTP pool, root key and CA bundle, the SSM
-    resource-name cache, the capacity-reservation module's cache of EDH's private-subnet zones, whose SSM
+    resource-name cache and back-off state (restored after the test), the capacity-reservation module's cache of EDH's private-subnet zones, whose SSM
     client is a stand-in holding no parameter (zones unknown) unless a test installs its own, and the workstation
     service's cache of EC2's instance-type facts. Imported lazily so
     the environment above is in place first, and by the package paths every EDH test and support module
@@ -119,14 +119,14 @@ def _fresh_edh_module_state(monkeypatch):
             workstation_service._instance_type_facts_cache.clear()
         if reservations is not None:
             reservations._subnet_zones_cache.update(zones=None, readAt=None)
-        resource_names = sys.modules.get("common.resourceNames")
-        if isinstance(getattr(resource_names, "_cache", None), dict):
-            resource_names._cache.clear()
-            resource_names._missing_keys.clear()
-            resource_names._cache_fetched_at = 0.0
-            resource_names._ssm_client = None
-            resource_names._failed_sweeps = 0
-            resource_names._sweep_retry_after = 0.0
+
+    # The SSM resource-name cache and back-off state, through monkeypatch so they are restored after the test.
+    resource_names = sys.modules.get("common.resourceNames")
+    if isinstance(getattr(resource_names, "_cache", None), dict):
+        for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                            ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                            ("_window_logged_for", None)):
+            monkeypatch.setattr(resource_names, name, value, raising=False)
 
     reset()
     yield

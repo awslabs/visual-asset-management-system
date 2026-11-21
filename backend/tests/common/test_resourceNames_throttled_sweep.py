@@ -183,12 +183,11 @@ def rn(monkeypatch):
     for key in _mirror_keys(resourceNames):
         for env_name in key.env_var_names:
             monkeypatch.delenv(env_name, raising=False)
-    resourceNames._cache = {}
-    resourceNames._cache_fetched_at = 0.0
-    resourceNames._ssm_client = None
-    resourceNames._missing_keys = {}
-    resourceNames._failed_sweeps = 0
-    resourceNames._sweep_retry_after = 0.0
+    # Through monkeypatch, so the module state these tests set (here or in a test body) is restored.
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                        ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                        ("_window_logged_for", None)):
+        monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 
 

@@ -58,11 +58,11 @@ def throttled(monkeypatch):
         if isinstance(key, resourceNames.ResourceParamKey):
             for env_name in key.env_var_names:
                 monkeypatch.delenv(env_name, raising=False)
-    resourceNames._cache = {}
-    resourceNames._cache_fetched_at = 0.0
-    resourceNames._missing_keys = {}
-    resourceNames._failed_sweeps = 0
-    resourceNames._sweep_retry_after = 0.0
+    # Through monkeypatch, so the failed sweep this fixture leaves behind is gone after the test.
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                        ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                        ("_window_logged_for", None)):
+        monkeypatch.setattr(resourceNames, name, value, raising=False)
     clock = _Clock()
     monkeypatch.setattr(resourceNames, "_monotonic", clock.monotonic, raising=False)
     monkeypatch.setattr(resourceNames, "_sleep", clock.sleep, raising=False)
