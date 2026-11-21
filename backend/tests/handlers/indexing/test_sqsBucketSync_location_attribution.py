@@ -594,3 +594,28 @@ class TestOneAutoCreateRefusedDatapointPerRecord:
         assert second["batchItemFailures"] == []
         lines = [line for line in capsys.readouterr().out.splitlines() if '"AutoCreateRefused"' in line]
         assert len(lines) == 1
+
+    @pytest.mark.parametrize("refusal", ["createAsset", "readyIndex"])
+    def test_each_refusal_names_its_deployment(self, refusal, capsys, monkeypatch, _restore_module_attrs):
+        """Two deployments in one account and Region keep apart: each refusal is one datapoint whose
+        Deployment dimension is this deployment's name (D4)."""
+        monkeypatch.setenv("VAMS_RESOURCE_PARAM_PREFIX", "/vams-demo21/resourceNames")
+        m = _load()
+        if refusal == "createAsset":
+            _wire(m, resolve=[NOT_FOUND, NOT_FOUND], ready=True)
+            m.create_new_asset = MagicMock(
+                side_effect=m.AssetLocationInUseError("in use", owner="db2:o1 at newfolder/"))
+        else:
+            _wire(m, resolve=[NOT_FOUND, NOT_FOUND], ready=True,
+                  conflicts=[_entry("db2", "o1", "newfolder/sub/")])
+        m.resolve_owner = MagicMock(return_value=NOT_FOUND)
+        capsys.readouterr()
+        for i in range(3):
+            m.process_s3_record(_record(f"newfolder/f{i}.glb"), receive_count=2)
+        metrics = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+                   if line.startswith('{"_aws"') and '"AutoCreateRefused"' in line]
+        assert len(metrics) == 3
+        for metric in metrics:
+            assert metric["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [["Deployment", "Reason"]]
+            assert (metric["Deployment"], metric["Reason"], metric["AutoCreateRefused"]) == \
+                ("vams-demo21", "locationInUse", 1)

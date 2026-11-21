@@ -25,7 +25,7 @@ Rules:
 - ``AccessDenied`` skips the version (``accessDenied``) with a warning once per bucket per hour.
 
 Every skipped or partial write is counted in the ``VamsTagsSkipped`` metric (namespace
-``VAMS/BucketSync``, dimension ``Reason``) as an embedded-metric log line.
+``VAMS/BucketSync``, dimensions ``Deployment`` and ``Reason``) as an embedded-metric log line.
 
 S3 has no conditional tagging write: a customer tag change made between the read and the write is
 lost. The window is the milliseconds after the version's first event.
@@ -33,6 +33,7 @@ lost. The window is the milliseconds after the version's first event.
 
 import base64
 import json
+import os
 import re
 import sys
 import threading
@@ -69,6 +70,10 @@ TAG_SYNCED_OBJECTS_FIELD = "tagSyncedObjects"
 METRIC_NAMESPACE = "VAMS/BucketSync"
 METRIC_SKIPPED = "VamsTagsSkipped"
 METRIC_DIMENSION = "Reason"
+# The deployment a datapoint comes from, so two deployments in one account and Region keep their own series.
+METRIC_DEPLOYMENT_DIMENSION = "Deployment"
+METRIC_DIMENSIONS = (METRIC_DEPLOYMENT_DIMENSION, METRIC_DIMENSION)
+UNKNOWN_DEPLOYMENT = "unknown"
 
 ACCESS_DENIED_WARNING_INTERVAL_SECONDS = 3600
 _ACCESS_DENIED_CODES = {"AccessDenied", "AccessDeniedException", "403"}
@@ -159,19 +164,30 @@ def reset_access_denied_warnings() -> None:
         _access_denied_warned_at.clear()
 
 
+def metric_deployment(resource_param_prefix: Optional[str] = None) -> str:
+    """The deployment a bucket-sync datapoint belongs to: `{configuration name}-{app.baseStackName}`, the first
+    segment of the deployment's resource-name prefix (`VAMS_RESOURCE_PARAM_PREFIX`,
+    `/{name}-{baseStackName}/resourceNames`), which every VAMS function carries and which no other deployment
+    in the same account and Region can share. `unknown` without a prefix (a local run)."""
+    if resource_param_prefix is None:
+        resource_param_prefix = os.environ.get("VAMS_RESOURCE_PARAM_PREFIX", "")
+    return (resource_param_prefix or "").strip("/").split("/")[0] or UNKNOWN_DEPLOYMENT
+
+
 def emit_bucket_sync_count(metric_name: str, reason: str) -> None:
     """One embedded-metric log line adding 1 to a bucket-sync count (namespace `VAMS/BucketSync`,
-    dimension `Reason`)."""
+    dimensions `Deployment` and `Reason`)."""
     try:
         sys.stdout.write(json.dumps({
             "_aws": {
                 "Timestamp": int(time.time() * 1000),
                 "CloudWatchMetrics": [{
                     "Namespace": METRIC_NAMESPACE,
-                    "Dimensions": [[METRIC_DIMENSION]],
+                    "Dimensions": [list(METRIC_DIMENSIONS)],
                     "Metrics": [{"Name": metric_name, "Unit": "Count"}],
                 }],
             },
+            METRIC_DEPLOYMENT_DIMENSION: metric_deployment(),
             METRIC_DIMENSION: reason,
             metric_name: 1,
         }) + "\n")

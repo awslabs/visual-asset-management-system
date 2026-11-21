@@ -9,6 +9,7 @@ import io
 import json
 import re
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -170,3 +171,58 @@ class TestDeniedTagging:
         throttled = ClientError({"Error": {"Code": "SlowDown", "Message": "slow"}}, "GetObjectTagging")
         assert tags.tag_synced_version(_client(get_error=throttled), BUCKET, KEY, "v7", "db1", "a1") == \
             tags.TagOutcome("skipped", "error")
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.unit
+class TestTheMetricIsPerDeployment:
+    """Two deployments in one account and Region write to the namespace `VAMS/BucketSync`; each datapoint
+    names its deployment, so their series stay apart (D4: one deployment read 2,210 for its 1,106 refusals)."""
+
+    def _skip_line(self, monkeypatch, prefix):
+        if prefix is None:
+            monkeypatch.delenv("VAMS_RESOURCE_PARAM_PREFIX", raising=False)
+        else:
+            monkeypatch.setenv("VAMS_RESOURCE_PARAM_PREFIX", prefix)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            tags.tag_synced_version(_client(existing=_customer(9)), BUCKET, KEY, "v7", "db1", "a1")
+        [metric] = _metric_lines(out.getvalue())
+        return metric
+
+    def test_the_line_declares_deployment_and_reason_and_carries_both(self, monkeypatch):
+        metric = self._skip_line(monkeypatch, "/vams-demo21/resourceNames")
+        [declaration] = metric["_aws"]["CloudWatchMetrics"]
+        assert declaration["Dimensions"] == [["Deployment", "Reason"]]
+        assert (metric["Deployment"], metric["Reason"], metric["VamsTagsSkipped"]) == ("vams-demo21", "tagLimit", 1)
+        # Every declared dimension has its value on the line, or CloudWatch drops the datapoint
+        assert all(isinstance(metric[d], str) and metric[d] for d in declaration["Dimensions"][0])
+
+    def test_two_deployments_write_two_series(self, monkeypatch):
+        first = self._skip_line(monkeypatch, "/vams-demo21/resourceNames")
+        second = self._skip_line(monkeypatch, "/vams-demo22/resourceNames")
+        assert (first["Deployment"], second["Deployment"]) == ("vams-demo21", "vams-demo22")
+
+    def test_without_a_prefix_the_dimension_still_has_a_value(self, monkeypatch):
+        assert self._skip_line(monkeypatch, None)["Deployment"] == "unknown"
+
+    @pytest.mark.parametrize("prefix,deployment", [
+        ("/vams-demo21/resourceNames", "vams-demo21"),
+        ("/vams-demo21/resourceNames/", "vams-demo21"),
+        ("vams-demo21/resourceNames", "vams-demo21"),
+        ("", "unknown"),
+        ("/", "unknown"),
+    ])
+    def test_the_deployment_is_the_prefixs_first_segment(self, prefix, deployment):
+        assert tags.metric_deployment(prefix) == deployment
+
+    def test_the_prefix_starts_with_the_deployments_name_and_base_stack_name(self):
+        """The dimension is the first segment of the prefix infra builds: `/{name}-{baseStackName}/resourceNames`,
+        unique per deployment in an account and Region. Every VAMS function carries it."""
+        config = (REPO_ROOT / "infra" / "config" / "config.ts").read_text(encoding="utf-8")
+        assert re.search(r'config\.resourceNamesSSMParamPrefix\s*=\s*"/"\s*\+\s*\[config\.name \+ "-" \+ '
+                         r'config\.app\.baseStackName, "resourceNames"\]\.join\("/"\)', config)
+        security = (REPO_ROOT / "infra" / "lib" / "helper" / "security.ts").read_text(encoding="utf-8")
+        assert 'addEnvironment("VAMS_RESOURCE_PARAM_PREFIX", config.resourceNamesSSMParamPrefix)' in security

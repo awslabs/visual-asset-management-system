@@ -138,3 +138,21 @@ describe("bucket-sync folder import permissions", () => {
         }
     });
 });
+
+// #1207 D4: the bucket-sync metrics (namespace VAMS/BucketSync) carry a Deployment dimension, the first
+// segment of the function's resource-name prefix (vamsObjectTags.metric_deployment), so every
+// bucket-sync function must carry the deployment's one prefix.
+describe("bucket-sync metric deployment dimension", () => {
+    test("every bucket-sync function carries the deployment's resource-name prefix", () => {
+        const s = synth();
+        const fns = [...functionsOf(s, CREATED_HANDLER), ...functionsOf(s, DELETED_HANDLER)];
+        expect(fns.length).toBe(4);
+        const prefixes = new Set(
+            fns.map((fn) => fn.properties.Environment?.Variables?.VAMS_RESOURCE_PARAM_PREFIX)
+        );
+        expect(prefixes.size).toBe(1);
+        const [prefix] = [...prefixes];
+        expect(typeof prefix).toBe("string");
+        expect(prefix).toMatch(/^\/[^/]+\/resourceNames$/);
+    });
+});
