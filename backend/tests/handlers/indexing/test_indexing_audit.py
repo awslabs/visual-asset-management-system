@@ -88,7 +88,7 @@ def _wire_existing_asset(monkeypatch, m, object_metadata):
     monkeypatch.setattr(m, "RESERVED_S3_PREFIX_FOLDERS", set())
     monkeypatch.setattr(m, "get_bucket_id", MagicMock(return_value="bucket-1"))
     monkeypatch.setattr(m, "lookup_asset", MagicMock(return_value={"databaseId": "db-1", "assetId": "x-asset-1"}))
-    monkeypatch.setattr(m, "update_s3_metadata", MagicMock(return_value=True))
+    monkeypatch.setattr(m, "tag_version", MagicMock(return_value=None))
     monkeypatch.setattr(m, "update_asset_type", MagicMock(return_value=True))
     monkeypatch.setattr(m, "write_file_version_history", MagicMock())
     monkeypatch.setattr(m, "is_vams_metadata_stamp_echo", MagicMock(return_value=False))

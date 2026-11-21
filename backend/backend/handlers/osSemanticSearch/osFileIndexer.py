@@ -24,11 +24,11 @@ from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.indexerEvents import s3_records_from_indexer_message
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
     SEARCHABLE_VAMS_METADATA_KEYS,
     is_system_metadata_key,
+    normalize_history_file_path,
 )
+from common.timestamps import utc_now
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -38,8 +38,10 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.indexing import FileDocumentModel, FileIndexRequest, IndexOperationResponse, MAX_S3_KEY_LENGTH
 from common.indexing.geoLocation import build_geo_location
 from common.indexing.documentIds import MAX_OPENSEARCH_DOCUMENT_ID_BYTES, build_file_document_id
-from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, region_routing_s3_client, bucket_region_fields
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN, join_asset_location_key
+from common.s3 import S3_VERSIONS_PAGE_SIZE, is_object_version_archived, list_all_object_versions, list_key_versions_to_newest_version, region_routing_s3_client, bucket_region_fields
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, PREVIEW_FILE_PATTERN
+from common.assetLocations import contains, normalize_base_prefix, object_key_for
+from common.fileAttribution import AMBIGUOUS, FileAttribution, attribute_object, binding_of, stored_location
 from common.dynamoDbMetadataKeys import is_excluded_metadata_record, is_internal_metadata_field
 
 # Configure AWS clients with retry configuration
@@ -72,6 +74,7 @@ try:
     asset_file_metadata_table_name = get_table_name(ResourceKeys.ASSET_FILE_METADATA_STORAGE_TABLE)
     file_attribute_table_name = get_table_name(ResourceKeys.FILE_ATTRIBUTE_STORAGE_TABLE)
     s3_asset_buckets_table_name = get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    asset_file_version_history_table_name = get_table_name(ResourceKeys.ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE)
     opensearch_file_index_ssm_param = os.environ["OPENSEARCH_FILE_INDEX_SSM_PARAM"]
     opensearch_endpoint_ssm_param = os.environ["OPENSEARCH_ENDPOINT_SSM_PARAM"]
     opensearch_type = os.environ.get("OPENSEARCH_TYPE", "serverless")
@@ -99,6 +102,7 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 asset_file_metadata_table = dynamodb.Table(asset_file_metadata_table_name)
 file_attribute_table = dynamodb.Table(file_attribute_table_name)
 s3_asset_buckets_table = dynamodb.Table(s3_asset_buckets_table_name)
+asset_file_version_history_table = dynamodb.Table(asset_file_version_history_table_name)
 
 #######################
 # OpenSearch Client Management
@@ -322,19 +326,14 @@ def query_all_pages(table, **query_kwargs) -> List[Dict[str, Any]]:
 
 
 def normalize_bucket_prefix(prefix: Optional[str]) -> Optional[str]:
-    """Normalize a bucket prefix to the form stored on a file document.
-
-    ``get_bucket_details`` stores ``baseAssetsPrefix`` with a trailing slash and no
-    leading slash, so a bucket rooted at ``/`` is indexed as an empty string.
-    Returns None when the prefix is unknown.
+    """Normalize a bucket prefix to the form stored on a file document
+    (``assetLocations.normalize_base_prefix``: a trailing slash and no leading slash, so a
+    bucket rooted at ``/`` is indexed as an empty string). Returns None when the prefix is
+    unknown.
     """
     if prefix is None:
         return None
-    if not prefix.endswith('/'):
-        prefix += '/'
-    if prefix.startswith('/'):
-        prefix = prefix[1:]
-    return prefix
+    return normalize_base_prefix(prefix)
 
 
 # Registered prefixes per bucket name, cached for the container's lifetime with a TTL.
@@ -437,20 +436,12 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             
         bucket = items[0]
         bucket_name = bucket.get('bucketName')
-        base_assets_prefix = bucket.get('baseAssetsPrefix', '/')
-        
+        base_assets_prefix = normalize_base_prefix(bucket.get('baseAssetsPrefix', '/'))
+
         if not bucket_name:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
-        
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
-        
+
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
@@ -504,6 +495,44 @@ def get_asset_details_any_state(database_id: str, asset_id: str) -> Tuple[Option
         logger.info(f"Asset {asset_id} found in archived partition {database_id}#deleted")
         return archived_details, True
     return None, False
+
+def _asset_row_for_attribution(database_id: str, asset_id: str,
+                               include_archived: bool) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """(row, archived) for `common.fileAttribution`, from the live partition or the archived one."""
+    details, archived = get_asset_details_any_state(database_id, asset_id)
+    if archived and not include_archived:
+        return None, False
+    return details, archived
+
+
+def attribute_file(event_record: Dict[str, Any], bucket_name: str, s3_key: str, include_archived: bool,
+                   read_stamp: Optional[Callable[[], Optional[Dict[str, Any]]]] = None) -> FileAttribution:
+    """The asset an S3 key belongs to: the record's binding, the location index, then (before the
+    index is ready) the stamp and the first folder, each checked against the bucket and the asset's
+    stored location (`common.fileAttribution`)."""
+    return attribute_object(
+        bucket_name, s3_key,
+        asset_table=asset_storage_table,
+        buckets_table=s3_asset_buckets_table,
+        binding=binding_of(event_record),
+        include_archived=include_archived,
+        read_stamp=read_stamp,
+        asset_table_name=asset_storage_table_name,
+        get_row=_asset_row_for_attribution,
+        get_registration=get_bucket_details,
+    )
+
+
+def _not_attributed_response(attribution: FileAttribution, s3_key: str, what: str) -> IndexOperationResponse:
+    """The skip answer for a key no asset holds (or several claim)."""
+    if attribution.status == AMBIGUOUS:
+        message = f"{what} is in a location several assets claim, skipping"
+    else:
+        message = f"{what} is not in any asset's location, skipping"
+    logger.warning(f"{message}: {s3_key}")
+    return IndexOperationResponse(success=True, message=message, indexName=opensearch_file_index,
+                                  operation="skip")
+
 
 def asset_record_belongs_to_event_bucket(
     item: Dict[str, Any],
@@ -1230,6 +1259,34 @@ def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
 # Business Logic Functions
 #######################
 
+def record_indexed_version(database_id: str, asset_id: str, file_path: str, version_id: Optional[str]) -> bool:
+    """Set `indexedAt` on the sync-ledger row of the version just indexed (the file version history
+    row bucket sync writes per version). One conditional UpdateItem: a version with no row (an object
+    bucket sync has not recorded) is logged and left alone; a failure never fails the indexing. An
+    object of a bucket without versioning has the version id 'null', as on its ledger row."""
+    version_id = version_id or 'null'
+    file_path = normalize_history_file_path(file_path)
+    try:
+        asset_file_version_history_table.update_item(
+            Key={'databaseId:assetId:filePath': f"{database_id}:{asset_id}:{file_path}", 'versionId': version_id},
+            UpdateExpression='SET indexedAt = :t',
+            ConditionExpression='attribute_exists(versionId)',
+            ExpressionAttributeValues={':t': utc_now().isoformat() + 'Z'},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            logger.info(f"No sync-ledger row for {database_id}:{asset_id}{file_path} version {version_id}; "
+                        "indexedAt not recorded")
+        else:
+            logger.warning(f"Could not record indexedAt for {database_id}:{asset_id}{file_path} version "
+                           f"{version_id}: {exception_log_summary(e)}")
+    except Exception as e:
+        logger.warning(f"Could not record indexedAt for {database_id}:{asset_id}{file_path} version "
+                       f"{version_id}: {exception_log_summary(e)}")
+    return False
+
+
 def validate_s3_key(name: str, value: str) -> Tuple[bool, str]:
     """Bound an S3 object key at the limit S3 itself enforces.
 
@@ -1358,6 +1415,9 @@ def process_file_index_request(request: FileIndexRequest, recheck: bool = True) 
                                                             recheck=recheck)
                 if corrected is not None:
                     return corrected
+                if not is_archived:
+                    record_indexed_version(request.databaseId, request.assetId, request.filePath,
+                                           (s3_file_info or {}).get('versionId'))
 
             return IndexOperationResponse(
                 success=success,
@@ -1488,10 +1548,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
             
             # Check versioning to determine if archived or permanently deleted
             try:
-                # A key's own entries lead its prefix listing, newest first, so one page holds its current state
-                versions_response = list_all_object_versions(
-                    bucket_name, s3_key, client=s3_client, max_keys=S3_VERSIONS_PAGE_SIZE
-                )
+                versions_response = list_key_versions_to_newest_version(bucket_name, s3_key, client=s3_client)
                 
                 delete_markers = versions_response.get('DeleteMarkers', [])
                 versions = versions_response.get('Versions', [])
@@ -1526,27 +1583,19 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                 Key=s3_key,
                                 VersionId=latest_version['VersionId']
                             )
-                            s3_metadata = version_response.get('Metadata', {})
-                            asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
-                            database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
-                            
-                            if asset_id and database_id:
-                                # File is archived - need to index with archived flag
-                                # Get asset details to calculate relative path. The
-                                # asset itself may be archived (asset-archive flow
-                                # creates these delete markers), so fall back to the
-                                # archived partition — the file doc must still be
-                                # flipped to archived rather than skipped.
-                                asset_details, _ = get_asset_details_any_state(database_id, asset_id)
-                                if not asset_details:
-                                    logger.warning(f"Asset not found for archived file: {database_id}/{asset_id}")
-                                    return IndexOperationResponse(
-                                        success=True,
-                                        message="Asset not found for archived file, skipping",
-                                        indexName=opensearch_file_index,
-                                        operation="skip"
-                                    )
-                                
+                            # The asset may itself be archived (the asset-archive flow creates
+                            # these delete markers), so archived assets count: the file document
+                            # must still be flipped to archived rather than skipped.
+                            attribution = attribute_file(
+                                event_record, bucket_name, s3_key, include_archived=True,
+                                read_stamp=lambda: version_response.get('Metadata', {}))
+
+                            if attribution.attributed:
+                                database_id = attribution.database_id
+                                asset_id = attribution.asset_id
+                                asset_details = attribution.asset_row
+                                relative_path = attribution.relative_path
+
                                 # Get bucket details
                                 bucket_details = get_bucket_details(asset_details.get('bucketId'))
                                 if not bucket_details:
@@ -1557,20 +1606,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                         indexName=opensearch_file_index,
                                         operation="skip"
                                     )
-                                
-                                # Calculate relative path
-                                asset_location = asset_details.get('assetLocation', {})
-                                asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-                                
-                                if s3_key.startswith(asset_base_key):
-                                    relative_path = s3_key[len(asset_base_key):]
-                                else:
-                                    relative_path = s3_key
-                                
-                                # Ensure relative path starts with a slash
-                                if not relative_path.startswith('/'):
-                                    relative_path = '/' + relative_path
-                                
+
                                 # Get file metadata and attributes (returned as separate dicts)
                                 file_metadata, file_attributes = get_file_metadata(database_id, asset_id, relative_path)
                                 
@@ -1613,13 +1649,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                                     operation="index"
                                 )
                             else:
-                                logger.warning(f"Missing metadata in archived version for {s3_key}")
-                                return IndexOperationResponse(
-                                    success=True,
-                                    message="Missing metadata in archived version, skipping",
-                                    indexName=opensearch_file_index,
-                                    operation="skip"
-                                )
+                                return _not_attributed_response(attribution, s3_key, "Archived file")
                         except Exception as e:
                             logger.warning(f"Error getting metadata from version: {e}")
                             return IndexOperationResponse(
@@ -1658,25 +1688,18 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                             indexName=opensearch_file_index,
                             operation="skip"
                         )
-                    s3_metadata = live_head.get('Metadata', {})
-                    asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
-                    database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
-                    if not asset_id or not database_id:
-                        logger.warning(f"Missing asset/database ID in S3 metadata for restored file {s3_key}")
-                        return IndexOperationResponse(
-                            success=True,
-                            message="Missing metadata on restored file, skipping",
-                            indexName=opensearch_file_index,
-                            operation="skip"
-                        )
                     # A permanent-delete burst emits one ObjectRemoved per version;
                     # an early event can observe the key still live mid-burst. If
                     # the asset record is gone from both partitions this is a
                     # delete in progress, not an unarchive — do not re-index.
-                    restored_asset, _ = get_asset_details_any_state(database_id, asset_id)
-                    if not restored_asset:
+                    attribution = attribute_file(
+                        event_record, bucket_name, s3_key, include_archived=True,
+                        read_stamp=lambda: live_head.get('Metadata', {}))
+                    if attribution.status == AMBIGUOUS:
+                        return _not_attributed_response(attribution, s3_key, "Restored file")
+                    if not attribution.attributed:
                         logger.info(
-                            f"Object {s3_key} live but asset {asset_id} record gone; "
+                            f"Object {s3_key} live but no asset record holds it; "
                             "skipping re-index (delete in progress)"
                         )
                         return IndexOperationResponse(
@@ -1697,6 +1720,24 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                     # File is permanently deleted (no versions remain)
                     logger.info(f"File is permanently deleted: {s3_key}")
 
+                    # The asset whose stored location holds the key, live or archived (binding,
+                    # location index, or the first folder before the index is ready). Its document
+                    # is removed by exact id, custom-root files included.
+                    attribution = attribute_file(event_record, bucket_name, s3_key, include_archived=True)
+                    if attribution.attributed:
+                        success = delete_file_document(
+                            attribution.database_id, attribution.asset_id, attribution.relative_path)
+                        return IndexOperationResponse(
+                            success=success,
+                            message="Permanently deleted file removed from index" if success else "Failed to delete file document",
+                            documentId=build_file_document_id(
+                                attribution.database_id, attribution.asset_id, attribution.relative_path),
+                            indexName=opensearch_file_index,
+                            operation="delete"
+                        )
+                    if attribution.status == AMBIGUOUS:
+                        return _not_attributed_response(attribution, s3_key, "Permanently deleted file")
+
                     # Object keys are {baseAssetsPrefix}{assetId}/{filePath}, the same
                     # asset_base_key shape the indexing path builds, so the registered
                     # prefix comes off before the first remaining component is the asset
@@ -1715,6 +1756,26 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                             event_bucket_name,
                             event_bucket_prefix if event_bucket_prefix is not None else '/'
                         )
+
+                        first_folder_row = None
+                        if lookup_success and database_id:
+                            first_folder_row, _ = get_asset_details_any_state(database_id, potential_asset_id)
+                        if first_folder_row and not contains(
+                                stored_location(first_folder_row, {'baseAssetsPrefix': event_bucket_prefix or ''}),
+                                s3_key):
+                            # The first folder names an asset of this bucket whose stored location
+                            # does not hold the key, so the key was never one of its files: deleting
+                            # the document at that path would remove the asset's own file there.
+                            logger.warning(
+                                f"Permanently deleted {s3_key} is not in the location of asset "
+                                f"{potential_asset_id} in database {database_id}; its documents are kept"
+                            )
+                            return IndexOperationResponse(
+                                success=True,
+                                message="Permanently deleted file is not in its first folder's asset location, skipping",
+                                indexName=opensearch_file_index,
+                                operation="skip"
+                            )
 
                         if lookup_success and database_id:
                             logger.info(f"Successfully looked up database_id {database_id} for permanently deleted file")
@@ -1775,20 +1836,14 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
             # For non-delete events, extract metadata from current object
             try:
                 s3_response = s3_client.head_object(Bucket=bucket_name, Key=s3_key)
-                s3_metadata = s3_response.get('Metadata', {})
-                
-                asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
-                database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
+                # The asset may be archived (record moved to {databaseId}#deleted) while its
+                # files still receive events; the document carries its archived state.
+                attribution = attribute_file(
+                    event_record, bucket_name, s3_key, include_archived=True,
+                    read_stamp=lambda: s3_response.get('Metadata', {}))
+                if not attribution.attributed:
+                    return _not_attributed_response(attribution, s3_key, "File")
 
-                if not asset_id or not database_id:
-                    logger.warning(f"Missing asset/database ID in S3 metadata for {s3_key}")
-                    return IndexOperationResponse(
-                        success=True,
-                        message="Missing metadata, skipping",
-                        indexName=opensearch_file_index,
-                        operation="skip"
-                    )
-                
                 operation = "index"
                 is_archived = False
                     
@@ -1812,26 +1867,16 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                     operation="error"
                 )
         
-        # Calculate relative file path
-        # This requires getting the asset details to determine the base prefix.
-        # The asset may be archived (record moved to {databaseId}#deleted) while
-        # its files still receive events — resolve from either partition and
-        # carry the asset's archived state onto the file document.
-        asset_details, asset_is_archived = get_asset_details_any_state(database_id, asset_id)
-        if not asset_details:
-            logger.warning(f"Asset not found for S3 file: {database_id}/{asset_id}")
-            return IndexOperationResponse(
-                success=True,
-                message="Asset not found, skipping",
-                indexName=opensearch_file_index,
-                operation="skip"
-            )
-        if asset_is_archived and not force_live:
+        # The attribution carries the asset row from either partition and the path of the key
+        # relative to the asset's stored location; the asset's archived state goes onto the
+        # file document unless the live object overrides it.
+        database_id = attribution.database_id
+        asset_id = attribution.asset_id
+        relative_path = attribution.relative_path
+        if attribution.archived and not force_live:
             is_archived = True
-        
-        # Get bucket details to determine prefix
-        bucket_details = get_bucket_details(asset_details.get('bucketId'))
-        if not bucket_details:
+
+        if not get_bucket_details((attribution.asset_row or {}).get('bucketId') or attribution.bucket_id):
             logger.warning(f"Bucket details not found for asset: {asset_id}")
             return IndexOperationResponse(
                 success=True,
@@ -1839,20 +1884,7 @@ def handle_s3_notification(event_record: Dict[str, Any]) -> IndexOperationRespon
                 indexName=opensearch_file_index,
                 operation="skip"
             )
-        
-        # Calculate relative path
-        asset_location = asset_details.get('assetLocation', {})
-        asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        
-        if s3_key.startswith(asset_base_key):
-            relative_path = s3_key[len(asset_base_key):]
-        else:
-            relative_path = s3_key
 
-        # Ensure relative path starts with a slash
-        if not relative_path.startswith('/'):
-            relative_path = '/' + relative_path
-        
         # Create file index request
         request = FileIndexRequest(
             databaseId=database_id,
@@ -1979,10 +2011,17 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                     operation="skip"
                 )
             
-            # Calculate S3 key
-            asset_location = asset_details.get('assetLocation', {})
-            asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-            s3_key = join_asset_location_key(asset_base_key, file_path)
+            # Calculate S3 key (the single-file rule: the object, an own preview or a companion entry)
+            s3_key = object_key_for(stored_location({**asset_details, 'assetId': asset_id}, bucket_details),
+                                    file_path)
+            if not s3_key:
+                logger.warning(f"File path {file_path} names no single file of asset {asset_id}; skipping")
+                return IndexOperationResponse(
+                    success=True,
+                    message="File path names no file of the asset, skipping",
+                    indexName=opensearch_file_index,
+                    operation="skip"
+                )
             
             # Ensure relative path starts with a slash
             if not file_path.startswith('/'):
@@ -2095,10 +2134,16 @@ def handle_metadata_stream(event_record: Dict[str, Any]) -> IndexOperationRespon
                 operation="skip"
             )
         
-        # Calculate S3 key
-        asset_location = asset_details.get('assetLocation', {})
-        asset_base_key = asset_location.get('Key', f"{bucket_details['baseAssetsPrefix']}{asset_id}/")
-        s3_key = join_asset_location_key(asset_base_key, file_path)
+        # Calculate S3 key (the single-file rule: the object, an own preview or a companion entry)
+        s3_key = object_key_for(stored_location({**asset_details, 'assetId': asset_id}, bucket_details), file_path)
+        if not s3_key:
+            logger.warning(f"File path {file_path} names no single file of asset {asset_id}; skipping")
+            return IndexOperationResponse(
+                success=True,
+                message="File path names no file of the asset, skipping",
+                indexName=opensearch_file_index,
+                operation="skip"
+            )
         
         # Ensure relative path starts with a slash
         if not file_path.startswith('/'):

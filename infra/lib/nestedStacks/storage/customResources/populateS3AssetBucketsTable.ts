@@ -234,6 +234,13 @@ def lambda_handler(event, context):
             # (a missing attribute means false) and toggling the flag off removes it on the next deploy.
             if is_accelerated:
                 item['isAccelerated'] = True
+            # Whether bucket sync tags the file versions it syncs from this registration (VAMS:databaseId,
+            # VAMS:assetId). Always written; a row from an earlier release without it means true.
+            item['tagSyncedObjects'] = bucket.get('tagSyncedObjects') is not False
+            # The registration's bucket-sync created-events queue, to which createAsset sends an import
+            # request for the files already at a bucketExistingKey.
+            if bucket.get('syncCreatedQueueUrl'):
+                item['syncCreatedQueueUrl'] = bucket['syncCreatedQueueUrl']
             table.put_item(Item=item)
             logger.info(f"Successfully added/updated record for bucket: {bucket_name} (region: {bucket_region}, versioning: {is_versioning_enabled}, default: {is_default})")
         
@@ -296,16 +303,23 @@ def lambda_handler(event, context):
     // name/ARN matching. bucketRegion is the record's Region, or the deployment Region for a bucket
     // registered without one, so every row carries a Region the handlers can sign for.
     const deploymentRegion = cdk.Stack.of(scope).region;
-    const bucketData = bucketRecords.map((record) => ({
-        bucketName: record.bucket.bucketName,
-        prefix: record.prefix || "/",
-        isDefault: !!record.isDefault,
-        bucketRegion: record.region || deploymentRegion,
-        bucketAccountId: record.accountId,
-        // Present only when true, so the custom resource properties of a deployment without
-        // acceleration are unchanged.
-        ...(record.isAccelerated ? { isAccelerated: true } : {}),
-    }));
+    // Built when the template is synthesized, after the storage stack has created each record's
+    // bucket-sync queues (their URLs are set on the records then).
+    const bucketData = () =>
+        bucketRecords.map((record) => ({
+            bucketName: record.bucket.bucketName,
+            prefix: record.prefix || "/",
+            isDefault: !!record.isDefault,
+            bucketRegion: record.region || deploymentRegion,
+            bucketAccountId: record.accountId,
+            // Present only when true, so the custom resource properties of a deployment without
+            // acceleration are unchanged.
+            ...(record.isAccelerated ? { isAccelerated: true } : {}),
+            tagSyncedObjects: record.tagSyncedObjects,
+            ...(record.syncCreatedQueueUrl
+                ? { syncCreatedQueueUrl: record.syncCreatedQueueUrl }
+                : {}),
+        }));
 
     // Create the custom resource provider
     const populateS3AssetBucketsTableProvider = new cr.Provider(scope, `${id}Provider`, {
@@ -316,7 +330,7 @@ def lambda_handler(event, context):
     const customResource = new cdk.CustomResource(scope, id, {
         serviceToken: populateS3AssetBucketsTableProvider.serviceToken,
         properties: {
-            buckets: JSON.stringify(bucketData),
+            buckets: cdk.Lazy.string({ produce: () => JSON.stringify(bucketData()) }),
             tableName: table.tableName,
             // Add a timestamp to force the custom resource to run on every deployment
             timestamp: new Date().toISOString(),

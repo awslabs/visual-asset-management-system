@@ -41,8 +41,10 @@ from aws_lambda_powertools.utilities.parser import parse, ValidationError
 
 from common.validators import validate
 from common.assetLocations import (
-    folder_listing_prefix, in_folder, is_folder_location, normalize_location, object_key_for, relative_path_in,
+    folder_listing_prefix, in_folder, is_folder_location, normalize_base_prefix, normalize_location, object_key_for,
+    relative_path_in,
 )
+from common.fileAttribution import nested_locations_of_asset
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.apiRoutes import (
     API_ASSET_METADATA,
@@ -355,10 +357,7 @@ def _asset_bucket_details(bucket_id):
     base_prefix = bucket.get("baseAssetsPrefix") or ""
     if not bucket_name:
         raise VAMSGeneralErrorResponse("Asset bucket details could not be resolved.")
-    if base_prefix and not base_prefix.endswith("/"):
-        base_prefix += "/"
-    if base_prefix.startswith("/"):
-        base_prefix = base_prefix[1:]
+    base_prefix = normalize_base_prefix(base_prefix)
     details = {"bucketName": bucket_name, "baseAssetsPrefix": base_prefix, **bucket_region_fields(bucket)}
     _bucket_details_cache[bucket_id] = details
     return details
@@ -1849,6 +1848,12 @@ def _verify_inputs_exist(selected_inputs, asset_records):
         root = _asset_root_key(asset)
         relative = item["relativeFileKey"]
         key = _input_key(root, relative)
+        # A key the location of another asset nested in this one holds is that asset's file
+        nested = nested_locations_of_asset(_asset_table(), _buckets_table(), asset, bucket, root,
+                                           asset_table_name=asset_table_name)
+        if nested.holder(key) is not None:
+            missing.append(f"{item['assetId']}{item['relativeFileKey']}")
+            continue
         checks.append(item)
         jobs.append(lambda b=bucket, k=key, v=item.get("versionId", ""): _input_exists_in_s3(b, k, v))
 
@@ -1906,13 +1911,21 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         # The concrete S3 version the run reads (stamped by _verify_inputs_exist), so the manifest
         # and the persisted input row name the same version.
         version_id = item.get("resolvedVersionId") or item.get("versionId", "")
+        # A folder input (or the whole asset) names the locations of assets nested in it: a pipeline that
+        # lists the folder leaves their keys out
+        exclude_locations = []
+        if not full_key or full_key.endswith("/"):
+            nested = nested_locations_of_asset(_asset_table(), _buckets_table(), asset, bucket, root,
+                                               asset_table_name=asset_table_name)
+            exclude_locations = [loc for loc in nested.locations if loc.startswith(full_key or "")]
         entries.append(er.build_manifest_entry(
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,
             asset_root_s3_key=root, aux_preview_prefix=aux_preview_prefix,
             bucket_id=bucket_id or "",
             bucket_region=bucket_details.get("bucketRegion", ""),
-            bucket_account_id=bucket_details.get("bucketAccountId", "")))
+            bucket_account_id=bucket_details.get("bucketAccountId", ""),
+            exclude_locations=exclude_locations))
     return entries
 
 

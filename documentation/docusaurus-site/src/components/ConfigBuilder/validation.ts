@@ -2236,6 +2236,21 @@ const CORE_RULES: Rule[] = [
         message:
             "app.assetBuckets.useS3TransferAcceleration and the same key on externalAssetBuckets entries must be a boolean (true or false, not a string).",
     },
+    // ----- VAMS object tags (config.ts: validateTagSyncedObjects) -----
+    {
+        id: "tag-synced-objects-not-boolean",
+        severity: "error",
+        fieldPaths: ["app.assetBuckets.tagSyncedObjects", "app.assetBuckets.externalAssetBuckets"],
+        appliesWhen: (c) => {
+            const top = g(c, "app.assetBuckets.tagSyncedObjects");
+            if (top !== undefined && top !== null && typeof top !== "boolean") return true;
+            return externalBuckets(c).some(
+                (b) => b.tagSyncedObjects !== undefined && typeof b.tagSyncedObjects !== "boolean"
+            );
+        },
+        message:
+            "app.assetBuckets.tagSyncedObjects and the same key on externalAssetBuckets entries must be a boolean (true or false, not a string).",
+    },
     {
         id: "s3ta-vpce-restriction",
         severity: "error",

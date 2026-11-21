@@ -18,6 +18,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from common.batchItemFailures import failed_records_log_line
@@ -343,20 +344,12 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             
         bucket = items[0]
         bucket_name = bucket.get('bucketName')
-        base_assets_prefix = bucket.get('baseAssetsPrefix', '/')
-        
+        base_assets_prefix = normalize_base_prefix(bucket.get('baseAssetsPrefix', '/'))
+
         if not bucket_name:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
-        
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
-        
+
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,

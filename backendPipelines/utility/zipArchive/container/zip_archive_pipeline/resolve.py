@@ -29,6 +29,24 @@ def relative_path(key, base_key):
     return "/" + key[len(base_key):]
 
 
+def held_by_excluded(key, exclude_locations):
+    """Whether a key is held by one of ``exclude_locations``, the stored locations of other assets nested in
+    the asset's location (the job manifest's ``excludeLocations``): a folder location holds every key under
+    it; a single-file location its own key, every key under ``{key}/`` and its previews
+    ``{key}.previewFile.{ext}``. Those keys are the nested assets' files, not the archived asset's."""
+    for location in exclude_locations or ():
+        if location.endswith("/"):
+            if key.startswith(location):
+                return True
+        elif key == location or key.startswith(location + "/"):
+            return True
+        elif key.startswith(location + ".previewFile."):
+            extension = key[len(location) + len(".previewFile."):]
+            if extension and "/" not in extension:
+                return True
+    return False
+
+
 def list_current(s3_client, bucket, prefix):
     """(key, versionId, size, lastModified epoch) of each current object under a prefix, and the
     folder marker keys (ending in '/')."""
@@ -52,13 +70,17 @@ def list_current(s3_client, bucket, prefix):
         kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
 
 
-def expand_selection(s3_client, bucket, base_key, entries, pinned_files=None, include_preview_files=False):
+def expand_selection(s3_client, bucket, base_key, entries, pinned_files=None, include_preview_files=False,
+                     exclude_locations=None):
     """Members ({bucket, key, versionId, size, relativePath, mtime}) and empty-folder relative paths.
 
     Preview companions (``{file}.previewFile.{ext}``) are left out unless ``include_preview_files``: an
     explicit one, a pinned one and every one a folder or the whole asset lists, as the file list hides
-    them. A folder that holds only preview companions then reads as empty."""
+    them. A folder that holds only preview companions then reads as empty. Keys ``exclude_locations`` hold
+    (other assets nested in the asset's location) are left out everywhere."""
     def wanted(key):
+        if held_by_excluded(key, exclude_locations):
+            return False
         return include_preview_files or not is_preview_companion(key)
 
     members, seen, markers = [], set(), []
@@ -80,6 +102,7 @@ def expand_selection(s3_client, bucket, base_key, entries, pinned_files=None, in
             continue
         files, folder_markers = list_current(s3_client, bucket, key)
         files = [f for f in files if wanted(f[0])]
+        folder_markers = [m for m in folder_markers if not held_by_excluded(m, exclude_locations)]
         if not files and not folder_markers:
             raise Refusal("A selected folder is empty or does not exist")
         markers.extend(folder_markers)

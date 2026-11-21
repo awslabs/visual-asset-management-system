@@ -693,7 +693,12 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
             path.join(__dirname, "..", "../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
             "utf8"
         );
-        const block = storage.slice(storage.indexOf('indexName: "AssetLocationGSI"'));
+        const at = storage.indexOf("indexName: ASSET_LOCATION_INDEX,");
+        expect(at).toBeGreaterThan(-1);
+        const block = storage.slice(at);
+        expect(storage).toContain(
+            `export const ASSET_LOCATION_INDEX = "${pyConstant(backend, "LOCATION_INDEX_NAME")}";`
+        );
         expect(block.slice(0, 400)).toContain(
             `name: "${pyConstant(backend, "LOCATION_BUCKET_ATTRIBUTE")}"`
         );

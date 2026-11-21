@@ -506,6 +506,27 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
 4. If a file is in the asset's file list but never appears in search, or a deleted asset or file is still listed, check the indexing dead-letter queues (next section).
 
+### Bucket Sync Rejected-Record Queue Holds Messages
+
+**Symptoms:**
+
+-   The Amazon CloudWatch alarm `<configuration name>-<app.baseStackName>-bucketSyncRejected` is in the `ALARM` state.
+-   A file written directly to an asset bucket is in no asset and not in search, and the bucket-sync function logged `Bucket sync rejected key ... (ambiguousLocation)` at `ERROR`.
+-   An upload, a new folder, a copy into an asset, a file revert, unarchive or primary-file change, or a workflow output is refused with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.`
+
+**Cause:** two live assets hold the same stored location in the bucket, so bucket sync cannot tell which one the file belongs to. It attributes the file to neither and sends the S3 notification to the deployment's bucket-sync rejected-record queue. Each message carries `reason`, `bucket`, `key`, `candidateAssets` (the `databaseId:assetId` of each asset that claims the location) and the original S3 `record`. Messages are kept for 14 days.
+
+**What archive and permanent delete do to a shared location:** the files of a location two live assets share belong to both, so neither asset's destructive operations change them. Archiving one asset archives its asset record and leaves every shared file live. Permanently deleting one asset removes its records and leaves every shared file and every version of it in place; viewer data in the auxiliary bucket stays when both assets are in one database. Deleting, archiving or moving a shared file through either asset is refused with `This file is also held by another asset and is not archived or deleted through this asset`. Do not move or delete the shared objects in Amazon S3 directly: they are the remaining asset's files.
+
+**What VAMS refuses on a shared location:** once the `assetLocationIndex` migration step has run, VAMS writes no file into a location another live asset also holds, because bucket sync could not attribute the file to either asset. An upload, a new folder, a copy into either asset, a file revert, unarchive or primary-file change, and a workflow output that would land there are refused before anything is written, with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.` The refusal names neither asset. Writes work again once you have followed the resolution below.
+
+**Resolution:**
+
+1. Read the messages in the queue (Amazon SQS console, **Send and receive messages**) and note the `candidateAssets` of each.
+2. Decide which asset keeps the location, then archive the other asset. Only its asset record is archived; the shared files stay live and belong to the remaining asset from then on. If you no longer need the archived asset, you can permanently delete it later, which leaves the shared files in place too. Do not unarchive it while the remaining asset is live, or the location is shared again and new writes there are rejected again.
+3. Send each message's `record` again as an S3 event to the bucket's created-events queue (`<configuration name>-<app.baseStackName>-bucketSyncCreated--<n>`), wrapped as `{"Records": [<record>]}`, then delete it from the rejected-record queue. Bucket sync then attributes the file to the remaining asset.
+4. Check the remaining asset's file list: it lists every file of the location, live.
+
 ### Indexing Dead-Letter Queue Holds Messages
 
 **Symptoms:**

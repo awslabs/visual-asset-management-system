@@ -72,6 +72,7 @@ from common.apiRoutes import (
     API_ZIP_DOWNLOADS_GLOBAL,
 )
 from common.assetLocations import is_folder_location
+from common.fileAttribution import nested_locations_of_asset
 from common.constants import UNALLOWED_FILE_EXTENSION_LIST, UNALLOWED_MIME_LIST
 from common.downloadEligibility import (
     MSG_FILE_NOT_FOUND,
@@ -485,7 +486,7 @@ def _check_members(bucket, members):
     return sizes
 
 
-def _prescan_prefix(bucket, prefix, deadline, budget):
+def _prescan_prefix(bucket, prefix, deadline, budget, nested=None):
     """List the current (latest, not deleted) objects under a prefix within a budget.
 
     Returns (count, bytes, complete). Refuses on an archive storage class or a blocked extension.
@@ -498,6 +499,8 @@ def _prescan_prefix(bucket, prefix, deadline, budget):
         for version in response.get("Versions", []) or []:
             key = version.get("Key", "")
             if not version.get("IsLatest") or key.endswith("/") or not _archived_key(key):
+                continue
+            if nested and not nested.keep(key):
                 continue
             if version.get("StorageClass") in ("GLACIER", "DEEP_ARCHIVE"):
                 raise ZipRefusal("The selection includes a file in an archive storage class; "
@@ -520,9 +523,10 @@ def _enforce_limits(files, size):
         raise ZipRefusal(f"The selection is larger than {MAX_TOTAL_BYTES_PER_REQUEST} bytes")
 
 
-def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
+def _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested=None):
     """Resolve the selection against an asset version snapshot: every selected file, folder or the
-    whole asset becomes the file versions recorded in that version."""
+    whole asset becomes the file versions recorded in that version. A recorded file a nested asset's
+    location holds is that asset's and is left out."""
     # Imported here: the asset-version helpers are a handler module with its own module-level setup.
     from handlers.assets.assetVersions import (
         get_asset_file_versions,
@@ -539,7 +543,7 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = (f.get("relativeKey") or "").lstrip("/")
-        if rel and f.get("versionId") and _archived_key(rel):
+        if rel and f.get("versionId") and _archived_key(rel) and (not nested or nested.keep(base_key + rel)):
             recorded[rel] = f
     chosen = {}
     for entry in request.selection:
@@ -574,12 +578,17 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
     return asset_version_id, pinned
 
 
-def _resolve_current(bucket, base_key, request):
+def _resolve_current(bucket, base_key, request, nested=None):
     """Resolve a current-files selection. Explicit files are fully checked; folders and the whole
-    asset are pre-scanned within a budget. Returns (entries, files, bytes, complete)."""
+    asset are pre-scanned within a budget. Returns (entries, files, bytes, complete). A selected path a
+    nested asset's location holds answers as a missing file or folder, and a folder's or the whole
+    asset's nested files are left out."""
     entries, explicit = [], []
     for entry in request.selection:
         key = resolve_asset_file_key(base_key, entry.relativePath)
+        if nested and nested.holder(key):
+            raise ZipRefusal(MSG_FILE_NOT_FOUND if entry.type == "file"
+                             else "A selected folder is empty or does not exist")
         if entry.type == "file" and not _archived_key(key):
             # A preview companion is left out like in a folder or the whole asset, not refused.
             continue
@@ -601,7 +610,7 @@ def _resolve_current(bucket, base_key, request):
     for record in entries:
         if record["type"] == "file":
             continue
-        count, size, done = _prescan_prefix(bucket, record["key"], deadline, budget)
+        count, size, done = _prescan_prefix(bucket, record["key"], deadline, budget, nested)
         if done and count == 0:
             raise ZipRefusal("A selected folder is empty or does not exist")
         files, total = files + count, total + size
@@ -977,12 +986,15 @@ def create_job(event, database_id, asset_id):
                              "Download its files directly instead.")
         if _cap_reached(user_id):
             return general_error(status_code=429, body={"message": zd.MSG_CAP_REACHED}, event=event)
+        # The files of an asset nested in this asset's location are that asset's
+        nested = nested_locations_of_asset(asset_table, buckets_table, asset, bucket, base_key,
+                                           asset_table_name=asset_table_name)
         pinned, asset_version_id = [], None
         if request.assetVersionId or request.assetVersionIdAlias:
-            asset_version_id, pinned = _resolve_pinned(database_id, asset_id, bucket, base_key, request)
+            asset_version_id, pinned = _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested)
             entries, files, total, complete = [], len(pinned), sum(p["size"] for p in pinned), True
         else:
-            entries, files, total, complete = _resolve_current(bucket, base_key, request)
+            entries, files, total, complete = _resolve_current(bucket, base_key, request, nested)
     except QuarantineBlockedResponse as refusal:
         return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
@@ -1044,6 +1056,8 @@ def create_job(event, database_id, asset_id):
         "archiveFileName": archive_file_name,
         "entries": [{k: v for k, v in e.items() if v is not None} for e in entries],
         "pinnedFiles": pinned,
+        # Locations of other assets nested in this asset's: the archive job leaves their keys out
+        "excludeLocations": sorted(nested.locations),
         "estimatedTotalBytes": total,
         "limits": {"maxFiles": MAX_FILES_PER_REQUEST, "maxTotalBytes": MAX_TOTAL_BYTES_PER_REQUEST},
         "blockedExtensions": sorted(UNALLOWED_FILE_EXTENSION_LIST),

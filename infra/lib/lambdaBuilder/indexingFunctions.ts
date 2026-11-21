@@ -14,6 +14,7 @@ import { LAMBDA_PYTHON_RUNTIME } from "../../config/config";
 import * as Service from "../helper/service-helper";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import {
     suppressCdkNagErrorsByGrantReadWrite,
     grantReadWritePermissionsToAllAssetBuckets,
@@ -36,40 +37,6 @@ import { searchLambdasInVpc } from "../helper/searchPlacement";
 const FILE_UPLOAD_EVENT_SOURCE_SUFFIX = ".trigger.fileUpload";
 const FILE_UPLOAD_EVENT_DETAIL_TYPE = "asset.file.uploaded";
 
-/**
- * Recursive-loop setting for a bucket-sync function.
- *
- * The created-events handler writes back to the bucket that triggers it: `update_s3_metadata` stamps an
- * unstamped object (a folder marker, a direct S3 write) by copying it onto itself, which raises another
- * ObjectCreated event into the same queue. The handler recognizes that echo and ends the chain there
- * (`is_vams_metadata_stamp_echo`), so the loop is bounded. Under sustained parallel writes, echoes and
- * new events share SQS batches, and Lambda's recursive-loop detection counts the chain across them; at
- * about 16 hops it stops the invocation before the handler runs and the whole batch of unrelated records
- * is dead-lettered. ALLOW turns that detection off for this function only.
- *
- * The deleted-events handler makes no S3 write that re-enters its own queue, so it keeps the default.
- *
- * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the
- * AWS European Sovereign Cloud (`aws-eusc`). The AWS GovCloud (US) user guide lists it as not available,
- * so `aws-us-gov` and any other partition omit the property: there is nothing to opt out of, and the
- * function template stays unchanged there.
- *
- * shortcut: this is a stopgap. Core upload and indexing must not depend on a partition-specific Lambda
- * setting, and a partition that gains the detection later drops records again until it is added here.
- * Remove this setting once the created-events path stops writing back to its own bucket
- * (https://github.com/awslabs/visual-asset-management-system/issues/1207).
- */
-function bucketSyncRecursiveLoop(
-    handlerType: "created" | "deleted",
-    config: Config.Config
-): lambda.RecursiveLoop | undefined {
-    const partition = config.env.partition;
-    if (handlerType !== "created" || (partition !== "aws" && partition !== "aws-eusc")) {
-        return undefined;
-    }
-    return lambda.RecursiveLoop.ALLOW;
-}
-
 export function buildSqsBucketSyncFunction(
     scope: Construct,
     lambdaCommonBaseLayer: LayerVersion,
@@ -81,7 +48,8 @@ export function buildSqsBucketSyncFunction(
     index: number,
     config: Config.Config,
     vpc: ec2.IVpc,
-    subnets: ec2.ISubnet[]
+    subnets: ec2.ISubnet[],
+    rejectedQueue?: sqs.IQueue
 ): lambda.Function {
     // Per-asset subscription topics are named AssetTopic<assetId> and created at runtime, so the
     // exact ARN is not known at synthesis. The account and Region ARE known, and wildcarding them
@@ -89,6 +57,9 @@ export function buildSqsBucketSyncFunction(
     const assetTopicWildcardArn = cdk.Fn.sub(
         `arn:${Service.Partition()}:sns:${config.env.region}:${config.env.account}:AssetTopic*`
     );
+    // Lambda's recursive-loop detection stays on (the default) for both directions: bucket sync writes
+    // no object back to its bucket. The VAMS object tags it writes raise only s3:ObjectTagging events,
+    // which no bucket notification subscribes to.
     const fun = new lambda.Function(scope, "sqsBucketSync-" + handlerType + "-" + index, {
         code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
         handler: `handlers.indexing.sqsBucketSync.lambda_handler_` + handlerType,
@@ -113,7 +84,6 @@ export function buildSqsBucketSyncFunction(
             ORCHESTRATION_BUS_NAME: storageResources.eventBridge.orchestrationBus.eventBusName,
             ORCHESTRATION_EVENT_SOURCE_PREFIX: storageResources.eventBridge.eventSourcePrefix,
         },
-        recursiveLoop: bucketSyncRecursiveLoop(handlerType, config),
     });
 
     storageResources.dynamo.assetFileMetadataStorageTable.grantReadWriteData(fun);
@@ -129,6 +99,12 @@ export function buildSqsBucketSyncFunction(
 
     // Grant SNS publish permissions
     storageResources.sns.fileIndexerSnsTopic.grantPublish(fun);
+
+    // A record that cannot be attributed by rule goes to the deployment's rejected-record queue.
+    if (rejectedQueue) {
+        fun.addEnvironment("BUCKET_SYNC_REJECTED_QUEUE_URL", rejectedQueue.queueUrl);
+        rejectedQueue.grantSendMessages(fun);
+    }
 
     // Grant EventBridge publish to the orchestration bus (fileUpload trigger delivery), scoped to the
     // one event the handler emits. A PutEvents request carries a set of entries, so its source and
@@ -357,5 +333,55 @@ export function buildDatabaseIndexerSnsQueuingFunction(
     suppressCdkNagLambda(fun);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
 
+    return fun;
+}
+
+/**
+ * The deploy-time custom resource handler that marks the asset location index ready on a new
+ * deployment (handlers/indexing/crAssetLocationIndexMarker.py). It reads the asset table's creation
+ * time and whether it holds a row, writes one SSM String parameter without overwriting it, and deletes
+ * that parameter when the resource is deleted.
+ */
+export function buildAssetLocationIndexMarkerFunction(
+    scope: Construct,
+    lambdaCommonBaseLayer: LayerVersion,
+    storageResources: storageResources,
+    config: Config.Config,
+    vpc: ec2.IVpc,
+    subnets: ec2.ISubnet[],
+    markerParameterName: string
+): lambda.Function {
+    const inVpc = config.app.useGlobalVpc.enabled && config.app.useGlobalVpc.useForAllLambdas;
+    const fun = new lambda.Function(scope, "crAssetLocationIndexMarker", {
+        code: lambda.Code.fromAsset(path.join(__dirname, `../../../backend/backend`)),
+        handler: `handlers.indexing.crAssetLocationIndexMarker.lambda_handler`,
+        runtime: LAMBDA_PYTHON_RUNTIME,
+        layers: [lambdaCommonBaseLayer],
+        timeout: Duration.minutes(2),
+        memorySize: Config.LAMBDA_MEMORY_SIZE,
+        vpc: inVpc ? vpc : undefined,
+        vpcSubnets: inVpc ? { subnets: subnets } : undefined,
+    });
+
+    const assetTable = storageResources.dynamo.assetStorageTable;
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:DescribeTable", "dynamodb:Scan"],
+            resources: [assetTable.tableArn],
+        })
+    );
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
+            resources: [Service.IAMArn(markerParameterName.replace(/^\//, "")).ssm],
+        })
+    );
+
+    kmsKeyLambdaPermissionAddToResourcePolicy(fun, storageResources.encryption.kmsKey);
+    globalLambdaEnvironmentsAndPermissions(fun, config);
+    suppressCdkNagLambda(fun);
+    setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     return fun;
 }

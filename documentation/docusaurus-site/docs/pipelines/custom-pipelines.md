@@ -495,7 +495,11 @@ Four behaviors are worth knowing:
     preview prefix (`auxPreviewPrefix`); `bucketId`, the asset bucket's registration id; and the
     bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
     Region), and `bucketAccountId`, its owning account when that is not the deployment account
-    (`""` otherwise). Read S3 with `bucket`, through a client for `bucketRegion`
+    (`""` otherwise). A folder input (a `key` ending in `/`, or the whole asset) whose asset holds the
+    location of another asset inside it also carries `excludeLocations`, those stored locations: their
+    keys are the other assets' files, so a pipeline that lists the folder leaves out every key one of
+    them holds (a folder location holds every key under it; a single-file location its own key, the keys
+    under `{key}/` and its previews). Read S3 with `bucket`, through a client for `bucketRegion`
     (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
     `inputBucketRegion` and the output bucket's as `outputBucketRegion`. `bucketId` is for a consumer
     downstream of the pipeline that must resolve the registered bucket row itself -- the vector
