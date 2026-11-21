@@ -331,6 +331,9 @@ describe("CI workflow", () => {
                 'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.(txt|lock)$")'
             );
             expect(script).toContain("is not a uv export");
+            // Every group and extra of the lock is audited too, and the rangedInputs list is validated.
+            expect(script).toContain('"--all-extras"');
+            expect(script).toContain("check_ranged_inputs(root, tracked, set(lock_dirs))");
         });
 
         test("annotations escape %, CR and LF, and package names compare PEP 503-normalised", () => {
