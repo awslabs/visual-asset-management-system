@@ -119,6 +119,12 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
     return object_key[len(loc):]
 
 
+# The refusal of a workflow output at a single-file asset's own file path. The upload completion answers it
+# per file, and output processing repeats it in the run's error, since the user can act on it.
+OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
+                           "Write the output under another file name or folder.")
+
+
 def names_own_object(location: Optional[str], relative_path: Optional[str]) -> bool:
     """Whether an asset-relative path names a single-file location's object itself (``/{file name}`` or its key)."""
     loc = normalize_location(location)

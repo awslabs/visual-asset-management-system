@@ -612,7 +612,7 @@ For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.ph
 :::
 
 :::info[Single-file assets]
-For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
+For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.` The run then ends `FAILED`, and its error names the file with that message: `The asset file write-back failed. Writing output file '{file name}' into the asset failed: A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
 :::
 
 :::info[Preview File Extensions]
