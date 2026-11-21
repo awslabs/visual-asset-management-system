@@ -224,11 +224,11 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
--   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project (today the Isaac Lab training image's two requirements files);
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project (today the Isaac Lab training image's two requirements files and Splat Toolbox's two, whose `container/requirements.txt` is upstream's file and is overwritten at every synth);
 -   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
 -   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos images other than Transfer's NCCL wheel, and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. The GPU images lock only the sets VAMS owns:
     -   Image to 3D: the shared `requirements.txt` of all seven model images. Each model's own requirements (torch, the CUDA extensions, the upstream repository's packages) are installed by its Dockerfile before or after it and can move a locked package (TripoSR pins trimesh 4.0.5, so its Dockerfile reasserts the floor; TRELLIS.2 and SAM 3D install the shared set after upstream and restore numpy).
-    -   Splat Toolbox: the image is upstream's Dockerfile, which does not install the VAMS `requirements.txt`; the lock covers the file the pipeline test runner installs.
+    -   Splat Toolbox: not locked. Its `container/requirements.txt` is copied from upstream on every synth, and the image is upstream's Dockerfile.
     -   Cosmos Transfer: only the NCCL wheel added to upstream's environment; upstream's own `uv.lock` is installed by `uv sync --locked`.
     -   GR00T: Isaac-GR00T's `base` extra at `STABLE_COMMIT` plus what the image adds, resolved on Python 3.10 for Linux x86_64. 151 advisories in upstream-pinned packages are on `.github/python-audit-allowlist.json` with a review date; the prebuilt flash-attn wheel (a direct URL) is named in the audit summary and not audited;
 -   packages that come with a container base image or the Lambda runtime;
