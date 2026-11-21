@@ -935,3 +935,26 @@ class TestIndexForAFileNamedLikeAPreview:
     def test_conflicts_with_the_file_whose_preview_it_is_named_like(self):
         table = FakeLocationTable([_row("db1", "base", "projects/scan")])
         assert [c.asset_id for c in al.find_conflicts(table, BUCKET, self.LOCATION)] == ["base"]
+
+
+@pytest.mark.unit
+class TestARegistrationRootAsset:
+    """An asset whose location is its bucket registration's own prefix (created before v2.6.1, which
+    refuses it) is indexed like any other folder location: it holds every key under the prefix."""
+
+    ROOT = "assets/"
+
+    def test_its_row_carries_the_index_attributes(self):
+        assert al.location_attributes(BUCKET, self.ROOT) == {
+            al.LOCATION_BUCKET_ATTRIBUTE: BUCKET, al.LOCATION_KEY_ATTRIBUTE: self.ROOT}
+        assert al.location_attributes(BUCKET, "/assets/") == al.location_attributes(BUCKET, self.ROOT)
+
+    def test_it_owns_a_key_no_deeper_asset_holds(self):
+        table = FakeLocationTable([_row("db1", "legacy-root", self.ROOT), _row("db1", "x1", "assets/x1/")])
+        assert al.resolve_owner(table, BUCKET, "assets/x2/model.glb").entry.asset_id == "legacy-root"
+        assert al.resolve_owner(table, BUCKET, "assets/x1/model.glb").entry.asset_id == "x1"
+
+    def test_a_new_location_under_it_conflicts(self):
+        table = FakeLocationTable([_row("db1", "legacy-root", self.ROOT)])
+        assert [c.asset_id for c in al.find_conflicts(table, BUCKET, "assets/new/")] == ["legacy-root"]
+        assert [c.asset_id for c in al.find_conflicts(table, BUCKET, "assets/new/model.glb")] == ["legacy-root"]

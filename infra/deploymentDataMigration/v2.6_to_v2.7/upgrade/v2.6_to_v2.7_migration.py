@@ -1730,21 +1730,25 @@ ASSET_LOCATION_WRITE_ATTEMPTS = 5
 _THROTTLING_ERRORS = ('ProvisionedThroughputExceededException', 'ThrottlingException',
                       'RequestLimitExceeded', 'InternalServerError')
 
-# Rows the step leaves out of the index, by reason.
+# Rows the step leaves out of the index, by reason. Their locations hold no key the index could
+# attribute: no bucket, no registration to name the bucket, or no location (the bucket root `/` is
+# stored as an empty location, which holds no key, as in common.assetLocations.contains).
 NOT_INDEXED_NO_BUCKET_ID = 'noBucketId'
 NOT_INDEXED_REGISTRATION_MISSING = 'registrationMissing'
 NOT_INDEXED_NO_LOCATION = 'noLocation'
 NOT_INDEXED_BUCKET_ROOT = 'bucketRoot'
-NOT_INDEXED_REGISTRATION_ROOT = 'registrationRoot'
 NOT_INDEXED_REASONS = (NOT_INDEXED_NO_BUCKET_ID, NOT_INDEXED_REGISTRATION_MISSING, NOT_INDEXED_NO_LOCATION,
-                       NOT_INDEXED_BUCKET_ROOT, NOT_INDEXED_REGISTRATION_ROOT)
+                       NOT_INDEXED_BUCKET_ROOT)
 # Rows the step indexes and reports for review.
 REVIEW_SHARED_LOCATION = 'sharedLocation'
 REVIEW_NESTED_LOCATION = 'nestedLocation'
 REVIEW_SINGLE_OBJECT_LOCATION = 'singleObjectLocation'
 REVIEW_OUTSIDE_REGISTRATION_PREFIX = 'outsideRegistrationPrefix'
+# The location is the registration's own prefix, which create refuses since v2.6.1. Such a row holds
+# every key under the prefix, so it is indexed: an ownership check must still see it.
+REVIEW_REGISTRATION_ROOT = 'registrationRoot'
 REVIEW_REASONS = (REVIEW_SHARED_LOCATION, REVIEW_NESTED_LOCATION, REVIEW_SINGLE_OBJECT_LOCATION,
-                  REVIEW_OUTSIDE_REGISTRATION_PREFIX)
+                  REVIEW_OUTSIDE_REGISTRATION_PREFIX, REVIEW_REGISTRATION_ROOT)
 
 _ASSET_LOCATION_PROJECTION = '#db, #a, #bid, #al, #lb, #lk'
 _ASSET_LOCATION_NAMES = {'#db': 'databaseId', '#a': 'assetId', '#bid': 'bucketId', '#al': 'assetLocation',
@@ -1847,9 +1851,9 @@ def plan_asset_location(row: Dict, registration: Optional[Dict]) -> Tuple[Option
         return None, NOT_INDEXED_BUCKET_ROOT, []
     prefix = normalize_base_prefix(registration.get('baseAssetsPrefix'))
     folder_form = location if location.endswith('/') else location + '/'
-    if prefix and folder_form == prefix:
-        return None, NOT_INDEXED_REGISTRATION_ROOT, []
     notes = []
+    if prefix and folder_form == prefix:
+        notes.append(REVIEW_REGISTRATION_ROOT)
     if not location.endswith('/'):
         notes.append(REVIEW_SINGLE_OBJECT_LOCATION)
     if prefix and not location.startswith(prefix):

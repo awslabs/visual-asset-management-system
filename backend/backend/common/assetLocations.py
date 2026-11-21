@@ -38,10 +38,18 @@ when the asset is created and by the v2.6-to-v2.7 `assetLocationIndex` migration
 - ``locationKey``: the location without a leading ``/``.
 
 ``AssetLocationGSI`` on the asset table indexes them (partition ``locationBucket``, sort
-``locationKey``, projecting ``bucketId`` beside the table keys). Until the backfill has written its
-completion marker the index does not cover every asset, so no decision may depend on it before
+``locationKey``, projecting ``bucketId`` beside the table keys). Rows whose location holds no key
+(no location, or the bucket root, stored as an empty location) and rows with no bucket
+registration carry no attributes. Until the backfill has written its completion marker the index
+does not cover every row whose location holds keys, so no decision may depend on it before
 ``index_ready()`` answers True; until then callers keep the checks that do not use it. Which
 asset owns a key, and which locations conflict, are decided with ``contains`` above.
+
+Depth limit. A key has about two candidate locations per folder level (the folder ``X/`` and the
+single file ``X``), plus the key and its preview bases. A key or location with more than
+``MAX_CANDIDATE_LOCATIONS`` (64) candidates, about 31 folder levels, is not looked up:
+``resolve_owner`` answers ``RESOLVED_TOO_DEEP`` and ``find_conflicts`` raises
+``LocationTooDeepError``. A caller keeps the checks that do not use the index for such a key.
 
 The index functions build no AWS client at import. Index reads take the caller's asset table
 handle; ``index_ready()`` builds its SSM client on first use unless one is passed.
@@ -312,7 +320,8 @@ def derive_location(registration: Dict[str, Any], database_id: str, asset_id: st
 
 def location_attributes(bucket_name: Optional[str], location_key: Optional[str]) -> Dict[str, str]:
     """The index attributes for an asset row, or {} when the row cannot be indexed (no bucket
-    name, or a location at the bucket root, which an index key cannot hold)."""
+    name, or a location at the bucket root, which is stored as an empty location and holds no
+    key)."""
     location = normalize_location(location_key)
     if not bucket_name or not location:
         return {}
@@ -646,9 +655,13 @@ def reset_index_ready_cache() -> None:
 
 
 def index_ready(asset_table_name: str, ssm_client=None, clock: Callable[[], float] = time.monotonic) -> bool:
-    """Whether the location index covers every row of `asset_table_name`: the backfill's completion
-    marker exists, records `complete` and names that table. Until it does, every decision keeps the
-    logic that does not read the index.
+    """Whether the location index covers every row of `asset_table_name` whose location holds keys:
+    the backfill's completion marker exists, records `complete` and names that table. Until it does,
+    every decision keeps the logic that does not read the index.
+
+    Rows the backfill leaves out hold no key the index could attribute: no location, the bucket
+    root (an empty location), no `bucketId`, or a bucket registration that no longer exists. A row
+    at its registration's own prefix is indexed. The step's report lists both kinds.
 
     The answer is cached per container and table for INDEX_READY_CACHE_TTL_SECONDS either way. A
     marker that cannot be read (no prefix, a missing parameter, AccessDenied, throttling) answers
