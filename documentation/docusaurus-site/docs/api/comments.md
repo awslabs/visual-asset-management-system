@@ -118,10 +118,11 @@ Retrieves a single comment.
 
 **Request Parameters:**
 
-| Parameter                  | Location | Type   | Required | Description                                                            |
-| -------------------------- | -------- | ------ | -------- | ---------------------------------------------------------------------- |
-| `assetId`                  | path     | string | Yes      | Asset identifier.                                                      |
-| `assetVersionId:commentId` | path     | string | Yes      | Asset version and comment ID, colon-joined (for example `2:c1a2b3c4`). |
+| Parameter                  | Location | Type    | Required | Description                                                               |
+| -------------------------- | -------- | ------- | -------- | ------------------------------------------------------------------------- |
+| `assetId`                  | path     | string  | Yes      | Asset identifier.                                                         |
+| `assetVersionId:commentId` | path     | string  | Yes      | Asset version and comment ID, colon-joined (for example `2:c1a2b3c4`).    |
+| `showArchived`             | query    | boolean | No       | When `true`, also reads a comment of an archived asset. Default: `false`. |
 
 **Response:**
 

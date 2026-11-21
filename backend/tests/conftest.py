@@ -146,7 +146,8 @@ _s3pp_spec = _s3mk_importlib_util.spec_from_file_location(
 _s3pp_module = _s3mk_importlib_util.module_from_spec(_s3pp_spec)
 _s3pp_spec.loader.exec_module(_s3pp_module)
 sys.modules['common.s3PathPatterns'] = _s3pp_module
-# assetLocations is pure location-key logic (typing and common.s3PathPatterns, registered above), so load the REAL module by path.
+# assetLocations is pure location-key logic (typing and common.s3PathPatterns, registered above), so load
+# the REAL module by path.
 # It must come before downloadEligibility below, which imports it.
 _alc_spec = _s3mk_importlib_util.spec_from_file_location(
     'common.assetLocations',

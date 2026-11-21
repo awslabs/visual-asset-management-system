@@ -90,6 +90,19 @@ class TestReservedExistingKey:
         assert error is None, (existing_key, error)
         m.assert_existing_key_not_owned.assert_called_once()
 
+    @pytest.mark.parametrize("existing_key,refused", [
+        ("exports/workspace/projects/model.glb", False),
+        ("exports/workspace/projects/building-a/", False),
+        ("exports/workspace/pipelines/wf1/output/model.glb", True),
+        ("exports/workspace/projects/preview/thumb.png", True),
+    ])
+    def test_a_base_prefix_with_a_reserved_name_is_not_checked_only_the_key_under_it(self, existing_key, refused):
+        m, error = _create("exports/workspace/", existing_key)
+        assert _refused(error) is refused, error
+        if not refused:
+            assert error is None, error
+            m.assert_existing_key_not_owned.assert_called_once()
+
     @pytest.mark.parametrize("base_prefix,existing_key", [
         ("/", "projects/model.glb"),
         ("/", "projects/building-a/"),
@@ -107,7 +120,8 @@ class TestReservedExistingKey:
         assert _refused(_create(base_prefix, reserved_key)[1])
 
 
-ASSET_ID_MESSAGE = "The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID."
+ASSET_ID_MESSAGE = ("The specified assetId is the name of a folder VAMS reserves for system use. "
+                    "Choose another asset ID.")
 
 
 def _create_with_id(asset_id, existing_key=None):

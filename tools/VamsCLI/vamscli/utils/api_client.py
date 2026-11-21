@@ -4,7 +4,7 @@ import json
 import threading
 import requests
 from typing import Dict, Any, List, Optional
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 # Single-flight token refresh: concurrent uploads share one APIClient (one requests.Session)
 # and run API calls on parallel executor threads. Without serialization, a 403/401 on several
@@ -13,6 +13,10 @@ from urllib.parse import quote, unquote, urljoin, urlparse
 # batch cascades to Forbidden. This module-level lock serializes refreshes; a thread that finds
 # the access token already changed since its failed request reuses it instead of refreshing again.
 _TOKEN_REFRESH_LOCK = threading.Lock()
+# Set on a thread while it holds _TOKEN_REFRESH_LOCK. A re-authentication with saved credentials reads
+# the login profile and the feature switches while the lock is held; a 401 or 403 on those reads must
+# not ask for another refresh, because the lock is not reentrant and the thread would wait on itself.
+_REFRESH_IN_PROGRESS = threading.local()
 
 # Keys an error body may carry the server's message under, in preference order. VAMS handlers return
 # `message`; Amazon API Gateway's own responses use `Message` — an authorizer deny and an unknown
@@ -102,6 +106,28 @@ _REDIRECT_TARGET_REFUSED_MESSAGE = (
     "signing in again does not change the result: a presigned URL may have expired, or the network path "
     "may not reach that host. Retry the command, or contact your administrator."
 )
+
+_REDIRECT_TARGET_FAILED_MESSAGE = (
+    "The request was redirected to {host}, which answered HTTP {status}. That host is not the VAMS API: "
+    "a presigned URL may have expired, or the network path may not reach that host. Retry the command, "
+    "or contact your administrator."
+)
+
+
+def _raise_if_redirect_target_unreachable(error, request_url: str) -> None:
+    """Raise an APIError naming only the host when a request failed at a host it was redirected to.
+
+    The exception text of a failed send repeats the full URL."""
+    failed_url = getattr(getattr(error, 'request', None), 'url', None)
+    if not isinstance(failed_url, str):
+        return
+    host = urlparse(failed_url).netloc
+    if host and host != urlparse(request_url).netloc:
+        raise APIError(
+            f"The request was redirected to {host}, which could not be reached ({type(error).__name__}). "
+            "That host is not the VAMS API: the network path may not reach it. Retry the command, or "
+            "contact your administrator."
+        ) from None
 
 
 def _is_cognito_unavailable(error_message: str) -> bool:
@@ -300,7 +326,7 @@ from ..constants import (
     API_ZIP_DOWNLOADS_GLOBAL, API_ZIP_DOWNLOADS_ASSET_ALL_USERS, FEATURE_ZIPDOWNLOADS,
     ZIP_DOWNLOADS_DISABLED_API_MESSAGE,
     ZIP_DOWNLOADS_DISABLED_MESSAGE, ZIP_DOWNLOAD_NOT_FOUND_API_MESSAGE,
-    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES,
+    ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE, ZIP_DOWNLOAD_ACTIVE_STATUSES, ADDON_BUSINESS_REFUSAL_429_MESSAGES,
     ZIP_DOWNLOAD_TERMINAL_STATUSES, ZIP_DOWNLOAD_STREAM_TIMEOUT, ZIP_DOWNLOAD_STREAM_CHUNK_BYTES,
     ZIP_DOWNLOAD_INTENT_PARAM, ZIP_DOWNLOAD_CANCEL_INTENT,
     API_COMPLIANCE_SCHEMAS, API_COMPLIANCE_SCHEMA_BY_NAME,
@@ -315,7 +341,7 @@ from ..constants import (
 )
 from ..version import get_version
 from .exceptions import (
-    APIError, VersionMismatchError, AuthenticationError, OverrideTokenError, 
+    APIError, ConfigurationError, VersionMismatchError, AuthenticationError, OverrideTokenError,
     TokenExpiredError, PermissionDeniedError, RequestBlockedError,
     APIUnavailableError, AssetNotFoundError, AssetAlreadyExistsError,
     DatabaseNotFoundError, DatabaseAlreadyExistsError, DatabaseDeletionError,
@@ -347,10 +373,12 @@ from .retry_config import get_retry_config
 from .addon_api_client import AddonAPIClientMixin
 from .custom_api_client import CustomAPIClientMixin
 from .request_paths import _path_segment, route_path  # noqa: F401 - route_path is re-exported
+from .logging import scrub_text
 
 # The exact 429 bodies that are a handler's business refusal rather than throttling
-# (_is_business_refusal_429): retrying cannot clear them.
-_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,)
+# (_is_business_refusal_429): retrying cannot clear them. The core one is the per-user active zip
+# download cap; the add-ons declare theirs in addon_constants.py.
+_BUSINESS_REFUSAL_429_MESSAGES = (ZIP_DOWNLOAD_CAP_REACHED_API_MESSAGE,) + tuple(ADDON_BUSINESS_REFUSAL_429_MESSAGES)
 
 
 def build_comment_path(asset_id: str, asset_version_id: str, comment_id: str) -> str:
@@ -554,8 +582,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 pass
             
             # Handle 429 rate limiting with exponential backoff. A 429 whose body is a known business
-            # refusal (the per-user active zip download cap) is not throttling: backing off cannot
-            # clear it, so it goes straight to the caller's status mapping.
+            # refusal (the per-user active zip download cap, an add-on's quota) is not throttling: backing
+            # off cannot clear it, so it goes straight to the caller's status mapping.
             if response.status_code == 429 and not _is_business_refusal_429(response):
                 if retry_config.should_retry(throttle_retry_count):
                     # Parse Retry-After header if present
@@ -698,49 +726,59 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             # Re-raise specific errors without wrapping
             raise
         except requests.exceptions.HTTPError as e:
+            # A host the request was redirected to (a presigned Amazon S3 URL) is named by its host
+            # and status only, as the 403 case above does: the exception text repeats the full URL.
+            redirected_host = _redirected_host(e.response, url)
+            if redirected_host:
+                raise APIError(_REDIRECT_TARGET_FAILED_MESSAGE.format(
+                    host=redirected_host, status=e.response.status_code)) from None
             if raise_http_errors:
                 # The caller maps the status code and the handler's body itself.
                 raise
 
             # Handle other HTTP errors with appropriate messages
             status_code = e.response.status_code
+            fallback = scrub_text(str(e))
 
             if status_code == 429:
                 # This shouldn't happen due to the check above, but just in case
-                raise RateLimitExceededError(f"Rate limit exceeded: {e}")
+                raise RateLimitExceededError(f"Rate limit exceeded: {fallback}")
             elif status_code >= 500:
                 # Server errors (500, 502, 503, 504, etc.)
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(
                     f"Server error ({status_code}): {error_message}. "
                     "The VAMS API is experiencing issues. Please try again later."
                 )
             elif status_code == 404:
                 # Not found errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"Resource not found (404): {error_message}")
             elif status_code == 400:
                 # Bad request errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"Invalid request (400): {error_message}")
             else:
                 # Other HTTP errors
-                error_message = _api_error_message(e.response, str(e))
+                error_message = _api_error_message(e.response, fallback)
                 raise APIError(f"API request failed ({status_code}): {error_message}")
         except requests.exceptions.ConnectionError as e:
+            _raise_if_redirect_target_unreachable(e, url)
             raise APIError(
                 f"Connection error: Unable to connect to the VAMS API. "
                 "Please check your network connection and verify the API Gateway URL is correct. "
-                f"Details: {e}"
+                f"Details: {scrub_text(str(e))}"
             )
         except requests.exceptions.Timeout as e:
+            _raise_if_redirect_target_unreachable(e, url)
             raise APIError(
                 f"Request timeout: The VAMS API did not respond in time. "
                 "The service may be experiencing high load. Please try again later. "
-                f"Details: {e}"
+                f"Details: {scrub_text(str(e))}"
             )
         except requests.exceptions.RequestException as e:
-            raise APIError(f"Request failed: {e}")
+            _raise_if_redirect_target_unreachable(e, url)
+            raise APIError(f"Request failed: {scrub_text(str(e))}")
             
     def _try_refresh_token(self, token_before: Optional[str] = None) -> bool:
         """Try to refresh the authentication token or re-authenticate using saved credentials.
@@ -755,17 +793,28 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             # An injected token is never refreshed or replaced from a profile.
             return False
 
+        if getattr(_REFRESH_IN_PROGRESS, "active", False):
+            # A request made by this thread's own refresh: it is answered without a further refresh.
+            log_auth_diagnostic(
+                auth_type="token_refresh", status="nested_request_not_refreshed",
+                details={'profile_name': self.profile_manager.profile_name})
+            return False
+
         with _TOKEN_REFRESH_LOCK:
-            # Another thread may have already refreshed while we waited for the lock. If the saved
-            # access token differs from the one our failed request carried, treat it as refreshed.
-            if token_before is not None:
-                current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
-                if current and current != token_before:
-                    log_auth_diagnostic(
-                        auth_type="token_refresh", status="reused_concurrent_refresh",
-                        details={'profile_name': self.profile_manager.profile_name})
-                    return True
-            return self._do_refresh_token()
+            _REFRESH_IN_PROGRESS.active = True
+            try:
+                # Another thread may have already refreshed while we waited for the lock. If the saved
+                # access token differs from the one our failed request carried, treat it as refreshed.
+                if token_before is not None:
+                    current = (self.profile_manager.load_auth_profile() or {}).get('access_token')
+                    if current and current != token_before:
+                        log_auth_diagnostic(
+                            auth_type="token_refresh", status="reused_concurrent_refresh",
+                            details={'profile_name': self.profile_manager.profile_name})
+                        return True
+                return self._do_refresh_token()
+            finally:
+                _REFRESH_IN_PROGRESS.active = False
 
     def _do_refresh_token(self) -> bool:
         """Perform the actual token refresh / re-auth. Callers hold _TOKEN_REFRESH_LOCK."""
@@ -991,9 +1040,26 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             raise APIError(f"Failed to check API version: {e}")
             
     def get_amplify_config(self) -> Dict[str, Any]:
-        """Get Amplify configuration from API."""
+        """Get Amplify configuration from API.
+
+        A redirect hop to plain http is refused, unless the base URL is itself http and the hop stays
+        on its host: `setup` accepts plain http only for a loopback base URL. Every hop is checked, not
+        only the last.
+        """
         try:
             response = self.get(API_AMPLIFY_CONFIG, include_auth=False)
+            history = getattr(response, 'history', None)
+            final_url = getattr(response, 'url', None)
+            if isinstance(history, list) and history and isinstance(final_url, str):
+                base = urlparse(self.base_url)
+                # history[0] is the request the caller made; each later entry and the final response
+                # is a hop a redirect chose.
+                for hop_url in [getattr(r, 'url', '') for r in history[1:]] + [final_url]:
+                    hop = urlparse(hop_url if isinstance(hop_url, str) else '')
+                    if hop.scheme == 'http' and (base.scheme != 'http' or hop.hostname != base.hostname):
+                        raise ConfigurationError(
+                            f"The deployment redirected the configuration read to plain http ({hop.hostname}). "
+                            "Run setup with the deployment's https URL.")
             return response.json()
         except GlobalInfrastructureError:
             raise
@@ -4318,12 +4384,16 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             staged_response.raise_for_status()
             return staged_response.json()
         except requests.exceptions.RequestException as e:
+            # Named by status and host only: the exception text repeats the presigned URL.
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            host = urlparse(staged_url).netloc
+            detail = f"HTTP {status} from {host}" if status else f"{type(e).__name__} reaching {host}"
             raise APIError(
                 "Asset export failed: the export payload was staged for download but could not be "
-                f"retrieved from its presigned URL ({e}). The URL expires after "
+                f"retrieved from its presigned URL ({detail}). The URL expires after "
                 f"{payload.get('presignedExportPayloadExpiresIn', 'the configured')} seconds; retry "
                 "the export if it has elapsed."
-            )
+            ) from None
         except ValueError as e:
             raise APIError(
                 "Asset export failed: the staged export payload was retrieved but is not valid "
@@ -4598,7 +4668,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             ZipDownloadNotFoundError: When the job does not exist, has expired, or is not the caller's
             ZipDownloadNotReadyError: When the job has not succeeded (409)
             ZipDownloadExpiredError: When the archive is no longer stored (410)
-            InvalidZipDownloadRequestError: When the asset is no longer distributable
+            InvalidZipDownloadRequestError: When the asset is no longer distributable, or a file
+                in the archive is no longer downloadable
             APIError: When the API call fails
         """
         endpoint = route_path(
@@ -7892,11 +7963,8 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             kwargs['json'] = body if body is not None else {}
         if params:
             kwargs['params'] = params
-        # The ids in the path are sent as typed: a `#` (a deleted database's `<id>#deleted`) or a
-        # space would otherwise end or break the URL path, and `<id>#deleted` would read the live
-        # id. An id typed already encoded (`%23`) passes as it is; the route templates hold no
-        # character this changes.
-        endpoint = quote(endpoint, safe='/%')
+        # The endpoint arrives built with route_path, so each id is one path segment and reaches the
+        # API as typed (a deleted database's `<id>#deleted` included).
 
         try:
             response = verb(endpoint, include_auth=True, raise_http_errors=True, **kwargs)
@@ -7920,21 +7988,32 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
     # ---- Schemas ------------------------------------------------------
 
-    def list_compliance_schemas(self, database_id: Optional[str] = None) -> Dict[str, Any]:
+    def list_compliance_schemas(self, database_id: Optional[str] = None,
+                                max_items: Optional[int] = None,
+                                starting_token: Optional[str] = None) -> Dict[str, Any]:
         """
-        List compliance schemas using the /compliance/schemas GET endpoint.
+        List one page of compliance schemas using the /compliance/schemas GET endpoint.
 
         Args:
             database_id: When given, only schemas scoped to this database plus GLOBAL schemas are
                 returned; otherwise every schema the caller may read.
+            max_items: Schemas per page (1-200; the handler applies 100 when omitted)
+            starting_token: The NextToken of a previous page
 
         Returns:
-            API response data: {"schemas": [...]} — the latest version of each schema. The route
-            returns the whole list in one response and takes no paging parameters.
+            API response data: {"schemas": [...], "NextToken"?: str, "createScopes"?: [...]} — the
+            latest version of each schema, in schemaName order. `NextToken` is present while more
+            schemas remain; a page can be short, or empty, while it is (rows the caller may not
+            read are left out). `createScopes` is on every page of a listing without database_id.
+
+        Raises:
+            InvalidComplianceDataError: When max_items or the pagination token is rejected
         """
-        params = {'databaseId': database_id} if database_id else None
+        params = dict(self._compliance_page_params(max_items, starting_token) or {})
+        if database_id:
+            params['databaseId'] = database_id
         return self._compliance_request(
-            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params)
+            'GET', API_COMPLIANCE_SCHEMAS, "Listing compliance schemas", params=params or None)
 
     def get_compliance_schema(self, schema_name: str) -> Dict[str, Any]:
         """
@@ -7947,7 +8026,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ComplianceSchemaNotFoundError: When the schema does not exist
         """
-        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance schema '{schema_name}'")
 
@@ -7973,7 +8052,9 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         Raises:
             DatabaseNotFoundError: When the scoping database does not exist
-            InvalidComplianceDataError: When the schema body or fields are rejected
+            InvalidComplianceDataError: When the schema body or fields are rejected, or databaseId
+                names a database while an existing schema of that name is bound (database binding
+                or asset override) in another database; GLOBAL is not refused for that reason
         """
         return self._compliance_request(
             'POST', API_COMPLIANCE_SCHEMAS, "Compliance schema registration", body=schema_data)
@@ -7994,10 +8075,12 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
 
         Raises:
             ComplianceSchemaNotFoundError: When the schema does not exist
-            InvalidComplianceDataError: When the new body is rejected, or the schema is a system
-                schema that cannot be modified
+            InvalidComplianceDataError: When the new body is rejected, the schema is a system
+                schema that cannot be modified, or databaseId names a database while the schema is
+                bound (database binding or asset override) in another database; moving it to
+                GLOBAL is not refused for that reason
         """
-        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
             'PUT', endpoint, f"Compliance schema '{schema_name}' update", body=dict(update_data))
 
@@ -8013,7 +8096,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             ComplianceSchemaNotFoundError: When the schema does not exist
             InvalidComplianceDataError: When the schema is still bound to a database or an asset
         """
-        endpoint = API_COMPLIANCE_SCHEMA_BY_NAME.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SCHEMA_BY_NAME, schemaName=schema_name)
         return self._compliance_request(
             'DELETE', endpoint, f"Compliance schema '{schema_name}' deletion")
 
@@ -8052,7 +8135,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             DatabaseNotFoundError: When the database does not exist
             InvalidComplianceDataError: When the pagination token is malformed
         """
-        endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+        endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance bindings for '{database_id}'",
             params=self._compliance_page_params(max_items, starting_token))
@@ -8085,10 +8168,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         """
         body: Dict[str, Any] = {'schemaName': schema_name}
         if asset_id:
-            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_ASSET, databaseId=database_id, assetId=asset_id)
             action = f"Binding schema '{schema_name}' to asset '{asset_id}'"
         else:
-            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
             action = f"Binding schema '{schema_name}' to database '{database_id}'"
             if auto_eval is not None:
                 body['complianceAutoEval'] = auto_eval
@@ -8111,10 +8194,10 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             DatabaseNotFoundError: When the database does not exist
         """
         if asset_id:
-            endpoint = API_COMPLIANCE_BIND_ASSET.format(databaseId=database_id, assetId=asset_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_ASSET, databaseId=database_id, assetId=asset_id)
             action = f"Removing the schema override from asset '{asset_id}'"
         else:
-            endpoint = API_COMPLIANCE_BIND_DATABASE.format(databaseId=database_id)
+            endpoint = route_path(API_COMPLIANCE_BIND_DATABASE, databaseId=database_id)
             action = f"Removing the schema binding from database '{database_id}'"
         return self._compliance_request('DELETE', endpoint, action)
 
@@ -8126,24 +8209,35 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Evaluate an asset using the /compliance/evaluate/{databaseId}/{assetId} POST endpoint.
 
         Args:
-            schema_name: Schema to evaluate against; defaults to the asset's bound schema
+            schema_name: Schema to evaluate against; defaults to the asset's bound schema. The
+                caller needs read access to it, and it must be GLOBAL or available to the asset's
+                database.
 
         Returns:
             API response data: {message, evaluationId, schemaName, verdict, complianceState,
-            ruleResults, pipelineRulesPending, pipelineRulesWaiting}. The metadata and
-            relationship rules run synchronously; each pipeline rule launches a workflow execution
-            and is counted in pipelineRulesPending. A pipeline rule whose workflow's concurrency
-            lock another execution holds waits for it to end and then launches; it is counted in
-            pipelineRulesWaiting as well. While the asset holds an active exception against the schema
-            evaluated, a failing verdict leaves complianceState `exception` rather than
-            quarantining the asset. Naming a schema evaluates against it without changing the
-            asset's binding.
+            ruleResults, pipelineRulesPending, pipelineRulesWaiting, dryRun: False}. The metadata
+            and relationship rules run synchronously; each pipeline rule launches a workflow
+            execution and is counted in pipelineRulesPending. A pipeline rule whose workflow's
+            concurrency lock another execution holds waits for it to end and then launches; it is
+            counted in pipelineRulesWaiting as well. While the asset holds an active exception
+            against the schema evaluated, a failing verdict leaves complianceState `exception`
+            rather than quarantining the asset.
+
+            Naming a schema other than the asset's bound one is a dry run: {message, dryRun: True,
+            schemaName, schemaVersion, verdict, complianceState (the asset's current state,
+            unchanged), ruleResults, hasRuleErrors, errorRules, pipelineRulesNotRun} and no
+            evaluationId. Nothing is recorded: no evaluation record, no state change, no audit
+            entry, no workflow launch, no cascade. Pipeline rules do not run in a dry run; each is
+            a rule result with status `error`, counted in pipelineRulesNotRun.
 
         Raises:
             AssetNotFoundError: When the asset does not exist
-            InvalidComplianceDataError: When no schema is given and the asset has none bound
+            ComplianceSchemaNotFoundError: When the named schema does not exist
+            InvalidComplianceDataError: When no schema is given and the asset has none bound, or
+                the named schema is not available to the asset's database
+            PermissionDeniedError: When the caller may not read the named schema (403)
         """
-        endpoint = API_COMPLIANCE_EVALUATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_EVALUATE_ASSET, databaseId=database_id, assetId=asset_id)
         body = {'schemaName': schema_name} if schema_name else {}
         return self._compliance_request(
             'POST', endpoint, f"Evaluating asset '{asset_id}'", body=body)
@@ -8163,11 +8257,13 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             NextToken?}. `skipped` counts the bound assets not evaluated: `skippedNotAuthorized`
             those the caller is not authorized to evaluate or may not read (never listed) and
             `skippedArchived` the archived ones the caller may see (their records are left as they
-            are; an archived asset the caller may not see is counted nowhere). `assetsRemaining`
-            counts the bound assets still to evaluate; while it is above 0 the response carries
-            `NextToken`, which the next call passes back to continue.
+            are; an archived asset the caller may not see is counted nowhere). A call reads the
+            bound assets a page at a time under a time budget and may end before it has read them
+            all: `NextToken` is present while any asset remains (read or not), and the next call
+            passes it back to continue. `assetsRemaining` counts only the assets this call read
+            and did not reach; it can be 0 while `NextToken` is present.
         """
-        endpoint = API_COMPLIANCE_SWEEP_SCHEMA.format(schemaName=schema_name)
+        endpoint = route_path(API_COMPLIANCE_SWEEP_SCHEMA, schemaName=schema_name)
         body = {'startingToken': starting_token} if starting_token else {}
         return self._compliance_request('POST', endpoint, f"Sweeping schema '{schema_name}'",
                                         body=body)
@@ -8190,13 +8286,14 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             NextToken?}. `skippedArchived` counts the archived assets the caller may see, which
             are not evaluated (their records are left as they are; 0 for a caller who may not see
             the database's archive), `skippedNotAuthorized` the assets the caller may not read
-            (not evaluated, never listed), and `skipped` the two. While `assetsRemaining` is above
-            0 the response
-            carries `NextToken`: pass it back to continue. `registered` counts assets of a bound
+            (not evaluated, never listed), and `skipped` the two. `NextToken` is present while any
+            tracked asset remains (read or not): pass it back to continue. `assetsRemaining` counts
+            only the assets this call read and did not reach; it can be 0 while `NextToken` is
+            present. `registered` counts assets of a bound
             database registered under the binding by this call; `withoutSchema` counts tracked
             assets whose record names no schema (not evaluated).
         """
-        endpoint = API_COMPLIANCE_EVALUATE_DATABASE.format(databaseId=database_id)
+        endpoint = route_path(API_COMPLIANCE_EVALUATE_DATABASE, databaseId=database_id)
         body = {'startingToken': starting_token} if starting_token else {}
         return self._compliance_request(
             'POST', endpoint, f"Evaluating the assets of database '{database_id}'", body=body)
@@ -8216,7 +8313,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Returns:
             API response data: {"evaluations": [...], "NextToken"?: str}, most recent first.
         """
-        endpoint = API_COMPLIANCE_EVALUATIONS_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_EVALUATIONS_ASSET, databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'GET', endpoint, f"Listing evaluations for asset '{asset_id}'",
             params=self._compliance_page_params(max_items, starting_token))
@@ -8235,7 +8332,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             An asset that is not tracked answers complianceState "unknown" with a null schemaName
             rather than a 404.
         """
-        endpoint = API_COMPLIANCE_STATE_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_STATE_ASSET, databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance state for asset '{asset_id}'")
 
@@ -8265,7 +8362,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
                 "Database not found" rather than an empty overview)
             InvalidComplianceDataError: When the pagination token is malformed
         """
-        endpoint = API_COMPLIANCE_STATE_DATABASE.format(databaseId=database_id)
+        endpoint = route_path(API_COMPLIANCE_STATE_DATABASE, databaseId=database_id)
         params = dict(self._compliance_page_params(max_items, starting_token) or {})
         params.update({key: value for key, value in (filters or {}).items() if value})
         return self._compliance_request(
@@ -8319,7 +8416,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset is not tracked for compliance
             InvalidComplianceDataError: When the asset is not quarantined
         """
-        endpoint = API_COMPLIANCE_QUARANTINE_RELEASE.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_RELEASE, databaseId=database_id, assetId=asset_id)
         body = {'reason': reason} if reason else {}
         return self._compliance_request(
             'POST', endpoint, f"Releasing asset '{asset_id}' from quarantine", body=body)
@@ -8344,7 +8441,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset is not tracked for compliance
             InvalidComplianceDataError: When the asset is not quarantined or the reason is missing
         """
-        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_EXCEPTION,
             databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'POST', endpoint, f"Granting an exception for asset '{asset_id}'",
@@ -8366,7 +8463,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             AssetNotFoundError: When the asset is not tracked for compliance
             InvalidComplianceDataError: When the asset has no active exception
         """
-        endpoint = API_COMPLIANCE_QUARANTINE_EXCEPTION.format(
+        endpoint = route_path(API_COMPLIANCE_QUARANTINE_EXCEPTION,
             databaseId=database_id, assetId=asset_id)
         return self._compliance_request(
             'DELETE', endpoint, f"Revoking the exception of asset '{asset_id}'")
@@ -8410,7 +8507,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ComplianceCascadeNotFoundError: When the cascade does not exist
         """
-        endpoint = API_COMPLIANCE_CASCADE_BY_ID.format(cascadeId=cascade_id)
+        endpoint = route_path(API_COMPLIANCE_CASCADE_BY_ID, cascadeId=cascade_id)
         return self._compliance_request(
             'GET', endpoint, f"Getting compliance cascade '{cascade_id}'")
 
@@ -8465,7 +8562,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
             InvalidComplianceDataError: When the executor could not be started (the cascade is then
                 recorded as aborted)
         """
-        endpoint = API_COMPLIANCE_CASCADE_APPROVE.format(cascadeId=cascade_id)
+        endpoint = route_path(API_COMPLIANCE_CASCADE_APPROVE, cascadeId=cascade_id)
         body = {'reason': reason} if reason else {}
         return self._compliance_request(
             'POST', endpoint, f"Approving cascade '{cascade_id}'", body=body)
@@ -8481,7 +8578,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             ComplianceCascadeNotFoundError: When the cascade does not exist or is not pending
         """
-        endpoint = API_COMPLIANCE_CASCADE_REJECT.format(cascadeId=cascade_id)
+        endpoint = route_path(API_COMPLIANCE_CASCADE_REJECT, cascadeId=cascade_id)
         body = {'reason': reason} if reason else {}
         return self._compliance_request(
             'POST', endpoint, f"Rejecting cascade '{cascade_id}'", body=body)
@@ -8558,7 +8655,7 @@ class APIClient(AddonAPIClientMixin, CustomAPIClientMixin):
         Raises:
             InvalidComplianceDataError: When the pagination token is malformed
         """
-        endpoint = API_COMPLIANCE_AUDIT_ASSET.format(databaseId=database_id, assetId=asset_id)
+        endpoint = route_path(API_COMPLIANCE_AUDIT_ASSET, databaseId=database_id, assetId=asset_id)
         params = self._compliance_audit_params(start_date, end_date, max_items, starting_token)
         return self._compliance_request(
             'GET', endpoint, f"Reading the audit history for asset '{asset_id}'",

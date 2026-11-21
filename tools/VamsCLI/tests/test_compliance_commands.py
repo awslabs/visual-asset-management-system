@@ -9,8 +9,9 @@ then cover each command's happy path, its `--json-output` purity, and an API err
 Two shapes are easy to get wrong and are asserted explicitly: a POST to a route that takes no
 fields still carries an empty JSON object (the handlers parse the body unconditionally), and the
 `complianceAutoEval` flag is sent on the database binding only, because the asset route never
-reads it. The paged routes (audit, evaluations, the database overview, the quarantine listing and
-the bindings) all read their page size from `maxItems` and resume on `startingToken`, so those are
+reads it. The paged routes (audit, evaluations, the database overview, the quarantine listing, the
+bindings and the schema listing) all read their page size from `maxItems` and resume on
+`startingToken`, so those are
 the query-parameter names asserted; the audit command's `--limit` is asserted to be an alias that
 is sent as `maxItems` too.
 """
@@ -122,6 +123,12 @@ class TestComplianceRequestPathsAndMethods:
         client, calls = _recording_client({'schemas': []})
         client.list_compliance_schemas()
         assert 'params' not in calls[0]['kwargs']
+
+    def test_list_schemas_forwards_the_page_size_as_max_items_and_the_token(self):
+        client, calls = _recording_client({'schemas': []})
+        client.list_compliance_schemas(database_id='my-database', max_items=50, starting_token='tok')
+        assert calls[0]['kwargs']['params'] == {
+            'databaseId': 'my-database', 'maxItems': 50, 'startingToken': 'tok'}
 
     def test_get_schema_gets_the_named_route(self):
         client, calls = _recording_client(SCHEMA_RECORD)
@@ -483,7 +490,9 @@ class TestComplianceSchemaCommands:
             assert result.exit_code == 0
             assert 'cad-quality' in result.output
             assert 'has-owner' in result.output
-            mocks['api_client'].list_compliance_schemas.assert_called_once_with(database_id=None)
+            mocks['api_client'].list_compliance_schemas.assert_called_once_with(
+                database_id=None, max_items=None, starting_token=None)
+            assert 'Next token' not in result.output
 
     def test_list_forwards_the_database_filter(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -491,7 +500,95 @@ class TestComplianceSchemaCommands:
             result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '-d', 'my-database'])
             assert result.exit_code == 0
             assert 'No compliance schemas found' in result.output
-            mocks['api_client'].list_compliance_schemas.assert_called_once_with(database_id='my-database')
+            mocks['api_client'].list_compliance_schemas.assert_called_once_with(
+                database_id='my-database', max_items=None, starting_token=None)
+
+    def test_list_pages_on_max_items_and_starting_token_and_prints_the_next_token(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.return_value = {
+                'schemas': [SCHEMA_RECORD], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--max-items', '1',
+                                             '--starting-token', 'page-1'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].list_compliance_schemas.assert_called_once_with(
+                database_id=None, max_items=1, starting_token='page-1')
+            assert 'Next token: page-2' in result.output
+            assert 'Use --starting-token to get the next page' in result.output
+
+    def test_an_empty_page_with_a_token_is_not_reported_as_no_schemas(self, cli_runner,
+                                                                      generic_command_mocks):
+        # Schemas the caller may not read are left out of a page, so a page can be empty while
+        # more remain.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.return_value = {
+                'schemas': [], 'NextToken': 'page-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list'])
+            assert result.exit_code == 0
+            assert 'No compliance schemas on this page.' in result.output
+            assert 'No compliance schemas found' not in result.output
+            assert 'Next token: page-2' in result.output
+
+    @pytest.mark.parametrize("max_items", ['0', '201'])
+    def test_list_rejects_a_page_size_outside_the_route_range(self, cli_runner,
+                                                              generic_command_mocks, max_items):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--max-items', max_items])
+            assert result.exit_code == 2
+            mocks['api_client'].list_compliance_schemas.assert_not_called()
+
+    def test_auto_paginate_reads_every_page_through_an_empty_one(self, cli_runner,
+                                                                 generic_command_mocks):
+        # A page can be empty while a token is present (rows the caller may not read are left
+        # out), so only an absent token ends the walk.
+        second = dict(SCHEMA_RECORD, schemaName='zz-last')
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.side_effect = [
+                {'schemas': [SCHEMA_RECORD], 'NextToken': 'p2', 'createScopes': ['GLOBAL']},
+                {'schemas': [], 'NextToken': 'p3', 'createScopes': ['GLOBAL']},
+                {'schemas': [second], 'createScopes': ['GLOBAL']},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--auto-paginate',
+                                             '--max-items', '50', '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert [s['schemaName'] for s in body['schemas']] == ['cad-quality', 'zz-last']
+            assert (body['pageCount'], body['autoPaginated'], body['createScopes']) == (3, True, ['GLOBAL'])
+            assert 'NextToken' not in body
+            assert [c.kwargs for c in mocks['api_client'].list_compliance_schemas.call_args_list] == [
+                {'database_id': None, 'max_items': 50, 'starting_token': token}
+                for token in (None, 'p2', 'p3')]
+
+    def test_auto_paginate_stops_on_a_token_handed_back_and_keeps_it(self, cli_runner,
+                                                                    generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].list_compliance_schemas.side_effect = [
+                {'schemas': [SCHEMA_RECORD], 'NextToken': 'p2'},
+                {'schemas': [], 'NextToken': 'p2'},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--auto-paginate',
+                                             '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert (body['NextToken'], body['truncated'], body['pageCount']) == ('p2', True, 2)
+
+    def test_auto_paginate_with_a_starting_token_is_refused(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            result = cli_runner.invoke(cli, ['compliance', 'schema', 'list', '--auto-paginate',
+                                             '--starting-token', 'p2'])
+            assert result.exit_code != 0
+            assert 'Cannot use --auto-paginate with --starting-token' in result.output
+            mocks['api_client'].list_compliance_schemas.assert_not_called()
+
+    @pytest.mark.parametrize("command", ['create', 'update'])
+    def test_the_write_help_says_a_database_scope_is_refused_while_bound_elsewhere(self, cli_runner,
+                                                                                  command):
+        result = cli_runner.invoke(cli, ['compliance', 'schema', command, '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert 'refused while' in text
+        assert '(a database binding or an asset override) in any other database' in text
+        assert 'GLOBAL' in text
 
     def test_list_json_output(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -622,9 +719,9 @@ class TestComplianceSchemaCommands:
                                                        command):
         """D150: a parent not found as a vams-rules-v1 schema the caller may read is a save
         warning, printed as the API worded it."""
-        message = ("The parent schema 'base' was not found as a vams-rules-v1 schema you may read. "
-                   "If it does not exist or is not vams-rules-v1, this schema is evaluated with "
-                   "its own rules only.")
+        message = ("The parent schema named in `extends` was not found as a vams-rules-v1 schema you "
+                   "may read. If it does not exist or is not vams-rules-v1, an evaluation under this "
+                   "schema reaches no verdict.")
         answer = {'message': "Schema 'cad-quality' registered as v2", 'schemaName': 'cad-quality',
                   'internalVersion': 2, 'warnings': [{
                       'code': 'extendsSchemaNotFound', 'message': message, 'extends': 'base'}]}
@@ -978,6 +1075,65 @@ class TestComplianceEvaluationCommands:
             mocks['api_client'].evaluate_asset_compliance.assert_called_once_with(
                 'my-database', 'my-asset', schema_name='cad-quality')
 
+    DRY_RUN = {
+        'message': "Dry run completed: the asset's compliance state was not changed",
+        'dryRun': True, 'schemaName': 'strict-cad', 'schemaVersion': 3, 'verdict': 'quarantined',
+        'complianceState': 'compliant', 'hasRuleErrors': True, 'errorRules': ['wall-thickness'],
+        'pipelineRulesNotRun': 1,
+        'ruleResults': [
+            {'ruleName': 'has-owner', 'enforcement': 'quarantine', 'passed': False,
+             'message': 'owner missing'},
+            {'ruleName': 'wall-thickness', 'enforcement': 'quarantine', 'status': 'error',
+             'message': 'Pipeline rules do not run in a dry run'}],
+    }
+
+    def test_a_dry_run_says_so_and_prints_no_evaluation_id(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = dict(self.DRY_RUN)
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database',
+                                             '-a', 'my-asset', '-n', 'strict-cad'])
+            assert result.exit_code == 0, result.output
+            assert "Dry run completed: the asset's compliance state was not changed" in result.output
+            assert ("Dry Run: yes (nothing was recorded; the asset's compliance state was not "
+                    "changed)") in result.output
+            assert 'Evaluation ID' not in result.output
+            assert 'Verdict: quarantined' in result.output
+            assert 'Compliance State: compliant (unchanged)' in result.output
+            assert 'Pipeline Rules Not Run: 1 (pipeline rules do not run in a dry run)' in result.output
+            assert ('! wall-thickness [quarantine] (error): Pipeline rules do not run in a dry run'
+                    in result.output)
+
+    def test_a_normal_evaluation_prints_its_id_and_no_dry_run_line(self, cli_runner,
+                                                                   generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = {
+                'message': 'Evaluation completed', 'evaluationId': 'ev-1', 'dryRun': False,
+                'schemaName': 'cad-quality', 'verdict': 'compliant', 'complianceState': 'compliant'}
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database',
+                                             '-a', 'my-asset'])
+            assert result.exit_code == 0
+            assert 'Evaluation ID: ev-1' in result.output
+            assert 'Compliance State: compliant\n' in result.output
+            assert 'Dry Run' not in result.output
+            assert 'Not Run' not in result.output
+
+    def test_a_dry_run_is_pure_in_json_mode(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_asset_compliance.return_value = dict(self.DRY_RUN)
+            result = cli_runner.invoke(cli, ['compliance', 'evaluate', '-d', 'my-database',
+                                             '-a', 'my-asset', '-n', 'strict-cad', '--json-output'])
+            assert result.exit_code == 0
+            assert json.loads(result.output) == self.DRY_RUN
+
+    def test_the_help_says_what_a_dry_run_does_and_checks(self, cli_runner):
+        result = cli_runner.invoke(cli, ['compliance', 'evaluate', '--help'])
+        assert result.exit_code == 0
+        text = ' '.join(result.output.split())
+        assert 'runs a dry run' in text
+        assert 'nothing is recorded' in text
+        assert 'Pipeline rules do not run in a dry run' in text
+        assert 'must be one you may read, and GLOBAL or available to the asset\'s database' in text
+
     def test_evaluate_asset_not_found(self, cli_runner, generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
             mocks['api_client'].evaluate_asset_compliance.side_effect = AssetNotFoundError(
@@ -1042,7 +1198,7 @@ class TestComplianceEvaluationCommands:
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
             assert result.exit_code == 0
             assert 'Skipped (not authorized to evaluate): 3' in result.output
-            assert 'Remaining (not evaluated yet): 12' in result.output
+            assert 'Remaining (read by the last call, not reached): 12' in result.output
 
     def test_sweep_reports_the_archived_assets_it_skipped_apart(self, cli_runner,
                                                               generic_command_mocks):
@@ -1115,7 +1271,7 @@ class TestComplianceEvaluationCommands:
             assert 'Assets Triggered: 2' in result.output
             assert 'Registered under the database binding: 1' in result.output
             assert 'Without a bound schema (not evaluated): 1' in result.output
-            assert "Remaining (not evaluated yet): 3" in result.output
+            assert "Remaining (read by the last call, not reached): 3" in result.output
 
     def test_sweep_follows_the_token_until_every_asset_is_evaluated(self, cli_runner,
                                                                   generic_command_mocks):
@@ -1157,6 +1313,23 @@ class TestComplianceEvaluationCommands:
             assert result.exit_code == 0, result.output
             assert 'Records of deleted assets removed (not evaluated): 3' in result.output
 
+    def test_sweep_adds_up_each_calls_skip_counts(self, cli_runner, generic_command_mocks):
+        # Each call counts only the rows it read, so the merged result adds the counts up.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.side_effect = [
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'a'}], 'skipped': 3,
+                 'skippedNotAuthorized': 2, 'skippedArchived': 1, 'withoutSchema': 1,
+                 'assetsRemaining': 0, 'NextToken': 'tok-2'},
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'b'}], 'skipped': 1,
+                 'skippedNotAuthorized': 0, 'skippedArchived': 1, 'withoutSchema': 2,
+                 'assetsRemaining': 0},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'd', '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert (body['skipped'], body['skippedNotAuthorized'], body['skippedArchived'],
+                    body['withoutSchema']) == (4, 2, 2, 3)
+
     def test_sweep_stops_with_the_token_when_a_call_makes_no_progress(self, cli_runner,
                                                                     generic_command_mocks):
         with generic_command_mocks('compliance') as mocks:
@@ -1168,8 +1341,43 @@ class TestComplianceEvaluationCommands:
             result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality'])
             assert result.exit_code == 0, result.output
             assert mocks['api_client'].sweep_compliance_schema.call_count == 2
-            assert 'Remaining (not evaluated yet): 5' in result.output
+            assert 'Remaining (read by the last call, not reached): 5' in result.output
             assert 'Next token: tok-2' in result.output
+            assert 'More assets remain: continue with --starting-token' in result.output
+
+    def test_sweep_follows_the_token_through_calls_that_evaluate_nothing(self, cli_runner,
+                                                                         generic_command_mocks):
+        # A call can read only rows it does not evaluate (skipped, or its time budget ran out) and
+        # report 0 remaining while a token is still present: the walk follows the token alone.
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].evaluate_database_compliance.side_effect = [
+                {'assetsTriggered': [], 'skipped': 4, 'assetsRemaining': 0, 'NextToken': 'tok-2'},
+                {'assetsTriggered': [], 'skipped': 4, 'assetsRemaining': 0, 'NextToken': 'tok-3'},
+                {'assetsTriggered': [{'databaseId': 'd', 'assetId': 'a'}], 'skipped': 4,
+                 'assetsRemaining': 0},
+            ]
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-d', 'd', '--json-output'])
+            assert result.exit_code == 0, result.output
+            body = json.loads(result.output)
+            assert [c.kwargs['starting_token'] for c in
+                    mocks['api_client'].evaluate_database_compliance.call_args_list] == [
+                None, 'tok-2', 'tok-3']
+            assert body['calls'] == 3
+            assert [t['assetId'] for t in body['assetsTriggered']] == ['a']
+            assert 'NextToken' not in body
+
+    def test_sweep_stops_when_the_first_call_hands_back_the_token_it_was_given(
+            self, cli_runner, generic_command_mocks):
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].sweep_compliance_schema.return_value = {
+                'assetsTriggered': [], 'assetsRemaining': 0, 'NextToken': 'tok-2'}
+            result = cli_runner.invoke(cli, ['compliance', 'sweep', '-n', 'cad-quality',
+                                             '--starting-token', 'tok-2'])
+            assert result.exit_code == 0, result.output
+            mocks['api_client'].sweep_compliance_schema.assert_called_once_with(
+                'cad-quality', starting_token='tok-2')
+            assert 'Next token: tok-2' in result.output
+            assert 'Remaining' not in result.output
 
     def test_sweep_no_follow_makes_one_call_and_starting_token_continues(self, cli_runner,
                                                                        generic_command_mocks):
@@ -2559,11 +2767,12 @@ class TestBindingChangesKeepQuarantine:
 
 
 class TestARefusedPipelineRuleSave:
-    """A schema save whose pipeline rule names a workflow the caller may not run answers 403 naming
-    the rule; the CLI raises the permission error with that message and prints it."""
+    """A schema save whose pipeline rule names a workflow the caller may not run answers 403 locating
+    the rule by its position in the body's rules; the CLI raises the permission error with that
+    message and prints it."""
 
-    REFUSAL = {'message': "Not authorized to run the workflow of pipeline rule 'convert'",
-               'ruleName': 'convert'}
+    REFUSAL = {'message': "Not authorized to run the workflow of pipeline rule rules[0]",
+               'rulePosition': 0}
 
     @pytest.mark.parametrize('call', [
         lambda client: client.create_compliance_schema({'schemaName': 's', 'schemaBody': {}}),
@@ -2588,7 +2797,7 @@ class TestARefusedPipelineRuleSave:
             # which prints its message.
             assert result.exit_code != 0
             assert isinstance(result.exception, PermissionDeniedError)
-            assert "pipeline rule 'convert'" in str(result.exception)
+            assert "pipeline rule rules[0]" in str(result.exception)
 
 
 class TestAnOutrankedEvaluationSaysItWasNotApplied:
@@ -2622,7 +2831,7 @@ class TestAnOutrankedEvaluationSaysItWasNotApplied:
             result = cli_runner.invoke(cli, ['compliance', 'evaluations', '-d', 'my-database',
                                              '-a', 'my-asset'])
             assert result.exit_code == 0
-            assert 'Not applied: a decision made after this evaluation began outranks it' in \
+            assert "Not applied: this evaluation's outcome did not change the asset" in \
                 result.output
 
 
@@ -2746,11 +2955,11 @@ class TestTheEvaluationsTextNamesThePipelineRules:
 
 
 class TestPathIdsArePercentEncoded:
-    """Every compliance call percent-encodes the ids it puts in the URL path (D134):
-    `vamscli compliance state -d 'r23-d#deleted'` sent `/compliance/state/r23-d#deleted`, which
-    the HTTP client cut at `#` as a fragment, so the live id's data came back. A `#` (and a
-    space) is now encoded; an id typed already encoded (`%23`) is sent as typed. The MCP tools call
-    these same client methods."""
+    """Every compliance call builds its path with `route_path`, so each id is one path segment and the
+    API reads it as typed (D134): `vamscli compliance state -d 'r23-d#deleted'` sent
+    `/compliance/state/r23-d#deleted`, which the HTTP client cut at `#` as a fragment, so the live
+    id's data came back. A `/`, `?`, `#` or `%` in an id is encoded, so an id never reaches another
+    route. The MCP tools call these same client methods."""
 
     DB = 'r23-d#deleted'
     ASSET = 'asset#1'
@@ -2794,12 +3003,27 @@ class TestPathIdsArePercentEncoded:
         client.unbind_compliance_schema(self.DB, asset_id=self.ASSET)
         assert calls[0]['endpoint'] == '/compliance/bind/r23-d%23deleted/asset%231'
 
-    def test_an_id_typed_encoded_is_sent_as_typed_and_a_plain_id_unchanged(self):
+    def test_a_percent_is_part_of_the_id_and_a_plain_id_is_unchanged(self):
         client, calls = _recording_client({})
         client.get_compliance_state('r23-d%23deleted', 'a1')
         client.get_compliance_state('my-database', 'my_asset.glb')
         assert [c['endpoint'] for c in calls] == [
-            '/compliance/state/r23-d%23deleted/a1', '/compliance/state/my-database/my_asset.glb']
+            '/compliance/state/r23-d%2523deleted/a1', '/compliance/state/my-database/my_asset.glb']
+
+    SLASHED = [
+        ('unbind_compliance_schema', ('db/a1',), '/compliance/bind/db%2Fa1'),
+        ('evaluate_database_compliance', ('db/a1',), '/compliance/evaluate/db%2Fa1'),
+        ('get_database_compliance_state', ('db/a1',), '/compliance/state/db%2Fa1'),
+        ('get_compliance_schema', ('s/x?y',), '/compliance/schemas/s%2Fx%3Fy'),
+        ('get_compliance_state', ('db', 'a/b'), '/compliance/state/db/a%2Fb'),
+        ('approve_compliance_cascade', ('c/1',), '/compliance/cascades/c%2F1/approve'),
+    ]
+
+    @pytest.mark.parametrize('method, args, endpoint', SLASHED, ids=[c[0] for c in SLASHED])
+    def test_a_slash_in_an_id_stays_in_its_segment(self, method, args, endpoint):
+        client, calls = _recording_client({})
+        getattr(client, method)(*args)
+        assert calls[0]['endpoint'] == endpoint
 
     def test_the_url_on_the_wire_carries_no_fragment(self):
         sent = []
@@ -2934,6 +3158,30 @@ class TestABindingChangeAppliedInTheBackground:
             body = json.loads(result.output)
             assert (body['waitTimedOut'], body['applyStatus'], body['apply']['assetsProcessed']) == (
                 True, 'applying', 10)
+
+    @pytest.mark.parametrize('read, text', [
+        (_read(_apply(applyId='apply-2', status='applying')),
+         'replaced by a later binding change (apply-2, applying)'),
+        (_read(None), 'the binding read names no change in progress'),
+    ], ids=['later-change', 'no-change'])
+    def test_a_change_replaced_while_waiting_is_reported_as_replaced(self, cli_runner, generic_command_mocks,
+                                                                     monkeypatch, read, text):
+        sleeps = []
+        monkeypatch.setattr('vamscli.commands.compliance.time.sleep', sleeps.append)
+        with generic_command_mocks('compliance') as mocks:
+            mocks['api_client'].bind_compliance_schema.return_value = _accepted()
+            mocks['api_client'].get_compliance_bindings.return_value = read
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait'])
+            assert result.exit_code == 1
+            assert text in result.output
+            assert 'Stopped waiting' not in result.output and sleeps == []
+            result = cli_runner.invoke(cli, [
+                'compliance', 'bind', '-n', 'cad-quality', '-d', 'my-database', '--wait', '--json-output'])
+            body = json.loads(result.output)
+            assert 'waitTimedOut' not in body
+            assert body['replacedBy'] == {'applyId': (read['apply'] or {}).get('applyId'),
+                                          'status': (read['apply'] or {}).get('status')}
 
     def test_json_output_carries_the_apply_fields(self, cli_runner, generic_command_mocks,
                                                   monkeypatch):

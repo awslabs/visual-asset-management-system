@@ -289,6 +289,27 @@ describe("default compliance schema seed", () => {
         expect(JSON.stringify(props.TableName)).toMatch(/ComplianceSchemaStorageTable/);
     });
 
+    test("on a first deploy the seeded row is in LatestVersionIndex: it carries latestVersion", () => {
+        // The schema listing reads LatestVersionIndex only; a fresh deployment has no earlier rows for
+        // the one-time backfill to mark, so the seed itself carries the marker.
+        const s = synth();
+        const { item } = complianceSeed(s);
+        expect(item.latestVersion).toEqual({ S: "latest" });
+        const tables = s.where("AWS::DynamoDB::Table", (r) =>
+            /ComplianceSchemaStorageTable/.test(r.logicalId)
+        );
+        expect(tables).toHaveLength(1);
+        const index = (tables[0].properties.GlobalSecondaryIndexes || []).find(
+            (gsi: any) => gsi.IndexName === "LatestVersionIndex"
+        );
+        expect(index).toBeDefined();
+        expect(index.KeySchema).toEqual([
+            { AttributeName: "latestVersion", KeyType: "HASH" },
+            { AttributeName: "schemaName", KeyType: "RANGE" },
+        ]);
+        expect(index.Projection).toEqual({ ProjectionType: "ALL" });
+    });
+
     test("the previous AwsCustomResource seed is gone from apiBuilder2", () => {
         // An upgrade then creates the new seed (a conditional put that leaves the existing row
         // alone) and deletes the old resource, whose Delete made no call.

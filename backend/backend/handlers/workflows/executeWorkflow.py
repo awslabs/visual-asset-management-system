@@ -40,7 +40,9 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 
 from common.validators import validate
-from common.assetLocations import is_folder_location, normalize_location, object_key_for
+from common.assetLocations import (
+    folder_listing_prefix, in_folder, is_folder_location, normalize_location, object_key_for, relative_path_in,
+)
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.apiRoutes import (
     API_ASSET_METADATA,
@@ -742,7 +744,7 @@ def _collapse_selections(selections):
     return [s for s in distinct if s in kept]
 
 
-def _list_selection_files(bucket, prefix, asset_root_prefix, limit):
+def _list_selection_files(bucket, prefix, asset_root_prefix, limit, location=None, folder=None):
     """The current files under one whole-asset or folder selection: (files, omitted, exact).
 
     `files` are asset-relative keys ('/sub/m.glb') in S3 key order, at most `limit` of them; `omitted`
@@ -751,7 +753,11 @@ def _list_selection_files(bucket, prefix, asset_root_prefix, limit):
 
     ListObjectsV2 returns current objects only, so an archived file (whose current version is a delete
     marker) is never listed. Folder markers (keys ending in '/') and generated preview files
-    (PREVIEW_FILE_PATTERN) are skipped; neither is a file of the asset a pipeline should describe."""
+    (PREVIEW_FILE_PATTERN) are skipped; neither is a file of the asset a pipeline should describe.
+
+    For a folder of a single-file `location`, `prefix` is `folder_listing_prefix(location, folder)`: a key is
+    kept when `in_folder` places it in `folder`, and its path is `relative_path_in`, so the copy named like the
+    file (`/{name}/{name}`) is part of the folder `/{name}/` and every key keeps its one path."""
     files = []
     omitted = 0
     scanned = 0
@@ -761,10 +767,18 @@ def _list_selection_files(bucket, prefix, asset_root_prefix, limit):
         for obj in response.get("Contents", []) or []:
             scanned += 1
             key = obj.get("Key", "") or ""
-            if key.endswith("/") or PREVIEW_FILE_PATTERN in key or not key.startswith(asset_root_prefix):
+            if key.endswith("/") or PREVIEW_FILE_PATTERN in key:
+                continue
+            if location is not None:
+                if not in_folder(location, folder, key):
+                    continue
+                relative = relative_path_in(location, key)
+            elif key.startswith(asset_root_prefix):
+                relative = "/" + key[len(asset_root_prefix):]
+            else:
                 continue
             if len(files) < limit:
-                files.append("/" + key[len(asset_root_prefix):])
+                files.append(relative)
             else:
                 omitted += 1
         token = response.get("NextContinuationToken")
@@ -828,8 +842,13 @@ def _expand_asset_selections(order, grouped, asset_records):
                 expansion["exact"] = False
                 truncated.append((label, None, False))
                 continue
-            files, omitted, exact = _list_selection_files(
-                bucket, root_prefix + selection.lstrip("/"), root_prefix, limit)
+            if is_folder_location(root):
+                files, omitted, exact = _list_selection_files(
+                    bucket, root_prefix + selection.lstrip("/"), root_prefix, limit)
+            else:
+                files, omitted, exact = _list_selection_files(
+                    bucket, folder_listing_prefix(root, selection), root_prefix, limit, location=root,
+                    folder=selection)
             files = [f for f in files if f not in explicit]
             budget -= len(files)
             expansion["files"].extend(files)

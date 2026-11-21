@@ -1,7 +1,7 @@
 openapi: "3.0.1"
 info:
     title: "Amazon Visual Asset Management System API"
-    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match. With AWS WAF enabled (`app.useWaf`), any operation can answer `403` before the request reaches VAMS when the deployment's web ACL blocks it at the API Gateway stage; that answer is the `RequestBlocked` response (`#/components/responses/RequestBlocked`), whose body carries `message`, `blockedBy: waf` and `requestId`, API Gateway's extended request ID, while a `403` from an authorization denial carries no `blockedBy`. Any authenticated operation answers `401` (the `Unauthorized` response, `#/components/responses/Unauthorized`) when the custom authorizer does not accept the credential (missing, expired or invalid token; unknown, disabled or expired API key), and `403` when it accepts the credential and refuses the request (source IP not allowed, an API key whose user has no roles)."
+    description: "REST API (v1) for the Visual Asset Management System (VAMS). All endpoints are secured by a custom Lambda authorizer that validates JWT tokens from Amazon Cognito or external OAuth providers, and enforces two-tier ABAC/RBAC authorization. Surrounding whitespace is removed from a submitted `description` or version `comment` before any length constraint is applied and before the value is stored, so the value returned by a subsequent read is the trimmed one; a padded value whose trimmed length falls below the declared minLength is rejected. This applies to asset, asset version, database, tag, tag type, role, permission constraint and API key requests, and to compliance requests, whose schema names, database and asset ids, descriptions and reasons are trimmed the same way. Pipeline, pipeline template and workflow descriptions are stored as submitted. File paths, S3 keys, echoed upload tokens and search terms are never trimmed, because a surrounding space is part of the key or changes which rows match. With AWS WAF enabled (`app.useWaf`), any operation can answer `403` before the request reaches VAMS when the deployment's web ACL blocks it at the API Gateway stage; that answer is the `RequestBlocked` response (`#/components/responses/RequestBlocked`), whose body carries `message`, `blockedBy: waf` and `requestId`, API Gateway's extended request ID, while a `403` from an authorization denial carries no `blockedBy`. Any authenticated operation answers `401` (the `Unauthorized` response, `#/components/responses/Unauthorized`) when the custom authorizer does not accept the credential (missing, expired or invalid token; unknown, disabled or expired API key, or an API key record with an unreadable expiration date or no user ID), and `403` when it accepts the credential and refuses the request (source IP not allowed, an API key whose user has no roles)."
     version: "2022-01-27 01:29:36UTC"
 servers:
     - url: "{apiGatewayUrl}"
@@ -595,7 +595,7 @@ paths:
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for an asset link (bulk operation)."
-            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific asset link. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -1467,7 +1467,7 @@ paths:
               - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
-    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionId:commentId}:
+    /comments/assets/{assetId}/assetVersionId:commentId/{assetVersionIdAndCommentId}:
         get:
             summary: "Get specified comment."
             responses:
@@ -1494,12 +1494,13 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId"
+              - name: "assetVersionIdAndCommentId"
                 in: "path"
-                description: "Unique identifier for comment. Validation will be performed on asset version ID and comment ID."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path. Validation will be performed on asset version ID and comment ID."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
+              - $ref: "#/components/parameters/showArchivedAssetParam"
             security:
               - DefaultCognitoAuthorizer: []
         delete:
@@ -1524,9 +1525,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1560,9 +1561,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1596,9 +1597,9 @@ paths:
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
-              - name: "assetVersionId:commentId" 
+              - name: "assetVersionIdAndCommentId" 
                 in: "path"
-                description: "Unique identifier for comment."
+                description: "The asset version ID and the comment ID, colon-joined (for example 2:c1a2b3c4). The API route names this path parameter {assetVersionId:commentId}; this file names it without the colon so that OpenAPI validators can match the parameter to the path."
                 required: true
                 schema:
                     $ref: '#/components/schemas/id_regex'
@@ -1691,6 +1692,13 @@ paths:
     /database/{databaseId}:
         get:
             summary: "Get a database."
+            parameters:
+              - name: "databaseId"
+                in: "path"
+                description: "Unique identifier for database."
+                required: true
+                schema:
+                    $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: OK
@@ -1766,7 +1774,7 @@ paths:
                 "200":
                     description: Database deleted.
                 "400":
-                    description: Database contains an active workflow, pipeline, or assets.
+                    description: "Database contains an active workflow, pipeline, or assets, or an unexpected error stopped the delete ('VAMS General Error: Error deleting database.')."
                 "403":
                     description: Action not allowed or not authorized.
                 "404":
@@ -1777,6 +1785,12 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "Right after an update that adds the compliance evaluation table's PipelineRuleWaitIndex, while Amazon DynamoDB still builds that index ('The database cannot be deleted while compliance finishes building an index after an update. Try again in a few minutes.'). Nothing is changed; the delete works once the index is active."
                     content:
                         application/json:
                             schema:
@@ -2022,9 +2036,12 @@ paths:
                         schema:
                             type: object
                             required:
-                                - databaseId
-                                - assetId
+                                - downloadType
                             properties:
+                                downloadType:
+                                    type: string
+                                    enum: [assetFile, assetPreview]
+                                    description: "assetFile signs URLs for the asset's files; assetPreview signs a URL for the asset's preview image (its previewLocation)."
                                 key:
                                     $ref: "#/components/schemas/asset_path_pattern_regex"
                                 keys:
@@ -2143,7 +2160,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip:
         post:
             summary: "Create a Download as Zip job for files, folders, or the whole asset."
-            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller and is visible only to that caller. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. A single-file asset (one created from a bucketExistingKey without a trailing '/') is refused with 400: download its files directly instead. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. A single-file asset (one created from a bucketExistingKey without a trailing '/') is refused with 400: download its files directly instead. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
             requestBody:
                 required: true
                 content:
@@ -2164,7 +2181,8 @@ paths:
                         - Invalid selection: no entries, more than 1000, a whole-asset entry combined with another entry, a path that is not asset-relative or contains backslashes, control characters, empty, '.' or '..' segments, a folder path without a trailing '/', or a versionId on a non-file entry.
                         - assetVersionId combined with assetVersionIdAlias, or an asset version pin combined with a per-file versionId.
                         - compression 'deflate' with a format other than zip.
-                        - Asset not distributable or archived.
+                        - Asset not distributable.
+                        - Asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded').
                         - A selected file or folder does not exist, has a blocked extension or media type, or the selection exceeds the file count or total size limit.
                         - A selected file is archived ('The selection includes an archived or deleted item. Remove it from the selection, or restore it first.').
                         - The Zip Archive workflow refused the run before starting it, for example because it is disabled or the selection fails its checks ('The archive job could not be started for this selection'); no job is recorded.
@@ -2179,7 +2197,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Asset not found: the asset does not exist or the caller may not read it (asset GET); both answer alike. Or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
+                    description: "Asset not found: the asset does not exist, is archived, or the caller may not read it (asset GET); all three answer alike. Or Download as Zip is not enabled for this deployment (message 'Zip downloads are not enabled for this deployment')."
                     content:
                         application/json:
                             schema:
@@ -2353,7 +2371,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
         post:
             summary: "Issue a short-lived download URL for a finished zip download."
-            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, and the archive object exists. For the caller's own job that is all. Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route) and every file in the archive is still present, not archived and not a blocked type at the time of the request; otherwise it answers 404 (not permitted) or 400 (a file is no longer downloadable, the same message as a refused create). Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, 'A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.'). Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "A download URL for the archive."
@@ -2362,7 +2380,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/zipDownloadUrlResponse"
                 "400":
-                    description: "Invalid path parameters, the asset is not distributable or is archived, or (another user's job) a file in the archive is no longer downloadable."
+                    description: "Invalid path parameters, the asset is not distributable, the asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` ('Asset is quarantined and cannot be downloaded'), or a file in the archive is no longer downloadable ('A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.')."
                     content:
                         application/json:
                             schema:
@@ -2374,7 +2392,7 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Zip download not found, or Download as Zip is not enabled for this deployment."
+                    description: "Zip download not found: the job does not exist, the asset is archived, the caller can no longer read the asset, or (another user's job) the caller may not download from it. Or Download as Zip is not enabled for this deployment."
                     content:
                         application/json:
                             schema:
@@ -3456,7 +3474,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/moveFile:
         post:
             summary: "Move or rename a file within an asset."
-            description: "Move a file to a different path or rename it in place. Handles both moving files to different directories and renaming files within the same directory. Source file must not be archived, and destination must not exist (including archived versions). Preview files and auxiliary files are automatically moved/renamed with the base file."
+            description: "Move a file to a different path or rename it in place. Handles both moving files to different directories and renaming files within the same directory. Source file must not be archived, and destination must not exist (including archived versions). Preview files and auxiliary files are automatically moved/renamed with the base file. The copy runs within the request: when copying a large file outlasts the Amazon API Gateway integration timeout (app.api.apiGatewayRest.apiGatewayTimeoutTime, 29 seconds by default), API Gateway answers 504 while the AWS Lambda function keeps copying."
             requestBody:
                 required: true
                 content:
@@ -3507,6 +3525,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/copyFile:
         post:
             summary: "Copy a file within an asset, to another asset, or across databases."
+            description: "The copy runs within the request: when copying a large file outlasts the Amazon API Gateway integration timeout (app.api.apiGatewayRest.apiGatewayTimeoutTime, 29 seconds by default), API Gateway answers 504 while the AWS Lambda function keeps copying."
             requestBody:
                 required: true
                 content:
@@ -5909,7 +5928,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for an asset (bulk operation)."
-            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific asset. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -6153,7 +6172,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata or attributes for a file (bulk operation)."
-            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata or attribute items for a specific file. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). File attributes only support 'string' metadataValueType. Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -6365,7 +6384,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
               - DefaultCognitoAuthorizer: []
         put:
             summary: "Update metadata for a database (bulk operation)."
-            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
+            description: "Update existing metadata items for a specific database. Supports two update modes: UPDATE (default, upserts provided metadata) and REPLACE_ALL (replaces all metadata with provided items, requires PUT+POST+DELETE permissions; a REPLACE_ALL that removes stored keys also requires the DELETE method on this route and returns 403 without it). Returns partial success information if some items fail. REPLACE_ALL mode includes automatic rollback on failure."
             requestBody:
                 required: true
                 content:
@@ -8165,7 +8184,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /uploads/{uploadId}:
         get:
             summary: "Get the status of an upload whose large files are ingested asynchronously."
-            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. An upload whose files all landed at completion has no record, so it answers 404. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
+            description: "Returns the upload's status and the outcome of each file it accepted for asynchronous ingestion (files over 1 GiB, largeFileAsynchronousHandling in the completion response). Completion keeps the record of such an upload with status processing_async and one PENDING entry per file; each file then becomes SUCCEEDED or FAILED, and the upload completed or completed_with_errors. The record is kept for 7 days. A user upload whose files all landed at completion has no record, so it answers 404; the upload a workflow execution makes to store its pipeline outputs keeps its record with status completed or completed_with_errors and answers 200. Requires GET on the upload's asset. A missing upload, an upload of another database, a missing asset and an asset the caller may not read all answer the same 404."
             parameters:
                 - name: "uploadId"
                   in: path
@@ -8207,7 +8226,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: "Upload not found: no record (including an upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
+                    description: "Upload not found: no record (including a user upload whose files all landed at completion, and a record past its 7 days), another database, or an asset the caller may not read."
                     content:
                         application/json:
                             schema:
@@ -8239,7 +8258,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/completeUploadResponse"
                 "400":
-                    description: Invalid parameters. A missing upload also answers 400.
+                    description: "Invalid parameters. A missing upload also answers 400, and so does a second completion of an upload whose record is kept for its asynchronously processed files ('VAMS General Error: Upload has already been completed.')."
                     content:
                         application/json:
                             schema:
@@ -8545,7 +8564,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /workflows/executions/{executionId}/details:
         get:
             summary: "Get full detail and input/output traceability for an execution."
-            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles, outputs.files, and outputs.results have no paged route, which is why the response budget is spent on them first. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required. While output files over 1 GiB are still being copied into the asset, the execution stays RUNNING and the response adds executionPhase 'INGESTING_OUTPUTS' and outputIngestion {filesTotal, filesDone, bytesTotal, bytesDone, files, filesTruncated}; both are absent for every other execution. outputIngestion.files lists each copy, sorted by relativeKey, at most 100 entries: {relativeKey, status (QUEUED, RUNNING, SUCCEEDED, FAILED or CANCELLED), bytesTotal, partsTotal, partsDone, error (a generic reason, set only for a FAILED or CANCELLED copy)}; filesTruncated is true when the execution has more copies than are listed. The per-file entries are display progress read from an eventually consistent index. Such a file's outputs.files row carries ingestionStatus 'SUCCEEDED' once it has landed, and a file whose copy failed is left out of outputs.files and named in executionError. A SKIPPED execution (fileUpload trigger launches a concurrency restriction refused) has no pipelines or outputs; its inputFiles are the files the refused launches named, and the response adds a skip block (see executionSkip) whose blockingExecutionId is present only when the caller also passes this read check on the blocking execution."
+            description: "Returns the underlying pipelines (with status, timing, names/descriptions cross-fetched from the pipeline definitions, and each pipeline's resolved configuration as renderedConfig, which is post-template-tag and pre-system-tag), the execution's output target (outputLocationType plus outputDatabaseId/outputAssetId for asset outputs), input files, input metadata (asset and file metadata under inputMetadata, database metadata under inputDatabaseMetadata; each row reports its entity's metadata under 'metadata' and that file's attributes under 'attributes', kept separate because a pipeline's metadataInputs grants fileMetadata and fileAttributes independently - a row with attributes and no metadata still appears with an empty metadata map, and asset/database-scope rows always report an empty attributes map; a row's expanded flag is true for a file record a metadataInputs.assetFileMetadata expansion added - context the step was handed for a whole-asset or folder selection, not one of its input files - and false on every other row, including rows recorded before the flag existed), the metadata sources of the run (metadataSourceDatabases lists every database captured and matches the inputDatabaseMetadata rows; metadataSourceAssets lists the assets named purely as sources; metadataSourceDatabaseId is the single database an execution with no input files named, and is empty for an execution whose databases came from its input files), input configurations, and a listing of all outputs (files, metadata, results) each tagged with the producing pipelineId. Input metadata is attributed PER PIPELINE: every row carries the pipelineId of the pipeline that read the entity, because a workflow's pipelines do not read the same entities - each receives the subset of input files passing its own inputFileFilters, and an inputFileArity 'none' pipeline receives none. A file's metadata belongs only to the pipeline that received that file; an asset's own ('/') row to a pipeline receiving at least one file from that asset or, for a named metadata-source asset, to every pipeline (a file-less pipeline reads the first asset group, so that group's row is recorded for it); a database's metadata to EVERY pipeline, since database metadata describes an entity rather than a file selection and every step is handed the run's whole set of databases. The same entity therefore legitimately appears once per pipeline that read it - a 3-pipeline run returns each database row 3 times, identical but for the pipelineId - and those rows are distinct facts rather than one row repeated. Works for running and completed executions; running executions may be partially populated. workflowVersion is the published workflow state machine version the execution started on (an integer), null for an execution started before versions were recorded; workflowVersionCurrent is true while the workflow still runs that version, false once its state machine has been redeployed since the execution, and null when either version is unrecorded (for example, the workflow was deleted). A save from the workflow builder always redeploys the state machine, as does an API or CLI update that supplies the step list (specifiedPipelines); a change to a setting one of its pipelines contributes to the state machine (execution type, target, callback mode, timeouts, Deadline Cloud job settings) redeploys it too. The flag does not track workflowSystemConfig or the pipeline names and descriptions in this response: they are read live and can change without a redeploy, so they may differ from what the execution used whatever the flag says; each pipeline entry's effectiveSystemConfig is the snapshot that step ran under. Every pipeline entry carries availableLogs, the log sources known for that step ({logId, kind, label, sourceType, stageName, logGroupName, logStreamName, logStreamPrefix}): kind is 'invocation' (the step's own invocation log), 'registered' (a location the pipeline reported for itself), 'subStateMachine' (the logging destination of a registered Step Functions sub-execution) or 'deadlineCloudJob' (the session logs of a registered AWS Deadline Cloud job: the queue's /aws/deadline/{farmId}/{queueId} log group under the session- stream prefix, read by the exact streams of the job's sessions); sourceType is one of stateMachine, lambda, batch, ecs, container, custom, deadlineCloud; and logId is the stable identifier GET /workflows/executions/{executionId}/logs accepts as its logId parameter. With includeSubExecutions=true each entry additionally carries subExecutions - one per registered sub-process, with resourceType, label, stageName, abortable (true for the types VAMS stops on abort: Step Functions executions, AWS Batch jobs, Deadline Cloud jobs, SageMaker training jobs and pipeline executions; false for any other registered type, which is reported by its label, stageName and raw resourceType with status UNKNOWN and is listed under notAbortable when the execution is aborted), resourceName, status (RUNNING, SUCCEEDED, FAILED, ABORTED, TIMED_OUT, NOT_STARTED or UNKNOWN), startDate, stopDate, error, cause, stageSource ('definition' when the stage order came from the sub-state-machine definition, 'history' when only its execution history was readable, 'none'), stagesTruncated, historyTruncated and stages, the ordered stage frame derived at read time from the sub-state-machine definition and its execution history, each stage reporting stageName, stateType, status, caught (a failure the sub-process handled and continued past), startDate, stopDate, error, cause, attempts and, for a Map state, iterations or distributed, and for an AWS Batch task the resolved batch {jobId, logStreamName}; a registered AWS Deadline Cloud job (resourceType deadlineCloudJob) has no state machine and is reported with its summary only (stageSource 'none'), resolved live from the farm: resourceName is the job name, status is the job's task-run status folded onto the same vocabulary (RUNNING while pending, scheduled, running, suspended or being interrupted; SUCCEEDED; FAILED for a failed or not-compatible job and for a failed create, update or upload; ABORTED for a cancelled job; otherwise UNKNOWN), startDate/stopDate its start and end, cause its lifecycle status message, and deadline {farmId, queueId, jobId} names the job by id alone (its parameters are never returned); a registered Amazon SageMaker training job (resourceType sageMakerTrainingJob) or pipeline execution (resourceType sageMakerPipelineExecution) is likewise reported with its summary only, resolved live from SageMaker in the deployment account: status folds InProgress/Executing and Stopping onto RUNNING, Completed/Succeeded onto SUCCEEDED, Failed onto FAILED and Stopped onto ABORTED, resourceName is the training job name or the pipeline execution display name, cause is the failure reason, and sageMaker names the job ({trainingJobName}) or the execution ({pipelineName, pipelineExecutionId}) by name and id tail only - ARNs, hyperparameters and pipeline parameters are never returned - plus subExecutionsTruncated and subExecutionWarnings. Nothing about stages is stored; the flag is off by default because the derivation reads Step Functions history, and every such read is best-effort (a failure yields status UNKNOWN and a warning, never an error). All dates are ISO-8601 UTC strings. Internal details (Step Functions and resource ARNs, temporary/auxiliary S3 input/output locations, credential-vending fields) are omitted; availableLogs names log groups and stream prefixes, which embed function and job-definition names, but never ARNs. Every collection is bounded so the response fits the AWS Lambda synchronous-response limit: each is read to at most 2000 rows, and each is then trimmed to at most 1000 returned rows apart from outputs.files, which the read cap and the byte budget bound on their own. The assembled response is additionally held to a byte ceiling below the Lambda limit, so a collection whose rows are large is trimmed further than the row caps alone would: the file collections are served first out of that ceiling and the metadata collections divide what they leave, with outputs.results granted ahead of them. truncatedCollections names every collection that came back partial -- 'inputFiles', 'inputMetadata', 'inputDatabaseMetadata', 'outputs.files', 'outputs.metadata', 'outputs.results', and, when the step section exceeded its byte share, 'pipelines' and 'inputConfigurations' together with (only under includeSubExecutions=true) 'pipelines.subExecutions', which means every sub-execution kept its summary but its stages were dropped, before any inline configuration body was shortened -- and is empty when the view is complete. The three metadata collections (inputMetadata, inputDatabaseMetadata, outputs.metadata) are retrievable in full from GET /workflows/executions/{executionId}/details/metadata, which pages one collection at a time with a continuation token; inputFiles and outputs.files are retrievable in full from GET /workflows/executions/{executionId}/details/files. The result text of outputs.results pages through GET /workflows/executions/{executionId}/details/results, concatenated, one page at a time. inputMetadata and inputDatabaseMetadata are read together, so a read-cap hit names both while a return-trim names only the trimmed collection. Both are per-pipeline collections, so their bounds are spent evenly across the run's pipelines rather than in collection order - each pipeline reads its own share of the 2000-row read budget, and a return trim takes a share from each pipeline instead of a prefix, so a trimmed collection still holds rows for every pipeline rather than reading as though the later steps took no metadata. A pipeline entry's renderedConfig is the configuration body after the caller's template-tag values were substituted and BEFORE the reserved system tags were: template substitution is two-stage, so the system tags ({{assetMetadataObject}}, {{jobName}}, the output paths) resolve per step at launch once that step's manifest and execution context exist. renderedConfig therefore still shows those as literal {{tag}} placeholders, which is expected rather than a failed substitution. It is held inline up to a size limit, and renderedConfigTruncated reports whether that inline copy was shortened. The entry also carries renderedConfigLocation ({bucket, key}) whenever the object exists - not only on truncation - because it is the Amazon S3 object holding the FULLY substituted body the pipeline itself read. The two fields describe different stages of the same body: renderedConfig is pre-system-tag, renderedConfigLocation post, so they are not two views of one value and a caller wanting what the step actually ran with needs the pointer even when the inline copy is complete. Requires GET on the execution's workflow, GET on every input-file asset tied to the execution, GET on every asset named as a metadata source, GET on the asset the run wrote to whenever it wrote to one, and GET on every database in metadataSourceDatabases - every captured database must be permitted, so the databases reported are exactly those access to this view required. While output files over 1 GiB are still being copied into the asset, the execution stays RUNNING and the response adds executionPhase 'INGESTING_OUTPUTS' and outputIngestion {filesTotal, filesDone, bytesTotal, bytesDone, files, filesTruncated}; both are absent for every other execution. outputIngestion.files lists each copy, sorted by relativeKey, at most 100 entries: {relativeKey, status (QUEUED, RUNNING, SUCCEEDED, FAILED or CANCELLED), bytesTotal, partsTotal, partsDone, error (a generic reason, set only for a FAILED or CANCELLED copy)}; filesTruncated is true when the execution has more copies than are listed. The per-file entries are display progress read from an eventually consistent index. Such a file's outputs.files row carries ingestionStatus 'SUCCEEDED' once it has landed, and a file whose copy failed is left out of outputs.files and named in executionError. A SKIPPED execution (fileUpload trigger launches a concurrency restriction refused) has no pipelines or outputs; its inputFiles are the files the refused launches named, and the response adds a skip block (see executionSkip) whose blockingExecutionId is present only when the caller also passes this read check on the blocking execution."
             parameters:
               - in: path
                 name: executionId
@@ -8564,6 +8583,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
             responses:
                 "200":
                     description: OK
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    message:
+                                        $ref: "#/components/schemas/executionDetails"
                 "400":
                     description: "Invalid or missing executionId, or an includeSubExecutions value other than 'true' or 'false' (the body message is: includeSubExecutions must be 'true' or 'false')."
                     content:
@@ -8603,9 +8629,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 sections: 'input' is inputMetadata (the asset and file metadata each step read),
                 'inputDatabase' is inputDatabaseMetadata (each metadata-source database's own
                 metadata), and 'output' is outputs.metadata. The details view's file collections
-                (inputFiles, outputs.files) and outputs.results have no paged equivalent, which is why
-                the details view serves them ahead of the metadata collections when its own byte
-                budget cannot hold everything.
+                (inputFiles, outputs.files) page through GET
+                /workflows/executions/{executionId}/details/files. The result text of
+                outputs.results pages through GET
+                /workflows/executions/{executionId}/details/results, concatenated, one page at
+                a time.
 
 
                 Every metadata collection is keyed per pipeline execution, so the walk visits the
@@ -9916,7 +9944,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhWorkstationRecord"
                 "400":
-                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
+                    description: "Validation failed (`Request body is not valid JSON`), the instance type is outside the deployment allow-list, the image is not a registered desktop image with a determinable OS family equal to `osFamily` (`imageId is not a registered VDI image`, `The image's OS family cannot be determined`, `osFamily does not match the image`), the image's EDH profile lists the instance type only under architectures of another family than the image's, with `x86_64` and `i386` one family (`instanceType does not match the image's architecture`), an AMI recipe whose `AVAILABLE` build registered the image lists `launchInstanceTypes` that leave the instance type out (`instanceType is not offered for this image`; a recipe read that fails refuses nothing), or `leaseHours` is outside what the lease policy allows (`leaseHours must be 1-<cap>`, `Leases are disabled for this deployment`), or `rootSizeGb` is below the image's registered root size (`Root disk size must be at least <n> GB for this image`); or the named capacity reservation is not registered or is disabled (`capacityReservationId is not registered`; for a role with `GET` or `POST` on the id, any other role receives `403`), is not `active` or EC2 holds no such reservation (`The capacity reservation is not active`), is in an Availability Zone EDH has no private subnet in (`The capacity reservation's Availability Zone (<az>) has no EDH private subnet; choose another reservation or On-demand`), is of another instance type (`instanceType does not match the capacity reservation`), or has a platform that does not suit the image's OS family (`The capacity reservation's platform does not match the image`)."
                     content:
                         application/json:
                             schema:
@@ -10642,10 +10670,11 @@ Several triggers of one type are supported: address each with its own key ('<typ
                 - name: idleMinutes
                   in: query
                   required: false
-                  description: "Idle threshold in minutes; 120 when omitted, at least 1."
+                  description: "Idle threshold in minutes; 120 when omitted, from 1 to 525600 (a year)."
                   schema:
                       type: integer
                       minimum: 1
+                      maximum: 525600
                       default: 120
             responses:
                 "200":
@@ -10655,7 +10684,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/edhStaleInstanceList"
                 "400":
-                    description: "`idleMinutes` is not an integer or is below 1."
+                    description: "`idleMinutes` is not an integer, is below 1 or is above 525600."
                     content:
                         application/json:
                             schema:
@@ -10706,7 +10735,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "The session does not exist."
+                    description: "The session does not exist (answered only to a caller allowed on a session of every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -10757,7 +10786,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "The session does not exist."
+                    description: "The session does not exist (answered only to a caller allowed on a session of every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11074,7 +11103,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`unresolved placeholder(s) in component document: <placeholders>`, `deployment value(s) not in the expected form for: <placeholders>`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
+                    description: "`recipeId is already in use`, the `duplicateOf` recipe does not exist (`the recipe to duplicate does not exist`; answered only to a caller allowed to read a recipe with that id for every OS family, any other caller receives `403`), another recipe uses the `stackName` (`stackName is already used by another recipe`), the body carries `assets` without `duplicateOf` (`assets are only supported on shipped recipes`) or `assets` that are not the source's (`the assets of a duplicated recipe cannot be changed`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`)."
                     content:
                         application/json:
                             schema:
@@ -11114,7 +11143,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11150,13 +11179,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The recipe has `source: config` (`a config recipe is edited in the repository, not here`), the body carries `assets` for a recipe that holds none (`assets are only supported on shipped recipes`) or `assets` other than the ones the recipe holds (`the assets of a duplicated recipe cannot be changed`), another recipe uses the `stackName` (`stackName is already used by recipe '<id>'`), or a component document cannot be materialized (`unresolved placeholder(s) in component document: <placeholders>`, `deployment value(s) not in the expected form for: <placeholders>`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`), the recipe was deleted after the request read it (`the recipe no longer exists`), or other writes to the recipe kept landing between the request's read and its write (`the recipe changed while it was saved; try again`)."
+                    description: "The recipe has `source: config` (`a config recipe is edited in the repository, not here`), the body carries `assets` for a recipe that holds none (`assets are only supported on shipped recipes`) or `assets` other than the ones the recipe holds (`the assets of a duplicated recipe cannot be changed`), another recipe uses the `stackName` (`stackName is already used by another recipe`), or a component document cannot be materialized (`a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`), the recipe was deleted after the request read it (`the recipe no longer exists`), or other writes to the recipe kept landing between the request's read and its write (`the recipe changed while it was saved; try again`)."
                     content:
                         application/json:
                             schema:
@@ -11186,7 +11215,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11232,7 +11261,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
@@ -11268,13 +11297,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "Recipe not found."
+                    description: "Recipe not found (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`)."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "`the recipe is disabled`, `the recipe is being deleted`, `the recipe no longer exists` (deleted after the request read it), or `the recipe's builds changed while the request was placed; try again` (other requests kept taking the version this one claimed); or, on a build that starts at once, the parent image cannot be resolved (`SSM parameter <name> could not be read (<code>)`, `EDH lists no <kind> stack named '<name>'`), Amazon EC2 does not find the AMI it resolves to (`the parent image could not be found`), Amazon EC2 reports that AMI or a build instance type as running another architecture family than the recipe's `architecture` (`the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`), or a component document cannot be materialized (`recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`, `unresolved placeholder(s) in component document: <placeholders>`, `deployment value(s) not in the expected form for: <placeholders>`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`). A refusal creates no EC2 Image Builder resource. A refused new version is not recorded; a queued build the request started goes back to QUEUED with `not started: <reason>` in its `error`."
+                    description: "`the recipe is disabled`, `the recipe is being deleted`, `the recipe no longer exists` (deleted after the request read it), or `the recipe's builds changed while the request was placed; try again` (other requests kept taking the version this one claimed); or, on a build that starts at once, the parent image cannot be resolved (`the parent image's SSM parameter could not be read`, `EDH lists no stack of the recipe's kind with the parent image's name`), Amazon EC2 does not find the AMI it resolves to (`the parent image could not be found`), Amazon EC2 reports that AMI or a build instance type as running another architecture family than the recipe's `architecture` (`the parent image's architecture does not match the recipe's architecture`, `buildInstanceType does not match the recipe's architecture`), or a component document cannot be materialized (`recipe declares assets but EDH_AMI_BUILD_ARTEFACTS_BUCKET or assetPrefix is not set`, `a component document names a placeholder the recipe does not declare`, `a component document names a deployment value not in its expected form`, `component <n> is <length> characters once its placeholders are resolved; Image Builder accepts at most 16000`). A refusal creates no EC2 Image Builder resource. A refused new version is not recorded; a queued build the request started goes back to QUEUED with `not started: <reason>` in its `error`."
                     content:
                         application/json:
                             schema:
@@ -11328,7 +11357,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "`Recipe not found` or `Build not found`."
+                    description: "`Recipe not found` (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`) or `Build not found`."
                     content:
                         application/json:
                             schema:
@@ -11388,7 +11417,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "404":
-                    description: "`Recipe not found` or `Build not found`."
+                    description: "`Recipe not found` (answered only to a caller allowed on a recipe with that id for every OS family; any other caller receives `403`) or `Build not found`."
                     content:
                         application/json:
                             schema:
@@ -11596,11 +11625,25 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/schemas:
         get:
             summary: "List compliance schemas."
-            description: "Returns the latest version of every registered compliance schema the caller may read. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
+            description: "Returns one page of the latest version of each registered compliance schema the caller may read, ordered by name; only each schema's latest version is read. `NextToken` is present while more schemas remain; a page can be short, or empty, while a `NextToken` is present, because the schemas the caller may not read are left out. With `databaseId`, only GLOBAL schemas and schemas scoped to that database are returned. Each record carries `schemaFormat` (`vams-rules-v1`, or `legacy` for a body that is not a vams-rules-v1 document; a legacy schema cannot be bound, updated or evaluated and is listed so it can be deleted)."
             parameters:
                 - name: databaseId
                   in: query
                   description: "Restrict the listing to GLOBAL schemas plus the schemas scoped to this database; a deleted database's `<databaseId>#deleted` (sent as `%23deleted`) reads its history."
+                  required: false
+                  schema:
+                      type: string
+                - name: maxItems
+                  in: query
+                  description: "Schemas per page (default 100, at most 200)."
+                  required: false
+                  schema:
+                      type: integer
+                      minimum: 1
+                      maximum: 200
+                - name: startingToken
+                  in: query
+                  description: "The previous page's `NextToken`."
                   required: false
                   schema:
                       type: string
@@ -11612,7 +11655,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/listComplianceSchemasResponse"
                 "400":
-                    description: Invalid parameters.
+                    description: "Invalid parameters: an invalid `databaseId`, `maxItems must be an integer`, or `Invalid pagination token` (a malformed token, or one of another listing)."
                     content:
                         application/json:
                             schema:
@@ -11648,19 +11691,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a deleted database's schema, or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `ruleName`. A caller who may not run that rule's workflow gets the 403 instead."
+                    description: "Invalid parameters, invalid schema body, the scoping database does not exist, the name belongs to a system schema (`System schemas cannot be modified`; only the system user writes its next version) or to a deleted database's schema, the name exists, the request moves it to a database scope and it is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`), or a new or changed pipeline rule uses a system pipeline or workflow (a record with `isSystem`, such as the SYSTEM GenAI metadata pipeline): `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A caller who may not run that rule's workflow gets the 403 instead."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule rules[<n>]` with `rulePosition`, the rule's position in the body's `rules`. The same answer is given when the workflow or a pipeline does not exist."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/pipelineRuleRefusedError"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)."
                     content:
                         application/json:
                             schema:
@@ -11683,7 +11726,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the compliance schema. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: Schema retrieved successfully.
@@ -11720,7 +11763,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the compliance schema to update. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: true
                 content:
@@ -11735,19 +11778,19 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/writeComplianceSchemaResponse"
                 "400":
-                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `ruleName`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
+                    description: "Invalid parameters or schema body, the schema does not exist, the scoping database does not exist, the schema is a system schema, the new `databaseId` is a database and the schema is bound in another database (`The schema is bound in a database the new scope does not include. Remove those bindings first, or make the schema available to every database (GLOBAL).`) (a move to GLOBAL is always allowed), or a new or changed pipeline rule uses a system pipeline or workflow: `A pipeline rule cannot use a system pipeline. To require the generated metadata, add a metadata rule on its genai_* fields.` with `rulePosition`, the rule's position in the body's `rules`. A rule left as stored is not re-checked; when evaluated it is recorded as an error with the same message and not launched."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule '<name>'` with `ruleName`. The same answer is given when the workflow or a pipeline does not exist."
+                    description: "Not authorized, or a new or changed pipeline rule names a workflow the caller may not run: `Not authorized to run the workflow of pipeline rule rules[<n>]` with `rulePosition`, the rule's position in the body's `rules`. The same answer is given when the workflow or a pipeline does not exist."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/pipelineRuleRefusedError"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or another request saved the schema at the same time (`The schema was saved by another request at the same time. Reload it and save again.`)."
                     content:
                         application/json:
                             schema:
@@ -11769,7 +11812,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Name of the compliance schema to delete. Schema names are unique across GLOBAL and every database (one name space). The caller is authorized before the name is looked up: a schema in a scope the caller may not read answers 403, and a name no scope uses is checked as a GLOBAL schema (400 Schema not found when the caller may act on GLOBAL schemas, else 403)."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: Schema deleted.
@@ -11807,7 +11850,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - $ref: "#/components/parameters/complianceBindingsMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
@@ -11846,7 +11889,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: true
                 content:
@@ -11901,7 +11944,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             responses:
                 "200":
                     description: The database had no binding.
@@ -11951,13 +11994,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: true
                 content:
@@ -12006,13 +12049,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             responses:
                 "200":
                     description: Override removed, or the asset had no override.
@@ -12049,20 +12092,20 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}/{assetId}:
         post:
             summary: "Evaluate an asset."
-            description: "Evaluates an asset against the named schema, or against its bound schema when the body names none; naming a schema never changes the asset's binding. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Evaluates an asset against its bound schema. When the body names a schema the caller needs `GET` on it in its scope (a name no scope uses is checked as GLOBAL) and it must be GLOBAL or scoped to the asset's database, both decided before the asset is read; a named schema other than the bound one is a dry run: the response carries `dryRun: true`, the rule results and the verdict, `pipelineRulesNotRun` (pipeline rules do not run in a dry run), and no `evaluationId`, and nothing is recorded (no evaluation record, state change, audit entry or cascade). A schema with a rule that cannot be read, or whose `extends` parent is not found, gives verdict `error` and launches no pipeline rule. Metadata, relationship, file-structure, version-coverage and asset-attribute rules complete in the request; a pipeline rule selects the asset files its `inputFiles` describes, launches a workflow execution and leaves the evaluation `pending_pipeline` until the execution completes. While the asset holds an active exception against the schema version evaluated, a failing verdict is recorded on the evaluation (`exceptionApplied`) and the asset stays in the `exception` state instead of being quarantined. A rule whose tooling fails (an input selection the workflow cannot use, an execution that cannot be launched) is a rule result with `status` `error`: not a verdict, its enforcement does not apply, and `hasRuleErrors` is true; when every rule errored the `verdict` is `error` and the asset's state is left unchanged. The response also carries the `schemaVersion` read. A cascade awaiting approval is opened for an asset with children unless one for it is already pending. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: databaseId
                   in: path
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: false
                 content:
@@ -12077,13 +12120,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/evaluateAssetResponse"
                 "400":
-                    description: Invalid parameters, the asset does not exist, no schema is named or bound, or the evaluation could not run.
+                    description: "Invalid parameters, the asset does not exist, no schema is named or bound, the named schema does not exist (`Evaluation could not run: Schema not found`) or is not available to the asset's database (`The schema is not available to the asset's database`), the asset's binding changed after the request read it, or the evaluation could not run."
                     content:
                         application/json:
                             schema:
                                 $ref: "#/components/schemas/error"
                 "403":
-                    description: Not authorized.
+                    description: Not authorized, or the caller may not read the named schema.
                     content:
                         application/json:
                             schema:
@@ -12105,14 +12148,14 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/evaluate/{databaseId}:
         post:
             summary: "Evaluate every tracked asset of a database."
-            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). Assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds. While assets remain the response carries `NextToken` and `assetsRemaining` counts the assets still to evaluate: send the token as `startingToken` and the call evaluates only the assets not evaluated since the evaluation started, until no token is returned. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
+            description: "Evaluates every asset of the database that has a compliance record, each against the schema its record binds (the database binding or the asset's own override); no other database is read or evaluated. In a bound database, an asset with no compliance record yet is first registered under the binding (`registered`). The records are read a page at a time (within a page, assets in `pending_evaluation` first, then the least recently evaluated), at most 200 evaluations per call, and a call stops reading and launching after about 20 seconds. While anything is left to read the response carries `NextToken`: send it as `startingToken` and the call goes on from there, evaluating only the assets not evaluated since the evaluation started, until no token is returned. `assetsRemaining` counts the assets of the pages the call read and did not reach, so it can be 0 while a `NextToken` is present. `withoutSchema` counts tracked assets whose record names no schema (not evaluated), and `skippedNotAuthorized` the assets the caller may not read (not evaluated). Authorized on the database's `complianceEvaluation` object."
             parameters:
                 - name: databaseId
                   in: path
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: false
                 content:
@@ -12139,7 +12182,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: "#/components/schemas/error"
                 "409":
-                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`)."
+                    description: "The compliance data of a deleted database with this id is still being moved (`The compliance data of a deleted database with this id is still being moved. Try again in a few minutes.`), or a binding change of the database is still being applied (`The compliance schema binding of this database is still being applied; try again when it finishes`; a stalled one: `The compliance schema binding of this database stopped while it was being applied; repeat the same change to resume it`)."
                     content:
                         application/json:
                             schema:
@@ -12155,14 +12198,14 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/sweep/{schemaName}:
         post:
             summary: "Sweep the assets bound to a schema."
-            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate: assets in `pending_evaluation` first, then the least recently evaluated, at most 200 per call, and a call stops launching evaluations after about 20 seconds so that it returns within the API Gateway integration window. While assets remain the response carries `NextToken`; a call with it as `startingToken` evaluates only the assets not evaluated since the sweep started, so repeated calls finish. `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets still to evaluate."
+            description: "Evaluates every asset whose compliance record is bound to the schema and whose database the caller may evaluate, reading a page at a time (the bound databases' asset rows to register unrecorded assets, then the schema's records; within a page, assets in `pending_evaluation` first, then the least recently evaluated), at most 200 evaluations per call, and a call stops reading and launching after about 20 seconds so that it returns within the API Gateway integration window. While anything is left to read the response carries `NextToken`; a call with it as `startingToken` goes on from there and evaluates only the assets not evaluated since the sweep started, so repeated calls finish. A token from a sweep of another schema is refused (`Invalid pagination token`). `skipped` counts the bound assets the caller is not authorized to evaluate or may not read (they are never listed); `superseded` counts the listed assets whose evaluation did not run because a newer evaluation of the asset had already started; `assetsRemaining` counts the assets of the pages the call read and did not reach (it can be 0 while a `NextToken` is present)."
             parameters:
                 - name: schemaName
                   in: path
                   description: "Name of the schema to sweep."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
             requestBody:
                 required: false
                 content:
@@ -12207,12 +12250,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
                 - $ref: "#/components/parameters/complianceEvaluationsMaxItemsParam"
                 - $ref: "#/components/parameters/complianceStartingTokenParam"
             responses:
@@ -12253,12 +12297,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             responses:
                 "200":
                     description: Compliance state retrieved successfully.
@@ -12297,6 +12342,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: state
                   in: query
                   description: "Only assets in this compliance state."
@@ -12422,13 +12468,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: false
                 content:
@@ -12478,13 +12524,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             requestBody:
                 required: true
                 content:
@@ -12533,13 +12579,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Database identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/id_regex'
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
             responses:
                 "200":
                     description: Exception revoked.
@@ -12677,14 +12723,14 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /compliance/cascades/{cascadeId}:
         get:
             summary: "Get a cascade."
-            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
+            description: "Returns one cascade with its state and per-node progress. An executing cascade is followed by polling this route until `state` is `completed` or `aborted`; a long cascade runs in more than one executor run and stays `executing` meanwhile, and one whose run stopped before it finished (no progress for 20 minutes) is aborted by the next read (`abortReason` `The cascade stopped before it finished; start it again`); a rejected cascade carries `rejectionReason`, any other aborted cascade `abortReason`. A caller whose permissions have constraints on the `asset` object type also needs `GET` on the asset as stored (for a cascade, its parent asset), as the asset routes check it (`403` otherwise); a caller with none is not asked it."
             parameters:
                 - name: cascadeId
                   in: path
                   description: "Cascade identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/uuid_regex'
             responses:
                 "200":
                     description: Cascade retrieved successfully.
@@ -12722,7 +12768,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Cascade identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/uuid_regex'
             requestBody:
                 required: false
                 content:
@@ -12766,7 +12812,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   description: "Cascade identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/uuid_regex'
             requestBody:
                 required: false
                 content:
@@ -12872,12 +12918,13 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   required: true
                   schema:
                       type: string
+                      pattern: "^[-_a-zA-Z0-9]{3,63}(#deleted)?$"
                 - name: assetId
                   in: path
                   description: "Asset identifier."
                   required: true
                   schema:
-                      type: string
+                      $ref: '#/components/schemas/asset_id_regex'
                 - $ref: "#/components/parameters/complianceAuditStartDateParam"
                 - $ref: "#/components/parameters/complianceAuditEndDateParam"
                 - $ref: "#/components/parameters/complianceAuditMaxItemsParam"
@@ -13373,19 +13420,6 @@ components:
             required:
                 - assetId
                 - message
-        asset_links:
-            type: object
-            properties:
-                assetIdFrom:
-                    $ref: '#/components/schemas/id_regex'
-                assetIdTo:
-                    $ref: '#/components/schemas/id_regex'
-                relationshipType:
-                    $ref: "#/components/schemas/string256Param"
-            required:
-                - assetIdFrom
-                - assetIdTo
-                - relationshipType
         asset_path_pattern_regex:
             type: string
             pattern: ^[a-z]([-_a-z0-9]){3,63}(\/[a-zA-Z0-9_\-.]+){1,63}$
@@ -13421,13 +13455,6 @@ components:
                 type: string
                 deprecated: true
                 description: "Deprecated: the same value as userId (the user id, which need not be an email address). Read userId instead."
-        auth_routes:
-            type: object
-            properties:
-              routes:
-                type: array
-                items:
-                    $ref: "#/components/schemas/route"
         apiRoute:
             type: object
             properties:
@@ -13985,7 +14012,6 @@ components:
                 restrictFileUploadsToExtensions:
                     type: string
                     description: "Comma-delimited list of allowed file extensions, each with its leading dot (e.g., '.jpg,.png,.pdf'). '.all' or an empty string allows all extensions (optional)"
-            required: []
             example:
                 description: "Updated 3d models used in training programs"
                 restrictMetadataOutsideSchemas: true
@@ -15425,7 +15451,7 @@ components:
                     minLength: 1
                     maxLength: 200
                     pattern: '^[a-zA-Z0-9\-._ ]{1,256}$'
-                    description: "Base name of the EDH software stack each build registers, as `<stackName> v<version>`. A create or update refuses a name another recipe uses, compared with surrounding spaces removed and without regard to case (409 `stackName is already used by recipe '<id>'`)."
+                    description: "Base name of the EDH software stack each build registers, as `<stackName> v<version>`. A create or update refuses a name another recipe uses, compared with surrounding spaces removed and without regard to case (409 `stackName is already used by another recipe`)."
                 profileId:
                     type: integer
                     minimum: 0
@@ -15507,7 +15533,7 @@ components:
                     minLength: 2
                     maxLength: 40
                     pattern: "^[a-z0-9][a-z0-9-]{1,39}$"
-                    description: "POST only: the recipeId of the recipe to duplicate, shipped or administrator-defined. The new recipe takes that recipe's `assets` and `assetPrefix` and records its id as `duplicatedFrom`; a source that does not exist answers 409 (`the recipe to duplicate does not exist`), and the caller needs object-tier GET on the source. Ignored on PUT."
+                    description: "POST only: the recipeId of the recipe to duplicate, shipped or administrator-defined. The new recipe takes that recipe's `assets` and `assetPrefix` and records its id as `duplicatedFrom`; a source that does not exist answers 409 (`the recipe to duplicate does not exist`) to a caller allowed to read a recipe with that id for every OS family and 403 to any other caller, and the caller needs object-tier GET on the source. Ignored on PUT."
         edhAmiRecipe:
             type: object
             description: "An AMI recipe view: the recipe fields plus latestBuild. `baseOs` is present on vdi recipes only; `description` and `parameters` when set; `assets` and `assetPrefix` on a seeded recipe that declares assets and on a recipe duplicated from any recipe that holds them; `duplicatedFrom` on a duplicated recipe; `latestVersion` once a build has been started or queued; `imageBuilder` once a build has started; `deletingAt` while a delete runs."
@@ -16161,6 +16187,121 @@ components:
                 skipReason:
                     type: string
                     description: "SKIPPED records only: the fixed message the refused launch was answered with, naming only the scope."
+        executionDetails:
+            type: object
+            description: >-
+                The details view of one execution (GET /workflows/executions/{executionId}/details).
+                The operation description explains each field, the collection bounds and
+                truncatedCollections. executionPhase and outputIngestion are present only while a
+                running execution's large outputs are being copied into the asset; skip is present
+                only for a SKIPPED execution.
+            properties:
+                workflowExecutionId:
+                    type: string
+                workflowId:
+                    type: string
+                workflowDatabaseId:
+                    type: string
+                workflowName:
+                    type: string
+                workflowDescription:
+                    type: string
+                workflowVersion:
+                    type: integer
+                    nullable: true
+                workflowVersionCurrent:
+                    type: boolean
+                    nullable: true
+                workflowSystemConfig:
+                    type: object
+                    additionalProperties: true
+                executionStatus:
+                    type: string
+                executionStartDate:
+                    type: string
+                executionStopDate:
+                    type: string
+                triggerType:
+                    type: string
+                triggeredByUserId:
+                    type: string
+                executionError:
+                    type: string
+                executionPhase:
+                    type: string
+                    enum: [INGESTING_OUTPUTS]
+                outputIngestion:
+                    type: object
+                    additionalProperties: true
+                outputLocationType:
+                    type: string
+                outputDatabaseId:
+                    type: string
+                outputAssetId:
+                    type: string
+                outputFileBaseExecutionPathExtension:
+                    type: string
+                metadataSourceDatabaseId:
+                    type: string
+                metadataSourceDatabases:
+                    type: array
+                    items:
+                        type: string
+                metadataSourceAssets:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            databaseId:
+                                type: string
+                            assetId:
+                                type: string
+                pipelines:
+                    type: array
+                    items:
+                        type: object
+                        additionalProperties: true
+                inputFiles:
+                    type: array
+                    items:
+                        type: object
+                        additionalProperties: true
+                inputMetadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/executionDetailMetadataRow"
+                inputDatabaseMetadata:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/executionDetailMetadataRow"
+                inputConfigurations:
+                    type: array
+                    items:
+                        type: object
+                        additionalProperties: true
+                outputs:
+                    type: object
+                    properties:
+                        files:
+                            type: array
+                            items:
+                                type: object
+                                additionalProperties: true
+                        metadata:
+                            type: array
+                            items:
+                                $ref: "#/components/schemas/executionDetailMetadataRow"
+                        results:
+                            type: array
+                            items:
+                                type: object
+                                additionalProperties: true
+                truncatedCollections:
+                    type: array
+                    items:
+                        type: string
+                skip:
+                    $ref: "#/components/schemas/executionSkip"
         executionSkip:
             type: object
             description: >-
@@ -16233,6 +16374,9 @@ components:
                     type: object
                     additionalProperties: true
                     description: "(input rows) That file's captured attributes, reported apart from metadata because metadataInputs grants fileMetadata and fileAttributes independently. Always empty on an asset- or database-scope row."
+                expanded:
+                    type: boolean
+                    description: "(input rows) True for a file record that metadataInputs.assetFileMetadata added by expanding a whole-asset or folder selection, which the step received as context rather than as one of its input files; false on every other input row."
                 targetFilePath:
                     type: string
                     description: "(output rows) Asset-relative path of the file the metadata was written to."
@@ -16360,9 +16504,6 @@ components:
         filename_pattern:
             type: string
             pattern: ^[a-zA-Z0-9_\-.]+
-        file_type_regex: 
-                type: string
-                pattern: ^[\\.]([a-z0-9]){1,7}
         id_regex:
             type: string
             pattern: "^[-_a-zA-Z0-9]{3,63}$"
@@ -16517,24 +16658,6 @@ components:
                 - message
                 - uploadId
                 - assetId
-        location:
-            type: object
-            properties:
-                Key:
-                    type: string
-                    #example: blade-12345.stl
-                Bucket:
-                    type: string
-                    #example: training-models-vams-assets
-            required:
-                - Key
-                - Bucket
-        metadata:
-            type: object
-            properties:
-                assetPath:
-                    $ref: '#/components/schemas/asset_path_pattern_regex'
-        
         # Metadata Schema V2 API Schemas
         metadataSchemaEntityType:
             type: string
@@ -17807,17 +17930,6 @@ components:
                         $ref: "#/components/schemas/id_regex"
                 enabled:
                     type: boolean
-        role:
-            type: object
-            properties:
-                roleName:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"                    
-            required:
-                - roleName
-                - description
-        
         # Role API Request/Response Schemas
         createRoleRequest:
             type: object
@@ -17978,16 +18090,6 @@ components:
                 - method
                 - route__path
                 - object__type
-        s3_access:
-            type: object
-            properties:
-                databaseId:
-                    $ref: '#/components/schemas/id_regex'
-                assetId:
-                    $ref: '#/components/schemas/asset_id_regex'
-        sagemaker_notebook_name_regex:
-            type: string
-            pattern: ^[a-zA-Z0-9](-*[a-zA-Z0-9])*
         string256Param:
             type: string
             maxLength: 256
@@ -18011,22 +18113,6 @@ components:
                 - entityName
                 - eventName
                 - subscribers
-        tag:
-            type: object
-            properties: 
-                tagName:
-                    #example:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"
-                tagTypeName:
-                    #example:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-            required:
-                - tagName
-                - description
-                - tagTypeName
-        
         # Tag API Request/Response Schemas
         createTagRequest:
             type: object
@@ -18148,17 +18234,6 @@ components:
                 - tagName
                 - operation
                 - timestamp
-        tagType:
-            type: object
-            properties: 
-                tagTypeName:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"
-            required: 
-                - tagTypeName
-                - description
-        
         # Tag Type API Request/Response Schemas
         createTagTypeRequest:
             type: object
@@ -18308,17 +18383,6 @@ components:
             properties:
                 email:
                     type: string
-        userRole:
-            type: object
-            properties: 
-                roleName:
-                    $ref: "#/components/schemas/object_name_pattern_regex"
-                description:
-                    $ref: "#/components/schemas/string256Param"
-            required:
-                - roleName
-                - description
-        
         # User Role API Request/Response Schemas
         createUserRolesRequest:
             type: object
@@ -18459,28 +18523,6 @@ components:
         uuid_regex:
             type: string
             pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
-        validatePagInfoParams:
-            type: object
-            properties:
-              maxItemsParam:
-                $ref: "#/components/parameters/maxItemsParam"
-              pageSizeParam:
-                $ref: "#/components/parameters/pageSizeParam"
-              startingTokenParam:
-                $ref: "#/components/parameters/startingTokenParam"
-        version:
-            type: object
-            properties:
-                Comment:
-                    type: string
-                Version:
-                    type: string
-                S3Version:
-                    type: string
-                DateModified:
-                    type: string
-                description:
-                    type: string
         assetUpdate:
             type: object
             properties:
@@ -18705,7 +18747,7 @@ components:
                     $ref: '#/components/schemas/asset_id_regex'
                 status:
                     type: string
-                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED)."
+                    description: "processing_async while a file is PENDING, then completed (every file SUCCEEDED) or completed_with_errors (a file FAILED). A workflow-output upload record can also report initialized (created by the output step, not yet completed), processing (a completion is running) or failed (the completion raised)."
                 asyncFiles:
                     type: array
                     description: "One entry per file accepted for asynchronous ingestion, sorted by relativeKey; empty when the upload tracks none."
@@ -18778,7 +18820,7 @@ components:
                     nullable: true
                 previewFile:
                     type: string
-                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object when several exist. Empty string if no preview file exists."
+                    description: "Path to the preview file for this file: the newest non-archived `.previewFile.` object, or, in a listing with includeArchived=true, the newest archived one when the file has no other. Empty string if no preview file exists."
                 changeSource:
                     type: string
                     description: "How the current file version was created (direct, upload, workflowExecution, fileCopy, fileMove, fileRename, fileUnarchive, fileRevert, fileMetadataUpdate). Blank or absent for versions created before change provenance tracking was introduced."
@@ -18799,28 +18841,6 @@ components:
                 - relativePath
                 - isFolder
 
-        listAssetFilesRequest:
-            type: object
-            properties:
-                maxItems:
-                    type: integer
-                    description: "Maximum number of items to return"
-                    default: 1000
-                pageSize:
-                    type: integer
-                    description: "Number of items per page"
-                    default: 100
-                startingToken:
-                    type: string
-                    description: "Token for pagination"
-                prefix:
-                    type: string
-                    description: "Filter files by prefix"
-                includeArchived:
-                    type: boolean
-                    description: "Whether to include archived files"
-                    default: false
-        
         listAssetFilesResponse:
             type: object
             properties:
@@ -18833,19 +18853,6 @@ components:
                     description: "Token for pagination"
             required:
                 - items
-        
-        fileInfoRequest:
-            type: object
-            properties:
-                filePath:
-                    type: string
-                    description: "Path to the file relative to the asset root"
-                includeVersions:
-                    type: boolean
-                    description: "Whether to include version history"
-                    default: false
-            required:
-                - filePath
         
         fileInfoResponse:
             type: object
@@ -19406,35 +19413,6 @@ components:
                     type: boolean
                     default: false
                     description: "Whether to revert metadata and attributes to the target version state. When true, deletes all current metadata/attributes and restores from the target version."
-            required: []
-        
-        getAssetVersionRequest:
-            type: object
-            properties:
-                assetVersionId:
-                    type: string
-                    description: "Asset version ID to get details for"
-            required:
-                - assetVersionId
-        
-        getAssetVersionsRequestModel:
-            type: object
-            properties:
-                maxItems:
-                    type: integer
-                    description: "Maximum number of items to return"
-                    default: 100
-                pageSize:
-                    type: integer
-                    description: "Number of items per page"
-                    default: 100
-                startingToken:
-                    type: string
-                    description: "Token for pagination"
-                showArchived:
-                    type: boolean
-                    description: "Whether to include archived versions in the results"
-                    default: false
         
         bucket:
             type: object
@@ -19596,7 +19574,6 @@ components:
                         type: string
                     description: "Updated tags for the asset link"
                     default: []
-            required: []
         
         updateAssetLinkResponse:
             type: object
@@ -19924,7 +19901,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -20060,7 +20037,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -20218,7 +20195,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - filePath
                 - type
@@ -20377,7 +20354,7 @@ components:
                     type: string
                     enum: [update, replace_all]
                     default: "update"
-                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items)"
+                    description: "Update mode: 'update' (default, upserts provided metadata) or 'replace_all' (replaces all metadata, requires PUT+POST+DELETE permissions, max 500 items; removing stored keys also requires the DELETE method on the route, else 403)"
             required:
                 - metadata
             example:
@@ -20639,7 +20616,6 @@ components:
                     maximum: 2000
                     default: 100
                     description: "Number of results to return"
-            required: []
         
         searchRequest:
             type: object
@@ -20736,7 +20712,6 @@ components:
                     maximum: 2000
                     default: 100
                     description: "Number of results to return"
-            required: []
 
         geoSearch:
             type: object
@@ -20766,7 +20741,8 @@ components:
                             maximum: 180
                         radiusMeters:
                             type: number
-                            exclusiveMinimum: 0
+                            minimum: 0
+                            exclusiveMinimum: true
                             description: "Optional radius in meters; treated as a circle around (lat, lon)"
                     required: [lat, lon]
                 bbox:
@@ -21372,7 +21348,6 @@ components:
                 clearPhone:
                     type: boolean
                     description: "Set to true to remove the stored phone number. Cannot be sent together with phone. May be sent on its own, in which case email and phone are both absent"
-            required: []
             example:
                 email: "newemail@example.com"
                 phone: "+19876543210"
@@ -21636,7 +21611,7 @@ components:
                     type: integer
         zipDownloadJob:
             type: object
-            description: "A zip download job. The job record never exposes the archive's storage location or the run that produced it. The owner's user ID (requestedBy) and the flags below appear only in the all-users list."
+            description: "A zip download job. The job record never exposes the archive's storage location or the run that produced it. The owner's user ID (requestedBy) and isOwn appear only in the all-users list; canDownload and canRemove appear on every list response (the caller's own lists and the all-users list), not on the create or get answers."
             properties:
                 requestId:
                     type: string
@@ -21832,7 +21807,7 @@ components:
                     description: "Name of a parent schema whose rules are inherited. A rule of the same name in this schema replaces the parent's."
                 rules:
                     type: object
-                    description: "Rules keyed by rule name. At least one rule is required."
+                    description: "Rules keyed by rule name. At least one rule is required. A rule name may not start with `$` (reserved for results an evaluation records itself)."
                     additionalProperties:
                         oneOf:
                             - $ref: "#/components/schemas/compliancePipelineRule"
@@ -22239,7 +22214,10 @@ components:
                     type: array
                     items:
                         type: string
-                    description: "Without `databaseId` only: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
+                    description: "Without `databaseId` only, on every page: the scopes (`GLOBAL` and database ids) the caller may register a schema in."
+                NextToken:
+                    type: string
+                    description: "Present while more schemas remain: pass it back as `startingToken`."
             required:
                 - schemas
 
@@ -22248,14 +22226,21 @@ components:
             properties:
                 schemaName:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Name of the schema (3-63 characters; letters, digits, hyphens, underscores)."
                 schemaBody:
                     $ref: "#/components/schemas/vamsRulesV1Schema"
                 description:
                     type: string
+                    maxLength: 1024
                     description: "Human-readable description."
                 databaseId:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Database to scope the schema to. Defaults to `GLOBAL`."
                     default: GLOBAL
                 isSystem:
@@ -22274,9 +22259,13 @@ components:
                     $ref: "#/components/schemas/vamsRulesV1Schema"
                 description:
                     type: string
+                    maxLength: 1024
                     description: "Replacement description."
                 databaseId:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Replacement database scope, or `GLOBAL`."
 
         writeComplianceSchemaResponse:
@@ -22305,7 +22294,7 @@ components:
 
         complianceSchemaSaveWarning:
             type: object
-            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and a missing or non-vams-rules-v1 parent leaves the schema evaluated with its own rules only."
+            description: "One notice a schema save returns. `pipelineRulesShareWorkflow`: two or more pipeline rules of the body name the same workflow (`pipelineRef.databaseId` + `pipelineRef.workflowId`); when the workflow restricts concurrency (perAsset, perInputFile, perInputFileVersion) they run one after another on an asset, so its evaluation lasts as long as their runs together. `extendsSchemaNotFound`: the body's `extends` names a parent that was not found as a vams-rules-v1 schema the caller may read (GET on `/compliance/schemas/{schemaName}` and on the schema in its scope); a parent that exists but the caller may not read gets the same entry and message, and an evaluation under a schema whose parent is missing or not vams-rules-v1 reaches no verdict."
             properties:
                 code:
                     type: string
@@ -22344,13 +22333,13 @@ components:
 
         pipelineRuleRefusedError:
             type: object
-            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `ruleName`, for any other authorization refusal."
+            description: "A schema save refused because a new or changed pipeline rule names a workflow the caller may not run (POST on its execute route, GET on the workflow and its pipelines). Also returned, with no `rulePosition`, for any other authorization refusal."
             properties:
                 message:
                     type: string
-                ruleName:
-                    type: string
-                    description: "The first pipeline rule refused."
+                rulePosition:
+                    type: integer
+                    description: "The position, counting from 0, of the first pipeline rule refused in the body's `rules`."
             required:
                 - message
 
@@ -22359,6 +22348,9 @@ components:
             properties:
                 schemaName:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Name of a GLOBAL schema or a schema scoped to the target database."
                 complianceAutoEval:
                     type: boolean
@@ -22622,6 +22614,9 @@ components:
             properties:
                 schemaName:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Schema to evaluate against. When omitted, the asset's bound schema is used."
 
         complianceRuleResult:
@@ -22682,9 +22677,16 @@ components:
             properties:
                 message:
                     type: string
+                dryRun:
+                    type: boolean
+                    description: "`true` for an evaluation against a named schema other than the bound one: nothing was recorded and there is no `evaluationId`."
+                pipelineRulesNotRun:
+                    type: integer
+                    description: "Dry run only: the pipeline rules that did not run (each is a rule result with `status` `error`)."
                 evaluationId:
                     type: string
                     format: uuid
+                    description: "Absent from a dry run."
                 schemaName:
                     type: string
                 schemaVersion:
@@ -22714,11 +22716,11 @@ components:
                     description: "`true` when an active quarantine exception held the asset released while the verdict was computed."
                 notApplied:
                     type: string
-                    enum: [released, exceptionGranted]
-                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                    enum: [released, exceptionGranted, bindingChanged]
+                    description: "Present when something made after the evaluation began outranked its outcome: a release (`released`) or an exception grant (`exceptionGranted`), recorded but not changing the asset's state, quarantine fields or exception fields; or a change of the asset's schema binding (`bindingChanged`), which leaves the record as the binding change left it."
                 notAppliedMessage:
                     type: string
-                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, `Not applied: an exception was granted after this evaluation began`, `Not applied: the asset's compliance schema binding changed after this evaluation began`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`; the verdict was computed from the remaining rules and an `evaluation_error` audit entry names the errored rules."
@@ -22760,7 +22762,7 @@ components:
                                 type: boolean
                 assetsRemaining:
                     type: integer
-                    description: "Tracked assets still to evaluate after this call (not evaluated since the evaluation started); above 0, `NextToken` is present."
+                    description: "Assets of the pages this call read that it did not reach. A lower bound: it can be 0 while a `NextToken` is present, which is what says that more remain."
                 NextToken:
                     type: string
                     description: "Present while assets remain: send it as `startingToken` to continue this evaluation."
@@ -22826,7 +22828,7 @@ components:
                                 description: "Present and `true` on a `superseded` entry."
                 assetsRemaining:
                     type: integer
-                    description: "Bound assets still to evaluate after this call (not evaluated since the sweep started); above 0, `NextToken` is present."
+                    description: "Bound assets of the pages this call read that it did not reach. A lower bound: it can be 0 while a `NextToken` is present, which is what says that more remain."
                 NextToken:
                     type: string
                     description: "Present while assets remain: send it as `startingToken` to continue this sweep."
@@ -22888,11 +22890,11 @@ components:
                     description: "`true` when the evaluation ran while a quarantine exception against this schema version was active: the violations are recorded as computed, but the asset state stayed released (`exception` on a failing verdict, never `quarantined`)."
                 notApplied:
                     type: string
-                    enum: [released, exceptionGranted]
-                    description: "Present when a release (`released`) or an exception grant (`exceptionGranted`) made after the evaluation began outranked its outcome: the verdict is recorded but did not change the asset's state, quarantine fields or exception fields."
+                    enum: [released, exceptionGranted, bindingChanged, notRecorded]
+                    description: "Present when something made after the evaluation began outranked its outcome: a release (`released`) or an exception grant (`exceptionGranted`), recorded but not changing the asset's state, quarantine fields or exception fields; or a change of the asset's schema binding (`bindingChanged`), which leaves the record as the binding change left it. `notRecorded`: the outcome could not be written to the asset (an AWS error before any pipeline rule started); the next evaluation decides the asset, the automatic one after a change included."
                 notAppliedMessage:
                     type: string
-                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, or `Not applied: an exception was granted after this evaluation began`."
+                    description: "The not-applied detail in words: `Not applied: the asset was released after this evaluation began`, `Not applied: an exception was granted after this evaluation began`, `Not applied: the asset's compliance schema binding changed after this evaluation began`, or `Not applied: the outcome could not be written to the asset`."
                 hasRuleErrors:
                     type: boolean
                     description: "`true` when at least one rule result has `status` `error`. The verdict was computed from the remaining rules; when every rule errored the evaluation's `status` is `error` and the asset's state was left unchanged."
@@ -23150,6 +23152,7 @@ components:
             properties:
                 reason:
                     type: string
+                    maxLength: 1024
                     description: "Reason recorded in the audit entry. Defaults to `released via API`."
 
         grantExceptionRequest:
@@ -23157,7 +23160,9 @@ components:
             properties:
                 reason:
                     type: string
-                    description: "Justification recorded on the compliance record and in the audit entry."
+                    minLength: 1
+                    maxLength: 1024
+                    description: "Justification recorded on the compliance record and in the audit entry. Surrounding whitespace is removed before the length check."
             required:
                 - reason
 
@@ -23312,12 +23317,18 @@ components:
             properties:
                 databaseId:
                     type: string
+                    minLength: 3
+                    maxLength: 63
+                    pattern: "^[-_a-zA-Z0-9]{3,63}$"
                     description: "Database of the asset whose downstream assets are re-evaluated."
                 assetId:
                     type: string
+                    maxLength: 256
+                    pattern: ^(?!.*[<>:"\/\\|?*])(?!.*[.\s]$)[\w\s.,\'-]{1,254}[^.\s]$
                     description: "Asset whose downstream assets are re-evaluated."
                 reason:
                     type: string
+                    maxLength: 1024
                     description: "Reason recorded on the cascade. Defaults to `manual trigger`."
                 requireApproval:
                     type: boolean
@@ -23349,6 +23360,7 @@ components:
             properties:
                 reason:
                     type: string
+                    maxLength: 1024
                     description: "Reason recorded on the cascade and in the audit entry. Defaults to `approved` or `rejected`."
 
         approveCascadeResponse:
@@ -23476,7 +23488,7 @@ components:
                     schema:
                         $ref: "#/components/schemas/requestBlockedError"
         Unauthorized:
-            description: "The custom Lambda authorizer did not accept the credential: the Authorization header is missing or malformed, the token is expired or invalid, or the API key is unknown, disabled or expired. Any operation that is not 'security: []' can return it. Refresh the token or sign in again and resend. The body is API Gateway's generic message and never names the reason. Since v2.7.0; earlier versions answered these credentials with 403."
+            description: "The custom Lambda authorizer did not accept the credential: the Authorization header is missing or malformed, the token is expired or invalid, or the API key is unknown, disabled or expired, or its stored record has an unreadable expiration date or no user ID. Any operation that is not 'security: []' can return it. Refresh the token or sign in again and resend. The body is API Gateway's generic message and never names the reason."
             content:
                 application/json:
                     schema:
@@ -23694,13 +23706,13 @@ components:
       complianceAuditStartDateParam:
         name: startDate
         in: query
-        description: "ISO-8601 timestamp; only entries at or after it are returned"
+        description: "ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or after it are returned"
         schema:
             type: string
       complianceAuditEndDateParam:
         name: endDate
         in: query
-        description: "ISO-8601 timestamp; only entries at or before it are returned"
+        description: "ISO-8601 date or timestamp, compared in UTC (a value with no offset is read as UTC); only entries at or before it are returned"
         schema:
             type: string
       complianceStartingTokenParam:

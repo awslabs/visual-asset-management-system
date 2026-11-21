@@ -110,7 +110,8 @@ def svc(monkeypatch):
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket=BUCKET)
         client.put_bucket_versioning(Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"})
-        for key in (FILE_LOCATION, OWN_PREVIEW, COMPANION) + OUTSIDE_KEYS + ("proj/a/", "proj/a/x.txt") + SIBLING_FOLDER_KEYS:
+        keys = (FILE_LOCATION, OWN_PREVIEW, COMPANION) + OUTSIDE_KEYS + ("proj/a/", "proj/a/x.txt")
+        for key in keys + SIBLING_FOLDER_KEYS:
             client.put_object(Bucket=BUCKET, Key=key, Body=b"content")
         history = MagicMock()
         monkeypatch.setattr(m, "s3", client)
@@ -154,6 +155,24 @@ class TestAssetArchive:
         svc.archive_multi_assetFiles({"Key": FILE_LOCATION}, BUCKET, "db1", "a1", "tester")
         assert listed == [(FILE_LOCATION, 1), (FILE_LOCATION + ".previewFile.", None), (FILE_LOCATION + "/", None)]
         assert not _live(svc.test_client, FILE_LOCATION) and not _live(svc.test_client, COMPANION)
+
+    def test_archive_with_the_object_already_archived_marks_each_held_key_once(self, svc):
+        """With the object and its preview archived and no neighbour key, the one-key read of the location
+        returns the companion entry, which the companion folder listing returns again (D4)."""
+        client = svc.test_client
+        for key in OUTSIDE_KEYS:
+            for version in client.list_object_versions(Bucket=BUCKET, Prefix=key).get("Versions", []):
+                if version["Key"] == key:
+                    client.delete_object(Bucket=BUCKET, Key=key, VersionId=version["VersionId"])
+        client.delete_object(Bucket=BUCKET, Key=FILE_LOCATION)
+        client.delete_object(Bucket=BUCKET, Key=OWN_PREVIEW)
+
+        svc.archive_multi_assetFiles({"Key": FILE_LOCATION}, BUCKET, "db1", "a1", "tester")
+
+        markers = [m for m in client.list_object_versions(Bucket=BUCKET, Prefix=COMPANION).get("DeleteMarkers", [])
+                   if m["Key"] == COMPANION]
+        assert len(markers) == 1
+        assert [i["filePath"] for i in _history_items(svc.asset_file_version_history_table)] == ["/inner.txt"]
 
     def test_control_a_folder_asset_archives_its_folder_and_no_sibling_prefix(self, svc):
         svc.archive_multi_assetFiles({"Key": FOLDER_LOCATION}, BUCKET, "db1", "a2", "tester")

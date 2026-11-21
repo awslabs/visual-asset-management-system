@@ -82,10 +82,25 @@ class TestTheRoutesAnswerFixed400s:
         event = {"requestContext": {"http": {"method": "GET"}},
                  "pathParameters": {"databaseId": "db-one", "assetId": "asset1"},
                  "queryStringParameters": {"status": "FAILED", "excludeStatus": "FAILED"}}
-        with patch(f"{MOD}.get_executions") as listing:
+        with patch.object(le, "claims_and_roles", {"tokens": ["u1"]}), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=_allow_all()), \
+                patch(f"{MOD}.get_executions") as listing:
             response = le.handle_get_request(event)
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"] == em.EXCLUDE_STATUS_CONFLICT_MESSAGE
+        listing.assert_not_called()
+
+    def test_the_asset_route_checks_api_access_first(self):
+        event = {"requestContext": {"http": {"method": "GET"}},
+                 "pathParameters": {"databaseId": "db-one", "assetId": "asset1"},
+                 "queryStringParameters": {"excludeStatus": "NOPE"}}
+        refused = MagicMock()
+        refused.enforceAPI.return_value = False
+        with patch.object(le, "claims_and_roles", {"tokens": ["u1"]}), \
+                patch(f"{MOD}.CasbinEnforcer", return_value=refused), \
+                patch(f"{MOD}.get_executions") as listing:
+            response = le.handle_get_request(event)
+        assert response["statusCode"] == 403
         listing.assert_not_called()
 
 

@@ -143,6 +143,7 @@ graph TD
     Search["SearchBuilder<br/>(OpenSearch, vector indexing, /search/nlp)"]
     Pipelines["PipelineBuilder<br/>(Processing Pipelines)"]
     Addons["AddonBuilder<br/>(Garnet Framework, Physna Sync, EDH Workstations)"]
+    Custom["CustomBuilder<br/>(Fork Extension Point)"]
     API["RestApi<br/>(SpecRestApi + Authorizer)"]
     StaticWeb["StaticWeb<br/>(CloudFront or ALB, Conditional)"]
     Location["LocationService<br/>(Conditional)"]
@@ -172,6 +173,8 @@ graph TD
     Storage --> Addons
     Names --> Addons
     APIBuilder -.-> Addons
+    Storage --> Custom
+    Names --> Custom
     Storage --> API
     Auth --> API
     APIBuilder --> API
@@ -179,6 +182,7 @@ graph TD
     APIBuilder3 --> API
     Search --> API
     Addons --> API
+    Custom --> API
     Storage --> StaticWeb
     API --> StaticWeb
     Auth --> StaticWeb

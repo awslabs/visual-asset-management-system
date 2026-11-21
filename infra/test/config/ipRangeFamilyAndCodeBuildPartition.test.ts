@@ -31,6 +31,7 @@ import commercialTemplate from "../../config/config.template.commercial.json";
 import eusovereignTemplate from "../../config/config.template.eusovereign.json";
 import govcloudTemplate from "../../config/config.template.govcloud.json";
 import { newTestApp } from "../support/testApp";
+import { RULES } from "../../../documentation/docusaurus-site/src/components/ConfigBuilder/validation";
 
 const realReadFileSync = jest.requireActual("fs").readFileSync;
 
@@ -133,6 +134,7 @@ describe("ipAddressFamily", () => {
 const INVALID_FORMAT = /Invalid IP address format in range at index/;
 const MIXED_FAMILY = /mixes IPv4 and IPv6 endpoints|mixes IPv6 and IPv4 endpoints/;
 const NOT_A_PAIR = /must be an array of exactly 2 IP addresses/;
+const NOT_AN_ARRAY = /allowedIpRanges must be an array of \[min, max\] IP address ranges/;
 
 const withRanges = (ranges: unknown) => (c: any) => {
     c.app.authProvider.authorizerOptions.allowedIpRanges = ranges;
@@ -214,6 +216,56 @@ describe("authorizerOptions.allowedIpRanges accepts both address families", () =
         const run = loadConfig(commercialTemplate, "us-east-1", withRanges([["2001:db8::"]]));
         expect(run).toThrow(NOT_A_PAIR);
     });
+
+    test.each([
+        ["an object", {}],
+        ["a string", "203.0.113.0-203.0.113.255"],
+        ["a number", 1],
+    ])("rejects a list that is %s rather than an array", (_kind, value) => {
+        // The authorizer refuses every request for a value it cannot read as an array, so the
+        // deployment must not write one.
+        const run = loadConfig(commercialTemplate, "us-east-1", withRanges(value));
+        expect(run).toThrow(NOT_AN_ARRAY);
+    });
+
+    test.each([
+        ["unset", undefined],
+        ["null", null],
+        ["empty", []],
+    ])("accepts a list that is %s (no restriction)", (_kind, value) => {
+        const run = loadConfig(commercialTemplate, "us-east-1", (c: any) => {
+            if (value === undefined) delete c.app.authProvider.authorizerOptions.allowedIpRanges;
+            else c.app.authProvider.authorizerOptions.allowedIpRanges = value;
+        });
+        expect(run).not.toThrow();
+    });
+});
+
+describe("ConfigBuilder mirrors the allowedIpRanges array rule", () => {
+    const rule = RULES.find((r) => r.id === "ip-ranges-array");
+    const shaped = (value: unknown) => {
+        const config = JSON.parse(JSON.stringify(commercialTemplate));
+        if (value === undefined) delete config.app.authProvider.authorizerOptions.allowedIpRanges;
+        else config.app.authProvider.authorizerOptions.allowedIpRanges = value;
+        return config;
+    };
+
+    test("[control] the rule is ported as an error on the field", () => {
+        expect(rule).toBeDefined();
+        expect(rule!.severity).toBe("error");
+        expect(rule!.fieldPaths).toContain("app.authProvider.authorizerOptions.allowedIpRanges");
+    });
+
+    test.each([
+        ["an object", {}, true],
+        ["a string", "203.0.113.0-203.0.113.255", true],
+        ["unset", undefined, false],
+        ["null", null, false],
+        ["empty", [], false],
+        ["a valid range list", [["203.0.113.0", "203.0.113.255"]], false],
+    ])("agrees with getConfig() for a list that is %s", (_kind, value, violates) => {
+        expect(rule!.appliesWhen(shaped(value))).toBe(violates);
+    });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -224,6 +276,7 @@ const CODEBUILD_WARNING = /useCodeBuild is true for .* while deploying to the '[
 
 const CODEBUILD_PIPELINES = [
     "useConversionCoordinateTransform",
+    "useCogConversion",
     "useGenAiCadStepAgent",
     "useSplatToolbox",
     "useIsaacLabTraining",
@@ -247,6 +300,20 @@ const warningsFrom = (run: () => unknown): string[] => {
     return captured.filter((message) => CODEBUILD_WARNING.test(message));
 };
 
+/**
+ * The CodeBuild warnings `run` prints, also when getConfig() then rejects the config for a reason of
+ * the pipeline's own (a model to pick, a token to supply, a partition it refuses). Only for tests
+ * that assert a warning IS printed: a rejection cannot make that assertion pass.
+ */
+const warningsEvenIfRejected = (run: () => unknown): string[] =>
+    warningsFrom(() => {
+        try {
+            run();
+        } catch (e) {
+            if (!/^Configuration Error: /.test((e as Error).message)) throw e;
+        }
+    });
+
 describe("useCodeBuild outside the supported partitions warns and does not reject", () => {
     afterEach(() => {
         (fs.readFileSync as unknown as jest.Mock).mockReset();
@@ -268,17 +335,53 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
         expect(exposed.sort()).toEqual([...CODEBUILD_PIPELINES, "useZipDownloads"].sort());
     });
 
+    /**
+     * Turns `pipeline` on with useCodeBuild, plus the Global VPC the GPU pipelines need. Isaac Lab's
+     * EULA check runs before the CodeBuild check, so it is accepted here; the other pipelines' own
+     * checks run after it (see warningsEvenIfRejected).
+     */
+    const buildWithCodeBuild = (c: any, pipeline: string): void => {
+        c.app.useGlobalVpc = { ...(c.app.useGlobalVpc ?? {}), enabled: true };
+        c.app.pipelines[pipeline].enabled = true;
+        c.app.pipelines[pipeline].useCodeBuild = true;
+        if (pipeline === "useIsaacLabTraining") {
+            c.app.pipelines.useIsaacLabTraining.acceptNvidiaEula = true;
+        }
+    };
+
     test.each(CODEBUILD_PIPELINES)("warns for %s in the EU Sovereign Cloud", (pipeline) => {
         const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
-            c.app.pipelines[pipeline].useCodeBuild = true;
+            buildWithCodeBuild(c, pipeline);
         });
-        const warnings = warningsFrom(run);
+        const warnings = warningsEvenIfRejected(run);
         expect(warnings.join(" ")).toContain(`app.pipelines.${pipeline}`);
+    });
+
+    test.each(CODEBUILD_PIPELINES)(
+        "does not warn for %s.useCodeBuild while the pipeline is off",
+        (pipeline) => {
+            // A disabled pipeline deploys no build.
+            const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+                c.app.pipelines[pipeline].enabled = false;
+                c.app.pipelines[pipeline].useCodeBuild = true;
+            });
+            expect(warningsFrom(run)).toEqual([]);
+        }
+    );
+
+    test("does not warn for an upgraded config whose image to 3D and CAD STEP blocks are backfilled", () => {
+        // A v2.6.7 EU Sovereign config.json has neither block; getConfig() backfills both with
+        // useCodeBuild true and the pipeline off.
+        const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
+            delete c.app.pipelines.useImageTo3d;
+            delete c.app.pipelines.useGenAiCadStepAgent;
+        });
+        expect(warningsFrom(run)).toEqual([]);
     });
 
     test("does NOT throw — decision E-6 is warn only, not reject", () => {
         const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
-            c.app.pipelines.useSplatToolbox.useCodeBuild = true;
+            buildWithCodeBuild(c, "useSplatToolbox");
         });
         const spy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
         try {
@@ -291,10 +394,10 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
     test("names every offending pipeline in one warning", () => {
         const run = loadConfig(eusovereignTemplate, "eusc-de-east-1", (c) => {
             for (const pipeline of CODEBUILD_PIPELINES) {
-                c.app.pipelines[pipeline].useCodeBuild = true;
+                buildWithCodeBuild(c, pipeline);
             }
         });
-        const warnings = warningsFrom(run);
+        const warnings = warningsEvenIfRejected(run);
         expect(warnings).toHaveLength(1);
         for (const pipeline of CODEBUILD_PIPELINES) {
             expect(warnings[0]).toContain(`app.pipelines.${pipeline}`);
@@ -303,14 +406,14 @@ describe("useCodeBuild outside the supported partitions warns and does not rejec
 
     test("does not warn in the commercial partition", () => {
         const run = loadConfig(commercialTemplate, "us-east-1", (c) => {
-            c.app.pipelines.useSplatToolbox.useCodeBuild = true;
+            buildWithCodeBuild(c, "useSplatToolbox");
         });
         expect(warningsFrom(run)).toEqual([]);
     });
 
     test("does not warn in GovCloud", () => {
         const run = loadConfig(govcloudTemplate, "us-gov-west-1", (c) => {
-            c.app.pipelines.useSplatToolbox.useCodeBuild = true;
+            buildWithCodeBuild(c, "useSplatToolbox");
         });
         expect(warningsFrom(run)).toEqual([]);
     });

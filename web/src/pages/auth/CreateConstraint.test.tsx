@@ -233,3 +233,45 @@ describe("CreateConstraint default-constraint notice", () => {
         expect(screen.queryByText("Default constraint")).not.toBeInTheDocument();
     });
 });
+
+describe("CreateConstraint object type the deployment no longer offers", () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        const { fetchConstraintPermissionObjects } = require("../../services/APIService");
+        fetchConstraintPermissionObjects.mockResolvedValue([true, _PERMISSION_OBJECTS]);
+    });
+
+    it("disables Update and says why while the stored object type is not offered", async () => {
+        const initState = {
+            constraintId: "addon-constraint",
+            name: "addon-constraint",
+            description: "a valid description",
+            objectType: "addonThing",
+            criteriaAnd: [{ field: "thingName", operator: "equals", value: "x" }],
+            criteriaOr: [],
+            groupPermissions: [
+                { id: "g1", groupId: "admin", permission: "GET", permissionType: "allow" },
+            ],
+            userPermissions: [],
+        };
+        render(
+            <MemoryRouter>
+                <CreateConstraint
+                    open={true}
+                    setOpen={jest.fn()}
+                    setReload={jest.fn()}
+                    initState={initState}
+                />
+            </MemoryRouter>
+        );
+
+        expect(
+            await screen.findByText("This object type is not offered on this deployment")
+        ).toBeInTheDocument();
+        const submit = screen.getByTestId("Update-authcriteria-button");
+        expect(submit).toHaveAttribute("aria-disabled", "true");
+        expect(submit).toHaveAccessibleDescription(
+            "This object type is not offered on this deployment, so saving changes is refused."
+        );
+    });
+});

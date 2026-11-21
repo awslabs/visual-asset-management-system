@@ -1602,8 +1602,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     height: "20px",
                                 }}
                                 title="Dismiss error"
+                                aria-label="Dismiss error"
                             >
-                                ×
+                                <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     )}
@@ -1641,8 +1642,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     fontWeight: "bold",
                                     padding: "0 0 0 12px",
                                 }}
+                                aria-label="Dismiss file version notice"
                             >
-                                ×
+                                <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     )}
@@ -1698,8 +1700,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                     height: "20px",
                                 }}
                                 title="Dismiss warning"
+                                aria-label="Dismiss warning"
                             >
-                                ×
+                                <span aria-hidden="true">×</span>
                             </button>
                         </div>
                     )}
@@ -1806,8 +1809,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                 height: "auto",
                             }}
                             title="Hide panel"
+                            aria-label="Hide panel"
                         >
-                            ×
+                            <span aria-hidden="true">×</span>
                         </button>
                         <div style={{ display: "flex", flex: 1, overflowX: "auto" }}>
                             <button
@@ -2498,8 +2502,9 @@ const CesiumViewerComponent: React.FC<ViewerPluginProps> = ({
                                 padding: "0 0 0 12px",
                             }}
                             title="Close"
+                            aria-label="Close"
                         >
-                            ×
+                            <span aria-hidden="true">×</span>
                         </button>
                     </div>
                     {pickedFeatureInfo.properties.length === 0 ? (

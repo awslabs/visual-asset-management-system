@@ -31,7 +31,7 @@ than with the prefix match alone.
 Pure functions, no AWS calls.
 """
 
-from typing import List, Optional, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 
@@ -107,10 +107,15 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
     loc = normalize_location(location)
     if loc.endswith("/"):
         return "/" + object_key[len(loc):]
+    name = _file_name(loc)
+    # The whole key first: a file named like a preview (``x.previewFile.png``) is a chain key itself
+    depth = _chain_depth(loc, object_key)
+    if depth is not None:
+        return "/" + "/".join([name] * (depth + 1))
     body, preview = _split_preview(object_key)
     depth = _chain_depth(loc, body)
     if depth is not None:
-        return "/" + "/".join([_file_name(loc)] * (depth + 1)) + preview
+        return "/" + "/".join([name] * (depth + 1)) + preview
     return object_key[len(loc):]
 
 
@@ -143,10 +148,11 @@ def object_key_for(location: Optional[str], relative_path: Optional[str]) -> Opt
     if relative == loc or relative.startswith(loc + "/") or _is_preview_of(loc, relative):
         return relative
     name = _file_name(loc)
-    body, preview = _split_preview(relative)
-    segments = body.split("/")
-    if all(segment == name for segment in segments):
-        return loc + "/".join([""] + [name] * (len(segments) - 1)) + preview
+    # The whole path first, as relative_path_in does, then the path without a preview suffix
+    for body, preview in ((relative, ""), _split_preview(relative)):
+        segments = body.split("/")
+        if all(segment == name for segment in segments):
+            return loc + "/".join([""] + [name] * (len(segments) - 1)) + preview
     return loc + "/" + relative
 
 
@@ -164,6 +170,29 @@ def listing_prefixes(location: Optional[str]) -> List[Tuple[str, Optional[int]]]
     if loc.endswith("/"):
         return [(loc, None)]
     return [(loc, 1), (loc + PREVIEW_FILE_PATTERN, None), (loc + "/", None)]
+
+
+def held_objects(location: Optional[str],
+                 list_objects: Callable[[str, Optional[int]], Iterable[Dict]]) -> Iterator[Dict]:
+    """Each S3 object a location holds, once, from listings of its ``listing_prefixes``.
+
+    ``list_objects(prefix, cap)`` returns the S3 object dicts (``Contents`` entries) under ``prefix``, at most
+    ``cap`` when ``cap`` is set. The one-key read of a single-file location's own key counts only when the key
+    it returns IS that key: when the object has no current version, the smallest key under the prefix is an
+    own preview or a companion entry, which a later prefix lists again. Only keys ``contains`` accepts are
+    yielded, each once.
+    """
+    loc = normalize_location(location)
+    seen = set()
+    for prefix, cap in listing_prefixes(loc):
+        for obj in list_objects(prefix, cap) or []:
+            key = obj.get("Key", "")
+            if cap == 1 and not loc.endswith("/") and key != loc:
+                continue
+            if key in seen or not contains(loc, key):
+                continue
+            seen.add(key)
+            yield obj
 
 
 def folder_listing_prefix(location: Optional[str], relative_folder: Optional[str]) -> str:

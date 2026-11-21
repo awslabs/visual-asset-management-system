@@ -83,7 +83,7 @@ def test_a_valid_answer_is_parsed_and_passes_at_four():
     assert result["input_tokens"] == 2000 and result["output_tokens"] == 150
     assert result["estimated_cost_usd"] == pytest.approx(2000 / 1e6 * 3 + 150 / 1e6 * 15)
     call = client.calls[0]
-    assert call["modelId"] == "model-under-test" and call["inferenceConfig"]["temperature"] == 0
+    assert call["modelId"] == "model-under-test" and "temperature" not in call["inferenceConfig"]
     assert call["inferenceConfig"]["maxTokens"] == lj.MAX_TOKENS
 
 

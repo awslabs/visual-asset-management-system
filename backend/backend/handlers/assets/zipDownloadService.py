@@ -25,9 +25,9 @@ role allows that route (Tier 1) and who may read the asset (Tier 2); a caller wh
 gets the same 404 as for a missing asset. Each row carries the API's own advisory flags for the caller
 (canDownload, canRemove). The download URL route also signs another user's finished archive for a
 caller who may download from the asset: the same checks as a file download (Tier 1 on the asset's
-file download route, Tier 2 asset GET), plus the URL route itself, and the archive's member files are
-rechecked against the download eligibility rules at the time of the request. Cancel and delete stay
-with the requester.
+file download route, Tier 2 asset GET), plus the URL route itself. For every archive, the requester's
+own or another user's, the URL route rechecks the archive's member files against the download
+eligibility rules at the time of the request. Cancel and delete stay with the requester.
 
 A create resolves and checks the selection (refusing the whole job on any archived, delete-marker,
 archive-storage-class or blocked file, owner decision), writes the request manifest and a QUEUED row,
@@ -195,7 +195,7 @@ register_bucket_region(aux_bucket_name, deployment_region())
 
 USER_ASSET_INDEX = "UserAssetIndex"
 ASSET_INDEX = "AssetIndex"
-# The member recheck of another user's archive (_recheck_members): at most this many members are
+# The member recheck of a finished archive (_recheck_members): at most this many members are
 # head-checked; a larger archive is checked from one listing of the asset's prefix, within the time
 # bound. Either bound exceeded refuses the link (fails closed).
 SHARED_RECHECK_HEAD_MAX_FILES = HEAD_CHECK_MAX_FILES
@@ -203,7 +203,16 @@ SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_M
 
 
 class ZipRefusal(VAMSGeneralErrorResponse):
-    """A refused create (400, or the given status)."""
+    """A refused create (400, or the given status). Its text is the refusal sentence alone, as the
+    API pages quote it and as the URL route already answers it, without the "VAMS General Error: "
+    prefix the base class adds."""
+
+    def __init__(self, message, status_code=400):
+        super().__init__(message, status_code=status_code)
+        self.message = message
+
+    def __str__(self):
+        return self.message
 
 
 def _refusal_message(error) -> str:
@@ -525,7 +534,8 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
         asset_version_id = resolve_asset_version_id_from_alias(database_id, asset_id,
                                                                request.assetVersionIdAlias)
     validate_asset_version_exists(database_id, asset_id, asset_version_id)
-    snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id) or {}
+    # A failed read raises (answered 500), so it is never reported as a selection the version lacks.
+    snapshot = get_asset_file_versions(database_id, asset_id, asset_version_id, raise_errors=True) or {}
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = (f.get("relativeKey") or "").lstrip("/")
@@ -585,6 +595,7 @@ def _resolve_current(bucket, base_key, request):
                          f"folder")
     sizes = _check_members(bucket, explicit) if explicit else []
     files, total, complete = len(explicit), sum(sizes), True
+    _enforce_limits(files, total)
     deadline = time.monotonic() + PRESCAN_MAX_SECONDS
     budget = [PRESCAN_MAX_OBJECTS]
     for record in entries:
@@ -1288,9 +1299,10 @@ def _current_member_ok(bucket, key):
 
 
 def _recheck_members(asset, row) -> bool:
-    """Download eligibility of another user's archive at request time: every member file must still
-    be present, not archived and not a blocked type in the asset (#1124's rules, as a file download
-    applies them). Fails closed on anything it cannot confirm, including the time bound."""
+    """Download eligibility of a finished archive at request time, the requester's own or another
+    user's: every member file must still be present, not archived and not a blocked type in the asset
+    (#1124's rules, as a file download applies them). Fails closed on anything it cannot confirm,
+    including the time bound."""
     members = _read_resolved_members(row)
     if not members:
         return False
@@ -1374,11 +1386,11 @@ def job_url(event, database_id, asset_id, request_id):
     row = _reconcile(row)
     if row.get("status") != zd.STATUS_SUCCEEDED:
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
-    if shared and not _recheck_members(asset, row):
-        # AUDIT LOG: another user's archive refused because a member is no longer downloadable.
+    if not _recheck_members(asset, row):
+        # AUDIT LOG: the archive refused because a member is no longer downloadable.
         log_action(event, "zipDownloadUrl", outcome="failed", reason="validation",
                    database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)
-        return general_error(status_code=400, body={"message": zd.MSG_ARCHIVED_IN_SELECTION},
+        return general_error(status_code=400, body={"message": zd.MSG_ARCHIVE_FILE_UNAVAILABLE},
                              event=event)
     exists, size = zd.archive_head(s3, aux_bucket_name, row.get("archiveKey", ""))
     if not exists:

@@ -85,6 +85,7 @@ const buildStorageResources = (stack: cdk.Stack): storageResources => {
         sqs: {
             complianceTriggerQueue: new sqs.Queue(stack, "ComplianceTriggerQueue"),
             complianceJobQueue: new sqs.Queue(stack, "ComplianceJobQueue"),
+            complianceJobDLQ: new sqs.Queue(stack, "ComplianceJobDLQ"),
         },
     } as unknown as storageResources;
 };

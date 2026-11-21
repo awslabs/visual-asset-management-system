@@ -73,7 +73,8 @@ function recordReadResponses(page: Page): Response[] {
 }
 
 async function openAssetPage(page: Page, ref: ArchivedAssetRef): Promise<void> {
-    await page.goto(`/#/databases/${ref.databaseId}/assets/${ref.assetId}`, {
+    // The asset id is encoded as the app's own links encode it, so an id with "#" or "%" opens it.
+    await page.goto(`/#/databases/${ref.databaseId}/assets/${encodeURIComponent(ref.assetId)}`, {
         waitUntil: "domcontentloaded",
     });
 }

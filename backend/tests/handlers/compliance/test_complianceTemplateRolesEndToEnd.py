@@ -76,7 +76,11 @@ class TestTheServicesWithTheRealEnforcer:
         svc = complianceSchemaService
         rows = [schema_row("global-1", database_id=GLOBAL), schema_row("own-1", database_id=DB_A),
                 schema_row("other-1", database_id=DB_B)]
-        schema_table = MagicMock(scan=MagicMock(return_value={"Items": rows}))
+        # The listing reads the latest-version index (each row is a latest version), and the
+        # one-time marker backfill has run.
+        schema_table = MagicMock(
+            query=MagicMock(return_value={"Items": rows}),
+            get_item=MagicMock(return_value={"Item": dict(svc.LATEST_MARKER_BACKFILL_KEY)}))
         database_table = MagicMock(scan=MagicMock(return_value={
             "Items": [{"databaseId": DB_A}, {"databaseId": DB_B}]}))
         with patch(f"{svc.__name__}.request_to_claims", claims_for(USER_ID)), \

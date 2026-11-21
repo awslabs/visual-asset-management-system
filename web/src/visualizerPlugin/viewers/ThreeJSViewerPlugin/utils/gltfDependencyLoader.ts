@@ -52,6 +52,20 @@ export function extractGLTFDependencies(gltfJson: any): string[] {
 }
 
 /**
+ * A glTF URI as the file name it stands for: glTF writes URIs percent-encoded (RFC 3986), so a
+ * texture named `my texture.png` is written `my%20texture.png`. A URI that is not valid
+ * percent-encoding is kept as written. Only glTF is decoded; OBJ, USD and the other formats name
+ * their files literally.
+ */
+function decodeGltfUri(uri: string): string {
+    try {
+        return decodeURIComponent(uri);
+    } catch {
+        return uri;
+    }
+}
+
+/**
  * Downloads the files a .gltf names through `resolver` and returns the glTF with each resolved
  * URI replaced by a blob URL. URIs that did not resolve are left as written; the loading
  * manager's URL modifier answers them without a request.
@@ -80,13 +94,17 @@ export async function resolveGLTFDependencies(
 
         console.log(`Found ${dependencies.length} dependencies in GLTF`);
 
-        const result = await resolver.resolveDependencies(baseFileKey, dependencies, {
-            depth: 1,
-            onProgress,
-        });
+        const result = await resolver.resolveDependencies(
+            baseFileKey,
+            dependencies.map(decodeGltfUri),
+            { depth: 1, onProgress }
+        );
 
+        // Keyed by the URI as the glTF writes it; the resolver keyed its result by the decoded name.
         const dependencyMap = new Map<string, string>();
-        result.resolved.forEach((dependency, uri) => {
+        dependencies.forEach((uri) => {
+            const dependency = result.resolved.get(decodeGltfUri(uri));
+            if (!dependency || dependencyMap.has(uri)) return;
             const blobUrl = resolver.blobUrlFor(dependency);
             dependencyMap.set(uri, blobUrl);
             blobUrls.push(blobUrl);

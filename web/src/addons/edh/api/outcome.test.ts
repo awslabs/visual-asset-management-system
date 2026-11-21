@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { toTuple } from "../../../features/orchestration/api/client";
+import { shouldRetryQuery } from "../../../utils/queryRetry";
 import {
+    callService,
     EdhRequestError,
     OUTCOME_UNKNOWN_MESSAGE,
     edhRequestError,
@@ -144,5 +147,30 @@ describe("unconfirmedNotice", () => {
     it("is null for a failure", () => {
         expect(unconfirmedNotice("Start", plain502())).toBeNull();
         expect(unconfirmedNotice("Start", new Error("Forbidden"))).toBeNull();
+    });
+});
+
+describe("callService", () => {
+    const refused = (status: number) => () =>
+        toTuple(() => Promise.reject(Object.assign(new Error("Not Authorized"), { status })));
+
+    it("throws a failed list read with its HTTP status, so a 403 or 404 is not sent again", async () => {
+        for (const status of [403, 404]) {
+            const error = await callService(refused(status)).catch((e) => e);
+            expect(error).toMatchObject({ message: "Not Authorized", status });
+            expect(shouldRetryQuery(0, error)).toBe(false);
+        }
+    });
+
+    it("[control] keeps one retry for a failure with no final answer", async () => {
+        const error = await callService(refused(503)).catch((e) => e);
+        expect(error.status).toBe(503);
+        expect(shouldRetryQuery(0, error)).toBe(true);
+    });
+
+    it("throws an EdhRequestError as it is and returns a successful call's data", async () => {
+        const edh = new EdhRequestError("EDH is unavailable.", 502);
+        await expect(callService(async () => [false, edh])).rejects.toBe(edh);
+        await expect(callService(async () => [true, ["a"]])).resolves.toEqual(["a"]);
     });
 });

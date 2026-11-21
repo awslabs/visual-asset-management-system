@@ -536,7 +536,14 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         }
         expect(tables.join(" ")).not.toMatch(/VECTOR|EXECUTION/);
         expect(readme).toContain("#### Part (b): the copy named like the file");
-        expect(readme).toContain("assetLocationFolderKeys-moved-copies.jsonl");
+        // Idempotent without local state: a conditional marker on the asset row, read by the scan.
+        expect(script).toMatch(/^COPY_DONE_ATTRIBUTE = 'assetLocationCopyRecordsMovedAt'$/m);
+        const mark = script.slice(script.indexOf("def mark_copy_records_done("));
+        expect(mark.slice(0, 1200)).toContain("attribute_not_exists(#m)");
+        expect(script).toMatch(/assetLocation, '\s*\n\s*f'\{COPY_DONE_ATTRIBUTE\}'/);
+        expect(script).not.toMatch(/moved-copies/);
+        expect(readme).toContain("assetLocationCopyRecordsMovedAt");
+        expect(readme).toContain("Run the step before users edit metadata on single-file assets.");
         expect(readme).toMatch(/run `vectorBackfill` after this step/);
     });
 

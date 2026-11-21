@@ -39,7 +39,7 @@ The Download Queue lists your download jobs. Archive jobs from Download as Zip a
 
 The asset's **Download Queue** tab opens on **My jobs**. When your role allows it, a **My jobs** / **Show all users** toggle at the right end of the row above the table lists every user's jobs for that asset, with a **Requested by** column. Your administrator grants it through the all-users list route (see [Permissions](../developer/permissions.md#zip-download-routes-on-roles-built-from-earlier-templates)); you also need read access to the asset. Without it, the choice is not shown. A finished job shows its download button only when the download would be allowed, in **My jobs** and on the **My Download Queue** page as well: on an asset that is quarantined without an exception, while `app.compliance.quarantineBlocksDownload` is on, no row offers one.
 
--   You can download another user's finished archive when your role lets you download files from that asset. VAMS checks the archive's files again when you choose **Download**: if a file in it has since been archived, deleted, or blocked, the download is refused with the same message a new zip download would get.
+-   You can download another user's finished archive when your role lets you download files from that asset. Its files are checked again when you choose **Download**, as for your own jobs.
 -   Only the user who requested a job can cancel or delete it, so another user's job shows no **Cancel** or **Delete**.
 -   Another user's job shows its selection summary (counts of files and folders), not the list of selected paths.
 -   Jobs created before this view was added appear only to their requester until they expire.
@@ -47,21 +47,21 @@ The asset's **Download Queue** tab opens on **My jobs**. When your role allows i
 
 The search box above each list finds jobs by asset ID, asset name, request ID, archive name, or (with **Show all users**) the requester, and the refresh button beside it reloads the list. The search covers the jobs already loaded; when more jobs exist than one load holds, choose **Load more** to add older jobs, which the search then includes.
 
-| Status        | Meaning                                                                                                     |
-| ------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Queued**    | The job is starting.                                                                                        |
-| **Running**   | The archive is being written. The progress bar shows files and bytes written.                               |
-| **Succeeded** | The archive is ready to download.                                                                           |
-| **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. |
-| **Cancelled** | You cancelled the job before it finished.                                                                   |
+| Status        | Meaning                                                                                                                                                                                                   |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Queued**    | The job is starting.                                                                                                                                                                                      |
+| **Preparing** | The archive is being written. The progress bar shows files and bytes written.                                                                                                                             |
+| **Ready**     | The archive is ready to download.                                                                                                                                                                         |
+| **Failed**    | No archive was produced. The reason is shown with the job, for example the path of a file that was refused. A run aborted from the **Executions** page fails with **Cancelled from workflow executions**. |
+| **Cancelled** | You cancelled the job before it finished.                                                                                                                                                                 |
 
-If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory. Create the job again; see [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if it recurs.
+If a job fails with **The archive job was stopped** or **The archive job stopped responding**, its archive job ended before it finished, for example because it was stopped by an administrator or ran out of memory; create the job again. If it fails with **The archive job waited too long to start**, too many archive jobs were running at once; create it again later. See [Zip Archive troubleshooting](../pipelines/zip-archive.md#troubleshooting) if a failure recurs.
 
-While a job is queued or running, the list refreshes itself every few seconds.
+While a job is queued or running, the list refreshes itself every few seconds. A job on the first page that was deleted in another window leaves the list at the next refresh. When two refreshes in a row fail, **Could not refresh the Download Queue** appears above the list: the list keeps the last answer and keeps trying, and **Retry** refreshes it at once.
 
 Each job's actions are icon buttons in its **Actions** column, named for screen readers and in their tooltip: a download icon (**Download**), a close icon (**Cancel**) and a remove icon (**Delete**). An action your role does not allow is greyed, with its reason when you hover or focus it.
 
--   **Download** -- available when the job has succeeded. VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
+-   **Download** -- available when the job has succeeded. VAMS checks the archive's files again first: if a file in it has since been archived, deleted, or blocked, the download is refused with **A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.** Otherwise VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
 -   **Cancel** -- available while a job is queued or running. The Zip Archive run stops and nothing is kept. A cancel never deletes a job. If the job finishes while the cancel dialog is open, the dialog says so and no longer offers the cancel; close it and download or delete the job from the list. If the job finishes just before your cancel reaches it, it keeps its outcome and a message says it finished before it could be cancelled.
 -   **Delete** -- available when a job has finished. The archive and the job are removed.
 

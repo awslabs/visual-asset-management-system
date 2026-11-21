@@ -29,9 +29,7 @@ from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
 from common.assetLocations import contains
-from common.s3PathPatterns import (
-    AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS, key_has_reserved_segment,
-)
+from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
 
@@ -393,9 +391,14 @@ def is_reserved_asset_id(asset_id):
 
 
 def is_reserved_existing_key(s3_key, base_prefix):
-    """Whether a resolved bucketExistingKey has a reserved VAMS system folder as any path segment, read
-    with and without the bucket's base prefix (``key_has_reserved_segment``)."""
-    return key_has_reserved_segment(s3_key, base_prefix, RESERVED_EXISTING_KEY_FOLDERS)
+    """Whether a resolved bucketExistingKey has a reserved VAMS system folder as a path segment of the part
+    under the bucket's base prefix. The base prefix itself is the registration's choice and is not checked,
+    so a prefix such as ``exports/workspace/`` does not refuse every key under it."""
+    key = (s3_key or "").lstrip("/")
+    base = (base_prefix or "").strip("/")
+    if base and key.startswith(base + "/"):
+        key = key[len(base) + 1:]
+    return any(part in RESERVED_EXISTING_KEY_FOLDERS for part in key.split("/"))
 
 
 def keys_conflict(existing_key, target_key):

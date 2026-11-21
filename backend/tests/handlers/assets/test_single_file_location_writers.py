@@ -6,7 +6,8 @@
 A single-file asset (location key with no trailing ``/``) holds its object, its companion folder
 ``{file key}/`` and its own previews. An upload or workflow output lands in the companion folder, a
 file's preview at its own preview key. A user upload at the asset's own file path writes a new version
-of its object, as for any other file; a workflow output at that path is refused. A workflow input of the asset resolves to the object
+of its object, as for any other file; a workflow output at that path is refused. A workflow input of the
+asset resolves to the object
 itself, not to the companion folder. Asset-type detection after an upload counts only the keys the
 asset holds.
 """
@@ -148,6 +149,18 @@ class TestAssetTypeAfterUpload:
         assert [max_objects for prefix, max_objects in calls if prefix == FILE_LOCATION] == [1], calls
 
     @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
+    def test_one_companion_file_without_the_object_is_counted_once(self, module_name):
+        """No current object: the one-key read of the location returns the companion file, which the
+        companion folder listing returns again (D4)."""
+        import importlib
+        module = importlib.import_module(f"backend.backend.handlers.assets.{module_name}")
+        fake, calls = self._listing("p1/model.glb/sub/x.obj")
+        with patch.object(module, "list_all_objects", side_effect=fake), \
+                patch.object(module, "is_file_archived", return_value=False):
+            assert module.determine_asset_type("asset-1", "bucket", FILE_LOCATION) == ".obj"
+        assert [max_objects for prefix, max_objects in calls if prefix == FILE_LOCATION] == [1], calls
+
+    @pytest.mark.parametrize("module_name", ["uploadFile", "sqsUploadFileLarge"])
     def test_a_companion_file_makes_a_folder(self, module_name):
         import importlib
         module = importlib.import_module(f"backend.backend.handlers.assets.{module_name}")
@@ -166,6 +179,24 @@ class TestWorkflowInputs:
     ])
     def test_a_single_file_input_resolves_inside_the_asset(self, relative, expected):
         assert ewv2._input_key(FILE_LOCATION, relative) == expected
+
+    def test_a_folder_selection_named_like_the_file_lists_the_copy_and_keeps_chain_paths(self):
+        keys = sorted([FILE_LOCATION, "p1/model.glb/model.glb", "p1/model.glb/model.glb.bak",
+                       "p1/model.glb/model.glb/model.glb", "p1/model.glb/model.glb/part.obj",
+                       "p1/model.glb/sub/x.obj"])
+        s3c = MagicMock()
+        s3c.list_objects_v2.side_effect = lambda **kw: {
+            "Contents": [{"Key": k} for k in keys if k.startswith(kw["Prefix"])], "IsTruncated": False}
+        key = ("db1", "a1")
+        asset = {"databaseId": "db1", "assetId": "a1", "bucketId": "b1", "assetLocation": {"Key": FILE_LOCATION}}
+        grouped = {key: [{"databaseId": "db1", "assetId": "a1", "relativeFileKey": "/model.glb/"}]}
+        with patch.object(ewv2, "s3c", s3c), \
+                patch.object(ewv2, "_asset_bucket_details", return_value={"bucketName": "bkt"}):
+            expansions, _ = ewv2._expand_asset_selections([key], grouped, {key: asset})
+        assert sorted(expansions[key]["files"]) == [
+            "/model.glb/model.glb", "/model.glb/model.glb/model.glb", "/model.glb/part.obj"]
+        for path in expansions[key]["files"]:
+            assert ewv2._input_key(FILE_LOCATION, path) in keys, path
 
     @pytest.mark.parametrize("relative,expected", [("/", "assetX/"), ("", "assetX/"),
                                                    ("/a/b.glb", "assetX/a/b.glb")])

@@ -163,6 +163,43 @@ describe("AssetListProviderComponent bulk actions", () => {
         expect(screen.queryByTestId("asset-delete-modal")).toBeNull();
     });
 
+    it("gates permanent delete on the reason the page passes", async () => {
+        // An archived row can only be permanently deleted, so without that permission Delete
+        // Selected is disabled for it, and the dialog offers no permanent delete for live rows.
+        const reason = "Your role does not allow permanently deleting assets.";
+        render(
+            <MemoryRouter>
+                <AssetListProviderComponent
+                    isActive
+                    assetActionDisabledReasons={{ permanentDelete: reason }}
+                />
+            </MemoryRouter>
+        );
+        await screen.findByText("Live asset");
+        const liveRow = screen.getByText("Live asset").closest("tr") as HTMLElement;
+        await userEvent.click(within(liveRow).getByRole("checkbox"));
+        const del = screen.getByRole("button", { name: "Delete Selected" });
+        await waitFor(() => expect(del).toBeEnabled());
+        await userEvent.click(del);
+        expect(await screen.findByTestId("asset-delete-modal")).toBeInTheDocument();
+        expect(deleteModalProps[deleteModalProps.length - 1].canPermanentlyDelete).toBe(false);
+
+        await userEvent.click(screen.getByRole("checkbox", { name: "Show archived" }));
+        const archivedRow = (await screen.findByText("Archived asset")).closest(
+            "tr"
+        ) as HTMLElement;
+        await userEvent.click(within(archivedRow).getByRole("checkbox"));
+        await waitFor(() =>
+            expect(screen.getByRole("button", { name: "Delete Selected" })).toHaveAttribute(
+                "aria-disabled",
+                "true"
+            )
+        );
+        expect(screen.getByRole("button", { name: "Delete Selected" })).toHaveAccessibleDescription(
+            reason
+        );
+    });
+
     it.each([
         ["may not unarchive", "Your role does not allow unarchiving assets.", true],
         ["may unarchive", undefined, false],

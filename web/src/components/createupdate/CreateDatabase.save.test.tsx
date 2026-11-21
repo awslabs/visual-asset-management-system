@@ -28,9 +28,14 @@ jest.mock("../../services/ComplianceService", () => ({
     bindSchemaToDatabase: jest.fn(),
     unbindSchemaFromDatabase: jest.fn(),
 }));
-// An administrator's routes: the bucket list, the schema list and the database binding.
+// An administrator's routes by default: the bucket list, the schema list and the database binding.
+// A test may refuse one "METHOD path-template".
+let mockRefused: string[] = [];
 jest.mock("../../features/orchestration/permissions/useAllowedRoutes", () => ({
-    useAllowedRoutes: () => ({ loading: false, can: () => true }),
+    useAllowedRoutes: () => ({
+        loading: false,
+        can: (method: string, path: string) => !mockRefused.includes(`${method} ${path}`),
+    }),
 }));
 
 const api = jest.requireMock("../../services/APIService");
@@ -114,6 +119,7 @@ const closedWith = (setOpen: jest.Mock) => setOpen.mock.calls.some(([open]) => o
 
 beforeEach(() => {
     jest.clearAllMocks();
+    mockRefused = [];
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     api.fetchBuckets.mockResolvedValue({
         Items: [{ bucketId: "b1", bucketName: "bucket-one", baseAssetsPrefix: "/" }],
@@ -308,5 +314,117 @@ describe(`${Synonyms.Database} editor save and compliance schema binding`, () =>
         expect(api.updateDatabase).not.toHaveBeenCalled();
         expect(compliance.bindSchemaToDatabase).toHaveBeenCalledTimes(2);
         expect(compliance.bindSchemaToDatabase).toHaveBeenLastCalledWith("db-new", "std");
+    });
+});
+
+describe(`${Synonyms.Database} editor when a compliance read fails`, () => {
+    const schemaSelect = () =>
+        present(formField("Compliance Schema").findControl()?.findSelect(), "schema select");
+
+    it("does not offer the schema while the binding is unknown, and saves the fields only", async () => {
+        compliance.getDatabaseBindings.mockResolvedValue([false, "Not Authorized"]);
+        api.updateDatabase.mockResolvedValue([true, "Database updated"]);
+        const setOpen = jest.fn();
+        render(
+            <CreateDatabase
+                open={true}
+                setOpen={setOpen}
+                setReload={jest.fn()}
+                initState={database}
+            />
+        );
+        expect(
+            await screen.findByText("Could not load the compliance schema binding: Not Authorized")
+        ).toBeInTheDocument();
+        expect(schemaSelect().isDisabled()).toBe(true);
+
+        editDescription("an edited description");
+        submit("Update");
+        await waitFor(() => expect(closedWith(setOpen)).toBe(true));
+        expect(api.updateDatabase).toHaveBeenCalledTimes(1);
+        expect(compliance.bindSchemaToDatabase).not.toHaveBeenCalled();
+        expect(compliance.unbindSchemaFromDatabase).not.toHaveBeenCalled();
+    });
+
+    it("reads the binding again on Retry and then offers the field", async () => {
+        compliance.getDatabaseBindings
+            .mockResolvedValueOnce([false, "Internal Server Error"])
+            .mockResolvedValue([true, { databaseId: "db-one", databaseSchema: "std" }]);
+        render(
+            <CreateDatabase
+                open={true}
+                setOpen={jest.fn()}
+                setReload={jest.fn()}
+                initState={database}
+            />
+        );
+        await screen.findByText(
+            "Could not load the compliance schema binding: Internal Server Error"
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(schemaSelect().isDisabled()).toBe(false));
+        expect(schemaSelect().findTrigger().getElement()).toHaveTextContent("std");
+    });
+
+    it("says the schemas could not be loaded when their read fails", async () => {
+        compliance.fetchComplianceSchemas.mockResolvedValue([false, "Not Authorized"]);
+        await openEditor("std");
+        expect(
+            screen.getByText("Could not load the compliance schemas: Not Authorized")
+        ).toBeInTheDocument();
+    });
+});
+
+describe(`${Synonyms.Database} editor for a role that may bind but not remove a schema`, () => {
+    const optionLabels = () => {
+        const select = present(
+            formField("Compliance Schema").findControl()?.findSelect(),
+            "schema select"
+        );
+        act(() => {
+            select.openDropdown();
+        });
+        return select
+            .findDropdown()
+            .findOptions()
+            .map((option) => option.getElement().textContent);
+    };
+
+    beforeEach(() => {
+        mockRefused = ["DELETE /compliance/bind/{databaseId}"];
+    });
+
+    it("does not offer None for a bound schema", async () => {
+        await openEditor("std");
+        expect(optionLabels().some((label) => label?.includes("None"))).toBe(false);
+    });
+
+    it("offers None while no schema is bound, since choosing it removes nothing", async () => {
+        await openEditor(null);
+        expect(optionLabels().some((label) => label?.includes("None"))).toBe(true);
+    });
+});
+
+describe(`${Synonyms.Database} editor for a role that may bind but not read a binding`, () => {
+    beforeEach(() => {
+        mockRefused = ["GET /compliance/bind/{databaseId}"];
+    });
+
+    it("does not offer the schema field when editing, and reads no binding", async () => {
+        render(
+            <CreateDatabase
+                open={true}
+                setOpen={jest.fn()}
+                setReload={jest.fn()}
+                initState={database}
+            />
+        );
+        await waitFor(() => expect(api.fetchBuckets).toHaveBeenCalled());
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(screen.queryByText("Compliance Schema")).not.toBeInTheDocument();
+        expect(compliance.getDatabaseBindings).not.toHaveBeenCalled();
+        expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument();
     });
 });

@@ -35,7 +35,7 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.assetProvenance import asset_edit_provenance
-from common.assetLocations import contains, is_folder_location, listing_prefixes, relative_path_in
+from common.assetLocations import contains, held_objects, is_folder_location, relative_path_in
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -610,17 +610,14 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
     logger.info(f'Archiving folder with multiple files from bucket: {bucket}')
 
     paginator = s3.get_paginator('list_objects_v2')
-    files = []
     # A single-file location is listed by its own prefixes (its object, its previews, its companion
-    # folder), so keys that only share its characters are never read; contains() keeps the held keys
-    pages = (page for list_prefix, cap in listing_prefixes(prefix)
-             for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix,
-                                            PaginationConfig={'MaxItems': cap} if cap else {}))
-    for page in pages:
-        if 'Contents' in page:
-            for obj in page.get('Contents', []):
-                if contains(prefix, obj['Key']):
-                    files.append(obj['Key'])
+    # folder), so keys that only share its characters are never read; held_objects yields each held key once
+    def _list(list_prefix, cap):
+        for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix,
+                                       PaginationConfig={'MaxItems': cap} if cap else {}):
+            yield from page.get('Contents', [])
+
+    files = [obj['Key'] for obj in held_objects(prefix, _list)]
 
     def _archive_one(key):
         try:
@@ -1890,14 +1887,15 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 5. Delete from asset uploads table if available
         if asset_upload_table:
             try:
-                # Query using the GSI to find uploads for this asset
-                response = asset_upload_table.query(
+                # Query using the GSI to find uploads for this asset, every page: each row found is
+                # deleted, so a row past the first page would otherwise be left behind. A row is
+                # deleted only when it names this asset's database.
+                for item in query_all_items(
+                    asset_upload_table,
                     IndexName='AssetIdGSI',
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
-                    if 'uploadId' in item:
+                ):
+                    if 'uploadId' in item and item.get('databaseId') in (databaseId, original_db_id):
                         asset_upload_table.delete_item(Key={'uploadId': item['uploadId'], 'assetId': assetId})
                         deleted_items["dynamodb_tables"].append(f"{asset_upload_table_name} (uploadId={item['uploadId']}, assetId={assetId})")
             except Exception as e:
@@ -1906,12 +1904,11 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
         # 6. Delete from comments table if available
         if comment_table:
             try:
-                # Query to find all comments for this asset
-                response = comment_table.query(
+                # Query to find all comments for this asset, every page (as for the uploads above)
+                for item in query_all_items(
+                    comment_table,
                     KeyConditionExpression=Key('assetId').eq(assetId)
-                )
-                
-                for item in response.get('Items', []):
+                ):
                     if 'assetVersionId:commentId' in item:
                         comment_table.delete_item(Key={
                             'assetId': assetId,

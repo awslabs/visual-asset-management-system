@@ -45,7 +45,7 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import contains, is_folder_location, listing_prefixes, names_own_object, object_key_for
+from common.assetLocations import contains, held_objects, is_folder_location, names_own_object, object_key_for
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -616,11 +616,9 @@ def determine_asset_type(assetId, bucket, prefix):
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = []
-        for list_prefix, cap in listing_prefixes(prefix):
-            contents.extend(list_all_objects(bucket, list_prefix, client=s3,
-                                             max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE,
-                                                             ASSET_TYPE_DETECTION_SAMPLE_SIZE)))
+        contents = list(held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+            bucket, list_prefix, client=s3,
+            max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE))))
         
         # Filter out archived files
         non_archived_files = []
@@ -1022,26 +1020,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     preview_files = []
     
     try:
-        # Get the directory and filename parts
-        directory = os.path.dirname(base_file_key)
-        filename = os.path.basename(base_file_key)
-        
-        # Create the prefix for listing objects
-        prefix = f"{directory}/" if directory else ""
-        
-        # Create the pattern to match preview files for this base file
-        pattern = f"{filename}{PREVIEW_FILE_PATTERN}"
-        
-        # List objects in the directory
+        # The prefix is the base file's own key, so a same-named file in a subfolder does not match
+        prefix = f"{base_file_key}{PREVIEW_FILE_PATTERN}"
+
         paginator = s3.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
-                key = obj['Key']
-                base_filename = os.path.basename(key)
-                
-                # Check if this is a preview file for our base file
-                if base_filename.startswith(pattern):
-                    preview_files.append(key)
+                preview_files.append(obj['Key'])
         
         # Sort the preview files alphabetically
         preview_files.sort()
@@ -1051,12 +1036,13 @@ def find_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     return preview_files
 
-def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
+def delete_existing_preview_files(bucket: str, base_file_key: str, keep: Optional[str] = None) -> List[str]:
     """Delete existing preview files for a base file
     
     Args:
         bucket: The S3 bucket name
         base_file_key: The base file key
+        keep: A preview key the caller is about to overwrite; it is not deleted
         
     Returns:
         List of deleted preview file keys
@@ -1068,6 +1054,11 @@ def delete_existing_preview_files(bucket: str, base_file_key: str) -> List[str]:
     
     # Delete each preview file
     for preview_file in preview_files:
+        if preview_file == keep:
+            # The copy that follows writes a new version of this key. A delete marker before it
+            # raises an S3 removal whose provenance cannot be read (a HEAD of a delete marker answers
+            # 405), which the compliance trigger would evaluate as a user change.
+            continue
         try:
             # Add delete marker (soft delete)
             s3.delete_object(Bucket=bucket, Key=preview_file)
@@ -1852,6 +1843,10 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                             has_failures = True
                         continue
 
+                    # Track the file before it is queued, so an outcome the consumer records while
+                    # this completion still runs is kept.
+                    uploadStatus.track_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
+
                     # Try to queue the file for asynchronous processing with comprehensive error handling
                     try:
                         if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
@@ -1867,11 +1862,13 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
                         else:
                             # Failed to queue - fall back to synchronous processing
                             logger.warning(f"Failed to queue large external file {file.relativeKey}, falling back to synchronous processing")
+                            uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                             process_async = False
                     except Exception as e:
                         # SQS queuing error - fall back to synchronous processing
                         logger.warning(f"Error queuing large external file {file.relativeKey} for asynchronous processing: {e}")
                         logger.info(f"Falling back to synchronous processing for external file {file.relativeKey}")
+                        uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                         process_async = False
                 
             except Exception as e:
@@ -2056,11 +2053,13 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
 
             logger.info(f"Copying file from {file_detail['temp_s3_key']} to {file_detail['final_s3_key']}")
 
-            # If this is a preview file in an assetFile upload, delete any existing preview files for the base file
+            # If this is a preview file in an assetFile upload, delete any existing preview files for
+            # the base file, except the key the copy below overwrites
             if uploadType == "assetFile" and is_preview_file(file_detail['relativeKey']):
                 base_file_path = get_base_file_path(file_detail['relativeKey'])
                 base_file_key = normalize_s3_path(asset_base_key, base_file_path)
-                deleted_files = delete_existing_preview_files(bucket_name, base_file_key)
+                deleted_files = delete_existing_preview_files(bucket_name, base_file_key,
+                                                             keep=file_detail['final_s3_key'])
                 if deleted_files:
                     logger.info(f"Deleted {len(deleted_files)} existing preview files for {base_file_path}")
 
@@ -2212,8 +2211,12 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                                    request_model.files, refusal.reason)
         raise VAMSGeneralErrorResponse(refusal.reason)
 
-    # A record kept to report its asynchronously ingested files has been completed already.
-    if upload_details.get('asyncFiles') is not None:
+    # A record kept to report its asynchronously ingested files has been completed already. Files are
+    # tracked while a completion runs, before it marks the record, so only a record marked kept
+    # (processing_async, or settled from it) with tracked files counts.
+    if upload_details.get('asyncFiles') and upload_details.get('status') in (
+            uploadStatus.STATUS_PROCESSING_ASYNC, uploadStatus.STATUS_COMPLETED,
+            uploadStatus.STATUS_COMPLETED_WITH_ERRORS):
         deny_upload_completion(event, databaseId, assetId, uploadId, uploadType,
                                request_model.files, "Upload has already been completed.")
     
@@ -2507,6 +2510,10 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                     "changeUserId": user_id
                 }
                 
+                # Track the file before it is queued, so an outcome the consumer records while this
+                # completion still runs is kept.
+                uploadStatus.track_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
+
                 # Try to queue the file for asynchronous processing
                 if queue_large_file_for_processing(file_info, large_file_processing_queue_url):
                     # Successfully queued - mark as successful with async flag
@@ -2522,6 +2529,7 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 else:
                     # Failed to queue - fall back to synchronous processing
                     logger.warning(f"Failed to queue large file {file.relativeKey}, falling back to synchronous processing")
+                    uploadStatus.untrack_async_file(asset_upload_table, uploadId, assetId, file.relativeKey)
                     process_async = False
             
             # Complete multipart upload synchronously (for small files or fallback)
@@ -2966,23 +2974,24 @@ def get_upload_status(event):
     """GET /uploads/{uploadId}?assetId=&databaseId=: the upload's status and the outcome of each file
     it accepted for asynchronous ingestion.
 
-    Tier 1 (the route) and Tier 2 (GET on the upload's asset) are decided before the record is read.
-    A missing record, a record of another database, a missing asset and a refused asset all answer
-    the same 404, so the route cannot tell an upload that does not exist from one the caller may not
-    see. One GetItem on the asset and one on the upload record."""
-    params = event.get('queryStringParameters') or {}
-    request_model = parse({
-        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
-        'assetId': params.get('assetId', ''),
-        'databaseId': params.get('databaseId', ''),
-    }, model=GetUploadStatusRequestModel)
-
+    Tier 1 (the route) is decided before the parameters are validated, and Tier 2 (GET on the
+    upload's asset) before the record is read. A missing record, a record of another database, a
+    missing asset and a refused asset all answer the same 404, so the route cannot tell an upload
+    that does not exist from one the caller may not see. One GetItem on the asset and one on the
+    upload record."""
     # Fail closed: with no authenticated identity no authorization can be evaluated.
     if len(claims_and_roles["tokens"]) == 0:
         return authorization_error()
     casbin_enforcer = CasbinEnforcer(claims_and_roles)
     if not casbin_enforcer.enforceAPI(event):
         return authorization_error()
+
+    params = event.get('queryStringParameters') or {}
+    request_model = parse({
+        'uploadId': (event.get('pathParameters') or {}).get('uploadId', ''),
+        'assetId': params.get('assetId', ''),
+        'databaseId': params.get('databaseId', ''),
+    }, model=GetUploadStatusRequestModel)
 
     not_found = general_error(status_code=404, body={'message': UPLOAD_NOT_FOUND_MESSAGE}, event=event)
     asset = get_asset_details(request_model.databaseId, request_model.assetId)

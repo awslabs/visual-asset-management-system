@@ -16,7 +16,9 @@ import pytest
 from moto import mock_aws
 
 from backend.tests.handlers.assets.test_assetVersions_change_provenance import _assetVersions as av
-from backend.tests.handlers.assets.test_assetExportService_authz_fail_closed import _load_asset_export_service as _load_export
+from backend.tests.handlers.assets.test_assetExportService_authz_fail_closed import (  # noqa: E402
+    _load_asset_export_service as _load_export,
+)
 
 BUCKET = "vams-test-assets"
 FILE_LOCATION = "p1/model.glb"

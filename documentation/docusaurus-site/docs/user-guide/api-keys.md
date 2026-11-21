@@ -30,7 +30,7 @@ The API Key Management page operates in two modes, depending on which API routes
 -   **All Keys (Admin)** -- View and manage API keys across all users. Keys may be created for any user, and an expiration date is optional.
 -   **My Keys (self-service)** -- View and manage only your own API keys. Created keys are always tied to your user, an **expiration date is required**, and the expiration may be at most **365 days** from the key's creation. Later edits cannot extend the expiration beyond that window -- create a new key to rotate after it elapses. On the last selectable date the expiration time is limited to the end of that window: the time field shows the latest allowed time (UTC), lowers a later time to it when you pick the date, and blocks a later time you type.
 
-Users with access to both modes see a toggle at the top of the page.
+Users with access to both modes see a toggle at the top of the page. **Create API Key**, **Edit** and **Delete** are offered only when your roles allow creating, updating or deleting keys in the mode shown, so a read-only role can list its own keys but not change them.
 
 You reach the page from two places:
 
@@ -141,6 +141,8 @@ You can update the description, expiration date, and active status of an existin
     - **Expiration Time (UTC)** -- Adjust the expiration time if a date is set.
     - **Active** -- Toggle the key between active and inactive states.
 4. Choose **Update API Key**.
+
+The expiration is sent only when you change it, so you can still change the description of an expired key or deactivate it. When a self-service key's 365-day window from creation has ended, its expiration date cannot change; create a new key to keep access.
 
 :::tip[Deactivate instead of delete]
 If you need to temporarily revoke access, toggle the key to **Inactive** instead of deleting it. This preserves the key record and allows you to reactivate it later.
