@@ -41,7 +41,17 @@ pytestmark = pytest.mark.unit
 
 ALICE = "alice"
 BOB = "bob"
-NOW = int(time.time())
+
+
+def now():
+    """Wall clock when the test runs, not when this module was imported.
+
+    The service compares ``expiresAt`` and deadlines with ``time.time()``.
+    An import-time stamp goes stale if collection or earlier tests take long
+    enough (#1752).
+    """
+    return int(time.time())
+
 
 _ECHO = ('--- [event: {"version": "2.0", "requestContext": {"requestId": "req-1", '
          '"http": {"method": "PUT", "path": "/database/db-1/assets/a-1", "sourceIp": "198.51.100.9"}}}]')
@@ -276,7 +286,7 @@ def call(event):
 
 
 def start_body(**overrides):
-    body = {"startTime": NOW - 3600, "endTime": NOW, "logGroups": ["auditActions"]}
+    body = {"startTime": now() - 3600, "endTime": now(), "logGroups": ["auditActions"]}
     body.update(overrides)
     return body
 
@@ -330,14 +340,14 @@ class TestAuthorization:
 
     def test_without_named_groups_only_the_allowed_ones_are_searched(self, env):
         FakeEnforcer.allowed_groups = {"auditActions", "auditErrors"}
-        status, _ = call(make_event("POST", "/audit/queries", body={"startTime": NOW - 600, "endTime": NOW}))
+        status, _ = call(make_event("POST", "/audit/queries", body={"startTime": now() - 600, "endTime": now()}))
         assert status == 202
         assert sorted(env.logs.started[0]["logGroupNames"]) == ["test-auditActions", "test-auditErrors"]
         assert FakeBatch.probes == [svc.PROBE_ENDPOINT_START]
 
     def test_with_no_allowed_group_a_start_is_refused(self, env):
         FakeEnforcer.allowed_groups = set()
-        status, _ = call(make_event("POST", "/audit/queries", body={"startTime": NOW - 600, "endTime": NOW}))
+        status, _ = call(make_event("POST", "/audit/queries", body={"startTime": now() - 600, "endTime": now()}))
         assert status == 403
 
     def test_the_group_list_shows_only_allowed_groups_and_writes_hidden_denials_as_one_probe_batch(self, env):
@@ -396,8 +406,8 @@ class TestStart:
 
     def test_a_window_over_the_limit_is_refused(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_MAX_WINDOW_DAYS, "2")
-        assert start(env, startTime=NOW - 3 * 86400)[0] == 400
-        assert start(env, startTime=NOW - 86400)[0] == 202
+        assert start(env, startTime=now() - 3 * 86400)[0] == 400
+        assert start(env, startTime=now() - 86400)[0] == 202
 
     def test_a_window_older_than_any_log_retention_is_a_400_not_a_500(self, env):
         status, body = start(env, startTime=1, endTime=2)
@@ -430,7 +440,7 @@ class TestStart:
     def test_a_handle_past_its_deadline_is_stopped_and_frees_its_slot(self, env):
         assert start(env)[0] == 202 and start(env)[0] == 202
         for item in handle_items(env):
-            item["deadlineAt"] = NOW - 1
+            item["deadlineAt"] = now() - 1
         assert start(env)[0] == 202
         assert sorted(env.logs.stopped) == ["cw-1", "cw-2"]
         assert {i["status"] for i in handle_items(env)} == {"Timeout", "Running"}
@@ -438,7 +448,7 @@ class TestStart:
     def test_a_handle_cloudwatch_no_longer_runs_frees_its_slot(self, env):
         assert start(env)[0] == 202 and start(env)[0] == 202
         for item in handle_items(env):
-            item["createdAtEpoch"] = NOW - 60
+            item["createdAtEpoch"] = now() - 60
         env.logs.running = []  # CloudWatch lists nothing as running
         assert start(env)[0] == 202
 
@@ -474,7 +484,7 @@ class TestHandles:
     def test_a_foreign_unknown_malformed_and_expired_handle_are_one_404(self, env):
         mine = started_handle(env)
         expired = started_handle(env, user=BOB)
-        env.table.items[expired]["expiresAt"] = NOW - 5
+        env.table.items[expired]["expiresAt"] = now() - 5
         forged_uuid = "00000000-0000-4000-8000-000000000000"
         responses = [get(mine, user=BOB), get(forged_uuid), get("../etc/passwd"), get("x" * 200), get(expired, user=BOB)]
         assert all(r == (404, {"message": "Query not found"}) for r in responses)
@@ -542,7 +552,7 @@ class TestPolling:
     def test_a_search_past_its_deadline_is_stopped_and_reported_as_timeout(self, env):
         handle = started_handle(env)
         env.logs.status = "Running"
-        env.table.items[handle]["deadlineAt"] = NOW - 1
+        env.table.items[handle]["deadlineAt"] = now() - 1
         status, body = get(handle)
         assert status == 200 and body["status"] == "Timeout" and body["Items"] == []
         assert env.logs.stopped == ["cw-1"] and "openKey" not in env.table.items[handle]
@@ -795,15 +805,15 @@ class TestHandleRetention:
     def test_a_running_search_is_never_set_to_expire_before_its_deadline(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "5")
         handle = started_handle(env)
-        env.table.items[handle]["deadlineAt"] = NOW + 800
+        env.table.items[handle]["deadlineAt"] = now() + 800
         env.logs.status = "Running"
         get(handle)
-        assert env.table.items[handle]["expiresAt"] >= NOW + 800
+        assert env.table.items[handle]["expiresAt"] >= now() + 800
 
     def test_a_closed_search_gets_the_retention_from_the_moment_it_closed(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "10")
         handle = started_handle(env)
-        env.table.items[handle]["expiresAt"] = NOW + 5000
+        env.table.items[handle]["expiresAt"] = now() + 5000
         get(handle)
         assert env.table.items[handle]["status"] == "Complete"
         assert abs(env.table.items[handle]["expiresAt"] - (int(time.time()) + 600)) <= 5
@@ -811,7 +821,7 @@ class TestHandleRetention:
     def test_a_row_past_its_expiry_is_a_generic_404_and_its_terms_are_never_used(self, env, monkeypatch):
         handle = started_handle(env, contains=["secret-term-777"])
         env.logs.results = [result_row(action_record(extra=', "note": "secret-term-777"'))]
-        env.table.items[handle]["expiresAt"] = NOW - 1       # TTL deletion has not run yet
+        env.table.items[handle]["expiresAt"] = now() - 1       # TTL deletion has not run yet
         used = []
         real = svc.build_rows
         monkeypatch.setattr(svc, "build_rows", lambda *a, **k: used.append(a) or real(*a, **k))
@@ -853,7 +863,7 @@ class TestContainsTermsRemoval:
 
     def test_a_deadline_timeout_drops_the_terms(self, env):
         handle = started_handle(env, contains=["secret-term-777"])
-        env.table.items[handle]["deadlineAt"] = NOW - 1
+        env.table.items[handle]["deadlineAt"] = now() - 1
         get(handle)
         assert env.table.items[handle]["status"] == "Timeout" and "containsTerms" not in env.table.items[handle]
 
@@ -1115,15 +1125,15 @@ class TestAtomicCaps:
     def test_an_expired_full_counter_starts_over(self, env, monkeypatch):
         monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
         start(env), start(env)
-        env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["expiresAt"] = NOW - 1
+        env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["expiresAt"] = now() - 1
         assert start(env)[0] == 202
 
     def test_an_expired_counter_below_the_cap_is_reset_not_incremented(self, env, monkeypatch):
         """A leaked count of 1 (no handle holds it) must not turn a per-user cap of 2 into 1."""
         monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
         env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE] = {
-            "queryId": svc.SLOT_USER_KEY_PREFIX + ALICE, "slotCount": 1, "expiresAt": NOW - 100}
-        env.table.items[svc.SLOT_ALL_KEY] = {"queryId": svc.SLOT_ALL_KEY, "slotCount": 1, "expiresAt": NOW - 100}
+            "queryId": svc.SLOT_USER_KEY_PREFIX + ALICE, "slotCount": 1, "expiresAt": now() - 100}
+        env.table.items[svc.SLOT_ALL_KEY] = {"queryId": svc.SLOT_ALL_KEY, "slotCount": 1, "expiresAt": now() - 100}
         assert start(env)[0] == 202
         assert env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["slotCount"] == 1
         assert start(env)[0] == 202       # the second of the two allowed searches
@@ -1133,7 +1143,7 @@ class TestAtomicCaps:
     def test_a_counter_that_has_not_expired_is_incremented(self, env, monkeypatch):
         monkeypatch.setattr(svc, "reconcile_open_handles", lambda: [])
         env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE] = {
-            "queryId": svc.SLOT_USER_KEY_PREFIX + ALICE, "slotCount": 1, "expiresAt": NOW + 1000}
+            "queryId": svc.SLOT_USER_KEY_PREFIX + ALICE, "slotCount": 1, "expiresAt": now() + 1000}
         assert start(env)[0] == 202
         assert env.table.items[svc.SLOT_USER_KEY_PREFIX + ALICE]["slotCount"] == 2
         assert start(env)[0] == 400
@@ -1144,8 +1154,8 @@ class TestAtomicCaps:
         svc._reserve_slots(ALICE)         # the reservation of the start that died
         key = svc.SLOT_USER_KEY_PREFIX + ALICE
         assert env.table.items[key]["slotCount"] == 1
-        env.table.items[key]["expiresAt"] = NOW - 1
-        env.table.items[svc.SLOT_ALL_KEY]["expiresAt"] = NOW - 1
+        env.table.items[key]["expiresAt"] = now() - 1
+        env.table.items[svc.SLOT_ALL_KEY]["expiresAt"] = now() - 1
         assert start(env)[0] == 202 and start(env)[0] == 202 and start(env)[0] == 400
 
     def test_the_counters_are_not_handles(self, env):
@@ -1158,7 +1168,7 @@ class TestAtomicCaps:
 class TestOneProbeRecordPerCall:
     def test_a_start_without_groups_writes_one_summary_denial(self, env):
         FakeEnforcer.allowed_groups = {"auditActions"}
-        call(make_event("POST", "/audit/queries", body={"startTime": NOW - 600, "endTime": NOW}))
+        call(make_event("POST", "/audit/queries", body={"startTime": now() - 600, "endTime": now()}))
         assert len(FakeBatch.flushed) == 1 and len(FakeBatch.flushed[0]) == 1
 
     def test_a_caller_who_may_search_every_group_writes_none(self, env):
