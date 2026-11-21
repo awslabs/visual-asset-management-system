@@ -11,8 +11,11 @@
  * refuses non-TLS access, raises an alarm on visible messages, and only the created-events functions
  * may send to it.
  *
- * The marker custom resource writes one SSM parameter on a new deployment. Its role may describe and
- * scan the asset table and put that one parameter, with partition-aware ARNs.
+ * The marker custom resource writes one SSM parameter on a new deployment and deletes it when the
+ * resource is deleted. Its role may describe and scan the asset table and put and delete that one
+ * parameter, with partition-aware ARNs. Its logical id is pinned: a new one would make CloudFormation
+ * replace the resource, and the Delete of the replaced one would remove the marker of a running
+ * deployment.
  */
 
 import {
@@ -29,6 +32,8 @@ import {
 const CREATED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_created";
 const DELETED_HANDLER = "handlers.indexing.sqsBucketSync.lambda_handler_deleted";
 const MARKER_HANDLER = "handlers.indexing.crAssetLocationIndexMarker.lambda_handler";
+// The marker custom resource's logical id in the storage nested stack template.
+const MARKER_LOGICAL_ID = "AssetLocationIndexMarker";
 const PARTITION: Record<TemplateName, string> = {
     commercial: "aws",
     govcloud: "aws-us-gov",
@@ -150,6 +155,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
                     "markerParameterName" in r.properties
             );
             expect(resources).toHaveLength(1);
+            expect(resources[0].logicalId).toBe(MARKER_LOGICAL_ID);
             const props = resources[0].properties;
             expect(SynthResult.flatten(props.markerParameterName)).toMatch(
                 /^\/.+\/resourceNames\/dataMigrations\/assetLocationIndex$/
@@ -158,7 +164,7 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
             expect(props.newTableWindowSeconds).toBe("3600");
         });
 
-        test("its role describes and scans the asset table and puts only the marker parameter", () => {
+        test("its role describes and scans the asset table and puts and deletes only the marker parameter", () => {
             const markers = synth.where(
                 "AWS::Lambda::Function",
                 (r) => handlerOf(r) === MARKER_HANDLER
@@ -179,9 +185,11 @@ describe.each(["commercial", "govcloud", "eusovereign"] as TemplateName[])(
             expect(resourcesOf(tableReads[0])).toHaveLength(1);
             expect(resourcesOf(tableReads[0])[0]).toContain("AssetStorageTable");
 
-            const puts = statements.filter((st) => actionsOf(st).includes("ssm:PutParameter"));
+            const puts = statements.filter((st) =>
+                actionsOf(st).some((a) => a === "ssm:PutParameter" || a === "ssm:DeleteParameter")
+            );
             expect(puts).toHaveLength(1);
-            expect(actionsOf(puts[0])).toEqual(["ssm:PutParameter"]);
+            expect(actionsOf(puts[0]).sort()).toEqual(["ssm:DeleteParameter", "ssm:PutParameter"]);
             const [parameterArn] = resourcesOf(puts[0]);
             expect(resourcesOf(puts[0])).toHaveLength(1);
             expect(parameterArn.startsWith(`arn:${PARTITION[templateName]}:ssm:`)).toBe(true);

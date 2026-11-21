@@ -3654,7 +3654,10 @@ export function storageResourcesBuilder(
 
     // Readiness marker of the asset location index for a new deployment: written once, on Create, and
     // only when the asset table was created by this deployment and holds no row. An upgrade gets no
-    // marker from here; the operator runs the index backfill, which writes it.
+    // marker from here; the operator runs the index backfill, which writes it. Deleting the resource
+    // (removing the stack, or deploying a release without it) deletes the marker, whoever wrote it.
+    // The construct id is pinned by test/storage/bucketSyncRejectedQueueAndIndexMarker.test.ts: a new
+    // logical id would replace the resource, and the replaced one's Delete would remove the marker.
     const assetLocationIndexMarkerName =
         config.resourceNamesSSMParamPrefix.replace(/\/$/, "") +
         "/dataMigrations/assetLocationIndex";

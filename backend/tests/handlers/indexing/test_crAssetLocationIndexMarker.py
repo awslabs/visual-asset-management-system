@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The deploy-time readiness marker is written only for a new, empty asset table, on Create only, and
-never over an existing marker. The marker it writes is one index_ready() accepts."""
+never over an existing marker. The marker it writes is one index_ready() accepts. Deleting the resource
+deletes the marker."""
 
 import importlib.util
 import json
@@ -78,13 +79,56 @@ class TestReadinessMarker:
         assert _create(m) == {"PhysicalResourceId": "pid"}
         assert m.ssm_client.put_parameter.call_args.kwargs["Overwrite"] is False
 
-    @pytest.mark.parametrize("request_type", ["Update", "Delete"])
-    def test_update_and_delete_do_nothing(self, request_type):
+    def test_an_update_does_nothing_and_keeps_the_physical_id(self):
         m = _load()
         _table(m, NOW - timedelta(minutes=5))
-        assert _create(m, request_type) == {"PhysicalResourceId": "pid"}
+        assert _create(m, "Update") == {"PhysicalResourceId": "pid"}
         m.dynamodb_client.describe_table.assert_not_called()
         m.ssm_client.put_parameter.assert_not_called()
+        m.ssm_client.delete_parameter.assert_not_called()
+
+    def test_a_create_returns_the_constant_physical_id(self):
+        m = _load()
+        _table(m, NOW - timedelta(days=30))
+        response = m.lambda_handler({"RequestType": "Create", "ResourceProperties": {
+            "assetTableName": TABLE, "markerParameterName": PARAM}}, MagicMock())
+        assert response == {"PhysicalResourceId": "assetLocationIndexMarker"}
+
+
+@pytest.mark.unit
+class TestMarkerRemovedWithTheResource:
+    """Deleting the resource (the stack is removed, or a release without it is deployed over it) deletes
+    the marker, so rows written later without the index attributes never meet a stale one."""
+
+    def test_a_delete_deletes_the_marker(self):
+        m = _load()
+        assert _create(m, "Delete") == {"PhysicalResourceId": "pid"}
+        m.ssm_client.delete_parameter.assert_called_once_with(Name=PARAM)
+        m.dynamodb_client.describe_table.assert_not_called()
+        m.ssm_client.put_parameter.assert_not_called()
+
+    def test_a_delete_without_a_marker_succeeds(self):
+        m = _load()
+        m.ssm_client.delete_parameter.side_effect = ClientError(
+            {"Error": {"Code": "ParameterNotFound", "Message": "not found"}}, "DeleteParameter")
+        assert _create(m, "Delete") == {"PhysicalResourceId": "pid"}
+        m.ssm_client.delete_parameter.assert_called_once_with(Name=PARAM)
+
+    @pytest.mark.parametrize("error", [
+        ClientError({"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, "DeleteParameter"),
+        RuntimeError("endpoint unreachable"),
+    ])
+    def test_a_failed_delete_never_fails_the_deployment(self, error):
+        m = _load()
+        m.ssm_client.delete_parameter.side_effect = error
+        assert _create(m, "Delete") == {"PhysicalResourceId": "pid"}
+
+    def test_a_delete_without_a_parameter_name_deletes_nothing(self):
+        m = _load()
+        response = m.lambda_handler({"RequestType": "Delete", "PhysicalResourceId": "pid",
+                                     "ResourceProperties": {"assetTableName": TABLE}}, MagicMock())
+        assert response == {"PhysicalResourceId": "pid"}
+        m.ssm_client.delete_parameter.assert_not_called()
 
     def test_a_failure_never_fails_the_deployment(self):
         m = _load()

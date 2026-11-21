@@ -339,7 +339,8 @@ export function buildDatabaseIndexerSnsQueuingFunction(
 /**
  * The deploy-time custom resource handler that marks the asset location index ready on a new
  * deployment (handlers/indexing/crAssetLocationIndexMarker.py). It reads the asset table's creation
- * time and whether it holds a row, and writes one SSM String parameter without overwriting it.
+ * time and whether it holds a row, writes one SSM String parameter without overwriting it, and deletes
+ * that parameter when the resource is deleted.
  */
 export function buildAssetLocationIndexMarkerFunction(
     scope: Construct,
@@ -373,7 +374,7 @@ export function buildAssetLocationIndexMarkerFunction(
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,
-            actions: ["ssm:PutParameter"],
+            actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
             resources: [Service.IAMArn(markerParameterName.replace(/^\//, "")).ssm],
         })
     );

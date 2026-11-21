@@ -8,13 +8,17 @@ the v2.6-to-v2.7 `assetLocationIndex` migration step writes them and then its co
 deployment has no asset rows to backfill, so this resource writes the same marker when the stack is
 created, and only when:
 
-- the request is a Create (an Update or Delete changes nothing);
+- the request is a Create;
 - the asset table was created within `newTableWindowSeconds` of this request, so it belongs to this
   deployment rather than to an earlier one being upgraded; and
 - the asset table holds no row (one `Scan` with `Limit` 1).
 
-An existing marker is never overwritten. Any failure is logged and the deployment goes on without a
-marker, which only means the backfill must be run, as on an upgrade.
+An existing marker is never overwritten. An Update changes nothing and keeps the physical id, so an
+update never makes CloudFormation replace (and so delete) the resource. A Delete, when the stack is
+removed or a release without this resource (v2.6) is deployed over it, deletes the marker, whichever
+step wrote it: rows written without the index attributes after that would make it stale. Any failure is
+logged and the deployment goes on: without a marker after a Create, which only means the backfill must
+be run, as on an upgrade; with the marker left in place after a Delete, to be deleted by hand.
 """
 
 import json
@@ -101,19 +105,50 @@ def write_marker_if_new_deployment(asset_table_name: str, parameter_name: str, w
     return True
 
 
+def delete_marker(parameter_name: str) -> bool:
+    """Delete the readiness marker. Returns whether one was deleted (False when there was none)."""
+    try:
+        ssm_client.delete_parameter(Name=parameter_name)
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ParameterNotFound':
+            logger.info(f"Location index marker {parameter_name} does not exist; nothing to delete")
+            return False
+        raise
+    logger.info(f"Deleted location index marker {parameter_name}")
+    return True
+
+
+def _on_delete(event, parameter_name: str, physical_id: str):
+    if not parameter_name:
+        logger.error("The marker parameter name is missing; no marker is deleted")
+        return {'PhysicalResourceId': physical_id}
+    try:
+        deleted = delete_marker(parameter_name)
+    except Exception as e:
+        logger.exception(f"Could not delete the location index marker {parameter_name}; delete it by hand: {e}")
+        log_action(event, "assetLocationIndexUnmark", outcome="failed", reason="internal",
+                   details={'deleted': False})
+        return {'PhysicalResourceId': physical_id}
+    log_action(event, "assetLocationIndexUnmark", details={'deleted': deleted})
+    return {'PhysicalResourceId': physical_id}
+
+
 @audited_handler
 def lambda_handler(event, context):
-    """cr.Provider onEvent handler. Only a Create acts; the deployment never fails because of it.
+    """cr.Provider onEvent handler. A Create writes the marker for a new deployment, an Update changes
+    nothing, and a Delete deletes the marker; the deployment never fails because of it.
 
     A Create is recorded as the system action `assetLocationIndexMark`, with `details.written` saying
-    whether the marker was written."""
+    whether the marker was written, and a Delete as `assetLocationIndexUnmark`, with `details.deleted`."""
     request_type = event.get('RequestType')
     physical_id = event.get('PhysicalResourceId') or PHYSICAL_RESOURCE_ID
-    if request_type != 'Create':
-        return {'PhysicalResourceId': physical_id}
     props = event.get('ResourceProperties') or {}
     asset_table_name = props.get('assetTableName', '')
     parameter_name = props.get('markerParameterName', '')
+    if request_type == 'Delete':
+        return _on_delete(event, parameter_name, physical_id)
+    if request_type != 'Create':
+        return {'PhysicalResourceId': physical_id}
     try:
         window_seconds = int(props.get('newTableWindowSeconds', DEFAULT_NEW_TABLE_WINDOW_SECONDS))
     except (TypeError, ValueError):
