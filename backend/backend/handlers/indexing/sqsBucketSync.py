@@ -188,9 +188,9 @@ ARCHIVED_DATABASE_CACHE_VALUE = "#archived"
 
 # Why a record went to the rejected-record queue.
 REJECTED_REASON_AMBIGUOUS = "ambiguousLocation"
-# A file written into an archived asset's location while another live asset holds a location that overlaps
-# it: restoring the archived asset would recreate the overlap (the API unarchive refuses it too), so nothing
-# is restored or attributed and the record goes to the rejected-record queue.
+# A file written into an archived asset's location while another live asset is stored at exactly that location:
+# restoring the archived asset would make the location shared again (the API unarchive refuses it too), so
+# nothing is restored or attributed and the record goes to the rejected-record queue.
 REJECTED_REASON_ARCHIVED_OWNER_LOCATION_IN_USE = "archivedOwnerLocationInUse"
 
 # A first-level auto-create whose folder already holds other objects is deferred once by this many
@@ -2349,15 +2349,16 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                         f"Object {object_key} no longer exists; not restoring archived asset {owner_asset_id}"
                     )
                     return True, True, f"Skipped stale create event for archived asset {owner_asset_id}"
-                # Not while another live asset holds a location that overlaps the archived asset's (the API
+                # Not while another live asset is stored at exactly the archived asset's location (the API
                 # unarchive's rule, once the index is ready): the key goes where a key of a shared location
-                # goes, the rejected-record queue, with no restore, ledger row, tags or binding.
+                # goes, the rejected-record queue, with no restore, ledger row, tags or binding. A live asset
+                # nested in it, or around it, does not stop the restore.
                 conflicts = unarchive_conflicts(asset_table, archived_asset, bucket_name,
                                                 asset_location_of(archived_asset, base_prefix, owner_asset_id),
                                                 asset_table_name=asset_table_name) if index_is_ready else []
                 if conflicts:
                     logger.info(f"Not restoring archived asset {owner_asset_id} for {object_key}: another live "
-                                "asset holds a location that overlaps its own")
+                                "asset is stored at its location")
                     owner_entry = LocationEntry(
                         database_id=str(archived_asset.get('databaseId', '')), asset_id=owner_asset_id,
                         bucket_id=owner_bucket_id or '',

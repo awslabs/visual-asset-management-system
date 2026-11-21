@@ -1612,14 +1612,14 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
 
-    # Not while another live asset holds a location that overlaps this asset's (the create-time conflict
-    # rule): the unarchive would recreate the overlap, and bucket sync could not attribute a new file in a
-    # location two live assets share. Read from the location index once it is ready, before anything is
-    # written; the response names neither asset.
+    # Not while another live asset is stored at exactly this asset's location: the unarchive would make the
+    # location shared again, and bucket sync could not attribute a new file there. A nested pair is no
+    # conflict (each key has one deepest owner). Read from the location index once it is ready, before
+    # anything is written; the response names neither asset.
     conflicts = unarchive_conflicts(asset_table, asset, bucket_name, asset_table_name=asset_database)
     if conflicts:
         logger.info(f"Not unarchiving asset {assetId} in database {original_db_id}: {len(conflicts)} other live "
-                    "asset(s) hold a location that overlaps its own")
+                    "asset(s) are stored at its location")
         raise VAMSGeneralErrorResponse(UNARCHIVE_LOCATION_IN_USE_REFUSAL)
 
     # Unarchive the asset record; file restoration is opt-in
