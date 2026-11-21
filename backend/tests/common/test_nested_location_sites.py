@@ -37,13 +37,6 @@ REVIEWED = {
         "exports asset rows, links and metadata rows keyed by asset id; lists no S3 keys",
     "handlers/assets/createAsset.py":
         "the create-time ownership check refuses a location that shares a key with another asset",
-    "handlers/assets/largeObjectCopy.py":
-        "copies to a destination key the upload or output step already checked (uploadFile.nested_path_refused)",
-    "handlers/assets/sqsUploadFileLarge.py":
-        "completes uploads whose keys uploadFile already checked (nested_path_refused)",
-    "handlers/assets/streamAuxiliaryPreviewAsset.py":
-        "serves viewer data from the auxiliary bucket by the asset's database and path; a nested asset of "
-        "another database keeps its data under its own database",
     "handlers/compliance/complianceEvaluationStore.py":
         "attributes each file event with fileAttribution.attribute_object (the deepest owner)",
     "handlers/indexing/crReindexer.py":

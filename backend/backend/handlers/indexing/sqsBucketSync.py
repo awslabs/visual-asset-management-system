@@ -49,6 +49,7 @@ from common.assetHistory import (
 )
 from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
 from common.fileAttribution import (
+    nested_locations_for_asset_type,
     RESOLVED_BY_FAST_PATH,
     RESOLVED_BY_IMPORT,
     RESOLVED_BY_LOCATION_INDEX,
@@ -504,7 +505,7 @@ def is_object_permanently_deleted(bucket_name: str, object_key: str) -> bool:
         return False
 
 
-def determine_asset_type(assetId, bucket, prefix):
+def determine_asset_type(assetId, bucket, prefix, nested: Optional[NestedLocations] = None):
     """Determine the asset type based on S3 contents, as the upload path does
     (uploadFile.determine_asset_type): a sample of the objects the location holds (`held_objects`, at
     most ASSET_TYPE_DETECTION_SAMPLE_SIZE per listing), folder markers and archived files left out."""
@@ -521,8 +522,9 @@ def determine_asset_type(assetId, bucket, prefix):
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/') or (prefix and not contains(prefix, item['Key'])):
-                # Skip folder markers and keys the location does not hold
+            if (item['Key'].endswith('/') or (prefix and not contains(prefix, item['Key']))
+                    or (nested and not nested.keep(item['Key']))):
+                # Skip folder markers, keys the location does not hold and keys a nested asset's location holds
                 continue
 
             try:
@@ -590,8 +592,10 @@ def update_asset_type(bucket_id: str, asset_id: str, bucket_name: str, asset_bas
             logger.warning(f"Asset {asset_id} not found in bucket {bucket_id}, cannot update asset type")
             return False
         
-        # Determine asset type
-        asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key)
+        # Determine asset type from the keys the asset owns (not a nested asset's)
+        nested = nested_locations_for_asset_type(dynamodb.Table(asset_table_name), asset_data, bucket_name,
+                                                 asset_base_key, asset_table_name=asset_table_name)
+        asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {asset_id}: {asset_type}")
         
         # Update asset type if it has changed

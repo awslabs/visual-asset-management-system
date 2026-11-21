@@ -460,3 +460,19 @@ def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[s
     owner = (str(row.get('databaseId') or ''), str(row.get('assetId') or '')) if row.get('assetId') else None
     return nested_locations_of(asset_table, bucket_name, location, asset_table_name=asset_table_name,
                                destructive=destructive, bucket_ids=bucket_ids(), owner=owner)
+
+
+def nested_locations_for_asset_type(asset_table, asset: Optional[Dict[str, Any]], bucket_name: str,
+                                    location: Optional[str], *,
+                                    asset_table_name: Optional[str] = None) -> Optional[NestedLocations]:
+    """The nested locations whose keys an asset-type classification of `asset` leaves out, so the type comes
+    from the keys the asset owns. A read (no registration walk). A lookup that fails returns None and the type
+    is classified from every key the location holds, as before the rule: the type is a label, and the upload
+    or copy step that sets it must not fail because of it."""
+    try:
+        return nested_locations_of_asset(asset_table, None, asset, bucket_name, location,
+                                         asset_table_name=asset_table_name)
+    except Exception as e:
+        logger.warning(f"The locations nested in {location} could not be read for the asset type; classifying "
+                       f"every key the location holds: {type(e).__name__}")
+        return None

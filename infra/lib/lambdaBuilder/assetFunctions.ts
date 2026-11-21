@@ -1149,6 +1149,15 @@ export function buildLargeObjectCopyEngine(
             resources: [storage.dynamo.assetStorageTable.tableArn],
         })
     );
+    // That asset type comes from the keys the asset owns: the locations of assets nested in its
+    // location are read from the asset table's location index (#1207).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [`${storage.dynamo.assetStorageTable.tableArn}/index/AssetLocationGSI`],
+        })
+    );
     fun.addToRolePolicy(
         new iam.PolicyStatement({
             effect: iam.Effect.ALLOW,

@@ -53,6 +53,7 @@ from botocore.exceptions import ClientError
 from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.assetLocations import contains, held_objects, legacy_location_in_key, normalize_location
+from common.fileAttribution import nested_locations_for_asset_type
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import (
     bucket_region_for_name,
@@ -586,14 +587,15 @@ def _audit_once(job, denied, reason, status):
         loc.release_job_flag(jobs_table, job["jobId"], "auditedAt")
 
 
-def _determine_asset_type(bucket, prefix):
-    """Empty / single file (its extension) / folder classification, as the queue consumer does."""
+def _determine_asset_type(bucket, prefix, nested=None):
+    """Empty / single file (its extension) / folder classification, as the queue consumer does, from the keys
+    the asset owns (a nested asset's keys left out)."""
     files = []
     sample = held_objects(prefix, lambda list_prefix, cap: list_all_objects(
         bucket, list_prefix, client=s3,
         max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE)))
     for item in sample:
-        if item["Key"].endswith("/") or not contains(prefix, item["Key"]):
+        if item["Key"].endswith("/") or not contains(prefix, item["Key"]) or (nested and not nested.keep(item["Key"])):
             continue
         try:
             if is_object_version_archived(bucket, item["Key"], None, client=s3):
@@ -626,7 +628,9 @@ def _after_landing(job):
         asset = asset_table.get_item(Key={"databaseId": job["databaseId"], "assetId": job["assetId"]}).get("Item")
         if asset:
             prefix = _asset_location(asset, job)
-            asset_type = (_determine_asset_type(job["dest"]["bucket"], prefix) if prefix else None) \
+            nested = nested_locations_for_asset_type(asset_table, asset, job["dest"]["bucket"], prefix,
+                                                     asset_table_name=asset_table_name) if prefix else None
+            asset_type = (_determine_asset_type(job["dest"]["bucket"], prefix, nested) if prefix else None) \
                 or asset.get("assetType") or "none"
             asset_table.update_item(
                 Key={"databaseId": job["databaseId"], "assetId": job["assetId"]},

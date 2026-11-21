@@ -49,7 +49,7 @@ from common.assetLocations import (
     NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, contains, held_objects, is_folder_location, names_own_object,
     normalize_base_prefix, object_key_for,
 )
-from common.fileAttribution import nested_locations_of_asset
+from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -604,8 +604,8 @@ def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """
     return is_object_version_archived(bucket, key, version_id, client=s3)
 
-def determine_asset_type(assetId, bucket, prefix):
-    """Determine the asset type based on S3 contents"""
+def determine_asset_type(assetId, bucket, prefix, nested=None):
+    """Determine the asset type based on S3 contents: the keys the asset owns (a nested asset's keys left out)"""
     try:
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
@@ -622,8 +622,8 @@ def determine_asset_type(assetId, bucket, prefix):
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
-                # Skip folder markers and keys the location does not hold
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']) or (nested and not nested.keep(item['Key'])):
+                # Skip folder markers, keys the location does not hold and keys a nested asset's location holds
                 continue
                 
             try:
@@ -2119,7 +2119,9 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
     # asynchronously updates the asset type and notifies subscribers once it lands.
     if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         
@@ -2925,7 +2927,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     # subscribers once it lands (the large-file consumer does both).
     if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
 
 
