@@ -41,6 +41,7 @@ import pyvista as pv
 from PIL import Image
 from .. import resources, scene_parts
 from ..utils.logging import get_logger
+from .scene_limits import MAX_SCENE_NODES, SceneLimit
 
 logger = get_logger()
 
@@ -258,6 +259,7 @@ def _collect_parts(root, xform_cache, context, plan=None):
     for prim in iterator:
         if prim.IsPseudoRoot():
             continue
+        context.count_prim()
         if not _is_rendered(prim, time):
             iterator.PruneChildren()
             continue
@@ -401,6 +403,7 @@ def _sample_plan(root, xform_cache, context):
     for prim in iterator:
         if prim.IsPseudoRoot():
             continue
+        context.count_prim()
         if not _is_rendered(prim, time):
             iterator.PruneChildren()
             continue
@@ -513,6 +516,7 @@ def _count_instancer(prim, xform_cache, context, cache):
         vertices = 0
         if root:
             for child in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+                context.count_prim()
                 if _is_rendered(child, time) and child.IsA(UsdGeom.Gprim):
                     vertices += _local_extent(child, cache, context)[0]
         per_prototype.append(vertices)
@@ -646,6 +650,10 @@ class _LoadContext:
         self.capped = False
         # (type name, path, root prim name) of each rendered prim of an undrawn type met by the walk.
         self.skipped_prims = []
+        # Bounds the number of prims one walk visits (instance proxies included). A file of nested
+        # instanceable prims composes cheaply but expands to 2^depth proxies, which hold no vertices,
+        # so the MAX_POINTS vertex cap never stops the walk; this does.
+        self.scene_limit = SceneLimit("USD stage", max_nodes=MAX_SCENE_NODES)
 
     def reset_counts(self):
         """Forget what a discarded walk counted, so a second walk of the stage starts clean."""
@@ -654,6 +662,18 @@ class _LoadContext:
         self.skipped_prims = []
         self.mdl_unread.clear()
         self.mdl_approximated.clear()
+        self.scene_limit = SceneLimit("USD stage", max_nodes=MAX_SCENE_NODES)
+
+    def count_prim(self):
+        """Count one visited prim against the node bound; raise once the bound is passed, so a scene
+        that expands past it ends at once with a clear message instead of running to the job's
+        timeout."""
+        if not self.scene_limit.visit():
+            raise ValueError(
+                f"The USD stage expands to more than {self.scene_limit.max_nodes:,} prims "
+                f"(instance proxies included) and is too large to preview. Reduce the depth or the "
+                f"number of nested instanceable prims."
+            )
 
 
 def _counted(counts):
