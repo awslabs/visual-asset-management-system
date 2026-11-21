@@ -328,7 +328,7 @@ describe("CI workflow", () => {
 
         test("a requirements file beside a lock that is not a uv export fails the audit", () => {
             expect(script).toContain(
-                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.txt$")'
+                'REQUIREMENTS_FILE = re.compile(r"^requirements[^/]*\\.(txt|lock)$")'
             );
             expect(script).toContain("is not a uv export");
         });
@@ -350,6 +350,15 @@ describe("CI workflow", () => {
             );
         });
 
+        test("the 3D Basic golden job also runs the suite on the Batch target", () => {
+            const golden = job("conversion-3dbasic-golden");
+            expect(golden).toMatch(/GOLDEN_TARGET: batch/);
+            expect(golden).toMatch(/timeout-minutes: 30\n/);
+            expect(
+                runCommands(golden).filter((command) => command.includes("run_golden.sh"))
+            ).toHaveLength(2);
+        });
+
         const job = (name: string): string =>
             new RegExp(`^ {4}${name}:\\n([\\s\\S]*?)(?=\\n {4}\\S|$(?![\\s\\S]))`, "m").exec(
                 text
@@ -367,6 +376,16 @@ describe("CI workflow", () => {
             // The runner's group count is GROUP_COUNT; backendPipelines/tests/test_ci_pipeline_suites.py
             // holds the matrix to it, and the runner itself to the test directories on disk.
             expect(read("backendPipelines/ci/pipeline_tests.py")).toMatch(/^GROUP_COUNT = 3$/m);
+        });
+
+        test("the pipeline test jobs install the pinned uv before the runner builds environments with it", () => {
+            const pipelines = job("pipelines-test");
+            const uv = pipelines.indexOf("astral-sh/setup-uv@");
+            const run = pipelines.indexOf("python backendPipelines/ci/pipeline_tests.py run");
+            expect(uv).toBeGreaterThanOrEqual(0);
+            expect(run).toBeGreaterThan(uv);
+            expect(pipelines).toContain('version: "0.13.8"');
+            expect(read("backendPipelines/ci/pipeline_tests.py")).toContain('[uv, "venv"');
         });
 
         test("each pipeline group installs the system packages the runner names, before its tests", () => {

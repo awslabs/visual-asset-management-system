@@ -29,12 +29,17 @@ import numpy as np
 import pytest
 
 RIE_URL = os.environ.get("GOLDEN_RIE_URL")
+# The same cells against the image's AWS Batch target: each conversion is one container run of that image
+# (``batch_entry.py`` as its entrypoint), with the request in VAMS_CONVERSION_EVENT, so both compute tiers
+# are held to one contract (tests/golden/run_golden.sh with GOLDEN_TARGET=batch).
+BATCH_IMAGE = os.environ.get("GOLDEN_BATCH_IMAGE")
+BATCH_TASK_MEMORY_MIB = os.environ.get("GOLDEN_BATCH_TASK_MEMORY_MIB", "30720")
 S3_ENDPOINT = os.environ.get("GOLDEN_S3_ENDPOINT")
 DUMP_DIR = os.environ.get("GOLDEN_DUMP_DIR")
 
 needs_image = pytest.mark.skipif(
-    not (RIE_URL and S3_ENDPOINT),
-    reason="needs the built image (GOLDEN_RIE_URL) and an S3 endpoint (GOLDEN_S3_ENDPOINT)")
+    not ((RIE_URL or BATCH_IMAGE) and S3_ENDPOINT),
+    reason="needs the built image (GOLDEN_RIE_URL or GOLDEN_BATCH_IMAGE) and an S3 endpoint (GOLDEN_S3_ENDPOINT)")
 
 trimesh = pytest.importorskip("trimesh")
 boto3 = pytest.importorskip("boto3")
@@ -150,7 +155,7 @@ def _fixture_files():
     }
 
 
-FIXTURES = _fixture_files() if (RIE_URL and S3_ENDPOINT) else {}
+FIXTURES = _fixture_files() if ((RIE_URL or BATCH_IMAGE) and S3_ENDPOINT) else {}
 
 
 @pytest.fixture(scope="module")
@@ -162,7 +167,35 @@ def s3():
     return client
 
 
+_BATCH_ERROR = re.compile(r"VAMS_CONVERSION_ERROR: (\w+): (.*)")
+
+
+def _invoke_batch(body):
+    """Run one request on the image's Batch target and answer what the Lambda handler would have: its
+    success body, or ``{"errorMessage": <the error text>}``."""
+    import subprocess
+    command = ["docker", "run", "--rm", "--platform", "linux/amd64",
+               "-e", "AWS_REGION=us-east-1", "-e", "AWS_DEFAULT_REGION=us-east-1",
+               "-e", "AWS_ACCESS_KEY_ID=test", "-e", "AWS_SECRET_ACCESS_KEY=test",
+               "-e", f"AWS_ENDPOINT_URL_S3={S3_ENDPOINT}",
+               "-e", f"VAMS_TASK_MEMORY_MIB={BATCH_TASK_MEMORY_MIB}", "-e", "VAMS_TASK_VCPU=4",
+               "-e", f"VAMS_CONVERSION_EVENT={json.dumps(body)}", BATCH_IMAGE]
+    done = subprocess.run(command, capture_output=True, text=True, timeout=600)
+    if done.returncode == 0:
+        results = [line for line in done.stdout.splitlines() if line.startswith("VAMS_CONVERSION_RESULT: ")]
+        return {"statusCode": 200, "body": results[-1][len("VAMS_CONVERSION_RESULT: "):] if results else done.stdout[-500:]}
+    log_path = os.environ.get("GOLDEN_BATCH_STDERR_LOG")
+    if log_path:
+        with open(log_path, "a", encoding="utf-8") as log:
+            log.write(f"--- exit {done.returncode} ---\n{done.stderr[-2000:]}\n")
+    found = _BATCH_ERROR.search(done.stderr)
+    return {"errorMessage": found.group(2) if found else f"exit {done.returncode}: {done.stderr[-500:]}",
+            "errorType": found.group(1) if found else ""}
+
+
 def _invoke(body):
+    if BATCH_IMAGE:
+        return _invoke_batch(body)
     request = urllib.request.Request(
         RIE_URL, data=json.dumps({"body": body}).encode("utf-8"), method="POST",
         headers={"Content-Type": "application/json"})

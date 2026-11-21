@@ -1552,9 +1552,11 @@ empty resource identifier, so every execution of it fails at the invoke state.
 
 A deployment can register a bundle with a different execution config than the one in its
 `pipeline.json` by passing `executionConfigOverrides` to `VamsSchemaRegistration`. It takes any of
-`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout`, `taskHeartbeatTimeout` (seconds; `""`
-clears the heartbeat) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
-value replaces the bundle's own. Leave the property out and the registration is exactly what it was.
+`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout` and `taskHeartbeatTimeout` (seconds; `""`
+clears the value, so the pipeline has no heartbeat and a `taskTimeout` of 24 hours) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
+value replaces the bundle's own. Setting `waitForCallback` to `"Enabled"` is only safe when the target
+Lambda reports back with the task token it receives (`SendTaskSuccess` or `SendTaskFailure`); otherwise
+every run waits until `taskTimeout` and then fails. Leave the property out and the registration is exactly what it was.
 A malformed value, such as an unknown key or a `waitForCallback` other than `Enabled` or `Disabled`,
 fails the registration before anything is written. When a value changes the state machines a pipeline
 produces (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`), VAMS redeploys every

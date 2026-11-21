@@ -64,6 +64,11 @@ export const allowed: AddonDocsAllowance[] = [
         reason: "Rule-mandated: every add-on route is documented on the add-on API reference page.",
     },
     {
+        page: "concepts/permissions-model.md",
+        sections: ["#### EDH Workstations routes"],
+        reason: "Registry: the permission model's route tables give every registered route's Tier 2 check, add-on routes included.",
+    },
+    {
         page: "deployment/configuration-reference.md",
         sections: [
             "### EDH Workstations (`app.addons.useEdhWorkstations`)",

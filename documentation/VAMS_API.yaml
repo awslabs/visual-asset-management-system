@@ -2125,7 +2125,7 @@ paths:
                         - Version parameters are not allowed for assetPreview downloads.
                         - No download URLs could be generated for the requested files (bulk request where every path was invalid).
                         - Ambiguous alias: multiple versions share this alias.
-                        - Asset, asset version, or file not found (also when no asset version carries the specified alias).
+                        - Asset version or file not found (also when no asset version carries the specified alias).
                         - Asset not distributable.
                         - Asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload`.
                     content:
@@ -2133,7 +2133,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized.
+                    description: Not authorized to download this asset, whether or not it exists.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "404":
+                    description: "Asset not found (`Asset not found`); answered only to a caller allowed to download the asset."
                     content:
                         application/json:
                             schema:
@@ -2913,14 +2919,14 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to stream this asset or asset not distributable.
+                    description: Not authorized to stream this asset, whether or not it exists; or, for a caller allowed to stream it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: |
-                        Not found. Possible reasons:
+                        Not found, answered only to a caller allowed to stream the asset. Possible reasons:
                         - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
@@ -3036,14 +3042,14 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to access this asset or asset not distributable.
+                    description: Not authorized to access this asset, whether or not it exists; or, for a caller allowed to access it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
                     description: |
-                        Not found. Possible reasons:
+                        Not found, answered only to a caller allowed to access the asset. Possible reasons:
                         - Asset or file not found.
                         - Asset version not found for asset.
                         - File not found in asset version.
@@ -3183,13 +3189,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to stream this asset.
+                    description: Not authorized to stream this asset, whether or not it exists; or, for a caller allowed to stream it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or file not found.
+                    description: Asset or file not found; answered only to a caller allowed to stream the asset.
                     content:
                         application/json:
                             schema:
@@ -3278,13 +3284,13 @@ paths:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "403":
-                    description: Not authorized to access this asset.
+                    description: Not authorized to access this asset, whether or not it exists; or, for a caller allowed to access it, the asset is not distributable.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/error'
                 "404":
-                    description: Asset or file not found.
+                    description: Asset or file not found; answered only to a caller allowed to access the asset.
                     content:
                         application/json:
                             schema:
@@ -3540,7 +3546,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, or the destination file name has a blocked extension. A missing source file also answers 400. With app.compliance.quarantineBlocksDownload, a copy to another asset or database of a file whose asset is quarantined without an exception answers "Asset is quarantined and its files cannot be copied to another asset".
                     content:
                         application/json:
                             schema:
@@ -4767,9 +4773,13 @@ paths:
                         execution holds on one of the selected assets, files, or file versions; the
                         message is "A conflicting execution of this workflow is already running for this
                         asset.", "... for this file." or "... for this file version." and names no
-                        execution, asset or file), and a recorded
+                        execution, asset or file), a recorded
                         set of inputs too large to store (fewer or shorter template tag values and
-                        metadata-source entities). A template-resolution failure returns
+                        metadata-source entities), and an input file's asset that is quarantined
+                        without an exception when the deployment sets
+                        app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files
+                        cannot be used as workflow input"; a run VAMS starts itself is not refused).
+                        A template-resolution failure returns
                         a message object carrying templateResolutionErrors, and a cross-entity failure
                         one carrying executionValidationErrors — so the 400 body's message is an object
                         holding a list of strings rather than a string on those two paths.
@@ -9087,7 +9097,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                                     message:
                                         $ref: '#/components/schemas/executeWorkflowResponse'
                 "400":
-                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, or a deployment in which re-run is not available.
+                    description: An invalid executionGroupId or request body, a stored configuration value too large to reproduce exactly, the reconstructed execution failing the execute route's validation, a deployment in which re-run is not available, or an input file's asset that is quarantined without an exception when the deployment sets app.compliance.quarantineBlocksDownload ("Asset is quarantined and its files cannot be used as workflow input", as on the execute route).
                     content:
                         application/json:
                             schema:
@@ -10130,7 +10140,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                   type: string
         post:
             summary: "Start a stopped EDH workstation."
-            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a workstation launched into a capacity reservation that has since ended (EC2 reports it `expired`, `cancelled` or `failed`, or no longer holds it) is first moved to on-demand capacity, and its record then reads `capacityReservationFallback` true with `capacityReservationFallbackReason` `ended`; when EC2 refuses that move, EDH's start is not sent and the record stays `STOPPED` with `lastError` `RESERVATION_ENDED`; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Starts the caller's stopped workstation asynchronously, as a launch is: the request runs every check below, claims the record, mints a fresh session key when session bootstrap is enabled (its outcome is reported in `sessionBootstrap`), marks the record starting and hands the start to a background function, then answers `202` with the record -- `state` `STOPPED` with `activity` `starting`. The request itself never calls EDH's start. The background function sends EDH's start once, waits for EDH's answer (EDH answers only once its own capacity work is done, which can take minutes) and records the outcome: a start EDH accepts moves the record to `CREATING` with `edhState` `pending`, and to `ACTIVE` once EDH reports the desktop running; a start EDH accepted whose instance Amazon EC2 then returns to stopped is recorded `STOPPED` again with `lastError` `CAPACITY_UNAVAILABLE` for EC2's state reason `Server.InsufficientInstanceCapacity` (`RESERVATION_FULL` on a workstation launched into a capacity reservation) or `START_FAILED` for any other state reason or one VAMS could not read, and a `startFailure` naming that state reason code and the Availability Zone, while a shutdown a user or the instance initiated records nothing; a start EDH refuses leaves the record `STOPPED`, with its disk, with `lastError` `CAPACITY_UNAVAILABLE` (AWS had no capacity for the instance type in the workstation's Availability Zone), `RESERVATION_FULL` (the capacity reservation the workstation was launched into is full) or `START_FAILED` (any other reason) and the detail in `startFailure`, and takes the fresh key back -- a refused start never deletes, terminates or orphans the desktop; a workstation launched into a capacity reservation that has since ended (EC2 reports it `expired`, `cancelled` or `failed`, or no longer holds it) is first moved to on-demand capacity, and its record then reads `capacityReservationFallback` true with `capacityReservationFallbackReason` `ended`; when EC2 refuses that move, EDH's start is not sent and the record stays `STOPPED` with `lastError` `RESERVATION_ENDED`; a start whose answer is lost is followed by reads of the desktop's state, and one EDH still reports stopped 10 minutes after the start is recorded `START_FAILED` by the session sweep. Poll `GET /addon/edh/workstations/{sessionId}` until `activity` is null. Callers authenticated with an API key are refused with `403`. Enforces VAMS two-tier Casbin authorization. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             responses:
                 "202":
                     description: "The start was handed over: the workstation record (`state` STOPPED, `activity` starting) plus `sessionBootstrap`, the outcome of placing a session key, as for a launch. A `lastError` and `startFailure` an earlier start left stay until this start is accepted."
@@ -10665,7 +10675,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /addon/edh/admin/instances/stale:
         get:
             summary: "List idle or missing sessions (administration)."
-            description: "Lists sessions whose state is `STOPPED` or `ORPHANED` (EDH reports them stopped, interrupted or in error) and whose record last changed at least `idleMinutes` ago (such a session VAMS never launched is listed at once), plus sessions recorded by VAMS but no longer listed by EDH; each item carries `stale` and a `staleReason` of `stopped` or `missingInEdh`. Filtered per item through object-tier authorization on edhWorkstation. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
+            description: "Lists sessions whose state is `STOPPED` or `ORPHANED` (EDH reports them stopped or interrupted, or a new launch in error; a workstation that has run and that EDH reports in error keeps its stored state, so it is listed only while it is stored `STOPPED`) and whose record last changed at least `idleMinutes` ago (such a session VAMS never launched is listed at once), plus sessions recorded by VAMS but no longer listed by EDH; each item carries `stale` and a `staleReason` of `stopped` or `missingInEdh`. Filtered per item through object-tier authorization on edhWorkstation. This route is only deployed when the EDH Workstations add-on is enabled via `app.addons.useEdhWorkstations.enabled`."
             parameters:
                 - name: idleMinutes
                   in: query
@@ -12960,7 +12970,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /audit/log-groups:
         get:
             summary: "List the audit log groups the caller may search."
-            description: "The /audit routes exist only while app.auditLogging.search.enabled is true (the default; false in the EU Sovereign template, where Amazon CloudWatch Logs Insights is not available); otherwise API Gateway answers them as unknown routes. Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. Core capability with no feature switch."
+            description: "The /audit routes exist only while app.auditLogging.search.enabled is true (the default; false in the EU Sovereign template, where Amazon CloudWatch Logs Insights is not available); otherwise API Gateway answers them as unknown routes. Returns the audit log groups the caller may search, derived from the audit group registry and the caller's `auditLog` permission (one check per group), with the filter options and the limits that apply. Only groups that are deployed and allowed are listed; an empty list is a normal answer. The routes carry the `AUDITLOGSEARCH` feature switch, so `GET /auth/routes/api` lists them only while search is on."
             responses:
                 "200":
                     description: Log groups retrieved successfully.
@@ -14254,7 +14264,7 @@ components:
                 errorCode:
                     type: string
                     pattern: "^[A-Za-z][A-Za-z0-9.]{0,63}$"
-                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`, or, for `RESERVATION_ENDED`, the one EC2 answered VAMS's move of the workstation to on-demand capacity with, such as `UnauthorizedOperation`; absent when it names none."
+                    description: "The AWS error code EDH's answer names, such as `InsufficientInstanceCapacity` or `ReservationCapacityExceeded`; for `RESERVATION_ENDED`, the one EC2 answered VAMS's move of the workstation to on-demand capacity with, such as `UnauthorizedOperation`; for a start Amazon EC2 accepted and then returned to stopped, the instance's EC2 state reason code, such as `Server.InsufficientInstanceCapacity`. Absent when none is known."
                 availabilityZone:
                     type: string
                     description: "The Availability Zone of the workstation's instance, the one zone a stopped workstation starts in, such as `us-west-2b`; absent when it could not be read."

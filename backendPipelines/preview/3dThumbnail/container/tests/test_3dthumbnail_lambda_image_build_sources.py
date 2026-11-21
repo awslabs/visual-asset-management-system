@@ -13,15 +13,18 @@ package builds an image with no handler in it."""
 
 import os
 import re
+import tomllib
 
 import pytest
 
 CONTAINER_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 LAMBDA_DOCKERFILE = os.path.join(CONTAINER_DIR, "Dockerfile.lambda")
 FARGATE_DOCKERFILE = os.path.join(CONTAINER_DIR, "Dockerfile")
-LAMBDA_REQUIREMENTS = os.path.join(CONTAINER_DIR, "requirements.lambda.txt")
-LAMBDA_LOCK = os.path.join(CONTAINER_DIR, "requirements.lambda.lock")
-FARGATE_REQUIREMENTS = os.path.join(CONTAINER_DIR, "requirements.txt")
+# The Lambda image is its own uv project: direct pins in lambdaImage/pyproject.toml, the hashed export of
+# lambdaImage/uv.lock in lambdaImage/requirements.txt (what Dockerfile.lambda installs).
+LAMBDA_PYPROJECT = os.path.join(CONTAINER_DIR, "lambdaImage", "pyproject.toml")
+LAMBDA_LOCK = os.path.join(CONTAINER_DIR, "lambdaImage", "requirements.txt")
+FARGATE_PYPROJECT = os.path.join(CONTAINER_DIR, "pyproject.toml")
 DOCKERIGNORE = os.path.join(CONTAINER_DIR, ".dockerignore")
 
 SPEC_PACKAGES = ("pyvista", "vtk", "trimesh", "numpy", "scipy", "laspy[lazrs]", "pye57", "cadquery", "Pillow",
@@ -40,6 +43,11 @@ def _lines(path):
 
 def _requirement_lines(path):
     return [line.strip() for line in _lines(path) if line.strip() and not line.lstrip().startswith("#")]
+
+
+def _direct_dependencies(pyproject):
+    with open(pyproject, "rb") as handle:
+        return [line.strip() for line in tomllib.load(handle)["project"]["dependencies"]]
 
 
 def _index(lines, pattern):
@@ -71,7 +79,7 @@ def _canonical(name):
 def _locked(path):
     """{canonical package name: (version, hash count)} of a hash-locked requirements file."""
     text = _read(path)
-    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+) \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text,
+    entries = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+)(?: ; [^\\\n]*)? \\\n((?:\s+--hash=sha256:[0-9a-f]{64}(?: \\)?\n)+)", text,
                          re.MULTILINE)
     return {_canonical(name): (version, block.count("--hash=")) for name, version, block in entries}
 
@@ -89,7 +97,7 @@ def _unreadable_copies(text):
         if words[0] != "COPY" or any(word.startswith("--from=") for word in words):
             continue
         sources = [word for word in words[1:-1] if not word.startswith("--")]
-        if all(source.startswith("requirements") for source in sources):
+        if all(re.match(r"(lambdaImage/)?requirements", source) for source in sources):
             continue
         target = words[-1]
         following = instructions[at + 1] if at + 1 < len(instructions) else ""
@@ -139,7 +147,7 @@ class TestLambdaDockerfile:
         text = _read(LAMBDA_DOCKERFILE)
         assert re.search(r"^COPY preview_pipeline \$\{LAMBDA_TASK_ROOT\}/preview_pipeline$", text, re.MULTILINE)
         assert re.search(r"^COPY lambda_handler\.py \$\{LAMBDA_TASK_ROOT\}/lambda_handler\.py$", text, re.MULTILINE)
-        assert re.search(r"^COPY requirements\.lambda\.txt requirements\.lambda\.lock ", text, re.MULTILINE)
+        assert re.search(r"^COPY lambdaImage/requirements\.txt \$\{LAMBDA_TASK_ROOT\}/requirements\.txt$", text, re.MULTILINE)
         assert "--only-binary=:all:" in text, "no compiler is installed, so every package must come as a wheel"
         assert "open3d" not in text.lower()
 
@@ -167,7 +175,7 @@ class TestLambdaImageReadBits:
 
 @pytest.mark.unit
 class TestLambdaDependencyLock:
-    """The image installs a hash lock generated from requirements.lambda.txt, so the transitive dependencies
+    """The image installs the hashed export of lambdaImage/uv.lock, so the transitive dependencies
     of pyvista, vtk, cadquery, ifcopenshell and the rest are as fixed as the direct pins."""
 
     def test_the_image_installs_only_the_lock_in_hash_checking_mode_from_wheels(self):
@@ -175,24 +183,24 @@ class TestLambdaDependencyLock:
         assert len(installs) == 1, installs
         assert "--require-hashes" in installs[0]
         assert "--only-binary=:all:" in installs[0]
-        assert re.search(r"-r \$\{LAMBDA_TASK_ROOT\}/requirements\.lambda\.lock$", installs[0]), installs[0]
+        assert re.search(r"-r \$\{LAMBDA_TASK_ROOT\}/requirements\.txt$", installs[0]), installs[0]
 
-    def test_the_lock_header_names_the_command_that_regenerates_it(self):
+    def test_the_export_header_names_the_command_that_regenerates_it(self):
         header = _read(LAMBDA_LOCK).split("\n")[:3]
-        assert any("uv pip compile requirements.lambda.txt --generate-hashes --python-version 3.12" in line
-                   for line in header), header
+        assert any("uv export --frozen" in line and "-o requirements.txt" in line for line in header), header
+        assert not any("--no-hashes" in line for line in header), "the image installs with --require-hashes"
 
     def test_every_lock_entry_is_pinned_and_hashed(self):
         locked = _locked(LAMBDA_LOCK)
         # The closure of the 19 direct pins is far larger; a near-empty parse means the parser missed the file.
-        assert len(locked) > len(_requirement_lines(LAMBDA_REQUIREMENTS)) * 2
+        assert len(locked) > len(_direct_dependencies(LAMBDA_PYPROJECT)) * 2
         requirement_lines = [line for line in _requirement_lines(LAMBDA_LOCK) if not line.startswith("--hash")]
         assert len(requirement_lines) == len(locked), "a lock entry is not pinned with hashes"
         assert all(hashes >= 1 for _, hashes in locked.values())
 
     def test_the_lock_pins_every_direct_dependency_at_its_requirements_version(self):
         locked = _locked(LAMBDA_LOCK)
-        for line in _requirement_lines(LAMBDA_REQUIREMENTS):
+        for line in _direct_dependencies(LAMBDA_PYPROJECT):
             match = EXACT_PIN.match(line)
             name, version = _canonical(match.group(1)), line.split("==", 1)[1]
             assert name in locked, name
@@ -202,28 +210,28 @@ class TestLambdaDependencyLock:
 @pytest.mark.unit
 class TestLambdaRequirements:
     def test_every_requirement_is_pinned_exactly(self):
-        lines = _requirement_lines(LAMBDA_REQUIREMENTS)
-        assert lines, "requirements.lambda.txt is empty"
+        lines = _direct_dependencies(LAMBDA_PYPROJECT)
+        assert lines, "lambdaImage/pyproject.toml names no dependencies"
         unpinned = [line for line in lines if not EXACT_PIN.match(line)]
         assert unpinned == [], unpinned
 
     def test_the_spec_packages_are_present(self):
         names = {EXACT_PIN.match(line).group(1) + (EXACT_PIN.match(line).group(2) or "")
-                 for line in _requirement_lines(LAMBDA_REQUIREMENTS)}
+                 for line in _direct_dependencies(LAMBDA_PYPROJECT)}
         missing = [pkg for pkg in SPEC_PACKAGES if pkg not in names]
         assert missing == [], missing
 
     def test_open3d_is_absent(self):
-        assert not any(line.lower().startswith("open3d") for line in _requirement_lines(LAMBDA_REQUIREMENTS))
+        assert not any(line.lower().startswith("open3d") for line in _direct_dependencies(LAMBDA_PYPROJECT))
 
     def test_boto3_matches_the_backend_layer_pin(self):
-        lines = _requirement_lines(LAMBDA_REQUIREMENTS)
+        lines = _direct_dependencies(LAMBDA_PYPROJECT)
         assert "boto3==1.43.89" in lines
         assert "botocore==1.43.89" in lines
 
     def test_the_fargate_requirements_are_untouched(self):
         """Control: the thumbnail image keeps its own file, Open3D included (its FBX fallback)."""
-        fargate = _requirement_lines(FARGATE_REQUIREMENTS)
+        fargate = _direct_dependencies(FARGATE_PYPROJECT)
         assert any(line.startswith("open3d") for line in fargate)
         assert any(line.startswith("pyvista>=") for line in fargate)
 

@@ -8,6 +8,8 @@
 #   GOLDEN_IMAGE=my-tag GOLDEN_SKIP_BUILD=1 tests/golden/run_golden.sh   # test an image already built
 #   GOLDEN_DUMP_DIR=/tmp/golden-a tests/golden/run_golden.sh             # also write every output file
 #   GOLDEN_STEP=1 tests/golden/run_golden.sh         # build and test the image with STEP input
+#   GOLDEN_TARGET=batch tests/golden/run_golden.sh   # the same cells on the image's AWS Batch target
+#                                                    # (one container run of batch_entry.py per cell)
 #
 # Needs: docker, and a Python with pytest, moto[server], boto3, trimesh and Pillow (the CI job installs
 # them next to the image's own hashed requirements).
@@ -31,12 +33,19 @@ trap cleanup EXIT
 STEP_ARG="false"
 if [[ "${GOLDEN_STEP:-}" == "1" ]]; then STEP_ARG="true"; fi
 if [[ -z "${GOLDEN_SKIP_BUILD:-}" ]]; then
-    docker build --platform linux/amd64 --build-arg "ENABLE_STEP_INPUT=${STEP_ARG}" -t "$IMAGE" "$LAMBDA_DIR"
+    TARGET_ARG=()
+    if [[ -n "${GOLDEN_TARGET:-}" ]]; then TARGET_ARG=(--target "$GOLDEN_TARGET"); fi
+    docker build --platform linux/amd64 "${TARGET_ARG[@]}" --build-arg "ENABLE_STEP_INPUT=${STEP_ARG}" -t "$IMAGE" "$LAMBDA_DIR"
 fi
 
 # What the image holds: the Assimp tool runs, and Open CASCADE (cascadio and its bundled libraries) is
 # present only in the image built with STEP input.
 docker run --rm --platform linux/amd64 --entrypoint /opt/assimp/bin/assimp "$IMAGE" version >/dev/null
+if [[ "${GOLDEN_TARGET:-}" == "batch" ]]; then
+    # The Batch target runs as a non-root user with its own entrypoint, and the conversion code is the same.
+    test "$(docker run --rm --platform linux/amd64 --entrypoint id "$IMAGE" -u)" = "10001"
+    docker image inspect "$IMAGE" -f '{{json .Config.Entrypoint}}' | grep -q batch_entry.py
+fi
 OCCT_FILES="$(docker run --rm --platform linux/amd64 --entrypoint python "$IMAGE" -c \
     "import glob, site; print(len([p for d in site.getsitepackages() for p in glob.glob(d + '/cascadio*') + glob.glob(d + '/**/libTK*', recursive=True)]))")"
 if [[ "$STEP_ARG" == "true" && "$OCCT_FILES" == "0" ]]; then
@@ -58,6 +67,11 @@ for _ in $(seq 1 60); do
     sleep 0.5
 done
 
+if [[ "${GOLDEN_TARGET:-}" == "batch" ]]; then
+    export GOLDEN_BATCH_IMAGE="$IMAGE"
+    export GOLDEN_BATCH_STDERR_LOG="$LOG_DIR/batch-stderr.log"
+    GOLDEN_RIE_URL=""
+else
 docker run -d --name "$NAME" --platform linux/amd64 -p "127.0.0.1:${RIE_PORT}:8080" \
     -e AWS_REGION=us-east-1 -e AWS_DEFAULT_REGION=us-east-1 \
     -e AWS_ACCESS_KEY_ID=test -e AWS_SECRET_ACCESS_KEY=test \
@@ -68,15 +82,23 @@ for _ in $(seq 1 60); do
     if curl -s -o /dev/null "http://127.0.0.1:${RIE_PORT}/"; then break; fi
     sleep 0.5
 done
+fi
 
 status=0
 GOLDEN_STEP="${GOLDEN_STEP:-}" \
-GOLDEN_RIE_URL="http://127.0.0.1:${RIE_PORT}/2015-03-31/functions/function/invocations" \
+GOLDEN_RIE_URL="${GOLDEN_RIE_URL-http://127.0.0.1:${RIE_PORT}/2015-03-31/functions/function/invocations}" \
 GOLDEN_S3_ENDPOINT="http://${GATEWAY}:${S3_PORT}" \
-    "$PYTHON" -m pytest -q -m golden "$LAMBDA_DIR/tests/test_3dbasic_golden_round_trip.py" "$@" || status=$?
+    "$PYTHON" -m pytest -q -m golden "$LAMBDA_DIR/tests/test_3dbasic_golden_round_trip.py" \
+    "$LAMBDA_DIR/tests/test_3dbasic_hostile_inputs_golden.py" \
+    "$LAMBDA_DIR/tests/test_3dbasic_escalation_golden.py" "$@" || status=$?
 
 if [[ $status -ne 0 ]]; then
     echo "--- image log (last 60 lines) ---"
-    docker logs "$NAME" 2>&1 | tail -n 60
+    if [[ "${GOLDEN_TARGET:-}" == "batch" ]]; then
+        echo "--- container stderr of failed runs (last 60 lines) ---"
+        if [[ -f "$LOG_DIR/batch-stderr.log" ]]; then tail -n 60 "$LOG_DIR/batch-stderr.log"; fi
+    else
+        docker logs "$NAME" 2>&1 | tail -n 60
+    fi
 fi
 exit $status

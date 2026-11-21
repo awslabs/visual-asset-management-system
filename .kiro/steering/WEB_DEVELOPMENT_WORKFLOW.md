@@ -645,9 +645,15 @@ VAMS supports dark/light themes (default: dark):
 }
 ```
 
+### **A Resizable Table Column's Width Is Seeded Once**
+
+With `resizableColumns`, Cloudscape seeds each column's width **once**, on the render in which that column id first becomes visible, and silently ignores later changes to its declared `width` (raising `minWidth` is not the lever either). **The value that selects the visible column set and the value that selects a column's declared width must come from one source, resolved in the same render**: this is why `SearchPageListView` derives `isFileMode` from the container's `recordType` rather than from the `_rectype` filter. Full rule: `WEB_FRONTEND.md` section 10.5.
+
+Source: `web/CLAUDE.md`, "10.5 A Resizable Table Column's Width Is Seeded Once".
+
 ### **Feature Flags**
 
-Feature flags are read from `/api/secure-config` and stored in `appCache`:
+Feature flags are read from `GET /secure-config` and stored in `appCache`:
 
 ```typescript
 const config = appCache.getItem("config");
@@ -974,7 +980,9 @@ against any sandbox. The core spec for a page outside the orchestration module i
     dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
     as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
 -   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
-    the API's message, and the switches and the query band stay.
+    the API's message, and the switches and the query band stay. With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
 -   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
     opened by click, Enter or Space; an exact count has none.
 -   **A database route locks the Database filter and names it**: the disabled multiselect reads the

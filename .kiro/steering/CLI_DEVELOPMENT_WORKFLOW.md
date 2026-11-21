@@ -45,7 +45,7 @@ tools/VamsCLI/
 └── README.md               # User documentation
 ```
 
-### **Command Groups (26 core + add-on groups)**
+### **Command Groups (27 core + add-on groups)**
 
 The core groups are registered in `main.py` via `cli.add_command()`:
 
@@ -277,12 +277,12 @@ Reverse direction applies too: if working on the MCP server or a connector revea
 ```python
 # ✅ CORRECT - Add to constants.py
 API_LOGIN_PROFILE = "/auth/loginProfile"
-API_USER_ASSETS = "/api/user/assets"
-API_ASSET_UPLOAD = "/api/assets/upload"
+API_DATABASE_ASSETS = "/database/{databaseId}/assets"
+API_UPLOADS = "/uploads"
 
 # ❌ INCORRECT - Don't hardcode in methods
-def get_user_assets(self):
-    return self.get("/api/user/assets")  # BAD
+def list_database_assets(self, database_id):
+    return self.get(f"/database/{database_id}/assets")  # BAD
 ```
 
 In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fork Extension Points](#fork-extension-points-commands-client-methods-mcp-tools)).
@@ -291,7 +291,7 @@ In a fork, the fork's paths go in `vamscli/custom_constants.py` instead (see [Fo
 
 ```python
 # ✅ CORRECT - Import from constants
-from ..constants import API_LOGIN_PROFILE, API_USER_ASSETS
+from ..constants import API_LOGIN_PROFILE, API_DATABASE_ASSETS
 
 # ✅ CORRECT - Use constants in methods; a value joined onto a prefix constant is one segment
 def call_login_profile(self, user_id: str):
@@ -789,13 +789,13 @@ if __name__ == '__main__':
 
 ```python
 # ✅ ALWAYS DO THIS - Add to constants.py
-API_USER_ASSETS = "/api/user/assets"
-API_ASSET_UPLOAD = "/api/assets/upload"
-API_WORKFLOW_STATUS = "/api/workflows/status"
+API_DATABASE_ASSETS = "/database/{databaseId}/assets"
+API_UPLOADS = "/uploads"
+API_UPLOAD_STATUS = "/uploads/{uploadId}"
 
 # ❌ NEVER DO THIS - Hardcoded endpoints
-def get_assets(self):
-    return self.get("/api/user/assets")  # VIOLATION
+def list_database_assets(self, database_id):
+    return self.get(f"/database/{database_id}/assets")  # VIOLATION
 ```
 
 An add-on's paths go in `vamscli/addon_constants.py` and, in a fork, the fork's in `vamscli/custom_constants.py`; the contract test below checks both the same way.
@@ -2264,6 +2264,34 @@ A `GlobalInfrastructureError` subclass gets a branch in `utils/global_exceptions
 elif isinstance(e, NewGlobalError):
     _handle_global_error("New Error", str(e), "What the user can do next.", exc=e)
 ```
+
+### **Key Constants Reference**
+
+#### **Upload/Download Limits**
+
+| Constant                      | Value  | Purpose                                         |
+| ----------------------------- | ------ | ----------------------------------------------- |
+| `DEFAULT_CHUNK_SIZE_SMALL`    | 150 MB | Small file chunk size                           |
+| `DEFAULT_CHUNK_SIZE_LARGE`    | 1 GB   | Large file chunk size                           |
+| `MAX_FILE_SIZE_SMALL_CHUNKS`  | 15 GB  | Threshold for large chunks                      |
+| `MAX_SEQUENCE_SIZE`           | 3 GB   | Max sequence size                               |
+| `MAX_PREVIEW_FILE_SIZE`       | 5 MiB  | Preview image limit (exactly 5 MiB is accepted) |
+| `MAX_FILES_PER_REQUEST`       | 50     | Files per upload request                        |
+| `MAX_TOTAL_PARTS_PER_REQUEST` | 1000   | Client parts per request                        |
+| `MAX_PARTS_PER_FILE`          | 1000   | Client parts per file                           |
+| `MAX_PART_SIZE`               | 5 GB   | S3 part size limit                              |
+
+#### **Retry Configuration**
+
+| Constant                           | Default | Env Var Override               |
+| ---------------------------------- | ------- | ------------------------------ |
+| `DEFAULT_MAX_RETRY_ATTEMPTS`       | 5       | `VAMS_CLI_MAX_RETRY_ATTEMPTS`  |
+| `DEFAULT_INITIAL_RETRY_DELAY`      | 1.0s    | `VAMS_CLI_INITIAL_RETRY_DELAY` |
+| `DEFAULT_MAX_RETRY_DELAY`          | 60.0s   | `VAMS_CLI_MAX_RETRY_DELAY`     |
+| `DEFAULT_RETRY_BACKOFF_MULTIPLIER` | 2.0     | -                              |
+| `DEFAULT_RETRY_JITTER`             | 0.1     | -                              |
+
+Source: `tools/VamsCLI/CLAUDE.md`, "Key Constants Reference" ("Upload/Download Limits", "Retry Configuration").
 
 ## ✅ **Quality Assurance Checklist**
 

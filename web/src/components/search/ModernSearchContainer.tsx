@@ -59,6 +59,11 @@ import Synonyms from "../../synonyms";
 export const NLP_EMPTY_TRUNCATED_NOTE =
     "No match among the closest results searched; more may exist.";
 
+// What the page says above the results when the newest search failed (an API error, a 504 timeout or a
+// network failure) and no answer is on screen, so the empty results never read as "No matches" (#1763).
+export const SEARCH_FAILED_NOTICE_HEADER = "Search did not finish";
+export const SEARCH_FAILED_NOTICE = "No results are shown. Try again.";
+
 // The note under a natural-language answer of `count` (1 or more) matches whose candidate window may
 // hold more: singular for one match.
 export const nlpTopMatchesNote = (count: number): string =>
@@ -609,6 +614,10 @@ const ModernSearchContainer: React.FC<
     // describe a search that has not answered).
     const hasAnswer =
         answeredMode === searchMode && (searchMode === "nlp" ? !!nlpResult : !!searchState.result);
+    // The newest search failed and no answer is on screen (the first search of the page, or the first
+    // in this mode): the page says the search failed instead of showing an empty result. The error
+    // clears when the next search starts.
+    const searchFailed = !!searchState.error && !hasAnswer;
 
     // Calculate pagination values: the count shown, and the pages over the records that can be shown
     // (fewer in natural-language mode, which counts every match but returns at most 100).
@@ -759,6 +768,9 @@ const ModernSearchContainer: React.FC<
             searchMode === "nlp" &&
             answeredMode === "nlp" &&
             nlpSearchedNoDatabase(nlpResult?.warnings),
+        // The search failed with no answer on screen: the empty table says so, as the notice above
+        // it does, instead of "No matches" with a Clear filter action that blames the filters.
+        searchFailed,
     };
 
     // Render main content
@@ -921,6 +933,21 @@ const ModernSearchContainer: React.FC<
                                 <Alert type="info" statusIconAriaLabel="Info">
                                     Showing the first {SEARCH_RESULT_WINDOW.toLocaleString()}{" "}
                                     results; refine your search
+                                </Alert>
+                            </Box>
+                        )}
+
+                        {/* A failed search with no answer on screen, said in the page as well as in the "Search
+                            failed" toast, so the empty results do not read as "no matches". */}
+                        {searchFailed && (
+                            <Box padding={{ bottom: "m" }}>
+                                <Alert
+                                    type="error"
+                                    header={SEARCH_FAILED_NOTICE_HEADER}
+                                    statusIconAriaLabel="Error"
+                                    data-testid="search-failed-notice"
+                                >
+                                    {SEARCH_FAILED_NOTICE}
                                 </Alert>
                             </Box>
                         )}

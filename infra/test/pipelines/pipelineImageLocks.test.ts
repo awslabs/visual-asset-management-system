@@ -75,11 +75,27 @@ function normalize(name: string): string {
     return name.toLowerCase().replace(/[-_.]+/g, "-");
 }
 
-/** Direct dependency names in a requirements.txt. */
-function directDependencies(text: string): string[] {
+/** Direct dependency names in a plain requirements.txt (the GPU images, which are not uv projects yet). */
+function requirementsTxtDependencies(text: string): string[] {
     return text
         .split(/\r?\n/)
         .map((l) => l.replace(/#.*/, "").trim())
+        .filter(Boolean)
+        .map((l) => normalize(/^[A-Za-z0-9][A-Za-z0-9._-]*/.exec(l)![0]));
+}
+
+/** Direct dependency names in a pyproject.toml's `[project] dependencies` list. */
+function directDependencies(text: string): string[] {
+    const block = /^dependencies = \[([\s\S]*?)^\]/m.exec(text);
+    expect(block).not.toBeNull(); // [control] the dependency list was found
+    return block![1]
+        .split(/\r?\n/)
+        .map((l) =>
+            l
+                .replace(/#.*/, "")
+                .trim()
+                .replace(/^"|",?$/g, "")
+        )
         .filter(Boolean)
         .map((l) => normalize(/^[A-Za-z0-9][A-Za-z0-9._-]*/.exec(l)![0]));
 }
@@ -101,17 +117,21 @@ describe.each(PIP_LOCKED_IMAGES)("the $label image", ({ dir, dockerfile }) => {
         }
     });
 
-    it("carries a lock generated from requirements.txt with a hash on every pin", () => {
+    it("carries the hashed uv export of uv.lock, with a hash on every pin", () => {
         // [control] the parser found the pins at all.
         expect(entries.length).toBeGreaterThan(0);
-        expect(lock).toMatch(/^#\s+uv pip compile requirements\.txt --generate-hashes /m);
+        // The audit regenerates this file from the command in its header and requires it to match, so the
+        // image installs what `uv.lock` holds; `--no-hashes` would defeat `--require-hashes`.
+        expect(lock).toMatch(/^#\s+uv export --frozen /m);
+        expect(lock).toMatch(/^#\s+uv export .*-o requirements\.lock$/m);
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
     });
 
     it("locks every direct dependency", () => {
         const locked = new Set(entries.map((e) => e.name));
         const direct = directDependencies(
-            fs.readFileSync(path.join(root, "requirements.txt"), "utf-8")
+            fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8")
         );
         expect(direct.length).toBeGreaterThan(0);
         expect(direct.filter((name) => !locked.has(name))).toEqual([]);
@@ -184,12 +204,42 @@ const PIP_LOCKED_RUNTIME_INSTALLS: { label: string; dir: string; dockerfile: str
         dir: "simulation/isaacLabTraining/container",
         dockerfile: "Dockerfile",
     },
-    {
-        label: "pcPotreeViewer Potree",
-        dir: "preview/pcPotreeViewer/container",
-        dockerfile: "Dockerfile_Potree",
-    },
 ];
+
+/**
+ * The Potree image: a runtime-stage `pip install` of the hashed uv export, on an Alpine base whose OS packages
+ * the image does not manage (so the OS-update rule above is not asserted). Its lock is shared with the PDAL
+ * image, which the first list covers.
+ */
+describe("the pcPotreeViewer Potree image", () => {
+    const root = path.join(PIPELINES_DIR, "preview/pcPotreeViewer/container");
+    const steps = instructions(fs.readFileSync(path.join(root, "Dockerfile_Potree"), "utf-8"));
+    const lock = fs.readFileSync(path.join(root, "requirements.lock"), "utf-8");
+    const entries = lockEntries(lock);
+
+    it("installs its Python packages from the hashed lock only, as wheels", () => {
+        const installs = installSteps(steps);
+        expect(installs.length).toBeGreaterThan(0);
+        for (const step of installs) {
+            expect(step).toMatch(/--require-hashes/);
+            expect(step).toMatch(/--only-binary :all:/);
+            expect(step).toMatch(/-r \S*requirements\.lock\b/);
+        }
+    });
+
+    it("locks every direct dependency of pyproject.toml, with a hash on every pin", () => {
+        expect(lock).toMatch(/^#\s+uv export --frozen /m);
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
+        expect(entries.length).toBeGreaterThan(0);
+        expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
+        const locked = new Set(entries.map((e) => e.name));
+        const direct = directDependencies(
+            fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8")
+        );
+        expect(direct.length).toBeGreaterThan(0);
+        expect(direct.filter((name) => !locked.has(name))).toEqual([]);
+    });
+});
 
 describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfile }) => {
     const root = path.join(PIPELINES_DIR, dir);
@@ -212,7 +262,7 @@ describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfil
         expect(entries.length).toBeGreaterThan(0);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
         const locked = new Set(entries.map((e) => e.name));
-        const direct = directDependencies(
+        const direct = requirementsTxtDependencies(
             fs.readFileSync(path.join(root, "requirements.txt"), "utf-8")
         );
         expect(direct.length).toBeGreaterThan(0);

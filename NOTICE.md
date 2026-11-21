@@ -222,13 +222,17 @@ This software includes third party software subject to the following copyrights:
 | libE57Format    | [3.3.0](https://github.com/asmaloney/libE57Format/releases/tag/v3.3.0) (vendored in PDAL's E57 plugin)                                                    | POTREE VIEWER                                                                      | BSL-1.0          |
 | Xerces-C++      | [3.3.0](https://xerces.apache.org/xerces-c/) (PDAL E57 plugin dependency)                                                                                 | POTREE VIEWER                                                                      | Apache-2.0       |
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                                                                      | BSD-2-Clause     |
+| Mambaforge      | [24.9.2-0](https://github.com/conda-forge/miniforge-images) (`condaforge/mambaforge` base image of the PDAL build stage)                                  | POTREE VIEWER                                                                      | BSD-3-Clause     |
+| Miniforge3      | [26.5.3-0](https://github.com/conda-forge/miniforge-images) (`condaforge/miniforge3` base image of the PDAL runtime stage)                                | POTREE VIEWER                                                                      | BSD-3-Clause     |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                                                                      | MIT              |
 | FFmpeg          | Ubuntu `ffmpeg` package (installed at image build time, not version-pinned)                                                                               | NVIDIA COSMOS PREDICT, COSMOS REASON, COSMOS TRANSFER, COSMOS 3, GR00T FINE-TUNING | GPL-2.0-or-later |
 | FFmpeg          | Debian trixie `ffmpeg` package (7.1.x, installed at build time; 7:7.1.5-0+deb13u1 in the reference build)                                                 | VIDEO SOP/BOM EXTRACTION                                                           | GPL-2.0-or-later |
 
+The Mambaforge and Miniforge3 base images also carry the conda packages their installers add, each under its own license (recorded as SPDX identifiers in `/opt/conda/conda-meta/<package>.json`). Both images are built on Ubuntu, and their Ubuntu base layers carry the OS packages' own licenses.
+
 ### Preview 3D Thumbnail Pipeline
 
-**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
+**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/uv.lock`, exported to `container/requirements.txt`, which the image installs)
 
 | Name        | Version    | License                                                                     | Notes                                                 |
 | :---------- | :--------- | :-------------------------------------------------------------------------- | :---------------------------------------------------- |
@@ -265,7 +269,7 @@ This software includes third party software subject to the following copyrights:
 | blosc, blosc2, brotli, bitshuffle, lz4, lzfse, lzf, lzham, lzokay, snappy, libaec, zfp, sz3, isa-l, meshoptimizer, fastlz, bzip2, netcdf-c, hdf5, cfitsio, postgresql pglz | as in the wheel       | BSD-2-Clause, BSD-3-Clause, MIT, public domain or a permissive NASA/PostgreSQL licence                                                                                                                                 | General-purpose and scientific codecs, not selected by the pipeline                                                                          |
 | libgomp (OpenMP runtime)                                                                                                                                                   | GCC 8.5               | GPL-3.0-or-later with the GCC Runtime Library Exception                                                                                                                                                                | Bundled by the wheel; the image already installs Debian `libgomp1` for Open3D. The exception permits linking into programs under any licence |
 
-**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
+**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/uv.lock`; installed because a package above requires them, or compiled into one)
 
 | Name    | Version               | License           | Notes                                                                                                                                               |
 | :------ | :-------------------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -275,7 +279,7 @@ This software includes third party software subject to the following copyrights:
 | tqdm    | 4.70.1                | MPL-2.0 AND MIT   | Progress bars required by open3d                                                                                                                    |
 | Eigen   | da79095 (after 3.4.0) | MPL-2.0           | C++ linear algebra library compiled into the open3d 0.19.0 wheel, not a separate package. Loaded for `.fbx` and `.pcd` files                        |
 
-The other packages in `requirements.lock` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
+The other packages in `requirements.txt` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
 
 **Preview 3D Thumbnail Pipeline native libraries bundled in the cadquery-ocp wheel** (cadquery-ocp 7.9.3.1.1, installed because cadquery requires it; the pipeline loads every library below when it reads a `.step` or `.stp` file)
 
@@ -435,7 +439,7 @@ All rights reserved.
 
 ### Zip Archive Pipeline
 
-**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.lock`)
 
 | Name                     | Version | License    | Notes                                                                                                       |
 | :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |
@@ -453,7 +457,7 @@ All rights reserved.
 | openai            | 2.x     | Apache-2.0                   | OpenAI Python SDK, installed by the `strands-agents[openai]` extra     |
 | bedrock-agentcore | 1.23.1  | Apache-2.0                   | Amazon Bedrock AgentCore Runtime application SDK                       |
 | cadquery          | 2.8.0   | Apache-2.0                   | Parametric CAD modelling; STEP import and export                       |
-| cadquery-ocp      | 8.x     | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
+| cadquery-ocp      | 7.9.x   | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
 | ddgs              | 9.16.0  | MIT                          | Web search for the agent's research tool                               |
 | httpx             | 0.28.1  | BSD-3-Clause                 | Bounded page fetch for the agent's research tool                       |
 | boto3             | 1.43.x  | Apache-2.0                   | AWS SDK for Python                                                     |
@@ -758,6 +762,17 @@ The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-l
 **HuggingFace Model Access**
 
 The model weights for each enabled model are downloaded from HuggingFace using the configured access token. Accept each model's license on HuggingFace before deployment.
+
+**Image to 3D Image Build Components**
+
+These are built or installed into the Image to 3D container images in addition to the components above.
+
+| Name                   | Version | License                                                     | Purpose                                                                   |
+| :--------------------- | :------ | :---------------------------------------------------------- | :------------------------------------------------------------------------ |
+| CuMesh                 | 12289e1 | MIT                                                         | CUDA mesh processing extension built from source into the TRELLIS.2 image |
+| FlexGEMM               | 6dd94a8 | MIT                                                         | Sparse convolution extension built from source into the TRELLIS.2 image   |
+| opencv-python-headless | latest  | MIT (packaging); OpenCV Apache-2.0; bundled FFmpeg LGPL-2.1 | Image I/O in the TRELLIS.2 and Blender agent (`blenderagent`) images      |
+| xformers               | 0.0.34  | BSD-3-Clause                                                | Attention backend of the Stable3DGen image                                |
 
 ### EDH Workstations Add-on
 
