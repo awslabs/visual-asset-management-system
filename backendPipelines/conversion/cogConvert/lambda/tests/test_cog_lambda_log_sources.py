@@ -118,6 +118,8 @@ class TestLambdaLogSourceRegistration:
                                   STATE_FUNCTION_NAMES=json.dumps(FUNCTION_NAMES))
         _input, detail = _run_open_pipeline(mod)
         validators = registration._backend_validators()
+        # Control: with no Lambda entries the loop below would check nothing.
+        assert len(detail["logs"]) == 1 + len(FUNCTION_NAMES)
         for log in detail["logs"][1:]:
             assert validators.validate_cloudwatch_log_group_arn("logGroupArn", log["logGroupArn"])[0], log
             assert validators.validate_cloudwatch_log_group_name("logGroupName", log["logGroupName"])[0], log
