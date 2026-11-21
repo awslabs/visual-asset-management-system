@@ -10,6 +10,7 @@ import {
     toastErrorMessage,
 } from "../../../features/orchestration/components/ToastProvider";
 import type { WorkstationRecord } from "../types";
+import { isLaunchStalled } from "../labels";
 import { BusyButton } from "../../../features/orchestration/components/BusyControls";
 import { useInFlight } from "../components/useInFlight";
 
@@ -25,8 +26,15 @@ export const DISPLAY_SESSION_ENDED_MESSAGE =
 export const DESKTOP_ERROR_MESSAGE =
     "The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.";
 
-/** The sentence the service's `connectionUnavailableReason` stands for, or null for none or an unknown one. */
+/**
+ * The sentence the service's `connectionUnavailableReason` stands for, or null for none or an unknown
+ * one. A launch the sweep found stalled (`isLaunchStalled`) never ran, so its own sentence and Delete
+ * apply rather than a desktop error's.
+ */
 export function connectionUnavailableMessage(row: WorkstationRecord): string | null {
+    if (isLaunchStalled(row)) {
+        return null;
+    }
     if (row.connectionUnavailableReason === "DISPLAY_SESSION_ENDED") {
         return DISPLAY_SESSION_ENDED_MESSAGE;
     }

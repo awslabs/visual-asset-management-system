@@ -740,8 +740,28 @@ def test_update_edh_admin_settings_refuses_empty_call_without_touching_client(cl
 )
 def test_edh_session_tools_forward_the_session_id_and_return_the_record(client, gated, tool, method):
     getattr(client.api, method).return_value = {"sessionId": "s-1", "state": "x"}
-    assert gated[tool]("s-1") == {"sessionId": "s-1", "state": "x"}
+    # stop_edh_workstation sends nothing without confirm=True (test_stop_without_confirm_...).
+    kwargs = {"confirm": True} if tool == "stop_edh_workstation" else {}
+    assert gated[tool]("s-1", **kwargs) == {"sessionId": "s-1", "state": "x"}
     getattr(client.api, method).assert_called_once_with("s-1")
+
+
+def test_stop_without_confirm_returns_an_error_and_calls_nothing(client, gated):
+    """A client-side interlock the owner chose for this tool: the agent confirms with the user and
+    calls again with confirm=True; until then no request is made."""
+    result = gated["stop_edh_workstation"]("s-1")
+    assert result["error_type"] == "ValueError"
+    assert "Confirm with the user" in result["error"]
+    assert "confirm=True" in result["error"]
+    client.api.stop_edh_workstation.assert_not_called()
+    assert gated["stop_edh_workstation"]("s-1", confirm=False)["error_type"] == "ValueError"
+    client.api.stop_edh_workstation.assert_not_called()
+
+
+def test_stop_with_confirm_stops(client, gated):
+    client.api.stop_edh_workstation.return_value = {"sessionId": "s-1", "activity": "stopping"}
+    assert gated["stop_edh_workstation"]("s-1", confirm=True) == {"sessionId": "s-1", "activity": "stopping"}
+    client.api.stop_edh_workstation.assert_called_once_with("s-1")
 
 
 # --- Admin image tools -------------------------------------------------------------------------

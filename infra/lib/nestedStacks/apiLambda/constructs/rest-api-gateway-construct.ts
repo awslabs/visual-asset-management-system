@@ -241,6 +241,10 @@ export class RestApiGatewayConstruct extends Construct implements IApiImplementa
             vpcEndpointIds: apiGatewayVpcEndpointId ? [apiGatewayVpcEndpointId] : undefined,
             title: `${config.env.coreStackName}Api`,
             timeoutSeconds: apiGatewayRest.apiGatewayTimeoutTime,
+            // The authorizer refuses callers outside allowedIpRanges, so its decision depends on
+            // the client address and is not cached when the list is set.
+            authorizerCacheDisabled:
+                (config.app.authProvider.authorizerOptions.allowedIpRanges || []).length > 0,
         });
 
         // CORS headers on gateway-level responses (authorizer denials and errors).

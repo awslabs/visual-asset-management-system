@@ -14,6 +14,10 @@ logger = safeLogger()
 AUTH_METHOD_JWT = "jwt"
 AUTH_METHOD_API_KEY = "apiKey"
 
+#Set to True on the claims when customAuthClaimsCheckOverride raised. CasbinEnforcer refuses every
+#check for claims that carry it (handlers/authz), so the request is denied.
+CLAIMS_CHECK_FAILED = "claimsCheckFailed"
+
 def request_to_claims(request):
     normalize_event(request)
 
@@ -111,13 +115,15 @@ def request_to_claims(request):
             "apiKeyId": apiKeyId
         }
 
-    #Conduct custom claims check. If a customer-supplied hook raises, fail closed by
-    #dropping roles (rather than silently passing the un-filtered claims through) so a
-    #broken claims-restriction hook cannot grant more access than intended.
+    #Conduct custom claims check. If a customer-supplied hook raises, the request is denied: the
+    #claims are marked (CLAIMS_CHECK_FAILED) and roles emptied, and a CasbinEnforcer built from
+    #marked claims refuses every Tier 1 and Tier 2 check, so the route answers 403. The caller's
+    #tokens are kept so the denial is recorded against them.
     try:
         claims_and_roles = customAuthClaimsCheckOverride(claims_and_roles, request)
     except Exception as e:
-        logger.exception(f"customAuthClaimsCheckOverride failed; denying roles: {e}")
+        logger.exception(f"customAuthClaimsCheckOverride failed; denying the request: {e}")
         claims_and_roles["roles"] = []
+        claims_and_roles[CLAIMS_CHECK_FAILED] = True
 
     return claims_and_roles
