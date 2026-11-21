@@ -105,7 +105,7 @@ Every template has two optional drop-downs for the files a model names:
 
 -   **flatten** composes the scene, with every file it names that is inside the asset, and writes one converted file. Every format other than USD can only hold one file's worth of model, so this is what every mainstream exporter does. USD variant sets are baked to the selection in the file.
 -   **package** (`.usdz` output only) keeps the USD layers and their composition as authored and packs the selected layer and every file it names, textures included, into one `.usdz`. It cannot change units or the up axis; `auto` on Convert to USD chooses `package` for `.usdz` unless a unit or axis option is set, and `flatten` otherwise.
--   **convert-linked** (a `.usd`, `.usda`, or `.usdc` input to `.usdc` or `.usda`) converts the selected file and every USD layer it names, leaves first, each to the chosen encoding, and rewrites each layer's references to the converted names. The converted files keep the input's sub-folders inside the output folder (a layer outside the selected file's folder goes under `_linked/` at its path in the asset), textures are copied beside them, and nothing is composed, so every layer keeps its own unit and up axis. A reference cycle, or two layers that would get the same converted name, fails the run before anything is written.
+-   **convert-linked** (a `.usd`, `.usda`, or `.usdc` input to `.usdc` or `.usda`) converts the selected file and every USD layer it names, leaves first, each to the chosen encoding, and rewrites each layer's references to the converted names. The converted files keep the input's sub-folders inside the output folder (a layer outside the selected file's folder goes under `_linked/` at its path in the asset), textures are copied beside them, and nothing is composed, so every layer keeps its own unit and up axis. The output keeps the source's composition as authored: a scene whose layers reference or instance each other is still nested the same way in the converted files, and opening them composes it as the source would. A reference cycle, or two layers that would get the same converted name, fails the run before anything is written. With a `.usda` output, a layer holding an array whose text would reach 2 GB fails the same way (use `.usdc`), because the text writer would drop the array without an error.
 -   **selected-only** converts the selected file alone. No referenced file is downloaded, and each one it names is reported as not included; a GLTF buffer the model cannot load without still fails the run.
 
 With **skip**, a run that could not include a referenced file still succeeds, its completion message says the converted file is incomplete and counts the files by kind (geometry layers, data files, textures and other files), the run log lists each file with its reason, and a `conversion-incomplete.json` result document is written to the run's results (Output Results on the execution). The document has the same shape and limits as the 3D Preview Thumbnail's `preview-incomplete.json`: at most 100 files are listed with a `truncated` flag, paths are relative to the asset, and a reference outside the asset is named only by its file name. A complete run writes no document. With **fail**, the run stops before it converts and its error names up to 20 of the files and why each could not be used.
@@ -135,11 +135,13 @@ flowchart LR
 
 ### Execution Type
 
-This pipeline uses the **Lambda** execution type with synchronous invocation. It does not require an AWS Step Functions task token callback because the Lambda function returns results directly. The pipeline is registered in VAMS as a synchronous pipeline.
+By default this pipeline uses the **Lambda** execution type with synchronous invocation. It does not require an AWS Step Functions task token callback because the Lambda function returns results directly. The pipeline is registered in VAMS as a synchronous pipeline.
 
 :::warning[No Task Token]
-This pipeline must be registered as NOT needing a task token callback. If a workflow passes a `TaskToken` to this pipeline, it will reject the request with an error.
+With the Batch tier off, this pipeline must be registered as NOT needing a task token callback. If a workflow passes a `TaskToken` to the converter function, it will reject the request with an error.
 :::
+
+With `batchTier.enabled` set to `true`, the same pipeline (`conversion-3d-basic`, the same templates) is registered with the callback enabled and a task timeout of 6.5 hours, and the function the workflow calls is a small launcher that starts a state machine (see [AWS Batch tier](#aws-batch-tier)). The converter function never receives the task token in either mode.
 
 ### Processing Flow
 
@@ -149,6 +151,68 @@ This pipeline must be registered as NOT needing a task token callback. If a work
 4. The input file is downloaded from the asset bucket to the Lambda container's `/tmp` directory at its path within the asset, followed by the files it references (see [Multi-File Models](#multi-file-models)).
 5. The function starts a worker process that runs Trimesh. The worker has none of the function's AWS credentials in its environment, and the function process closes its own `/proc` files to it. It runs under an address-space limit set from the function's memory, a limit on the size of any one file it writes, no core dumps, and a time limit set from the invocation's remaining time; a limit that cannot be applied fails the run. The worker still runs as the function's user and shares its network namespace, so it can reach whatever network the function reaches, including the Lambda runtime API, which does not return credentials. Trimesh loads the model, detecting the format from the file extension, and reads referenced files only from those downloads. The model is exported to the target format using Trimesh's export capabilities.
 6. The converted file, and any companion files the export writes, are uploaded to the run's output files location using multipart upload for large files. The workflow then writes them back to the output asset in the input's folder, inside a further folder when the export writes several files or keeps the input's format (see [Output Naming](#output-naming)).
+
+## AWS Batch tier
+
+A model the Lambda function cannot convert is, by default, refused. With the Batch tier on, the run continues once on AWS Batch with AWS Fargate, on the smallest job that can hold it. Turn it on with `app.pipelines.useConversion3dBasic.batchTier.enabled`; it needs the global VPC (`app.useGlobalVpc.enabled`) and is off in every shipped configuration.
+
+```mermaid
+flowchart LR
+    W[VAMS workflow] --> L[Launcher Lambda]
+    L --> SM[State machine]
+    SM --> A[Converter Lambda<br/>first attempt]
+    A -- converted --> E[Report to workflow]
+    A -- refused or out of memory or time --> S[Select the smallest job size]
+    S --> B[AWS Batch Fargate job<br/>4 vCPU / 30 GiB, 8 / 60 or 16 / 120]
+    B --> E
+```
+
+-   **Every run starts on the Lambda function.** A small model converts there at the same cost and speed as without the tier; no job is queued and the run adds only a few Step Functions state transitions.
+-   **What escalates.** An input over the function's size limit (found before the download, or after it for a referenced file or a 3MF's declared uncompressed size), a worker killed for memory, and a worker out of time continue on Batch. The result is the same output files, names and folders, the same `conversion-incomplete.json`, and the same error text for the same input.
+-   **What never escalates.** A scene-expansion refusal (too many nodes or placements, or a scene that takes too long to read), a format limit (see [Limits no memory lifts](#limits-no-memory-lifts)), a corrupt file, a STEP file when `enableStepInput` is `false`, and a PLY over 4 GiB fail on both tiers with the same message.
+-   **Job sizes.** 4 vCPU / 30 GiB, 8 vCPU / 60 GiB and 16 vCPU / 120 GiB, each with 200 GiB of ephemeral storage. `batchTier.maxMemoryGiB` (30, 60 or 120, default 120) caps the largest. The smallest size whose limit admits the input runs. An input over the largest permitted size fails before any job starts, with a message that names the file, its size, the limit, the format pair, the resource and the largest job size.
+-   **Time bounds.** A job stops after its own attempt bound of 4 hours (the container ends the run itself first, at 4 hours; Batch terminates a wedged one at 4 hours 15 minutes). A job that stays in `RUNNABLE` for more than one hour (see [Troubleshooting](#troubleshooting)) fails the run. The whole run is bounded at 6 hours, and the workflow's task at 6.5 hours.
+-   **Failures.** A failed job reports the message the container wrote (the same text the function would have reported, for example `XMLSyntaxError: Comment too big`), read from `conversion-run.json`. When the container left none (it was killed, or never started), the run reports the job's own status reason and exit code, and points to the conversion job container log of the execution. A refusal on a job size says that the limit is set by the job memory.
+-   **Stopping.** Stopping the workflow execution terminates the Batch job. A failed or aborted run reports the failure to the workflow within about a minute, not at the task timeout.
+-   **Where the run is visible.** The run's stages list the Lambda attempt and, when it ran, the Batch job. Both container logs are registered as log sources of the execution (the converter function, and the job's log group under `/aws/vendedlogs/Pipelines/`). A run in a deployment with the tier on writes `conversion-run.json` with the results: the tier that ran, why the run continued, the job's vCPU and memory, the seconds each phase took, and the measured peak memory of the conversion worker (`peakWorkerMemoryMiB`; `requiredMemoryMiB` is the size check's estimate, not a measurement). A failed Batch run writes it too, with `failed: true` and the error.
+-   **Forcing a tier.** The input configuration accepts the optional keys `computeTier` (`auto`, `lambda` or `batch`) and `batchMemoryGiB` (30, 60 or 120; the size of a forced Batch run, 30 by default). They are for administrators and tests, are not template fields, and are not in the web form. `lambda` keeps the run on the function, so a refusal stays a refusal.
+-   **Security.** The Batch job runs the same image code as the function: the parent and worker split, the scrubbed worker environment (which also drops the Fargate credential variables), the address-space, file-size and time limits, the referenced-file confinement and the archive and XML guards. The job runs as a non-root user. Its role can read the asset buckets and write only under `<baseAssetsPrefix>pipelines/*/output/*`; it holds no Step Functions permission and never receives the workflow's task token. The job runs in the isolated pipeline subnets, which have no internet route.
+-   **Regions.** The job reaches Amazon S3 in the deployment Region and in the Regions served by the cross-Region S3 endpoints. A run on an input in another Region fails with a message naming the Region (a function outside the VPC can read any Region).
+
+### Batch limits
+
+The limit of a job is computed as the function's is: `(0.9 x memory - 300 MB) / factor`, with the same factors. Disk does not bind on a job (200 GiB). Sizes are in MB of 1,048,576 bytes, as the run's messages print them. The 120 GiB job admits about 12 times what the function does.
+
+| Input to output           | Factor | Lambda 10,240 MB | 4 vCPU / 30 GiB | 8 vCPU / 60 GiB | 16 vCPU / 120 GiB |
+| ------------------------- | -----: | ---------------: | --------------: | --------------: | ----------------: |
+| STL to GLB, OBJ, PLY, STL |     14 |              636 |           1,953 |           3,928 |             7,878 |
+| STL to `.usda`            |     21 |              424 |           1,302 |           2,618 |             5,252 |
+| STL to `.usdc`            |     22 |              405 |           1,243 |           2,499 |             5,013 |
+| OBJ to GLB                |      9 |              990 |           3,038 |           6,110 |            12,254 |
+| PLY to GLB                |     25 |              356 |           1,093 |           2,199 |             4,411 |
+| GLB to GLB                |     27 |              330 |           1,012 |           2,036 |             4,084 |
+| GLB to `.usdc`            |     42 |              212 |             651 |           1,309 |             2,626 |
+| USDC to GLB               |     46 |              193 |             594 |           1,195 |             2,397 |
+| USDC to `.usdc`           |     54 |              165 |             506 |           1,018 |             2,042 |
+| STEP to GLB               |     70 |              127 |             390 |             785 |             1,575 |
+| STEP to `.usdc`           |    109 |               81 |             250 |             504 |             1,011 |
+| 3MF to any, by zip size   |    106 |               84 |             258 |             518 |             1,040 |
+
+The scene walks of USD, STEP and FBX inputs have a triangle budget of 30 million on the function. On a job it is `(0.9 x memory - 300 MB) / 270 bytes`: about 106, 214 and 428 million triangles at 30, 60 and 120 GiB (73, 147 and 295 million for an STL output, which needs about 1.45 times the memory per triangle). The node bounds of a scene expansion grow in proportion to the job's memory.
+
+Measured on a 120 GiB job (spike, November 2026): peak memory is flat per input byte from 1 to 6 GiB, so the factors hold on a job. Time is linear: about 49 seconds per GiB for STL to GLB, 78 for STL to `.usdc`, 105 for STL to `.usda`, 124 for PLY to `.usdc`, 230 for USDC to GLB, 310 for USDC to `.usdc`, and about 890 and 940 for 3MF and STEP. The slowest admitted input converts in under 40 minutes, inside the 4-hour bound. A job starts 26 to 53 seconds after it is created when its image is already in the registry, and can take 1 to 3 minutes the first time.
+
+### Costs
+
+Fargate bills a job's vCPU and memory by the second (us-east-1 on-demand list price, to be re-checked before you quote it): about $0.30 per hour for 4 vCPU / 30 GiB, $0.59 for 8 / 60 and $1.18 for 16 / 120, so a 30-minute run on the largest job is about $0.60. The function at 10,240 MB costs about $0.60 per hour. A run that escalates pays for its Lambda attempt (a refusal before the download costs a fraction of a second) and the job, plus one to three minutes of job start time. The state machine (logged at error level, without execution data, so the workflow's task token is never stored in its log group), the launcher functions and the job's log group are billed at their usual rates. The compute environment is capped at 128 vCPUs, which bounds how many jobs run at once (eight of the largest). See [Costs](../overview/costs.md).
+
+### Troubleshooting
+
+-   **The run waits, then fails with a timeout in `RUNNABLE`.** The account's Fargate On-Demand vCPU quota can be as low as 6 in a new account, so a 16 vCPU job never starts. Raise the quota in Service Quotas, or lower `batchTier.maxMemoryGiB`.
+-   **The run fails before any job starts, naming the largest job size.** The input is over the limit of the largest job size the deployment permits (see [Batch limits](#batch-limits)). Reduce the model, convert to a format with a smaller factor, or raise `maxMemoryGiB`.
+-   **The run fails naming a Region.** The input is in a bucket in a Region the isolated subnets do not reach. Copy the asset to a bucket in the deployment Region.
+-   **`batchTier.enabled` fails the deployment naming `useGlobalVpc.enabled`.** The tier needs the global VPC; it is not enabled for you.
+-   **A custom workflow that uses the pipeline fails with "TaskToken not found" after the tier was turned on or off.** The workflow was generated for the other registration. Turning the tier on or off re-registers the pipeline and VAMS redeploys the workflows that reference it; the redeploy runs after the stack update, and a run that started before it finishes on the form it started with. Wait for the redeploy and run again.
 
 ## Configuration
 
@@ -161,7 +225,11 @@ Enable this pipeline in `infra/config/config.json`:
             "useConversion3dBasic": {
                 "enabled": true,
                 "autoRegisterWithVAMS": true,
-                "enableStepInput": false
+                "enableStepInput": false,
+                "batchTier": {
+                    "enabled": false,
+                    "maxMemoryGiB": 120
+                }
             }
         }
     }
@@ -170,14 +238,16 @@ Enable this pipeline in `infra/config/config.json`:
 
 ### Configuration Options
 
-| Option                 | Default | Description                                                                                                                                      |
-| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`              | `true`  | Deploy the 3D basic conversion pipeline. All three templates enable it; the commercial template also enables SYSTEM - GenAI Metadata Generation. |
-| `autoRegisterWithVAMS` | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                                                          |
-| `enableStepInput`      | `false` | Read STEP (`.step`, `.stp`) input; adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the image.                                  |
+| Option                   | Default | Description                                                                                                                                                                                                                  |
+| ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                | `true`  | Deploy the 3D basic conversion pipeline. All three templates enable it; the commercial template also enables SYSTEM - GenAI Metadata Generation.                                                                             |
+| `autoRegisterWithVAMS`   | `true`  | Automatically register the pipeline and workflow during CDK deployment.                                                                                                                                                      |
+| `enableStepInput`        | `false` | Read STEP (`.step`, `.stp`) input; adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the image.                                                                                                              |
+| `batchTier.enabled`      | `false` | Continue a model the function cannot convert on an AWS Batch Fargate job (see [AWS Batch tier](#aws-batch-tier)). Needs `app.useGlobalVpc.enabled`; a configuration error names the key when it is off. Not enabled for you. |
+| `batchTier.maxMemoryGiB` | `120`   | Memory of the largest job: `30`, `60` or `120`. Any other value is a configuration error.                                                                                                                                    |
 
 :::tip[Enabled by Default]
-Unlike most built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
+Unlike most built-in pipelines, the 3D Basic Conversion pipeline is enabled by default (`enabled: true`) because, with the Batch tier off, it is a lightweight Lambda-based pipeline that does not require a VPC or additional compute infrastructure.
 :::
 
 ## Input Parameters
@@ -202,9 +272,13 @@ The output file keeps the input's file name with the new extension, in the input
 
 ## Prerequisites
 
-### No VPC Required
+### No VPC Required (Batch tier off)
 
-This pipeline runs as a containerized Lambda function and does not require a VPC. It operates independently of the global VPC setting, although it will be placed in the VPC if `app.useGlobalVpc.useForAllLambdas` is set to `true`.
+With the Batch tier off, this pipeline runs as a containerized Lambda function and does not require a VPC. It operates independently of the global VPC setting, although it will be placed in the VPC if `app.useGlobalVpc.useForAllLambdas` is set to `true`.
+
+### VPC Required (Batch tier on)
+
+`batchTier.enabled` requires `app.useGlobalVpc.enabled`. The Batch compute runs in the isolated pipeline subnets, which gain the AWS Batch and Amazon ECR interface endpoints; the converter and launcher functions stay outside the VPC unless `useForAllLambdas` is set.
 
 ### Container Image
 
@@ -230,12 +304,23 @@ The installed versions are those in the container's lock file, from which its `r
 | Step Functions State Machine  | AWS Step Functions | Workflow orchestration    |
 | Lambda Function (vamsExecute) | AWS Lambda         | Pipeline coordination     |
 
+With the Batch tier on, the deployment also holds:
+
+| Resource                                                                                   | Service                | Purpose                                                              |
+| ------------------------------------------------------------------------------------------ | ---------------------- | -------------------------------------------------------------------- |
+| Fargate compute environment (128 vCPU ceiling), job queue, job definition                  | AWS Batch              | Large conversions                                                    |
+| Batch target of the container image                                                        | Amazon ECR             | The same conversion code, run as a non-root job                      |
+| State machine                                                                              | AWS Step Functions     | Lambda attempt, tier selection, Batch job, report to the workflow    |
+| Launcher, `openPipeline`, `selectJobSize`, `constructPipeline` and `pipelineEnd` functions | AWS Lambda             | Start the run, pick the job size, report the result                  |
+| Job role and execution role                                                                | AWS IAM                | Least-privilege access of the job; image pull and log write          |
+| Container log group and state machine log group                                            | Amazon CloudWatch Logs | Logs of the job and the run (KMS-encrypted when a key is configured) |
+
 ## Limitations
 
 | Constraint        | Details                                                                                                                                                                                  |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Maximum file size | Bounded by function memory, not by disk -- see [Input Size Limits](#input-size-limits)                                                                                                   |
-| Execution timeout | 15 minutes (Lambda maximum)                                                                                                                                                              |
+| Execution timeout | 15 minutes on the function (Lambda maximum); with the Batch tier, a run the function cannot finish continues on a job of up to 4 hours                                                   |
 | Geometry only     | Converts mesh and point geometry, transforms, and the base color material; complex materials, animations, skinning, or scene hierarchies may not transfer between all formats            |
 | Textures          | The base color texture is carried into OBJ, GLTF, GLB, and USD output; a PLY output keeps texture coordinates without the image. Other texture maps may not transfer, and none are baked |
 | Referenced files  | Must be in the input's own asset, at relative paths -- see [Multi-File Models](#multi-file-models)                                                                                       |
@@ -253,6 +338,8 @@ trimesh loads the whole mesh into memory to export it, so the practical ceiling 
 :::
 
 ### Input Size Limits
+
+The limits below are those of the Lambda function. With the Batch tier on, an input over them continues on a job whose limits are in [Batch limits](#batch-limits).
 
 The function refuses an input that is too large before it downloads it, and the failed step reports the file, its size, the limit for its format and the output format, and the resource that sets the limit, for example `huge.ply is 900.0 MB, over the 217.5 MB limit for converting .ply to .usdc. The limit is set by the function memory. Reduce the model's size and run the conversion again. A conversion to another format may accept it.`
 
@@ -299,6 +386,14 @@ The conversions between STL, OBJ, PLY, GLTF, GLB, and XYZ keep the limits they h
 The function runs at 10,240 MB, the Lambda maximum, rather than the 5,308 MB of the other VAMS functions, so it can take the larger CAD and USD files; a run bills at that memory size for its duration (see [Costs](../overview/costs.md)). The factors were measured at 5,308 MB and checked again at 10,240 MB, where a conversion at its limit peaked at 16 to 69 percent of the function memory (STL to STL 618 MB: 69 percent; STL to USDA 412 MB: 47 percent; STEP to USDC 54.6 MB: 16 percent and 70 seconds) and every measured run finished in under 2 minutes, well inside the 15-minute timeout. A different function memory moves these limits in proportion. The worker's address space is capped at the function memory plus 2 GiB, so a model that still grows past the size check fails with a message that the model needs more memory than the function has, and one that runs past the invocation's remaining time (less 90 seconds kept for the upload) is stopped with a message naming the time.
 
 Texture images are budgeted apart from these figures, by their decoded size. An image's memory follows its pixels, not its file size: a 12,000 x 12,000 PNG of one colour is under 1 MB on disk and needs 576 MB decoded. After the input and the files that carry geometry (GLTF buffers, OBJ material libraries) are counted at the factors above, the memory that remains is divided by 5, the peak memory measured per decoded RGBA byte of texture, and that many decoded bytes of texture images are fetched, so four 4096 x 4096 textures or one 12,000 x 12,000 texture fit even at 5,308 MB of function memory, and at 10,240 MB about twice as much does. A texture over what remains is skipped and the model converts without it. The run still succeeds, and its completion message says the model is incomplete and names each file left out and why, for example `Converted BoomBox.gltf, but 1 referenced file could not be included because of the function's size limits, so the converted model is incomplete: ...`. A GLTF buffer that does not fit fails the run.
+
+<a id="limits-no-memory-lifts"></a>
+
+Some file formats have limits of their own, which no function memory (and no Batch job size) raises. The run fails with a message naming the format's limit:
+
+-   A PLY input over 4 GiB is refused before it is downloaded, because 4 GiB is the largest PLY file the reader can address.
+-   A `.usda` output refuses a mesh with an array whose text would reach 2 GB (the text writer would drop the array without an error). The text size is not known before the file is written, so it is estimated from the array's length: a mesh of 50 million vertices or more is refused even when its numbers are short. Convert it to `.usdc` instead.
+-   A `.usdc` or `.usdz` output refuses a mesh with an array over about 2 GB of data (`0x7E000000` bytes), the largest block the binary format compresses.
 
 ### Run time
 

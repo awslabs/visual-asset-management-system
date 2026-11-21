@@ -894,6 +894,14 @@ const VPC_REQUIRING_FEATURES: VpcRequiringFeature[] = [
         appliesWhen: (c) => !!g(c, "app.pipelines.useMediaPreviews.enabled"),
     },
     {
+        id: "vpc-required-conversion-3dbasic-batch-tier",
+        label: "pipelines.useConversion3dBasic.batchTier",
+        fieldPaths: ["app.pipelines.useConversion3dBasic.batchTier.enabled"],
+        appliesWhen: (c) =>
+            !!g(c, "app.pipelines.useConversion3dBasic.enabled") &&
+            !!g(c, "app.pipelines.useConversion3dBasic.batchTier.enabled"),
+    },
+    {
         id: "vpc-required-preview-3d-thumbnail",
         label: "pipelines.usePreview3dThumbnail",
         fieldPaths: ["app.pipelines.usePreview3dThumbnail.enabled"],
@@ -1132,6 +1140,29 @@ const CORE_RULES: Rule[] = [
         },
         message:
             "app.pipelines.useConversion3dBasic.enableStepInput must be true or false (a JSON boolean). Leave it out to keep STEP input off.",
+    },
+    // ----- 3D basic conversion Batch tier (config.ts resolveConversion3dBasicBatchTier) -----
+    {
+        id: "conversion-3dbasic-batch-tier-enabled-boolean",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useConversion3dBasic.batchTier.enabled"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useConversion3dBasic.batchTier.enabled");
+            return value !== undefined && value !== null && typeof value !== "boolean";
+        },
+        message:
+            "app.pipelines.useConversion3dBasic.batchTier.enabled must be true or false (a JSON boolean). Leave it out to keep the Batch tier off.",
+    },
+    {
+        id: "conversion-3dbasic-batch-tier-max-memory",
+        severity: "error",
+        fieldPaths: ["app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB"],
+        appliesWhen: (c) => {
+            const value = g(c, "app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB");
+            return value !== undefined && value !== null && ![30, 60, 120].includes(value);
+        },
+        message:
+            "app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB must be one of 30, 60, 120 (the memory in GiB of the largest job the tier may start).",
     },
     // ----- Audit logging (config.ts resolveAuditLoggingConfig: absent = true, else a boolean) -----
     {

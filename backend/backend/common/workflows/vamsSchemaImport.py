@@ -161,7 +161,8 @@ def apply_execution_config_overrides(execution_config, execution_config_override
     always did.
 
     ``execution_config_overrides`` keys: waitForCallback ("Enabled"|"Disabled"), taskTimeout,
-    taskHeartbeatTimeout (seconds, as a string or a number; "" clears the heartbeat), lambdaName (the
+    taskHeartbeatTimeout (seconds, as a string or a number; "" clears the value: no heartbeat, and for
+    taskTimeout the platform default of 24 hours), lambdaName (the
     Lambda invoke target; Lambda execution type only). A key outside that set, a wrong type or an
     unknown waitForCallback value raises VamsSchemaError before any cross-call. A value of None is
     treated as absent. The pipeline service validates the resulting config again when it saves it."""
