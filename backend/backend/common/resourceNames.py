@@ -315,9 +315,12 @@ def _log_backoff_window_once():
 def _answer_without_sweep(key: ResourceParamKey):
     """The answer the module state gives without reading SSM: a fresh cached name, KeyError for a
     recorded miss and, inside the back-off window, a stale cached name or
-    ResourceNameUnavailableError. _NEEDS_SWEEP when only a sweep can answer."""
-    if key.param_key in _cache and (time.time() - _cache_fetched_at) < CACHE_TTL_SECONDS:
-        return _cache[key.param_key]
+    ResourceNameUnavailableError. _NEEDS_SWEEP when only a sweep can answer.
+
+    Reads the cache map once, since a sweep in another thread may replace it meanwhile."""
+    cache = _cache
+    if key.param_key in cache and (time.time() - _cache_fetched_at) < CACHE_TTL_SECONDS:
+        return cache[key.param_key]
 
     recorded_at = _missing_keys.get(key.param_key)
     if recorded_at is not None and (time.time() - recorded_at) < MISSING_KEY_TTL_SECONDS:
@@ -326,8 +329,8 @@ def _answer_without_sweep(key: ResourceParamKey):
 
     if _in_backoff_window():
         _log_backoff_window_once()
-        if key.param_key in _cache:
-            return _cache[key.param_key]
+        if key.param_key in cache:
+            return cache[key.param_key]
         raise ResourceNameUnavailableError(
             f"Resource name not resolved while SSM sweeps back off after a failure: {key.param_key}")
 

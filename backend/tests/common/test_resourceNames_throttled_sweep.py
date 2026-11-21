@@ -25,6 +25,7 @@ paginator. Time is a fake clock driven through the module's ``_monotonic`` and `
 import json
 import os
 import threading
+import time
 
 import pytest
 from botocore.exceptions import ClientError, ReadTimeoutError
@@ -511,6 +512,16 @@ class TestWarmPath:
 
         assert fake.tokens == []
         assert lock.acquired == 0
+
+    def test_a_cache_map_replaced_between_the_check_and_the_read_still_answers(self, rn):
+        class ReplacedOnCheck(dict):
+            def __contains__(self, key):
+                rn._cache = {}  # a sweep in another thread replaces the map between the two steps
+                return dict.__contains__(self, key)
+
+        rn._cache = ReplacedOnCheck({"dynamoTables/assetStorage": "asset-table"})
+        rn._cache_fetched_at = time.time()
+        assert rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "asset-table"
 
 
 @pytest.mark.unit
