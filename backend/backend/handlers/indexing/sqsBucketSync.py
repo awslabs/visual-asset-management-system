@@ -47,7 +47,12 @@ from common.assetHistory import (
     write_asset_history_record,
 )
 from common.batchItemFailures import all_batch_item_failures, with_batch_item_failures
-from common.fileAttribution import RESOLVED_BY_FAST_PATH, RESOLVED_BY_LOCATION_INDEX, VAMS_BINDING_FIELD
+from common.fileAttribution import (
+    RESOLVED_BY_FAST_PATH,
+    RESOLVED_BY_IMPORT,
+    RESOLVED_BY_LOCATION_INDEX,
+    VAMS_BINDING_FIELD,
+)
 from common.assetLocations import (
     RESOLVED_AMBIGUOUS,
     RESOLVED_FOUND,
@@ -108,6 +113,8 @@ try:
     # The deployment's queue for records bucket sync cannot attribute by rule (two live assets on
     # one location). Optional: without it a rejected record is only logged.
     rejected_queue_url = os.environ.get("BUCKET_SYNC_REJECTED_QUEUE_URL", "")
+    # This function's own created-events queue, to which it sends the objects of an imported folder.
+    created_queue_url = os.environ.get("BUCKET_SYNC_CREATED_QUEUE_URL", "")
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -1755,6 +1762,192 @@ def write_file_version_history(database_id, asset_id, relative_file_path, versio
         logger.exception(f"Failed writing file version history for {asset_id}/{relative_file_path}: {e}")
 
 
+#######################
+# Folder import
+#######################
+
+# Files already in a folder when it becomes an asset's location (an `init` marker written into a
+# first-level folder) get no S3 event of their own. Bucket sync lists the asset's objects and sends
+# them to its own created-events queue as ObjectCreated records marked `vamsImport` (the importing
+# asset), IMPORT_RECORDS_PER_MESSAGE to a message, in the SNS notification shape the queue receives.
+# Each is processed like an event for that asset: tags, a ledger row and the file-indexer topic;
+# a version the ledger already has is skipped. A listing that runs out of time sends an
+# `vamsImportRequest` message with its markers, which the next invocation continues.
+#
+# Lambda recursive-loop detection counts the hops: the import fans out from one invocation (a page
+# message starts no further message), so a chain is two invocations long, plus one per continuation.
+IMPORT_RECORD_FIELD = "vamsImport"
+IMPORT_REQUEST_FIELD = "vamsImportRequest"
+IMPORT_RECORDS_PER_MESSAGE = 200
+IMPORT_LIST_PAGE_SIZE = 1000
+IMPORT_LIST_TIME_RESERVE_MS = 120_000
+# Imported files were already in the bucket, so they reach search, semantic search, compliance and the
+# add-ons but start no fileUpload workflow (no asset.file.uploaded event). True publishes them too.
+IMPORTED_FILES_START_UPLOAD_WORKFLOWS = False
+
+# The remaining time of the invocation being served, when its context reports one.
+_time_left_ms = None
+
+
+def _remaining_ms() -> Optional[int]:
+    try:
+        value = _time_left_ms() if _time_left_ms else None
+    except Exception:
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def import_owner_of(database_id: str, asset_id: str, bucket_id: str) -> Dict[str, str]:
+    return {"databaseId": database_id, "assetId": asset_id, "bucketId": bucket_id}
+
+
+def import_record(bucket_name: str, entry: Dict, owner: Dict[str, str]) -> Dict:
+    """An ObjectCreated record for one listed object version, keyed as S3 notifications encode keys."""
+    last_modified = entry.get("LastModified")
+    return {
+        "eventVersion": "2.1",
+        "eventSource": "aws:s3",
+        "awsRegion": os.environ.get("AWS_REGION", ""),
+        "eventTime": last_modified.isoformat() if hasattr(last_modified, "isoformat") else str(last_modified or ""),
+        "eventName": "ObjectCreated:Put",
+        "s3": {
+            "s3SchemaVersion": "1.0",
+            "bucket": {"name": bucket_name},
+            "object": {"key": urllib.parse.quote_plus(entry["Key"], safe="/"), "size": entry.get("Size"),
+                       "eTag": str(entry.get("ETag") or "").strip('"'),
+                       "versionId": entry.get("VersionId") or "null"},
+        },
+        IMPORT_RECORD_FIELD: dict(owner),
+    }
+
+
+def _send_to_own_queue(body: Dict) -> None:
+    if not created_queue_url:
+        raise RuntimeError("BUCKET_SYNC_CREATED_QUEUE_URL is not set; the folder cannot be imported")
+    sqs_client.send_message(QueueUrl=created_queue_url, MessageBody=json.dumps(body))
+
+
+def _send_import_page(records: List[Dict]) -> None:
+    _send_to_own_queue({"Type": "Notification", "Message": json.dumps({"Records": records})})
+
+
+def import_folder(bucket_name: str, location: str, owner: Dict[str, str], prefix: str,
+                  key_marker: Optional[str] = None, version_id_marker: Optional[str] = None) -> int:
+    """Queue the current version of every object `location` holds (folder markers and VAMS system
+    folders left out) for processing as `owner`'s files. Returns the number queued."""
+    kwargs = {"Bucket": bucket_name, "Prefix": location, "MaxKeys": IMPORT_LIST_PAGE_SIZE}
+    if key_marker:
+        kwargs["KeyMarker"] = key_marker
+        if version_id_marker:
+            kwargs["VersionIdMarker"] = version_id_marker
+    queued, page = 0, []
+    while True:
+        response = s3_client.list_object_versions(**kwargs)
+        for entry in response.get("Versions", []):
+            key = entry.get("Key", "")
+            if (not entry.get("IsLatest") or key.endswith("/") or not contains(location, key)
+                    or _is_system_key(key, prefix)):
+                continue
+            page.append(import_record(bucket_name, entry, owner))
+            if len(page) >= IMPORT_RECORDS_PER_MESSAGE:
+                _send_import_page(page)
+                queued, page = queued + len(page), []
+        if response.get("IsTruncated") is not True:
+            break
+        kwargs["KeyMarker"] = response.get("NextKeyMarker")
+        kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker")
+        remaining = _remaining_ms()
+        if remaining is not None and remaining < IMPORT_LIST_TIME_RESERVE_MS:
+            if page:
+                _send_import_page(page)
+                queued, page = queued + len(page), []
+            _send_to_own_queue({IMPORT_REQUEST_FIELD: {
+                "bucket": bucket_name, "location": location, "owner": owner,
+                "keyMarker": kwargs["KeyMarker"], "versionIdMarker": kwargs.get("VersionIdMarker")}})
+            logger.info(f"Import of {location} continues in another invocation after {queued} files")
+            return queued
+    if page:
+        _send_import_page(page)
+        queued += len(page)
+    logger.info(f"Queued {queued} existing files of {location} in bucket {bucket_name} for import")
+    return queued
+
+
+def split_import_requests(event) -> Tuple[Dict, List[Tuple[str, Dict]]]:
+    """The event without its import-request messages, and each request with its message id."""
+    records = (event or {}).get("Records") if isinstance(event, dict) else None
+    if not records or not isinstance(records[0], dict) or records[0].get("eventSource") != "aws:sqs":
+        return event, []
+    kept, requests = [], []
+    for sqs_record in records:
+        try:
+            body = json.loads(sqs_record.get("body") or "")
+        except (TypeError, ValueError):
+            body = None
+        if isinstance(body, dict) and isinstance(body.get(IMPORT_REQUEST_FIELD), dict):
+            requests.append((sqs_record.get("messageId", ""), body[IMPORT_REQUEST_FIELD]))
+        else:
+            kept.append(sqs_record)
+    return {**event, "Records": kept}, requests
+
+
+def continue_import(request: Dict) -> int:
+    owner = request.get("owner") or {}
+    return import_folder(request["bucket"], request["location"], owner, normalize_base_prefix(asset_bucket_prefix),
+                         key_marker=request.get("keyMarker"), version_id_marker=request.get("versionIdMarker"))
+
+
+def version_already_synced(database_id: str, asset_id: str, relative_path: str, version_id: str) -> bool:
+    """Whether the sync ledger already has a row for this file version."""
+    if not asset_file_version_history_table:
+        return False
+    key = {"databaseId:assetId:filePath": f"{database_id}:{asset_id}:{normalize_history_file_path(relative_path)}",
+           "versionId": version_id or "null"}
+    return "Item" in asset_file_version_history_table.get_item(Key=key, ProjectionExpression="versionId")
+
+
+def process_imported_record(record: Dict, bucket_name: str, object_key: str, prefix: str, owner: Dict,
+                            binding_out: Optional[Dict]) -> Tuple[bool, bool, str]:
+    """An object of an imported folder: attributed to the importing asset when its stored location
+    holds the key, tagged and recorded in the ledger, and forwarded to the indexers; skipped when the
+    ledger already has its version, the object is gone or the asset no longer holds it."""
+    database_id_value = owner.get("databaseId", "")
+    asset_id = owner.get("assetId", "")
+    row = dynamodb.Table(asset_table_name).get_item(
+        Key={"databaseId": database_id_value, "assetId": asset_id}, ConsistentRead=True).get("Item")
+    if not row:
+        return True, False, f"Imported asset {asset_id} no longer exists; skipped {object_key}"
+    bucket_id = str(row.get("bucketId") or owner.get("bucketId") or "")
+    location = asset_location_of(row, normalize_base_prefix(prefix), asset_id)
+    relative_path = relative_path_in(location, object_key)
+    if relative_path is None:
+        return True, False, f"Asset {asset_id} does not hold {object_key}; not imported"
+    event_version_id = (record["s3"].get("object") or {}).get("versionId")
+    head_kwargs = {"Bucket": bucket_name, "Key": object_key}
+    if event_version_id and event_version_id != "null":
+        head_kwargs["VersionId"] = event_version_id
+    try:
+        head = s3_client.head_object(**head_kwargs)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NoSuchVersion", "405"):
+            return True, False, f"Imported object {object_key} no longer exists"
+        raise
+    version_id = head.get("VersionId") or event_version_id or "null"
+    if version_already_synced(database_id_value, asset_id, relative_path, version_id):
+        return True, False, f"Version {version_id} of {object_key} is already synced"
+    metadata = head.get("Metadata", {}) or {}
+    tags = tag_version(bucket_id, bucket_name, object_key, version_id, database_id_value, asset_id)
+    last_modified = head.get("LastModified")
+    write_file_version_history(database_id_value, asset_id, relative_path, version_id, metadata,
+                               last_modified.isoformat() if last_modified else "", etag=head.get("ETag"),
+                               size=head.get("ContentLength"), resolved_by=RESOLVED_BY_IMPORT, vams_tags=tags)
+    if binding_out is not None:
+        binding_out.update(build_binding(database_id_value, asset_id, bucket_id, relative_path, RESOLVED_BY_IMPORT))
+    _log_sync("fileSync", "imported", database_id=database_id_value, asset_id=asset_id, file_path=relative_path,
+              bytes=head.get("ContentLength"))
+    return True, True, f"Imported {object_key}"
+
+
 def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                       receive_count: Optional[int] = None) -> Tuple[bool, bool, str]:
     """
@@ -1861,6 +2054,11 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         if _is_system_key(object_key, prefix):
             logger.info(f"Key {object_key} contains a reserved VAMS folder segment, skipping")
             return False, False, f"Key {object_key} contains a reserved VAMS folder segment"
+
+        # 1.c' An object of an imported folder belongs to the asset that imported it.
+        import_owner = record.get(IMPORT_RECORD_FIELD)
+        if isinstance(import_owner, dict):
+            return process_imported_record(record, bucket_name, object_key, prefix, import_owner, binding_out)
 
         # 1.d The first folder is an asset id only for the fast path and for auto-create. A file in
         # any other stored location is found through the location index whatever its first folder is.
@@ -2032,9 +2230,13 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
             if not delete_result:
                 logger.error(f"Failed to delete init object {object_key}")
                 return False, False, f"Failed to delete init object {object_key}"
-            
-            # Processed successfully but skip indexing
-            return True, False, f"Deleted init object {object_key}"
+
+            # The marker imports its folder: the files already there get no event of their own, so
+            # they are typed and queued for import here. The marker itself is not indexed.
+            update_asset_type(owner_bucket_id, owner_asset_id, bucket_name, asset_location, asset_data=asset_data)
+            queued = import_folder(bucket_name, asset_location,
+                                   import_owner_of(database_id_to_use, owner_asset_id, owner_bucket_id), prefix)
+            return True, False, f"Deleted init object {object_key}; queued {queued} existing files"
         
         # 4. Update asset type from the files at the asset's stored location. The object itself is
         # never rewritten: a directly written file keeps its version, ETag, LastModified, headers,
@@ -2436,6 +2638,19 @@ def lambda_handler_created(event, context):
 
     failures = []
     redrives = []
+    global _time_left_ms
+    _time_left_ms = getattr(context, "get_remaining_time_in_millis", None)
+
+    # Continuations of a folder import listing carry no S3 records.
+    event, import_requests = split_import_requests(event)
+    for message_id, request in import_requests:
+        try:
+            continue_import(request)
+        except Exception as e:
+            logger.exception(f"Import listing could not continue: {e}")
+            failures.append({"itemIdentifier": message_id})
+    if not event.get("Records"):
+        return with_batch_item_failures({}, event, failures)
 
     try:
         # Parse the event to handle different sources
@@ -2464,15 +2679,18 @@ def lambda_handler_created(event, context):
                     if publish_to_file_indexer_sns(filtered_event):
                         # Publish to the orchestration EventBridge bus for the fileUpload trigger
                         # dispatcher. Pass the flat S3 records so a clean detail is published.
-                        publish_to_orchestration_bus([with_binding(r, bindings) for r in successful_records])
+                        triggering = [with_binding(r, bindings) for r in successful_records
+                                      if IMPORTED_FILES_START_UPLOAD_WORKFLOWS or not r.get(IMPORT_RECORD_FIELD)]
+                        if triggering:
+                            publish_to_orchestration_bus(triggering)
                     else:
                         # The indexers never saw these records, so their messages are redriven.
                         # The trigger is published by the delivery that reaches the topic, so a
                         # file fires its fileUpload trigger once rather than once per delivery.
-                        failures = all_batch_item_failures(filtered_event)
+                        failures = failures + all_batch_item_failures(filtered_event)
                 else:
                     logger.error("Indexable records could not be matched to their messages; reporting the batch for redrive")
-                    failures = all_batch_item_failures(event)
+                    failures = failures + all_batch_item_failures(event)
             else:
                 logger.info("No records to publish, skipping file indexer SNS publish")
         else:
@@ -2480,7 +2698,7 @@ def lambda_handler_created(event, context):
     except Exception as e:
         logger.exception(f"Unhandled error in lambda_handler_created: {e}")
         # Which records reached the indexers is unknown, so every message is redriven.
-        failures = all_batch_item_failures(event)
+        failures = failures + all_batch_item_failures(event)
 
     return with_batch_item_failures({}, event, merge_failures(failures, redrive_failures(event, redrives)))
 

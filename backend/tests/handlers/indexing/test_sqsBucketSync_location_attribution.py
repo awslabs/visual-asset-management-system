@@ -175,7 +175,8 @@ class TestNormalAssetParity:
     def test_an_init_marker_in_a_first_level_folder_is_still_deleted(self):
         m = _load()
         _wire(m, live=_row())
-        assert m.process_s3_record(_record("a1/init"), binding_out={}) == (True, False, "Deleted init object a1/init")
+        assert m.process_s3_record(_record("a1/init"), binding_out={}) == (
+            True, False, "Deleted init object a1/init; queued 0 existing files")
         assert m.delete_s3_object.called
 
 
@@ -243,7 +244,8 @@ class TestCustomRootLocation:
         m = _load()
         archived = _entry(database_id="db1#deleted", asset_id="a1", location="a1/")
         _wire(m, resolve=[NOT_FOUND, _found(archived)], ready=True)
-        assert m.process_s3_record(_record("a1/init"), binding_out={}) == (True, False, "Deleted init object a1/init")
+        assert m.process_s3_record(_record("a1/init"), binding_out={}) == (
+            True, False, "Deleted init object a1/init; queued 0 existing files")
         assert m.restore_archived_asset.called
         assert m.delete_s3_object.called
 

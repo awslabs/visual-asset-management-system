@@ -3497,6 +3497,13 @@ export function storageResourcesBuilder(
         }
 
         onS3ObjectCreatedQueue.grantConsumeMessages(sqsBucketSyncFunctionCreated);
+        // An imported folder's existing objects are sent to this same queue, a page per message, and
+        // processed like the S3 events it carries (sqsBucketSync.import_folder). Its only send grant.
+        onS3ObjectCreatedQueue.grantSendMessages(sqsBucketSyncFunctionCreated);
+        sqsBucketSyncFunctionCreated.addEnvironment(
+            "BUCKET_SYNC_CREATED_QUEUE_URL",
+            onS3ObjectCreatedQueue.queueUrl
+        );
 
         // Setup event source mapping with GovCloud support
         if (config.app.govCloud.enabled) {

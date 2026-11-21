@@ -56,6 +56,8 @@ RESOLVED_BY_LOCATION_INDEX = "locationIndex"
 RESOLVED_BY_BINDING = "binding"
 RESOLVED_BY_STAMP = "stamp"
 RESOLVED_BY_FIRST_FOLDER = "firstFolder"
+# Bucket sync: an object listed when its folder was imported, attributed to the importing asset.
+RESOLVED_BY_IMPORT = "import"
 
 ATTRIBUTED = "attributed"
 NOT_ATTRIBUTED = "notAttributed"

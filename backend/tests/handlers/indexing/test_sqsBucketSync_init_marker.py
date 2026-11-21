@@ -198,16 +198,19 @@ class TestIsInitMarker:
 
 @pytest.mark.unit
 class TestMarkerImportOnCreatedPath:
-    """A marker creates, restores or finds its folder's asset and is then deleted, and nothing else
-    runs for it: no stamp, no asset-type update, no history row, nothing forwarded or published."""
+    """A marker creates, restores or finds its folder's asset and is then deleted. The marker itself is
+    not tagged, recorded, forwarded or published; the asset's type is set from the files already in
+    its folder, which are queued for import (test_sqsBucketSync_folder_import.py)."""
 
     def _assert_marker_only_deleted(self, m, key, result):
         m.delete_s3_object.assert_called_once_with(_BUCKET, key, True)
         m.tag_version.assert_not_called()
-        m.update_asset_type.assert_not_called()
+        m.update_asset_type.assert_called_once()
+        assert m.update_asset_type.call_args.args[1] == "a1"
         m.write_file_version_history.assert_not_called()
         m.s3_client.head_object.assert_not_called()
-        assert result == (True, False, f"Deleted init object {key}")
+        assert result[:2] == (True, False)
+        assert result[2].startswith(f"Deleted init object {key}; queued ")
 
     @pytest.mark.parametrize("key", MARKER_KEYS)
     def test_new_folder_creates_asset_and_deletes_marker(self, key):
