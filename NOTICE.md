@@ -227,9 +227,13 @@ This software includes third party software subject to the following copyrights:
 | libE57Format    | [3.3.0](https://github.com/asmaloney/libE57Format/releases/tag/v3.3.0) (vendored in PDAL's E57 plugin)                                                    | POTREE VIEWER                                                                      | BSL-1.0          |
 | Xerces-C++      | [3.3.0](https://xerces.apache.org/xerces-c/) (PDAL E57 plugin dependency)                                                                                 | POTREE VIEWER                                                                      | Apache-2.0       |
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                                                                      | BSD-2-Clause     |
+| Mambaforge      | [24.9.2-0](https://github.com/conda-forge/miniforge-images) (`condaforge/mambaforge` base image of the PDAL build stage)                                  | POTREE VIEWER                                                                      | BSD-3-Clause     |
+| Miniforge3      | [26.5.3-0](https://github.com/conda-forge/miniforge-images) (`condaforge/miniforge3` base image of the PDAL runtime stage)                                | POTREE VIEWER                                                                      | BSD-3-Clause     |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                                                                      | MIT              |
 | FFmpeg          | Ubuntu `ffmpeg` package (installed at image build time, not version-pinned)                                                                               | NVIDIA COSMOS PREDICT, COSMOS REASON, COSMOS TRANSFER, COSMOS 3, GR00T FINE-TUNING | GPL-2.0-or-later |
 | FFmpeg          | Debian trixie `ffmpeg` package (7.1.x, installed at build time; 7:7.1.5-0+deb13u1 in the reference build)                                                 | VIDEO SOP/BOM EXTRACTION                                                           | GPL-2.0-or-later |
+
+The Mambaforge and Miniforge3 base images also carry the conda packages their installers add, each under its own license (recorded as SPDX identifiers in `/opt/conda/conda-meta/<package>.json`). Both images are built on Ubuntu, and their Ubuntu base layers carry the OS packages' own licenses.
 
 ### Preview 3D Thumbnail Pipeline
 
@@ -779,6 +783,17 @@ The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-l
 **HuggingFace Model Access**
 
 The model weights for each enabled model are downloaded from HuggingFace using the configured access token. Accept each model's license on HuggingFace before deployment.
+
+**Image to 3D Image Build Components**
+
+These are built or installed into the Image to 3D container images in addition to the components above.
+
+| Name                   | Version | License                                                     | Purpose                                                                   |
+| :--------------------- | :------ | :---------------------------------------------------------- | :------------------------------------------------------------------------ |
+| CuMesh                 | 12289e1 | MIT                                                         | CUDA mesh processing extension built from source into the TRELLIS.2 image |
+| FlexGEMM               | 6dd94a8 | MIT                                                         | Sparse convolution extension built from source into the TRELLIS.2 image   |
+| opencv-python-headless | latest  | MIT (packaging); OpenCV Apache-2.0; bundled FFmpeg LGPL-2.1 | Image I/O in the TRELLIS.2 and Blender agent (`blenderagent`) images      |
+| xformers               | 0.0.34  | BSD-3-Clause                                                | Attention backend of the Stable3DGen image                                |
 
 ### EDH Workstations Add-on
 

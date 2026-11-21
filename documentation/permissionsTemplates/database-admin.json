@@ -136,11 +136,6 @@
                 {
                     "field": "route__path",
                     "operator": "starts_with",
-                    "value": "/amplify-config"
-                },
-                {
-                    "field": "route__path",
-                    "operator": "starts_with",
                     "value": "/auth/routes"
                 },
                 {
@@ -167,11 +162,6 @@
                     "field": "route__path",
                     "operator": "starts_with",
                     "value": "/database"
-                },
-                {
-                    "field": "route__path",
-                    "operator": "starts_with",
-                    "value": "/metadata"
                 },
                 {
                     "field": "route__path",

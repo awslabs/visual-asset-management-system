@@ -167,7 +167,8 @@ The Veerum 3D Viewer provides advanced visualization for point cloud and 3D tile
 1. Contact [Veerum](https://veerum.com/) to obtain a license.
 2. Enable the viewer in `web/src/visualizerPlugin/config/addonViewerConfig.json` (the add-on viewer configuration) by setting `"enabled": true` on the `veerum-viewer` entry.
 3. The Veerum Viewer requires the Potree Auto-Processing pipeline to be enabled for point cloud file loading.
-4. Rebuild and redeploy the web application.
+4. For files in an [external S3 bucket](../deployment/external-s3-setup.md#step-2-configure-cors), the Veerum Viewer reads files through the VAMS streaming route, which redirects to Amazon S3 with `Origin: null`. Add `null` to the bucket's CORS `AllowedOrigins` next to the VAMS web origin (prefer `null` over `*`); see the exposure notes in that section. The Cesium 3D Tileset Viewer does not need this while its presigned-URL request hook is active, which is normal; if the hook cannot be installed it falls back to the streaming route and the bucket then needs `null` as well.
+5. Rebuild and redeploy the web application.
 
 ---
 

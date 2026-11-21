@@ -333,7 +333,7 @@ vamscli edh workstation connect SESSION_ID
 
 -   `edh workstation connect`, or `edh workstation start` of a stopped workstation, fails with HTTP 409 and `The workstation's remote display is not responding; its disk and data are kept. Wait a few minutes, or stop it, then start it again, to reconnect.`
 -   With `--json-output`, the error carries `error_type` `EdhDesktopErrorError` and `"code": "DESKTOP_ERROR"`
--   `edh workstation get` shows the workstation's state (`ACTIVE`, `STOPPED` or `CREATING`), `Connectable: False` and the same sentence on a `Connection` line
+-   `edh workstation get` shows `State:` `ACTIVE`, `STOPPED` or `STARTING` (a started workstation held in `CREATING`; `--json-output` keeps `state` `CREATING`), `Connectable: False` and the same sentence on a `Connection` line
 
 **Cause:**
 

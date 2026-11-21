@@ -151,7 +151,7 @@ Standard working access within a specific database. Can view all data, create an
 
 -   **Archive vs. permanent delete (two-tier enforcement)** -- The asset entity constraint grants DELETE at Tier 2 because both archive and permanent delete require DELETE on the asset entity. The differentiation happens at Tier 1 API routes: the DELETE API constraint uses the `contains` operator to only match paths containing `archiveAsset` or `archiveFile`, blocking permanent delete paths.
 -   **No archived records** -- The `database` and `asset` constraints name only `{DATABASE_ID}`, so the role does not reach the database's archived assets or its archived database record (see [Permissions Model: Archived records](../concepts/permissions-model.md#archived-records)). Its compliance constraints name only `{DATABASE_ID}` as well, so the compliance records of archived assets are withheld from it in the same way. The `unarchive deny` constraint also withholds `PUT .../unarchiveAsset` at Tier 1. It names the database because a deny applies across all of a user's roles: an unscoped deny would also block unarchiving in a database where the same user holds an admin role. Archiving and unarchiving files (`archiveFile`, `unarchiveFile`) and asset versions (`assetversions/{id}/archive`, `.../unarchive`) stay available.
--   **Everyday execution vs. administrative execution routes** -- The Database User can execute workflows, list executions, view execution details, page an execution's detail metadata (`/workflows/executions/{executionId}/details/metadata`), abort executions, and re-run executions. Two execution routes are withheld and reserved for administrators: the detailed execution **logs** route (`/workflows/executions/{executionId}/logs`, which exposes full CloudWatch logs) and the execution **permanent delete** route (`/workflows/executions/{executionId}/permanent`). The template grants the broad `/workflows` prefix on POST (execute + re-run) and on DELETE `/workflows/executions` (abort), then layers an explicit `deny` API constraint on paths ending in `/logs` (GET) and `/permanent` (DELETE) — a `deny` overrides the broad `allow`, so those two routes remain admin-only.
+-   **Everyday execution vs. administrative execution routes** -- The Database User can execute workflows, list executions, view execution details, page an execution's detail metadata and files (`/workflows/executions/{executionId}/details/metadata`, `.../details/files`), read its full results (`.../details/results`), abort executions, and re-run executions. Two execution routes are withheld and reserved for administrators: the detailed execution **logs** route (`/workflows/executions/{executionId}/logs`, which exposes full CloudWatch logs) and the execution **permanent delete** route (`/workflows/executions/{executionId}/permanent`). The template grants the broad `/workflows` prefix on POST (execute + re-run) and on DELETE `/workflows/executions` (abort), then layers an explicit `deny` API constraint on paths ending in `/logs` (GET) and `/permanent` (DELETE) — a `deny` overrides the broad `allow`, so those two routes remain admin-only.
 -   **API route method separation** -- Unlike the admin (which uses a single API constraint with all methods), the user has four separate `allow` API constraints, one per HTTP method, each allowing a different route subset, plus the two `deny` constraints above.
 -   **Execute is a Tier-2 `GET`** -- The pipeline and workflow entity constraints grant `GET` only. Executing a workflow authorizes the workflow object with `GET` and each pipeline the workflow references with `GET`; the right to execute is granted at Tier 1 by POST on `/workflows`. Granting POST on a `pipeline` or `workflow` object would instead let the role create pipelines and workflows, which the Tier 1 route constraint already permits — so the entity constraint is what withholds creation.
 -   **Database metadata without database management** -- Creating, updating, deleting, and replacing database metadata authorize POST, PUT, and DELETE on the `database` object, so the database entity constraint grants all four actions. The API route constraints keep those actions on the metadata routes: POST matches `/database/` (not `POST /database`, which creates a database), PUT matches `/database/{DATABASE_ID}/` (not `PUT /database/{DATABASE_ID}`, which edits its details), and DELETE matches `/database/{DATABASE_ID}/metadata` exactly (not `DELETE /database/{DATABASE_ID}`, which deletes it).
@@ -325,7 +325,7 @@ Tag and tag type management scoped to a single database, combined with unconstra
 **Key constraints (6 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/auth/tags`, the web route for the Tags Management page
--   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/secure-config`, `/amplify-config`, `/auth/routes`, `/auth/loginProfile`, `/tags`, or `/tag-types` (one `criteriaOr` constraint)
+-   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/secure-config`, `/auth/routes`, `/auth/loginProfile`, `/tags`, or `/tag-types` (one `criteriaOr` constraint)
 -   `tag` -- Allow GET where `tagName contains .*`
 -   `tagType` -- Allow GET where `tagTypeName contains .*`
 -   `tag` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
@@ -340,7 +340,7 @@ Compliance management for one database: the database's schemas, read access to `
 **Key constraints (15 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases` (the compliance pages and the database compliance overview)
--   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
+-   `api` -- Allow GET, PUT, POST, and DELETE on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile` (one `criteriaOr` constraint)
 -   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. The exact match leaves every route below it (`/database/{databaseId}/...`) and `/buckets` ungranted
 -   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals {DATABASE_ID}`
 -   `complianceSchema` -- Allow GET where `databaseId equals GLOBAL`
@@ -361,7 +361,7 @@ Read-only compliance access: the database's and `GLOBAL` schemas, and the evalua
 **Key constraints (10 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
--   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`
+-   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile`
 -   `api` -- Allow POST on paths starting with `/auth/routes` or `/auth/loginProfile` (non-mutating)
 -   `api` -- Allow GET on the path that `equals` `/database`: the database list, from which the Databases page links to the database's compliance overview. As for the Compliance Admin, the exact match leaves every route below it and `/buckets` ungranted
 -   `complianceSchema` -- Allow GET where `databaseId equals {DATABASE_ID}`
@@ -380,7 +380,7 @@ Management of `GLOBAL` compliance schemas and read access to every database's co
 **Key constraints (13 constraints):**
 
 -   `web` -- Allow GET on paths starting with `/compliance` or `/databases`
--   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/amplify-config`, `/auth/routes`, or `/auth/loginProfile`, and POST on `/auth/routes` and `/auth/loginProfile`
+-   `api` -- Allow GET on paths starting with `/compliance`, `/secure-config`, `/auth/routes`, or `/auth/loginProfile`, and POST on `/auth/routes` and `/auth/loginProfile`
 -   `api` -- Allow POST, PUT, DELETE on paths starting with `/compliance/schemas`
 -   `api` -- Allow GET on the path that `equals` `/database`
 -   `complianceSchema` -- Allow GET, PUT, POST, DELETE where `databaseId equals GLOBAL`, and GET where `databaseId contains .*`

@@ -131,6 +131,45 @@ describe("Cesium tileset authorization", () => {
     });
 });
 
+describe("Cesium tile reads through presigned URLs (#1630)", () => {
+    it("wraps Cesium's request functions while mounted and restores them on unmount", async () => {
+        const loadWithXhr = jest.fn();
+        const createImage = jest.fn();
+        (window as any).Cesium.Resource._Implementations = { loadWithXhr, createImage };
+        const implementations = (window as any).Cesium.Resource._Implementations;
+
+        const { unmount } = render(<CesiumViewerComponent {...props} viewerMode="wide" />);
+        await waitFor(() => expect(implementations.loadWithXhr).not.toBe(loadWithXhr));
+        expect(implementations.createImage).not.toBe(createImage);
+
+        // A request for this asset's stream route is not sent to the original function.
+        const deferred = { resolve: jest.fn(), reject: jest.fn() };
+        implementations.loadWithXhr(
+            "https://api.example/api/database/db1/assets/asset1/download/stream/k.json",
+            "text",
+            "GET",
+            undefined,
+            { Authorization: "Bearer t" },
+            deferred
+        );
+        expect(loadWithXhr).not.toHaveBeenCalled();
+        // Any other URL is.
+        implementations.loadWithXhr(
+            "https://other.example/x",
+            "text",
+            "GET",
+            undefined,
+            {},
+            deferred
+        );
+        expect(loadWithXhr).toHaveBeenCalledTimes(1);
+
+        unmount();
+        expect(implementations.loadWithXhr).toBe(loadWithXhr);
+        expect(implementations.createImage).toBe(createImage);
+    });
+});
+
 describe("Cesium background swatches", () => {
     it("name each swatch and mark only the selected one pressed", async () => {
         render(<CesiumViewerComponent {...props} viewerMode="wide" />);

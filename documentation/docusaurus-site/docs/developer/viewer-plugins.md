@@ -343,13 +343,12 @@ To enable this viewer, set `app.webUi.allowUnsafeEvalFeatures` to `true` in the 
 
 ### Available Feature Flags
 
-| Flag               | Effect on Viewers                                                                                                                                                                              |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data and Miris viewers, plus the Online 3D Viewer `.3dm` and Three.js CAD formats (all require `unsafe-eval` in the CSP) |
-| `LOCATIONSERVICES` | Can be used to gate geospatial viewers                                                                                                                                                         |
-| `MIRIS_ADDON`      | Enables the Miris Spatial Streaming viewer, together with `ALLOWUNSAFEEVAL`                                                                                                                    |
-| `MIRIS_UPLOAD`     | Offers the Miris viewer's **Stream with Miris** button                                                                                                                                         |
-| `PHYSNA_ADDON`     | Enables the Physna viewer                                                                                                                                                                      |
+| Flag               | Effect on Viewers                                                                                                                                                                                     |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWUNSAFEEVAL`  | Enables the Needle USD, SuperSplat Editor, ThatOpen IFC BIM, Robotics Data and Miris viewers, plus the Online 3D Viewer `.3dm` and Three.js CAD formats (all require the `unsafe-eval` CSP directive) |
+| `LOCATIONSERVICES` | Enables the GeoTIFF Map Viewer; can also gate other geospatial viewers                                                                                                                                |
+| `MIRIS_ADDON`      | Enables the Miris Spatial Streaming viewer, together with `ALLOWUNSAFEEVAL`                                                                                                                           |
+| `MIRIS_UPLOAD`     | Offers the Miris viewer's **Stream with Miris** button                                                                                                                                                |
 
 ### Multiple Requirements
 

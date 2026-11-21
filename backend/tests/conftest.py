@@ -88,6 +88,9 @@ sys.modules['handlers.auth'].request_to_claims = lambda event: {"tokens": ["test
 # test_request_to_claims_authMethod.py pins the real module's values to these.
 sys.modules['handlers.auth'].AUTH_METHOD_JWT = "jwt"
 sys.modules['handlers.auth'].AUTH_METHOD_API_KEY = "apiKey"
+# The claims key request_to_claims sets when the custom claims check raised (pinned to the real
+# module's value in tests/handlers/auth/test_init.py).
+sys.modules['handlers.auth'].CLAIMS_CHECK_FAILED = "claimsCheckFailed"
 sys.modules['handlers.authz'] = MagicMock()
 sys.modules['handlers.authz'].CasbinEnforcer = MagicMock()
 sys.modules['common'] = MagicMock()

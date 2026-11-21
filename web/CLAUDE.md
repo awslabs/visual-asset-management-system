@@ -651,9 +651,10 @@ Backend API endpoints follow REST conventions:
 ```
 GET    /database/{databaseId}/assets              # List assets
 GET    /database/{databaseId}/assets/{assetId}     # Get single asset
-POST   /database/{databaseId}/assets               # Create asset
+POST   /assets                                      # Create asset
 PUT    /database/{databaseId}/assets/{assetId}      # Update asset
-DELETE /database/{databaseId}/assets/{assetId}      # Delete asset
+DELETE /database/{databaseId}/assets/{assetId}/archiveAsset  # Archive asset
+DELETE /database/{databaseId}/assets/{assetId}/deleteAsset   # Permanently delete asset
 POST   /database/{databaseId}/assets/{assetId}/download  # Download
 POST   /auth/routes                                 # Check allowed routes
 GET    /secure-config                               # Get runtime config
@@ -1129,7 +1130,7 @@ interface VAMSConfig {
 Configuration is loaded at startup in this order:
 
 1. `GET /api/amplify-config` --> Cached in appCache, configures Amplify v6
-2. `GET /api/secure-config` --> Additional config requiring auth
+2. `GET /secure-config` --> Additional config requiring auth
 3. Both are stored in `appCache.setItem("config", ...)` for runtime access
 
 When the cached config has no `featuresEnabled` (every sign-out clears it), `Auth.tsx` renders the deployment banner (`<GlobalHeader />`) and `<LoadingScreen />` instead of the app until secure-config has applied the feature switches, has given up after its last attempt, or has run past `SECURE_CONFIG_HOLD_MAX_MS` (10 seconds), because pages and the viewer registry read the switches once, when they mount.
