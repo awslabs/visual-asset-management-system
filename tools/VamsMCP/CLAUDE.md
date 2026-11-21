@@ -408,8 +408,9 @@ asymmetry other callers rely on):
     `mcp.server.fastmcp`; `mcp` 2.x renamed it to `MCPServer` in
     `mcp.server.mcpserver` and removed the old module. `server.py` imports it
     through a `try`/`except ImportError` alias (`McpServer`) — keep that shim and
-    the `mcp>=1.10.0,<3.0.0` pin, and test against both before widening it (CI installs the
-    newest release the pin allows; run the newest 1.x and the floor yourself,
+    the `mcp>=1.10.0,<3.0.0` pin, and test against both before widening it (CI tests the `mcp`
+    that `uv.lock` pins, with `uv sync --frozen`, so a newer release inside the pin is tested only
+    once the lock is moved to it; run the newest 1.x and the floor yourself,
     `pip install "mcp==1.10.0" "pydantic<2.12"`, when you
     touch `@mcp.tool(...)` arguments or return types). 1.10.0 is the oldest release with tool
     titles and structured output; 1.9.x cannot register these tools. mcp 1.10.0 to 1.21.1 fail

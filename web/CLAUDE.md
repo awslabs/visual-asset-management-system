@@ -269,13 +269,17 @@ web/
 
     common/                 # Shared utilities and helpers
       GlobalHeader.tsx common-components.tsx
+      cogRaster/              # Shared GeoTIFF/COG raster code of the GeoTIFF Map Viewer and the Search map's Show raster
+                              #   (rasterResolver.ts, cogProtocol.ts, placedImage.ts, RasterLayerManager.ts)
       constants/              # apiKeys.ts authRoutes.ts featuresEnabled.ts fileFormats.ts
       helpers/                # labels.ts tableCounterStrings.ts
-      utils/                  # utils.ts fileSize.ts
+      utils/                  # utils.ts fileSize.ts,
+                              #   maplibreWorker.ts (setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts)
 
     constants/uploadLimits.ts
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
-                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page),
+                            #   useWebRouteAllowed.ts (does the POST /auth/routes decision allow a path)
     layout/navigationRegistry.ts  # The one navigation registry: core + add-on + custom, side/profile placement
     layout/Navigation.tsx   # Left sidebar navigation (side entries)
     layout/useProfileMenuItems.ts # Top-bar profile menu items (profile entries, current page checked, then Sign out)
@@ -288,7 +292,6 @@ web/
       queryRetry.ts         # createAppQueryClient, shouldRetryQuery: a final 4xx is never retried
       fileExtensionValidation.ts
       fileHandleCompat.ts
-      maplibreWorker.ts     # setWorkerUrl() for maplibre-gl's bundled worker; import for side effect before a map mounts
 
     styles/                 # Global styles
       theme.css             # CSS custom properties for dark/light theming
