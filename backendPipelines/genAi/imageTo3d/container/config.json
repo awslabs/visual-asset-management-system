@@ -25,8 +25,7 @@
         "MIN_VOLUME_RETENTION": "0.5",
         "CLOSE_HOLE_MAX_EDGES": "10000",
         "NEGLIGIBLE_FRAGMENT_FRACTION": "0.1",
-        "BENCHMARK_REPORT": "false",
-        "INVALIDATE_MODEL_CACHE": "false"
+        "BENCHMARK_REPORT": "false"
     },
     "models": {
         "sam3d": {
@@ -105,7 +104,7 @@
             "BLENDERAGENT_REASONING_EFFORT": "high",
             "BLENDERAGENT_RENDER_ENGINE": "CYCLES",
             "BLENDERAGENT_RENDER_SAMPLES": "32",
-            "BLENDERAGENT_BRIDGE_PORT": "4000",
+            "BLENDERAGENT_BRIDGE_PORT": "0",
             "BLENDERAGENT_MODE": "agent",
             "BLENDERAGENT_REFIT_REBUILD": "none",
             "BLENDERAGENT_REFIT_RESOLUTION": "0.004",

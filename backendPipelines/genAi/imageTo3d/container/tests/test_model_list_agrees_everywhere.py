@@ -95,7 +95,8 @@ def _config_ts_models():
     too, so matching the first one would compare this pipeline's models against another's.
     """
     source = _read(os.path.join(INFRA_DIR, "config", "config.ts"))
-    start = re.search(r"maxVCpus:\s*number;\s*models:\s*\{", source)
+    # Anchored on the block's maxVCpus field; the fields and comments between it and models vary.
+    start = re.search(r"maxVCpus:\s*number;[^{}]*?\bmodels:\s*\{", source)
     assert start, "config.ts declares no imageTo3d models interface block"
     # The block ends at the brace that balances its opening one; a model's own type may span lines.
     depth, end = 1, start.end()

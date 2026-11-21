@@ -58,7 +58,8 @@ changes, update the corresponding files here:
 6. **Run the drift check** — `infra/test/config/configBuilderSync.test.ts` (part of
    `npm test` in `infra/`). It covers `schema.ts` field coverage and the
    `defaults.ts` presets only. **`validation.ts` and `derived.ts` are outside
-   it**, so steps 3 to 5 are held by review discipline alone.
+   it**, so steps 3 to 5 are held by review discipline, except the core VPC-requiring
+   list, which `configBuilderVpcRequiringFeatures.test.ts` holds to `getConfig()`.
 
 The presets in `defaults.ts` are intentionally structured so they should remain
 deep-equal to the three template JSON files (GovCloud is Commercial plus the

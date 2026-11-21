@@ -43,6 +43,8 @@ import types
 # satisfy module-load, and then re-register via a session-scoped fixture
 # below so they survive the autouse fixture's clobbering.
 _auth_mock = types.ModuleType("handlers.auth")
+# The claims key a failed custom claims check sets; handlers.authz and auth/routes import it.
+_auth_mock.CLAIMS_CHECK_FAILED = "claimsCheckFailed"
 
 
 def _mock_request_to_claims(event):

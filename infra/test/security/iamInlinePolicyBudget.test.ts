@@ -92,6 +92,8 @@ const CELLS: Cell[] = [
             c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
             c.app.useGlobalVpc.enabled = true;
             c.app.useGlobalVpc.useForAllLambdas = true;
+            // The quarantine block adds a state-table read to the download, copy and execute roles.
+            c.app.compliance.quarantineBlocksDownload = true;
         },
     },
     {
@@ -120,6 +122,7 @@ const CELLS: Cell[] = [
             c.app.pipelines.deadlineCloudExecutionTypeEnabled = true;
             c.app.useGlobalVpc.enabled = true;
             c.app.useGlobalVpc.useForAllLambdas = true;
+            c.app.compliance.quarantineBlocksDownload = true;
             c.app.pipelines.useZipDownloads.enabled = true;
         },
         zipOnTwinOf: "commercial-worst",

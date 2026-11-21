@@ -1126,6 +1126,11 @@ const Auth: React.FC<AuthProps> = (props) => {
                                 <strong>Possible causes:</strong>
                                 <ul style={{ margin: "8px 0", paddingLeft: "20px" }}>
                                     <li>The backend API is not responding</li>
+                                    <li>
+                                        The API refused the request (HTTP 403): the deployment
+                                        accepts only some network addresses, or a firewall rule
+                                        blocked the request
+                                    </li>
                                     <li>Network connectivity issues</li>
                                     <li>The page was reloaded during initialization</li>
                                 </ul>

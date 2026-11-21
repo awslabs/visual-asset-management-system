@@ -66,7 +66,7 @@ def register(
     @tool_result
     def list_edh_workstations() -> Dict[str, Any]:
         """Use to see the signed-in user's EDH GPU workstations and follow a launch or start. Returns `Items`
-        (complete, not paginated; another user's workstations are never included). Each row carries
+        (complete, not paginated; only the user's own). Each row carries
         `bootstrapId` (always present; every session tool takes it, or `sessionId`, as `session_id`),
         `sessionId` (null until EDH assigns it), `name`, `state` (CREATING|ACTIVE|STOPPED|DELETED|ORPHANED),
         `activity` (`starting` from a start until the desktop is connectable, `stopping`, or null),
@@ -79,11 +79,12 @@ def register(
         STOPPED row's last start failed (CAPACITY_UNAVAILABLE, RESERVATION_FULL, RESERVATION_ENDED,
         START_FAILED), with `startFailure` (`errorCode`, `availabilityZone`, `observedAt`). START_STALLED
         on a CREATING row with `activity` null: EDH has not finished a start after 30 minutes; stop it with
-        stop_edh_workstation, then start it again. `edhFailure` is the failure captured from EDH:
-        `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`, `checkpoint`,
-        `observedAt`.
+        stop_edh_workstation, then start it again. LAUNCH_STALLED there: EDH has not placed a new launch
+        after 3 hours; delete it with delete_edh_workstation, or wait. `edhFailure`, captured from
+        EDH: `event` (`placement_failed` or `session-failed`), `errorCode`, `operation`,
+        `checkpoint`, `observedAt`.
 
-        Each row names its image in the image fields `imageName`, `recipeId`, `recipeDisplayName`,
+        Image fields: `imageName`, `recipeId`, `recipeDisplayName`,
         `recipeVersion`, `latestRecipeVersion` and `imageLatest` (`recipeId` null for a baseline image;
         `imageLatest`
         false only when a newer AVAILABLE build exists). To use the newest AVAILABLE build, launch a new
@@ -97,7 +98,9 @@ def register(
         """Use to read one of the user's EDH workstations by `session_id` (its `sessionId`, or its
         `bootstrapId`, which works at any time; follow a launch by it). Another user's workstation is not
         found. Carries the fields of a list_edh_workstations row: `activity`, `lastError` (START_STALLED
-        among its codes), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
+        and LAUNCH_STALLED among its codes; delete a LAUNCH_STALLED one with delete_edh_workstation, or
+        wait; once EDH reports such a launch in error it reads ORPHANED with LAUNCH_ERROR, never
+        `DESKTOP_ERROR`, and a row carrying both is the launch stall), `startFailure`, `edhFailure` (the AWS error code and operation, or the setup
         checkpoint, VAMS captured from EDH for a failed launch; null when none was captured),
         `connectionAvailable`,
         `connectionUnavailableReason` (`DISPLAY_SESSION_ENDED` when the display session ended,
@@ -441,18 +444,28 @@ def register(
 
         @mcp.tool(title="Stop EDH workstation", annotations=COMPUTE)
         @tool_result
-        def stop_edh_workstation(session_id: str) -> Dict[str, Any]:
+        def stop_edh_workstation(session_id: str, confirm: bool = False) -> Dict[str, Any]:
             """Stop one of the authenticated user's ACTIVE EDH workstations, or a CREATING one whose
             `lastError` is START_STALLED (a start EDH accepted and has not finished after 30 minutes;
-            start it again once it reads STOPPED); returns the updated record,
+            start it again once it reads STOPPED). LAUNCH_STALLED (a new launch EDH has not placed after
+            3 hours) never ran, so its stop is refused (`EdhOperationError`, HTTP 409, naming Delete):
+            delete it with delete_edh_workstation, or wait. Stopping closes the
+            desktop's open applications and interrupts its compute; the disk is kept, and
+            start_edh_workstation starts it again.
+            Confirm with the user first, then call with `confirm=True`: without it the tool returns
+            an error and stops nothing. Keep it out of `autoApprove`. Returns the updated record,
             whose `activity` reads `stopping` while EDH still stops the desktop (and whose
             `startFailure` is null). The record carries the image fields `imageName`, `recipeId`,
             `recipeDisplayName`, `recipeVersion`, `latestRecipeVersion` and `imageLatest` as a
-            list_edh_workstations row does. Stopping interrupts whatever is running on the desktop's
-            compute, and is reversible with start_edh_workstation. An `EdhOutcomeUnknownError` error
-            means EDH did not confirm the stop; call list_edh_workstations before retrying. Confirm
-            with the user before calling it, and keep it out of `autoApprove`."""
+            list_edh_workstations row does. An `EdhOutcomeUnknownError` error means EDH did not
+            confirm the stop; call list_edh_workstations before retrying."""
             client.require_feature(FEATURE_EDH_WORKSTATIONS, EDH_WORKSTATIONS_DISABLED_MESSAGE)
+            # A client-side interlock the owner chose for this tool (2026-11-18): the stop request
+            # has no confirmation field, so the tool asks for one (tools/VamsMCP/CLAUDE.md, Add-on Tools).
+            if not confirm:
+                raise ValueError(
+                    "Stopping a workstation closes its open applications. Confirm with the user, then "
+                    "call stop_edh_workstation again with confirm=True.")
             return client.api.stop_edh_workstation(session_id)
 
         @mcp.tool(title="Register EDH desktop image", annotations=WRITE)
@@ -755,7 +768,9 @@ def register(
             session are removed. Irreversible. Consider stop_edh_workstation first — it releases the GPU
             and can be undone with start_edh_workstation. `session_id` may be the `bootstrapId` of a
             launch that never received a session id: an ORPHANED launch is deleted at once, a CREATING
-            one only after 15 minutes without progress (younger → 409, returned as the error). The
+            one only after 15 minutes without progress (younger → 409, returned as the error). A
+            CREATING one whose `lastError` is LAUNCH_STALLED (EDH has not placed it after 3 hours) is
+            deleted by its `sessionId`. The
             returned record carries `activity` and `startFailure` as a list_edh_workstations row does,
             and the image fields `imageName`, `recipeId`, `recipeDisplayName`, `recipeVersion`,
             `latestRecipeVersion` and `imageLatest` as that row does.

@@ -321,7 +321,12 @@ class TestModelledIsaacLabVersion:
             "_MODELLED_ISAAC_LAB_VERSION.")
 
     def test_the_base_image_follows_that_version(self, image):
-        assert image.args.get("BASE_IMAGE") == "nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}"
+        assert image.args.get("BASE_IMAGE") == "nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}@${ISAAC_LAB_DIGEST}"
+
+    def test_the_base_image_is_pinned_by_digest(self, image):
+        """A tag can be re-pointed; the digest is what fixes the image a rebuild of this commit pulls."""
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", image.args.get("ISAAC_LAB_DIGEST") or ""), (
+            image.args.get("ISAAC_LAB_DIGEST"))
 
     @pytest.mark.parametrize("path", _IMAGE_BUILD_SOURCES, ids=os.path.basename)
     def test_no_build_overrides_the_base_image(self, path):
