@@ -57,12 +57,11 @@ RUN git clone ${GR00T_REPO} /workspace && \
 
 WORKDIR /workspace
 
-# Install dependencies: every file at the version and hash in requirements.lock, the uv export of uv.lock
-# (Isaac-GR00T's pyproject.toml with the `base` extra at the pinned commit, plus what the image adds; the
-# header holds the command). Four packages publish no wheel (antlr4-python3-runtime, fvcore, gpustat, iopath),
-# so they build from their hashed source against the build tools of requirements-build.lock (the `build`
-# group of uv.lock), installed first: `--no-build-isolation` keeps the build from fetching unhashed tools.
-# Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
+# Install dependencies: every file at the version and hash in requirements.lock (Isaac-GR00T's pyproject.toml
+# with the `base` extra, plus requirements-image.txt; its header holds the command). Four packages publish no
+# wheel (antlr4-python3-runtime, fvcore, gpustat, iopath), so they build from their hashed source against
+# the build tools of requirements-build.lock, installed first: `--no-build-isolation` keeps the build from
+# fetching unhashed tools. Isaac-GR00T itself is then installed from the pinned clone, without dependencies.
 COPY requirements-build.lock requirements.lock /tmp/gr00t/
 RUN uv pip install --no-cache --require-hashes --only-binary :all: -r /tmp/gr00t/requirements-build.lock
 RUN uv pip install --no-cache --require-hashes --no-build-isolation -r /tmp/gr00t/requirements.lock
