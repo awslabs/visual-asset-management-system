@@ -15,12 +15,12 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /opt/miris-upload
 
-# Install Python dependencies from the hash-locked set. requirements.txt lists the direct dependencies;
-# requirements.lock is generated from it (command in its header) and pins every package, transitive ones
-# included, by version and hash, so two builds of the same commit install the same packages.
-COPY requirements.lock /build/requirements.lock
-RUN chmod a+r /build/requirements.lock && \
-    pip install --no-cache-dir --require-hashes -r /build/requirements.lock
+# Install Python dependencies from requirements.txt, the hashed export of uv.lock (pyproject.toml
+# declares the direct dependencies). It pins every package, transitive ones included, by version and
+# hash, so two builds of the same commit install the same packages.
+COPY requirements.txt /build/requirements.txt
+RUN chmod a+r /build/requirements.txt && \
+    pip install --no-cache-dir --require-hashes -r /build/requirements.txt
 
 # Normalize read bits after each COPY: COPY preserves the build host's umask, so a hardened checkout
 # (umask 077/027) leaves these root-owned 600/640 and unreadable to the non-root USER below.

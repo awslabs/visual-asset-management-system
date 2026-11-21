@@ -763,15 +763,14 @@ describe.each(NON_ROOT_IMAGES)(
 );
 
 /**
- * The Miris upload image installs its Python dependencies from a hash-locked set.
+ * The Miris upload image installs its Python dependencies from the hashed export of its uv lock.
  *
- * `requirements.txt` lists the direct dependencies and `requirements.lock` is generated from it with
- * every package, transitive ones included, pinned by version and hash. `pip --require-hashes` refuses
- * a requirement that carries no hash, so the install is only as reproducible as the lock is complete:
- * a lock entry without a hash fails the BUILD, and a Dockerfile that installs from `requirements.txt`
- * instead resolves whatever the index serves that day.
+ * `pyproject.toml` declares the direct dependencies, `uv.lock` pins every package, and the committed
+ * `requirements.txt` is exported from the lock with every package pinned by version and hash. `pip
+ * --require-hashes` refuses a requirement that carries no hash, so the install is only as
+ * reproducible as the export is complete.
  */
-describe("the Miris upload image installs from its hash-locked requirements", () => {
+describe("the Miris upload image installs the hashed export of its uv lock", () => {
     const containerDir = path.join(
         PIPELINES_DIR,
         "addon",
@@ -780,16 +779,16 @@ describe("the Miris upload image installs from its hash-locked requirements", ()
         "container"
     );
     const dockerfile = fs.readFileSync(path.join(containerDir, "Dockerfile"), "utf-8");
-    const lock = fs.readFileSync(path.join(containerDir, "requirements.lock"), "utf-8");
+    const exported = fs.readFileSync(path.join(containerDir, "requirements.txt"), "utf-8");
 
-    /** Each requirement in the lock with its continuation lines joined. */
-    const lockEntries = lock
+    /** Each requirement in the export with its continuation lines joined. */
+    const exportEntries = exported
         .replace(/\\\r?\n\s*/g, " ")
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith("#"));
 
-    it("pip installs the lock with --require-hashes, and never requirements.txt", () => {
+    it("pip installs requirements.txt with --require-hashes", () => {
         const installs = dockerfile
             .replace(/\\\r?\n\s*/g, " ")
             .split(/\r?\n/)
@@ -797,43 +796,23 @@ describe("the Miris upload image installs from its hash-locked requirements", ()
         expect(installs.length).toBeGreaterThan(0);
         for (const install of installs) {
             expect(install).toContain("--require-hashes");
-            expect(install).toMatch(/-r \S*requirements\.lock\b/);
-            expect(install).not.toMatch(/requirements\.txt/);
+            expect(install).toMatch(/-r \S*requirements\.txt\b/);
         }
     });
 
-    it("every lock entry pins an exact version and carries a sha256 hash", () => {
-        // Control: an empty lock would satisfy the loop below.
-        expect(lockEntries.length).toBeGreaterThanOrEqual(5);
-        for (const entry of lockEntries) {
-            expect([entry.split(" ")[0], /^[A-Za-z0-9._-]+(\[[^\]]+\])?==\S+/.test(entry)]).toEqual(
-                [entry.split(" ")[0], true]
-            );
-            expect([entry.split(" ")[0], /--hash=sha256:[0-9a-f]{64}/.test(entry)]).toEqual([
-                entry.split(" ")[0],
-                true,
-            ]);
-        }
+    it("requirements.txt is a uv export, beside the lock it was exported from", () => {
+        expect(exported).toContain("uv export --frozen --no-emit-project --no-dev --no-annotate");
+        expect(fs.existsSync(path.join(containerDir, "uv.lock"))).toBe(true);
+        expect(fs.existsSync(path.join(containerDir, "requirements.lock"))).toBe(false);
     });
 
-    it("the lock covers every direct dependency", () => {
-        const direct = fs
-            .readFileSync(path.join(containerDir, "requirements.txt"), "utf-8")
-            .split(/\r?\n/)
-            .map((line) => line.replace(/#.*$/, "").trim())
-            .filter(Boolean)
-            .map((line) =>
-                line
-                    .split(/[=<>~!;[ ]/)[0]
-                    .toLowerCase()
-                    .replace(/_/g, "-")
-            );
-        expect(direct.length).toBeGreaterThan(0);
-        const locked = new Set(
-            lockEntries.map((entry) => entry.split("==")[0].toLowerCase().replace(/_/g, "-"))
-        );
-        for (const name of direct) {
-            expect([name, locked.has(name)]).toEqual([name, true]);
+    it("every exported entry pins an exact version and carries a sha256 hash", () => {
+        // Control: an empty export would satisfy the loop below.
+        expect(exportEntries.length).toBeGreaterThanOrEqual(5);
+        for (const entry of exportEntries) {
+            const name = entry.split(" ")[0];
+            expect([name, /^[A-Za-z0-9._-]+(\[[^\]]+\])?==\S+/.test(entry)]).toEqual([name, true]);
+            expect([name, /--hash=sha256:[0-9a-f]{64}/.test(entry)]).toEqual([name, true]);
         }
     });
 });

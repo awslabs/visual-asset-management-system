@@ -4,6 +4,7 @@
 and shipping every module it imports (the Dockerfile COPYs an explicit file list)."""
 import os
 import re
+import tomllib
 
 import pytest
 
@@ -43,29 +44,27 @@ def test_debian_security_updates_are_applied_and_the_lists_removed():
 def test_every_copy_of_source_is_followed_by_a_chmod():
     lines = _lines()
     for index, line in enumerate(lines):
-        if not line.startswith("COPY ") or "requirements.lock" in line:
+        if not line.startswith("COPY ") or "requirements.txt" in line:
             continue
         following = lines[index + 1]
         assert following.startswith("RUN chmod -R a+rX"), (line, following)
 
 
-def test_dependencies_install_from_the_hash_locked_set():
+def test_dependencies_install_from_the_hashed_export_of_the_uv_lock():
     lines = _lines()
-    joined = " ".join(lines)
-    copy_at = next(i for i, line in enumerate(lines) if line.startswith("COPY ") and "requirements.lock" in line)
+    copy_at = next(i for i, line in enumerate(lines) if line.startswith("COPY ") and "requirements.txt" in line)
     install = lines[copy_at + 1] + " " + lines[copy_at + 2]
-    assert install.startswith("RUN chmod a+r /build/requirements.lock")
-    assert "pip install --no-cache-dir --require-hashes -r /build/requirements.lock" in install
-    # Only the lock is installed: an unhashed requirements.txt install would bypass the hashes.
-    assert "requirements.txt" not in joined
-    with open(os.path.join(CONTAINER_DIR, "requirements.lock"), encoding="utf-8") as handle:
-        lock = handle.read()
-    assert "--hash=sha256:" in lock
+    assert install.startswith("RUN chmod a+r /build/requirements.txt")
+    assert "pip install --no-cache-dir --require-hashes -r /build/requirements.txt" in install
     with open(os.path.join(CONTAINER_DIR, "requirements.txt"), encoding="utf-8") as handle:
-        direct = [line.split("==")[0] for line in handle if line.strip() and not line.startswith("#")]
-    assert direct, "control: no direct dependencies listed"
+        export = handle.read()
+    assert "uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt" in export
+    assert "--hash=sha256:" in export
+    with open(os.path.join(CONTAINER_DIR, "pyproject.toml"), "rb") as handle:
+        direct = [re.split(r"[=<>~!;\[ (]", dep)[0] for dep in tomllib.load(handle)["project"]["dependencies"]]
+    assert direct, "control: no direct dependencies declared"
     for name in direct:
-        assert re.search(rf"^{re.escape(name)}==\S+ \\$", lock, re.M), name
+        assert re.search(rf"^{re.escape(name)}==\S+ ", export, re.M), name
 
 
 def test_the_image_runs_as_a_created_non_root_user():

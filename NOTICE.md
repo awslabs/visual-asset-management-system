@@ -496,7 +496,7 @@ Debian builds FFmpeg with `--enable-gpl`, so the `ffmpeg` and `ffprobe` binaries
 
 ### Miris Upload Pipeline
 
-**Miris Upload Pipeline Dependencies** (direct dependencies, as pinned by `container/requirements.lock`, which the image installs)
+**Miris Upload Pipeline Dependencies** (direct dependencies, as pinned by `container/uv.lock` and installed from its hashed export `container/requirements.txt`)
 
 | Name     | Version | License                                          | Notes                                                                   |
 | :------- | :------ | :----------------------------------------------- | :---------------------------------------------------------------------- |
