@@ -19,7 +19,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
-import ModernSearchContainer from "./ModernSearchContainer";
+import ModernSearchContainer, {
+    SEARCH_FAILED_NOTICE,
+    SEARCH_FAILED_NOTICE_HEADER,
+} from "./ModernSearchContainer";
 import { appCache } from "../../services/appCache";
 import { searchAssets, searchNlp } from "../../services/APIService";
 
@@ -177,4 +180,73 @@ describe("ModernSearchContainer search that the API answers with a 503", () => {
             expect(screen.getByTestId("keyword")).toHaveAttribute("aria-pressed", "true");
         }
     );
+});
+
+/**
+ * The first search of a page load fails with no answer on screen (the first search after idle time can
+ * reach the API's timeout, #1763): the page says the search failed, in the page as well as in the toast,
+ * and the empty table does not read as "No matches".
+ */
+describe("ModernSearchContainer first search that fails with no answer on screen", () => {
+    // API Gateway's 504 body, and the browser's message for a request that got no response
+    const TIMED_OUT = "Endpoint request timed out";
+    const NETWORK = "Failed to fetch";
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        clearPreferenceCookie();
+        (appCache.getItem as jest.Mock).mockReturnValue({ featuresEnabled: ["VECTORSEARCH"] });
+    });
+
+    it.each([
+        ["the API timed out", TIMED_OUT],
+        ["the network failed", NETWORK],
+    ])("says in the page that the search did not finish when %s", async (_, message) => {
+        (searchAssets as jest.Mock).mockResolvedValue([false, message]);
+        const { container } = renderContainer();
+
+        const notice = await screen.findByTestId("search-failed-notice");
+        expect(notice).toHaveTextContent(SEARCH_FAILED_NOTICE_HEADER);
+        expect(notice).toHaveTextContent(SEARCH_FAILED_NOTICE);
+        expect(toasts(container)).toContainEqual({ header: "Search failed", content: message });
+        // The results area neither waits for a first answer that will not come nor reads as no matches
+        expect(screen.getByText("No results to show")).toBeInTheDocument();
+        expect(screen.queryByText("Loading..")).toBeNull();
+        expect(screen.queryByText("No matches")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Clear filter" })).toBeNull();
+        // Not a Search notice (an answer's warning): the search did not answer.
+        expect(screen.queryByText("Search notice")).toBeNull();
+        expectSearchStillOffered();
+    });
+
+    it("clears the failure once a search answers", async () => {
+        (searchAssets as jest.Mock).mockResolvedValue([false, TIMED_OUT]);
+        renderContainer();
+        await screen.findByTestId("search-failed-notice");
+
+        (searchAssets as jest.Mock).mockResolvedValue([true, keywordRows]);
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+
+        await screen.findByText("Alpha");
+        expect(screen.queryByTestId("search-failed-notice")).toBeNull();
+        expect(screen.queryByText("No results to show")).toBeNull();
+    });
+
+    it("keeps an answer already on screen and says the failure only in the toast", async () => {
+        (searchAssets as jest.Mock).mockResolvedValue([true, keywordRows]);
+        const { container } = renderContainer();
+        await screen.findByText("Alpha");
+
+        (searchAssets as jest.Mock).mockResolvedValue([false, TIMED_OUT]);
+        await userEvent.click(screen.getByRole("button", { name: "Search" }));
+
+        await waitFor(() =>
+            expect(toasts(container)).toContainEqual({
+                header: "Search failed",
+                content: TIMED_OUT,
+            })
+        );
+        expect(screen.getByText("Alpha")).toBeInTheDocument();
+        expect(screen.queryByTestId("search-failed-notice")).toBeNull();
+    });
 });
