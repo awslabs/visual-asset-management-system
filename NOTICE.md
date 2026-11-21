@@ -439,7 +439,7 @@ All rights reserved.
 
 ### Zip Archive Pipeline
 
-**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.lock`)
 
 | Name                     | Version | License    | Notes                                                                                                       |
 | :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |
