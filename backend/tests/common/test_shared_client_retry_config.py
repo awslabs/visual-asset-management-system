@@ -6,7 +6,9 @@
 `backend/CLAUDE.md` Rule 6 requires `Config(retries={'max_attempts': 5, 'mode': 'adaptive'})` on
 every module-level AWS client. The finding named four shared modules and only `common/resourceNames`
 followed it; `customLogging/auditLogging`, `common/s3` and `common/dynamodb` built their clients
-bare.
+bare. `common/resourceNames` has since become a recorded departure: its SSM sweep runs during Lambda
+init, so its client carries short timeouts and no botocore retries, and the sweep's own page loop
+retries under a wall-clock budget (`DELIBERATE_DEPARTURES`).
 
 What the missing config costs is not retry itself -- botocore's default `legacy` mode does retry a
 `ThrottlingException` -- but the client-side rate limiting `adaptive` adds, which smooths a
@@ -67,9 +69,12 @@ BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "b
 
 # Shared modules Rule 6 covers, and the module-level attributes each binds a client to.
 # `common/resourceNames.py` builds its SSM client lazily inside a function, so it has no
-# module-level attribute to resolve -- it is still covered by the two AST checks.
+# module-level attribute to resolve. Every shared module is held to the constructor check; the
+# declared-form check skips `common/resourceNames.py`, whose only client is the bounded sweep
+# client listed in DELIBERATE_DEPARTURES (the resolution test below still holds it to that entry).
 SHARED_MODULES = ["common/resourceNames.py", "common/s3.py", "common/dynamodb.py",
                   "customLogging/auditLogging.py"]
+RULE_6_DECLARED_MODULES = [module for module in SHARED_MODULES if module != "common/resourceNames.py"]
 RESOLVABLE_CLIENTS = [("common/s3.py", "s3c")]
 
 RULE_6_RETRIES = {"max_attempts": 5, "mode": "adaptive"}
@@ -134,6 +139,10 @@ DELIBERATE_DEPARTURES = {
     # timeouts and three attempts under the flush deadline; a record it cannot confirm goes to the
     # function log as an undelivered record instead of holding the response.
     ("customLogging/auditLogging.py", "flush_client_config"),
+    # The resource-name sweep runs during Lambda init, which has a 10-second limit: short timeouts and
+    # no botocore retries, because the sweep's page loop retries under its own SWEEP_BUDGET_SECONDS and
+    # a botocore back-off sleep would run past it.
+    ("common/resourceNames.py", "sweep_client_config"),
 }
 
 
@@ -327,7 +336,7 @@ def _site_retries(relative_path, tree, config):
 
 
 class TestDeclaredForm:
-    @pytest.mark.parametrize("relative_path", SHARED_MODULES)
+    @pytest.mark.parametrize("relative_path", RULE_6_DECLARED_MODULES)
     def test_the_module_declares_the_rule_6_retry_config(self, relative_path):
         declared = _declared_retries(relative_path)
         assert declared is not None, (
