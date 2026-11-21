@@ -12,6 +12,7 @@ import json
 import os
 
 import boto3
+import executionLogKeys
 import manifestHelper
 from customLogging.logger import safeLogger
 from botocore.config import Config
@@ -96,6 +97,9 @@ def register_batch_job(orchestration_event_prefix, job_id):
 
 
 def lambda_handler(event, context):
+    # VAMS reads this function's shared log group for the run's execution ids, so they go on every
+    # line; the previous invocation's ids are removed first (see executionLogKeys).
+    executionLogKeys.bind_execution_ids(logger, event)
     logger.info("Event", event=event)
 
     job_name = event["jobName"]

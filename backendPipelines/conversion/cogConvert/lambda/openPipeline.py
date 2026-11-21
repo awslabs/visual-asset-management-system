@@ -32,6 +32,16 @@ ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
+# The Lambdas the state machine runs, by the state that runs them (each a CDK construct id, so a key of
+# the machine's States). The CDK passes each one's function name in STATE_FUNCTION_NAMES, a JSON object
+# keyed by these names; their log groups are registered as log sources, which VAMS reads for the lines
+# that carry this run's workflow and pipeline execution ids (each handler binds them, executionLogKeys).
+CONSTRUCT_PIPELINE_STATE_NAME = "ConstructPipelineTask"
+BATCH_JOB_STATE_NAME = "CogConvertBatchJob"
+PIPELINE_END_STATE_NAME = "PipelineEndTask"
+LAMBDA_STATE_NAMES = (CONSTRUCT_PIPELINE_STATE_NAME, BATCH_JOB_STATE_NAME, PIPELINE_END_STATE_NAME)
+STATE_FUNCTION_NAMES = os.environ.get("STATE_FUNCTION_NAMES", "")
+LAMBDA_LOG_GROUP_PREFIX = "/aws/lambda/"
 
 
 # AWS Step Functions rejects a task failure whose `error` is over 256 characters or whose `cause` is over 32,768,
@@ -60,9 +70,46 @@ def abort_external_workflow(error, task_token):
         )
 
 
+def _state_function_names():
+    """{state name: function name} from STATE_FUNCTION_NAMES; {} when unset or not a JSON object."""
+    try:
+        names = json.loads(STATE_FUNCTION_NAMES or "{}")
+    except ValueError:
+        logger.warning("STATE_FUNCTION_NAMES is not JSON; the Lambda log sources are not registered")
+        return {}
+    return names if isinstance(names, dict) else {}
+
+
+def lambda_log_entries():
+    """The log source of each Lambda state, in the order the machine runs them: the function's
+    /aws/lambda/<function> group, in the account, Region and partition of the state machine's group.
+    Every run shares the group, so VAMS reads it for this run's execution ids. A state with no function
+    name is left out."""
+    names = _state_function_names()
+    arn_prefix, separator, _ = STATE_MACHINE_LOG_GROUP_ARN.partition(":log-group:")
+    entries = []
+    for state_name in LAMBDA_STATE_NAMES:
+        function_name = names.get(state_name)
+        if not isinstance(function_name, str) or not function_name:
+            continue
+        group_name = LAMBDA_LOG_GROUP_PREFIX + function_name
+        entries.append({
+            "logGroupArn": arn_prefix + separator + group_name if separator else "",
+            "logGroupName": group_name,
+            "logStreamName": "",
+            "logStreamPrefix": "",
+            "stageName": state_name,
+            "sourceType": "lambda",
+            "label": f"{state_name} Lambda",
+        })
+    return entries
+
+
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort report of this sub-SFN execution to the VAMS orchestration bus; failures are swallowed."""
+    """Best-effort report of this sub-SFN execution and its log sources (the state machine and its
+    Lambda states) to the VAMS orchestration bus; failures are swallowed. executeBatchJob adds the
+    container's source when it submits the job."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -79,14 +126,18 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "label": "COG conversion processing",
         },
     }
+    logs = []
     if STATE_MACHINE_LOG_GROUP_NAME or STATE_MACHINE_LOG_GROUP_ARN:
-        detail["logs"] = [{
+        logs.append({
             "logGroupArn": STATE_MACHINE_LOG_GROUP_ARN,
             "logGroupName": STATE_MACHINE_LOG_GROUP_NAME,
             "logStreamName": "",
             "sourceType": "stateMachine",
             "label": "COG conversion state machine",
-        }]
+        })
+    logs.extend(lambda_log_entries())
+    if logs:
+        detail["logs"] = logs
     try:
         events_client.put_events(Entries=[{
             "EventBusName": orchestration_bus_name,
@@ -173,6 +224,8 @@ def lambda_handler(event, context):
         # abortable. Stopping this sub-state-machine does not stop the job — it is submitted from a
         # Lambda under WAIT_FOR_TASK_TOKEN, so Step Functions does not own its lifecycle.
         "orchestrationEventPrefix": orchestration_event_prefix,
+        # With the prefix's pipeline execution id, the id every state's Lambda puts on its log lines.
+        "workflowExecutionId": event.get("workflowExecutionId", "") or "",
     }
 
     try:

@@ -361,6 +361,9 @@ export class CogConvertConstruct extends Construct {
                 // sub-state-machine does not stop the job, because WAIT_FOR_TASK_TOKEN leaves the
                 // job's lifecycle with nobody.
                 "orchestrationEventPrefix.$": "$.orchestrationEventPrefix",
+                // With the prefix, the run's ids the Lambda puts on every line it logs (its group is a
+                // registered log source, read for both ids). constructPipeline always emits the field.
+                "workflowExecutionId.$": "$.workflowExecutionId",
             }),
             resultPath: "$.batchResult",
             taskTimeout: sfn.Timeout.duration(COG_CONVERT_BATCH_TIMEOUT),
@@ -396,10 +399,14 @@ export class CogConvertConstruct extends Construct {
             // timeout and reaches pipelineEnd — which releases the external task token — rather
             // than being cut short by an execution-level States.Timeout.
             timeout: COG_CONVERT_STATE_MACHINE_TIMEOUT,
+            // ERROR level without execution data: the execution input carries the workflow's task
+            // token (externalSfnTaskToken) and the Batch state's payload the internal one, which every
+            // VAMS logger redacts and which must not persist in a log group. The run's stages and their
+            // errors are in the execution history and the Lambda and container logs.
             logs: {
                 destination: stateMachineLogGroup,
-                includeExecutionData: true,
-                level: sfn.LogLevel.ALL,
+                includeExecutionData: false,
+                level: sfn.LogLevel.ERROR,
             },
             tracingEnabled: true,
         });
@@ -417,6 +424,13 @@ export class CogConvertConstruct extends Construct {
             props.pipelineSubnets,
             props.storageResources.eventBridge.orchestrationBus,
             stateMachineLogGroup,
+            // The function each Lambda state runs, keyed by the state's name (openPipeline.py
+            // LAMBDA_STATE_NAMES): their /aws/lambda/<name> groups are the run's Lambda log sources.
+            {
+                ConstructPipelineTask: constructPipelineFunction,
+                CogConvertBatchJob: executeBatchJobFunction,
+                PipelineEndTask: pipelineEndFunction,
+            },
             props.kmsKey
         );
 
