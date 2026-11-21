@@ -312,7 +312,7 @@ To permanently delete a file:
 
 An archived file offers **Permanently Delete File** instead, which opens the same dialog already set to permanent deletion. It is unavailable, with the reason, when your role may not permanently delete files.
 
-If Amazon S3 does not delete every version of the file, or of every file in a folder, an error is shown and the files that could not be deleted stay in the asset with their previews. Ask an administrator to check the bucket's permissions and object lock settings, then delete them again.
+If Amazon S3 does not delete every version of the file, or of every file in a folder, an error is shown and the files that could not be deleted stay in the asset with their previews. If a file's previews are the part that could not be deleted, the error says so. Ask an administrator to check the bucket's permissions and object lock settings, then delete the file again.
 
 ### File Previews and Preview Management
 
