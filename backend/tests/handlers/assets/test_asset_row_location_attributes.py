@@ -15,10 +15,12 @@ see is indexed too. Two parts:
 - behaviour tests per whole-row writer, driven with a stored row that carries the attributes and
   with one that lacks them.
 
-The inventory finds writes made through a module's asset table handle (`asset_table`,
-`asset_storage_table`, a local `table = dynamodb.Table(asset_table_name)`). A helper that receives
-the table as a parameter (`common/assetProvenance.record_indexed_change`, an attribute-scoped
-UpdateItem) is outside it.
+The inventory finds writes made through an asset table handle (a module's `asset_table` or
+`asset_storage_table`, a local `table = dynamodb.Table(asset_table_name)`, a handle kept on an object
+such as `self.asset_table`) and low-level client writes that name the asset table (`TableName=`, a
+transaction item's `TableName`, a `RequestItems` key). Today the only low-level calls on the asset
+table are queries. A helper that receives the table as a parameter
+(`common/assetProvenance.record_indexed_change`, an attribute-scoped UpdateItem) is outside it.
 """
 
 import ast
@@ -87,16 +89,55 @@ def _assigned_names(tree, predicate):
     return names
 
 
+def _assigned_attributes(tree, predicate):
+    """Attribute names (`self.<name> = ...`, `obj.<name> = ...`) assigned a value matching `predicate`."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and predicate(node.value):
+            names.update(t.attr for t in node.targets if isinstance(t, ast.Attribute))
+    return names
+
+
+def _refers_to(node, names, attributes):
+    """`node` is a variable in `names` or an attribute access `<x>.<name>` with name in `attributes`."""
+    return ((isinstance(node, ast.Name) and node.id in names)
+            or (isinstance(node, ast.Attribute) and node.attr in attributes))
+
+
 def _asset_table_writes(path, relpath):
+    """(relpath, function, method) for every write on the asset table in one source file.
+
+    A write counts when it goes through an asset table handle (a module variable, a function's local
+    or an attribute on an object such as `self.asset_table`, assigned `<resource>.Table(<asset table
+    name>)`), or through a low-level client call that names the asset table: `TableName=<asset table
+    name>` as a keyword or inside a dict (`transact_write_items` items), or the table name as a
+    `RequestItems` key (`batch_write_item`)."""
     tree = ast.parse(open(path, encoding="utf-8").read())
-    table_name_vars = _assigned_names(tree, _is_asset_table_name_call)
-    if not table_name_vars:
+    name_vars = _assigned_names(tree, _is_asset_table_name_call)
+    name_attrs = _assigned_attributes(tree, _is_asset_table_name_call)
+    if not name_vars and not name_attrs:
         return set()
+
+    def names_the_table(node):
+        return _refers_to(node, name_vars, name_attrs) or _is_asset_table_name_call(node)
 
     def is_table_handle(value):
         return (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-                and value.func.attr == "Table" and value.args
-                and isinstance(value.args[0], ast.Name) and value.args[0].id in table_name_vars)
+                and value.func.attr == "Table" and value.args and names_the_table(value.args[0]))
+
+    def names_the_table_in_arguments(call):
+        for keyword in call.keywords:
+            if keyword.arg == "TableName" and names_the_table(keyword.value):
+                return True
+        for node in ast.walk(call):
+            if node is call or not isinstance(node, ast.Dict):
+                continue
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == "TableName" and names_the_table(value):
+                    return True
+                if key is not None and names_the_table(key):
+                    return True
+        return False
 
     module_handles = set()
     pending = list(tree.body)
@@ -107,13 +148,16 @@ def _asset_table_writes(path, relpath):
         elif isinstance(node, (ast.Try, ast.If)):
             pending.extend(node.body + node.orelse + getattr(node, "finalbody", [])
                            + [s for h in getattr(node, "handlers", []) for s in h.body])
+    attribute_handles = _assigned_attributes(tree, is_table_handle)
     writes = set()
     for function in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
         handles = module_handles | _assigned_names(function, is_table_handle)
         for call in ast.walk(function):
-            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                    and call.func.attr in WRITE_METHODS and isinstance(call.func.value, ast.Name)
-                    and call.func.value.id in handles):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in WRITE_METHODS):
+                continue
+            if (_refers_to(call.func.value, handles, attribute_handles)
+                    or names_the_table_in_arguments(call)):
                 writes.add((relpath, function.name, call.func.attr))
     return writes
 
@@ -156,6 +200,55 @@ class TestAssetRowWriterInventory:
             "    table = dynamodb.Table(other_table_name)\n"
             "    table.put_item(Item=row)\n")
         assert _asset_table_writes(str(source), "writer.py") == {("writer.py", "rewrite", "put_item")}
+
+    def test_inventory_detects_low_level_client_writes(self, tmp_path):
+        # Control: a client call that names the asset table counts, as a keyword, inside a
+        # transaction item and as a batch RequestItems key; a read and another table do not.
+        source = tmp_path / "writer.py"
+        source.write_text(
+            "asset_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)\n"
+            "other_table_name = get_table_name(ResourceKeys.DATABASE_STORAGE_TABLE)\n"
+            "def put(item):\n"
+            "    dynamodb_client.put_item(TableName=asset_table_name, Item=item)\n"
+            "def move(item, key):\n"
+            "    dynamodb_client.transact_write_items(TransactItems=[\n"
+            "        {'Put': {'TableName': asset_table_name, 'Item': item}},\n"
+            "        {'Delete': {'TableName': asset_table_name, 'Key': key}}])\n"
+            "def batch(requests):\n"
+            "    dynamodb_client.batch_write_item(RequestItems={asset_table_name: requests})\n"
+            "def direct(item):\n"
+            "    client.update_item(TableName=get_table_name(ResourceKeys.ASSET_STORAGE_TABLE), Key=item)\n"
+            "def read(key):\n"
+            "    return dynamodb_client.query(TableName=asset_table_name, KeyConditionExpression=key)\n"
+            "def other(item):\n"
+            "    dynamodb_client.put_item(TableName=other_table_name, Item=item)\n")
+        assert _asset_table_writes(str(source), "writer.py") == {
+            ("writer.py", "put", "put_item"),
+            ("writer.py", "move", "transact_write_items"),
+            ("writer.py", "batch", "batch_write_item"),
+            ("writer.py", "direct", "update_item"),
+        }
+
+    def test_inventory_detects_a_handle_kept_on_an_object(self, tmp_path):
+        # Control: a table handle (or table name) kept on `self` counts in every method that uses it.
+        source = tmp_path / "writer.py"
+        source.write_text(
+            "class Store:\n"
+            "    def __init__(self, resource, client):\n"
+            "        self.table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)\n"
+            "        self.asset_table = resource.Table(self.table_name)\n"
+            "        self.other = resource.Table(other_table_name)\n"
+            "        self.client = client\n"
+            "    def save(self, row):\n"
+            "        self.asset_table.put_item(Item=row)\n"
+            "    def remove(self, key):\n"
+            "        self.client.delete_item(TableName=self.table_name, Key=key)\n"
+            "    def other_write(self, row):\n"
+            "        self.other.put_item(Item=row)\n")
+        assert _asset_table_writes(str(source), "writer.py") == {
+            ("writer.py", "save", "put_item"),
+            ("writer.py", "remove", "delete_item"),
+        }
 
     def test_only_the_location_module_names_the_index_attributes(self):
         # Writers set the attributes through common.assetLocations, so an expression that drops them
