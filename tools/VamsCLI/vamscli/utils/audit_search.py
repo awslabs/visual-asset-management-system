@@ -300,25 +300,39 @@ def raise_if_not_complete(page: Dict[str, Any], query_id: str) -> None:
 # Paging
 # ---------------------------------------------------------------------------
 
+def merge_warnings(warnings: List[Any], more: Optional[Iterable[Any]]) -> List[Any]:
+    """Add the entries of `more` that `warnings` does not hold yet, in order; return `warnings`.
+
+    The API reports a notice such as `recheckTimeBudget` on the page or export chunk it applies
+    to, so a read of several pages or chunks keeps every page's entries, each once."""
+    for warning in more or []:
+        if warning not in warnings:
+            warnings.append(warning)
+    return warnings
+
+
 def collect_rows(api_client, query_id: str, first_page: Optional[Dict[str, Any]] = None, *,
                  max_rows: int, page_size: Optional[int] = None,
                  sort: Optional[str] = None) -> Dict[str, Any]:
     """Read pages of a Complete search until `max_rows` rows are held or no page follows.
 
-    Returns the first page's envelope (status, statistics, warnings) with `Items` holding at most
-    `max_rows` rows, and `NextToken` when more rows follow. `more` is True when rows past the cap
-    exist on the server."""
+    Returns the first page's envelope (status, statistics) with `Items` holding at most `max_rows`
+    rows, `warnings` holding the warnings of every page read, each once, and `NextToken` when more
+    rows follow. `truncatedByMaxRows` is True when rows past the cap were read and dropped."""
     page = first_page
     if page is None:
         page = api_client.get_audit_query(query_id, page_size=page_size, sort=sort)
     envelope = {k: v for k, v in page.items() if k not in ('Items', 'NextToken')}
     rows: List[Dict[str, Any]] = list(page.get('Items') or [])
+    warnings = merge_warnings([], page.get('warnings'))
     token = page.get('NextToken')
     while token and len(rows) < max_rows:
         page = api_client.get_audit_query(query_id, page_size=page_size, starting_token=token, sort=sort)
         rows.extend(page.get('Items') or [])
+        merge_warnings(warnings, page.get('warnings'))
         token = page.get('NextToken')
     result = dict(envelope)
+    result['warnings'] = warnings
     if len(rows) > max_rows:
         rows = rows[:max_rows]
         # The token of the last page points past the dropped rows, so it is not a resume point.
@@ -454,12 +468,23 @@ def format_rows(page: Dict[str, Any]) -> str:
     if stats.get('candidateLimitReached'):
         lines.append("Warning: the candidate limit was reached; narrow the time range or add "
                      "filters. A result without this notice is not proof of completeness.")
-    for warning in page.get('warnings') or []:
-        lines.append(f"Warning: {warning}")
+    lines.extend(format_warnings(page.get('warnings')))
     if page.get('truncatedByMaxRows'):
         lines.append("Stopped at --max-rows; more records exist. Raise --max-rows or narrow the search.")
     if page.get('NextToken'):
         lines.append(f"More rows: use --page-token {page['NextToken']}")
+    return "\n".join(lines)
+
+
+def format_warnings(warnings: Optional[Iterable[Any]]) -> List[str]:
+    """One `Warning:` line per warning the API reported."""
+    return [f"Warning: {warning}" for warning in warnings or []]
+
+
+def format_export(result: Dict[str, Any]) -> str:
+    """The text view of an export written to a file: the row count, then the API's warnings."""
+    lines = [f"Wrote {result.get('rowCount')} records to {result.get('output')}"]
+    lines.extend(format_warnings(result.get('warnings')))
     return "\n".join(lines)
 
 

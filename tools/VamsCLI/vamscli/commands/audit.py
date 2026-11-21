@@ -44,10 +44,13 @@ from ..utils.audit_search import (
     collect_rows,
     export_chunks,
     find_record,
+    format_export,
     format_groups,
     format_row_detail,
     format_rows,
+    format_warnings,
     is_final,
+    merge_warnings,
     raise_if_not_complete,
     resolve_contains_limits,
     wait_for_audit_query,
@@ -117,8 +120,9 @@ def _effective_page_size(page_size: Optional[int], max_rows: int) -> int:
     return max(1, min(check_page_size(page_size) or AUDIT_DEFAULT_PAGE_SIZE, max_rows))
 
 
-def _print_rows(page: Dict[str, Any], json_output: bool) -> None:
+def _print_rows(page: Dict[str, Any], json_output: bool) -> Dict[str, Any]:
     output_result(page, json_output, cli_formatter=format_rows)
+    return page
 
 
 @click.group()
@@ -156,6 +160,7 @@ def groups(ctx: click.Context, json_output: bool):
     try:
         result = api_client.list_audit_log_groups()
         output_result(result, json_output, cli_formatter=format_groups)
+        return result
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)
 
@@ -236,7 +241,7 @@ def search(ctx: click.Context, groups_, actions, entity_types, entity_ids, users
                 started, json_output,
                 cli_formatter=lambda r: (f"Search started: {r.get('queryId')}\n"
                                          f"Read it with: vamscli audit results --handle {r.get('queryId')}"))
-            return
+            return started
 
         # The handle is shown at once: a failure or Ctrl-C while waiting would otherwise lose it.
         output_status(f"Search handle: {query_id}", json_output)
@@ -253,9 +258,10 @@ def search(ctx: click.Context, groups_, actions, entity_types, entity_ids, users
             _note_running_search(query_id, interrupted, json_output)
             raise
         page['queryId'] = query_id
-        if started.get('warnings') and not page.get('warnings'):
-            page['warnings'] = started['warnings']
-        _print_rows(page, json_output)
+        # The start answer's warnings and those of every page read, each once.
+        page['warnings'] = merge_warnings(merge_warnings([], started.get('warnings')),
+                                          page.get('warnings'))
+        return _print_rows(page, json_output)
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)
 
@@ -312,7 +318,7 @@ def results(ctx: click.Context, query_id: str, page_token: Optional[str], read_a
         else:
             output_info("The search is still running; read it again later or use --wait.", json_output)
         page['queryId'] = query_id
-        _print_rows(page, json_output)
+        return _print_rows(page, json_output)
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)
 
@@ -350,6 +356,7 @@ def show(ctx: click.Context, query_id: str, record_id: str, json_output: bool):
                             "'audit results --json-output'.")
             raise AuditQueryNotFoundError(message)
         output_result(row, json_output, cli_formatter=format_row_detail)
+        return row
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)
 
@@ -377,6 +384,7 @@ def stop(ctx: click.Context, query_id: str, json_output: bool):
         result = api_client.stop_audit_query(query_id)
         output_result(result, json_output,
                       cli_formatter=lambda r: f"Search {r.get('queryId')}: {r.get('status')}")
+        return result
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)
 
@@ -436,9 +444,7 @@ def export_(ctx: click.Context, query_id: str, export_format: str, output_path: 
         try:
             for content, chunk in export_chunks(api_client, query_id, export_format):
                 total += int(chunk.get('rowCount') or 0)
-                for warning in chunk.get('warnings') or []:
-                    if warning not in warnings:
-                        warnings.append(warning)
+                merge_warnings(warnings, chunk.get('warnings'))
                 if sink:
                     sink.write(content)
                 else:
@@ -453,12 +459,15 @@ def export_(ctx: click.Context, query_id: str, export_format: str, output_path: 
                 sink.close()
             if temp_path and os.path.exists(temp_path):
                 os.remove(temp_path)
-        if not output_path:
-            sys.stdout.flush()
-            return
         result = {'queryId': query_id, 'format': export_format, 'output': output_path,
                   'rowCount': total, 'warnings': warnings}
-        output_result(result, json_output,
-                      cli_formatter=lambda r: f"Wrote {r['rowCount']} records to {r['output']}")
+        if not output_path:
+            sys.stdout.flush()
+            # Standard output holds the export text only, so the warnings go to standard error.
+            for line in format_warnings(warnings):
+                click.secho(line, fg='yellow', bold=True, err=True)
+            return result
+        output_result(result, json_output, cli_formatter=format_export)
+        return result
     except AuditSearchError as e:
         _handle_audit_error(e, json_output)

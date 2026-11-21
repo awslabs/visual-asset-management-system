@@ -225,8 +225,9 @@ API_COMPLIANCE_CASCADE_REJECT = "/compliance/cascades/{cascadeId}/reject"
 API_COMPLIANCE_AUDIT = "/compliance/audit"
 API_COMPLIANCE_AUDIT_ASSET = "/compliance/audit/{databaseId}/{assetId}"
 
-# Audit log search (core feature, no feature switch): the groups the caller may search, a search
-# (POST starts it and answers a handle, GET reads or long-polls it, DELETE stops it) and its export.
+# Audit log search (core feature behind the AUDITLOGSEARCH switch, off in the EU Sovereign
+# template): the groups the caller may search, a search (POST starts it and answers a handle, GET
+# reads or long-polls it, DELETE stops it) and its export.
 API_AUDIT_LOG_GROUPS = "/audit/log-groups"
 API_AUDIT_QUERIES = "/audit/queries"
 API_AUDIT_QUERY = "/audit/queries/{queryId}"
