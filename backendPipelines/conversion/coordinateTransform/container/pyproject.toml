@@ -19,9 +19,15 @@ dependencies = [
     "pydantic>=2.0,<3",
 ]
 
-# The image installs the committed requirements.txt with pip. It is exported from uv.lock; uv is a
+# The image installs the committed, hashed requirements.lock with `pip install --require-hashes
+# --only-binary :all:`. It is exported from uv.lock (`uv export`, command in its header); uv is a
 # development and CI tool only and is not part of the image.
 [tool.uv]
 package = false
 required-version = "==0.13.8"
 exclude-newer = "7 days"
+
+# The packages named below were uploaded less than seven days before this lock; they are the versions
+# the image already ships, so the cutoff is lifted for them. Remove each entry once its release is older
+# than seven days: boto3 after 2026-11-24, botocore after 2026-11-24, cloudpickle after 2026-11-25, configargparse after 2026-11-24, janus after 2026-11-22, narwhals after 2026-11-24, platformdirs after 2026-11-24.
+exclude-newer-package = { boto3 = "2026-11-18T20:24:23Z", botocore = "2026-11-18T20:24:18Z", cloudpickle = "2026-11-19T10:27:18Z", configargparse = "2026-11-18T02:53:08Z", janus = "2026-11-16T23:04:45Z", narwhals = "2026-11-18T15:30:43Z", platformdirs = "2026-11-18T20:03:32Z" }
