@@ -298,6 +298,8 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **Tag earlier synced files** — `reindex_utility.py --tag-synced` tags files synced by earlier releases; never automatic. (issue #1207)
 -   **Compliance for custom root locations** — Compliance evaluates direct writes into an asset's custom root location. (issue #366)
 -   **Init marker imports existing files** — An `init` marker sets the asset type and imports, indexes and tags the files already in its folder, without starting upload workflows. (issue #1770)
+-   **Existing-key imports** — An asset created on an existing key imports the files already there and gets its asset type from them. (issue #366)
+-   **Quieter auto-create refusals** — An auto-create refused for an overlapping location is one WARNING and an `AutoCreateRefused` count, not four ERROR lines per object. (issue #1207)
 -   **One base-prefix normalization** — Every reader of a registration's base prefix normalizes it the same way. (issue #366)
 -   **3MF size check on the uncompressed size** — 3D Basic Conversion checks a 3MF package's declared uncompressed size against the function's memory after the download and before any part is parsed, and the refusal names that size. A package that compresses better than about 5 to 1 passed the zip-size check and could run out of memory. (issue #1743)
 -   **CAD STEP agent runs on the default model** — Every GenAI CAD STEP agent run failed at its first model call with the default `global.anthropic.claude-sonnet-5-5`, which refuses a `temperature`. The agent sends none, so each model uses its own default. (issue #1711)
