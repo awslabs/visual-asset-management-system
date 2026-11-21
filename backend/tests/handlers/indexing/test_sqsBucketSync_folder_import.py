@@ -85,10 +85,10 @@ class TestAnInitMarkerImportsItsFolder:
         m.update_asset_type.assert_called_once()
         records = _sent_records(m)
         assert [r["s3"]["object"]["key"] for r in records] == ["a1/model.glb", "a1/sub/part.obj"]
-        assert all(r["vamsImport"] == {"databaseId": "db1", "assetId": "a1", "bucketId": "bucket-1"}
-                   for r in records)
-        assert all(r["eventName"] == "ObjectCreated:Put" and r["s3"]["object"]["versionId"] == "v1"
-                   for r in records)
+        owner = {"databaseId": "db1", "assetId": "a1", "bucketId": "bucket-1"}
+        assert [r["vamsImport"] for r in records] == [owner, owner]
+        assert [(r["eventName"], r["s3"]["object"]["versionId"]) for r in records] == [
+            ("ObjectCreated:Put", "v1"), ("ObjectCreated:Put", "v1")]
 
     def test_listing_pages_and_message_pages(self):
         m = _load()
