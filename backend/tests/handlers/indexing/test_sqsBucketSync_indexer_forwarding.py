@@ -20,6 +20,8 @@ _PATCHED_ATTRS = (
     # that _load() caches, so a LATER file asserting the real stamp behaviour saw the mock and
     # passed for the wrong reason.
     "update_s3_metadata",
+    # Replaced by TestAutoCreateNeverReachesASystemFolder.
+    "get_or_create_database_for_bucket", "object_still_exists", "create_new_asset",
 )
 
 
