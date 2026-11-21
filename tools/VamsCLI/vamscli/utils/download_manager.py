@@ -27,6 +27,31 @@ class DownloadFileInfo(NamedTuple):
     last_modified: Optional[float] = None  # Epoch seconds; applied to the local file mtime
 
 
+# The reason a file is reported failed when its asset-relative path would put it outside the directory
+# the download writes to.
+DOWNLOAD_PATH_OUTSIDE_TARGET_REASON = "Not downloaded: the file path does not stay inside the download directory"
+
+
+def confined_local_path(root: Path, relative_path: str) -> Optional[Path]:
+    """``root`` joined with an asset-relative file path, or None when the file would not land under it.
+
+    Leading slashes are removed, as an asset key starts with one. The path is refused when nothing is
+    left, when a segment is ``..``, or when the joined path does not resolve to a location inside the
+    resolved ``root`` (an absolute or drive path, or a symlink leading out of it), or cannot be
+    resolved at all (a NUL character). The joined path is returned unresolved, so the location reported
+    is the one the caller named.
+    """
+    text = (relative_path or "").lstrip("/")
+    if not text or ".." in text.replace("\\", "/").split("/"):
+        return None
+    candidate = Path(root) / text
+    try:
+        inside = Path(root).resolve() in candidate.resolve().parents
+    except (ValueError, OSError):
+        return None
+    return candidate if inside else None
+
+
 def parse_remote_timestamp(timestamp: Optional[str]) -> Optional[float]:
     """Parse an ISO-8601 timestamp from the API into epoch seconds."""
     if not timestamp:

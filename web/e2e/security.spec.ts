@@ -43,10 +43,14 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { featureSwitches } from "./support/fixtures";
 
 type Violation = { directive: string; blockedURI: string };
 
-/** Collect CSP violations the browser reports, plus console errors that name one. */
+/**
+ * Collect CSP violations the browser reports, plus console errors that name one. Kept beside the
+ * harness's `watchCspViolations`, which records the events only: this spec asserts on both.
+ */
 async function watchForCspViolations(page: Page): Promise<{
     violations: Violation[];
     consoleErrors: string[];
@@ -82,40 +86,6 @@ async function watchForCspViolations(page: Page): Promise<{
     return { violations, consoleErrors };
 }
 
-/** The deployment's feature list, read from the page's own cached config.
- *
- * NOT via `page.request.get("/api/secure-config")`: that endpoint requires the Bearer token the app
- * attaches in-page from its auth session, and `page.request` does not carry it. The call returns 401,
- * `!response.ok()` yields an empty list, and every feature then reads as DISABLED — which silently
- * inverted the Physna branch of this spec's reporting. Reading the app's own `appCache` entry
- * (localStorage `vams_cache_config`) sees exactly what the running application sees.
- */
-async function featuresEnabled(page: Page): Promise<string[]> {
-    // The cache entry is written after the app boots and fetches its config, which is LATER than
-    // `page.goto` resolving. Reading once immediately after a navigation therefore saw an empty list
-    // and reported every feature as disabled. Poll to a short deadline instead.
-    if (!page.url().startsWith("http")) {
-        await page.goto("/", { waitUntil: "domcontentloaded" });
-    }
-    const deadline = Date.now() + 20_000;
-    for (;;) {
-        const features = await page.evaluate(() => {
-            try {
-                const raw = localStorage.getItem("vams_cache_config");
-                if (!raw) return null;
-                const parsed = JSON.parse(raw);
-                const config = parsed?.value ?? parsed ?? {};
-                return (config.featuresEnabled ?? null) as string[] | null;
-            } catch {
-                return null;
-            }
-        });
-        if (features && features.length) return features;
-        if (Date.now() > deadline) return features ?? [];
-        await page.waitForTimeout(1000);
-    }
-}
-
 test.describe("Content-Security-Policy", () => {
     test("the response carries a policy with a script-src directive", async ({ page }) => {
         const response = await page.goto("/");
@@ -132,7 +102,7 @@ test.describe("Content-Security-Policy", () => {
         const response = await page.goto("/");
         const csp = response!.headers()["content-security-policy"] ?? "";
         const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src")) ?? "";
-        const features = await featuresEnabled(page);
+        const features = await featureSwitches(page);
 
         const hasHash = scriptSrc.includes("sha256-");
         const hasUnsafeInline = scriptSrc.includes("'unsafe-inline'");
@@ -271,6 +241,9 @@ test.describe("published bundle hygiene", () => {
  * while a 403 means the credential was accepted and refused. The fetches run inside the page, from
  * the web origin, so they also prove the 401 carries the CORS headers the browser needs to read it
  * (the API's DEFAULT_4XX gateway response); a missing header would make the fetch reject instead.
+ *
+ * `apiBase` is kept beside the harness's `apiContext`: these cases need only the API base the app
+ * stores (`api_path`), not a Cognito ID token, so they also run on an external OAuth deployment.
  */
 async function apiBase(page: Page): Promise<string> {
     await page.goto("/", { waitUntil: "domcontentloaded" });

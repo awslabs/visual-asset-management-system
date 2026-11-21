@@ -278,6 +278,48 @@ class TestListingPrefixes:
     def test_no_location_lists_nothing(self):
         assert al.listing_prefixes("") == [] and al.listing_prefixes(None) == []
 
+@pytest.mark.unit
+class TestHeldObjects:
+    @staticmethod
+    def _lister(*keys):
+        def list_objects(prefix, cap):
+            listed = [{"Key": key} for key in sorted(keys) if key.startswith(prefix)]
+            return listed[:cap] if cap else listed
+        return list_objects
+
+    def test_each_held_key_is_yielded_once_when_the_object_has_no_current_version(self):
+        lister = self._lister("projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == [
+            "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj"]
+        lister = self._lister("projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == ["projects/model.glb/sub/x.obj"]
+
+    def test_the_object_and_its_keys_are_yielded_and_neighbours_are_not(self):
+        lister = self._lister(FILE_LOCATION, "projects/model.glb-old/n.txt", "projects/model.glb.bak",
+                              "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj")
+        assert [o["Key"] for o in al.held_objects(FILE_LOCATION, lister)] == [
+            FILE_LOCATION, "projects/model.glb.previewFile.png", "projects/model.glb/sub/x.obj"]
+        # A folder location lists its folder once
+        lister = self._lister("projects/building-a/x.txt", "projects/building-a-other/y.txt")
+        assert [o["Key"] for o in al.held_objects(FOLDER_LOCATION, lister)] == ["projects/building-a/x.txt"]
+
+
+@pytest.mark.unit
+class TestAFileNamedLikeAPreview:
+    LOCATION = "projects/scan.previewFile.png"
+
+    @pytest.mark.parametrize("key,path", [
+        ("projects/scan.previewFile.png", "/scan.previewFile.png"),
+        ("projects/scan.previewFile.png/scan.previewFile.png", "/scan.previewFile.png/scan.previewFile.png"),
+        ("projects/scan.previewFile.png.previewFile.gif", "/scan.previewFile.png.previewFile.gif"),
+        ("projects/scan.previewFile.png/sub/x.obj", "/sub/x.obj"),
+    ])
+    def test_its_keys_keep_their_own_paths(self, key, path):
+        assert al.relative_path_in(self.LOCATION, key) == path
+        assert al.object_key_for(self.LOCATION, path) == key
+        assert al.names_own_object(self.LOCATION, path) is (key == self.LOCATION)
+
+
 BUCKET = "vams-assets"
 
 
@@ -871,3 +913,25 @@ class TestIndexReady:
         assert al.index_ready(self.TABLE, ssm_client=complete, clock=lambda: now["t"]) is True
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS - 1
         assert al.index_ready(self.TABLE, ssm_client=missing, clock=lambda: now["t"]) is True
+
+
+@pytest.mark.unit
+class TestIndexForAFileNamedLikeAPreview:
+    """A single-file location named like a preview (`scan.previewFile.png`) owns its own key, its companion
+    folder and its own previews, also when a single file `scan` beside it would claim the key as its preview:
+    the deeper location wins."""
+
+    LOCATION = "projects/scan.previewFile.png"
+
+    @pytest.mark.parametrize("key", [
+        "projects/scan.previewFile.png",
+        "projects/scan.previewFile.png/sub/x.obj",
+        "projects/scan.previewFile.png.previewFile.gif",
+    ])
+    def test_its_keys_resolve_to_it(self, key):
+        table = FakeLocationTable([_row("db1", "base", "projects/scan"), _row("db2", "named", self.LOCATION)])
+        assert al.resolve_owner(table, BUCKET, key).entry.asset_id == "named"
+
+    def test_conflicts_with_the_file_whose_preview_it_is_named_like(self):
+        table = FakeLocationTable([_row("db1", "base", "projects/scan")])
+        assert [c.asset_id for c in al.find_conflicts(table, BUCKET, self.LOCATION)] == ["base"]

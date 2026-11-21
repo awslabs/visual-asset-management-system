@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import FormField from "@cloudscape-design/components/form-field";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
@@ -12,7 +12,11 @@ import ComplianceSchemaEditor from "./ComplianceSchemaEditor";
 
 jest.mock("@monaco-editor/react", () => ({
     __esModule: true,
-    default: () => <div>Monaco Editor Mock</div>,
+    default: (props: { theme?: string }) => (
+        <div data-testid="monaco" data-theme={props.theme}>
+            Monaco Editor Mock
+        </div>
+    ),
     loader: { config: jest.fn() },
 }));
 
@@ -571,5 +575,87 @@ describe("ComplianceSchemaEditor metadata rule scope", () => {
         expect(
             screen.getByText("'linkDirection' and 'relationshipType' apply to the links scope only")
         ).toBeInTheDocument();
+    });
+});
+
+describe("ComplianceSchemaEditor Visual Builder and the JSON", () => {
+    const FIX_JSON = /^Fix the JSON before using the Visual Builder\./;
+
+    it("asks to fix the JSON instead of opening a builder on JSON that does not parse", async () => {
+        const onChange = jest.fn();
+        render(
+            <ComplianceSchemaEditor
+                value={'{ "schemaFormat": "vams-rules-v1", "rules": {'}
+                onChange={onChange}
+            />
+        );
+        await userEvent.click(screen.getByRole("tab", { name: "Visual Builder" }));
+        expect(await screen.findByText(FIX_JSON)).toBeInTheDocument();
+        expect(screen.queryByText("Compliance Rules")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Add property" })).not.toBeInTheDocument();
+        expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("stops offering the builder when the JSON stops parsing, and leaves the JSON alone", async () => {
+        const onChange = jest.fn();
+        const { rerender } = render(
+            <ComplianceSchemaEditor value={JSON.stringify(pipelineBody())} onChange={onChange} />
+        );
+        await openBuilder();
+        rerender(<ComplianceSchemaEditor value={'{ "rules": '} onChange={onChange} />);
+        expect(await screen.findByText(FIX_JSON)).toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("rule-name")).not.toBeInTheDocument();
+        expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("drops a rule-name problem once the JSON is edited to a valid rule set", async () => {
+        let value = JSON.stringify(pipelineBody(), null, 2);
+        const onChange = jest.fn((json: string) => {
+            value = json;
+        });
+        const onProblem = jest.fn();
+        const editor = () => (
+            <ComplianceSchemaEditor
+                value={value}
+                onChange={onChange}
+                onRulesProblemChange={onProblem}
+            />
+        );
+        const { rerender } = render(editor());
+        await openBuilder();
+        fireEvent.change(screen.getByPlaceholderText("rule-name"), { target: { value: "" } });
+        rerender(editor());
+        await waitFor(() => expect(onProblem).toHaveBeenLastCalledWith("Rule name is required"));
+
+        // The rule is fixed in the JSON Editor tab.
+        await userEvent.click(screen.getByRole("tab", { name: "JSON Editor" }));
+        value = JSON.stringify(pipelineBody(), null, 2);
+        rerender(editor());
+        await waitFor(() => expect(onProblem).toHaveBeenLastCalledWith(null));
+    });
+});
+
+describe("ComplianceSchemaEditor theme", () => {
+    afterEach(() => document.body.classList.remove("awsui-dark-mode"));
+
+    it("uses the light editor theme in the light app theme", () => {
+        render(<ComplianceSchemaEditor value="{}" onChange={jest.fn()} />);
+        expect(screen.getByTestId("monaco")).toHaveAttribute("data-theme", "vs");
+    });
+
+    it("follows the app into dark mode", async () => {
+        render(<ComplianceSchemaEditor value="{}" onChange={jest.fn()} />);
+        act(() => {
+            document.body.classList.add("awsui-dark-mode");
+        });
+        await waitFor(() =>
+            expect(screen.getByTestId("monaco")).toHaveAttribute("data-theme", "vs-dark")
+        );
+    });
+
+    it("draws the editor border with the theme's input border colour", () => {
+        render(<ComplianceSchemaEditor value="{}" onChange={jest.fn()} />);
+        const frame = screen.getByTestId("monaco").parentElement as HTMLElement;
+        expect(frame.style.border).toContain("var(--vams-border-input)");
     });
 });

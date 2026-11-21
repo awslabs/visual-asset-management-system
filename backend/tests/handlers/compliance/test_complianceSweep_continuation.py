@@ -101,7 +101,7 @@ def _call(evaluations, event):
             patch.object(evaluate_svc, "CasbinEnforcer", return_value=enforcer()), \
             patch.object(evaluate_svc, "check_and_trigger_cascade", MagicMock()), \
             patch.object(store, "run_evaluation", evaluations), \
-            patch.object(store, "register_unrecorded_assets", return_value=0):
+            patch.object(store, "register_unrecorded_assets_page", return_value=(0, None)):
         response = evaluate_svc.lambda_handler(event, MagicMock())
     assert response["statusCode"] == 200, response
     return body_of(response)
@@ -138,7 +138,10 @@ class TestASweepOfMoreThanOneCallFinishes:
         _seed(tables, DB_A, 513, pending=20)
         evaluations = Evaluations(tables)
         responses = _walk(evaluations, _database_sweep)
-        assert [r["assetsRemaining"] for r in responses] == [313, 113, 0]
+        # Each call reads one page and stops at the cap where the page ends, so no page it read
+        # holds an asset it did not reach: the token alone says that more remain.
+        assert [r["assetsRemaining"] for r in responses] == [0, 0, 0]
+        assert ["NextToken" in r for r in responses] == [True, True, False]
         assert [len(r["assetsTriggered"]) for r in responses] == [200, 200, 113]
         counts = Counter(evaluations.calls)
         assert len(counts) == 513 and set(counts.values()) == {1}
@@ -152,27 +155,62 @@ class TestASweepOfMoreThanOneCallFinishes:
         _seed(tables, DB_B, 213, prefix="y")
         evaluations = Evaluations(tables)
         responses = _walk(evaluations, _schema_sweep)
-        assert [r["assetsRemaining"] for r in responses] == [313, 113, 0]
+        assert [len(r["assetsTriggered"]) for r in responses] == [200, 200, 113]
+        assert ["NextToken" in r for r in responses] == [True, True, False]
         counts = Counter(evaluations.calls)
         assert len(counts) == 513 and set(counts.values()) == {1}
         assert {database_id for database_id, _ in counts} == {DB_A, DB_B}
 
-    def test_calls_without_the_token_still_advance(self, tables):
-        # A client that does not pass the token back (an older one) does not repeat the same
-        # assets: the least recently evaluated go first.
+    def test_a_call_without_the_token_starts_a_new_walk(self, tables):
+        # The rows are read a page at a time, so the token is where a walk goes on: a call without
+        # it starts again from the first page (a new walk, started now).
         _seed(tables, DB_A, 450)
         evaluations = Evaluations(tables)
-        for _ in range(3):
-            _call(evaluations, _database_sweep())
+        for _ in range(2):
+            body = _call(evaluations, _database_sweep())
+            assert "NextToken" in body
         counts = Counter(evaluations.calls)
-        assert len(counts) == 450
-        assert max(counts.values()) <= 2 and sum(counts.values()) == 600
+        assert len(counts) == 200 and set(counts.values()) == {2}
+
+    def test_a_token_of_the_earlier_form_goes_on_from_the_start(self, tables):
+        """A token from before the walk was paged (the start instant alone) is accepted: it starts
+        the walk over and skips what was evaluated since that instant."""
+        _seed(tables, DB_A, 5)
+        started = datetime.now(timezone.utc) - timedelta(minutes=1)
+        tables["complianceAssetStateStorage"].update_item(
+            Key={"databaseId": DB_A, "assetId": "x0000"},
+            UpdateExpression="SET lastEvaluatedAt = :at",
+            ExpressionAttributeValues={":at": datetime.now(timezone.utc).isoformat()})
+        token = base64.b64encode(json.dumps(
+            {"sweepStartedAt": started.isoformat()}).encode()).decode()
+        evaluations = Evaluations(tables)
+        body = _call(evaluations, _database_sweep(token))
+        assert sorted(asset_id for _, asset_id in evaluations.calls) == [
+            "x0001", "x0002", "x0003", "x0004"]
+        assert "NextToken" not in body
+
+    def test_each_call_reads_only_the_pages_it_goes_on_from(self, tables):
+        """No call reads the records of a page an earlier call finished: the asset-state queries
+        of the second call start at the first call's cursor."""
+        _seed(tables, DB_A, 300)
+        evaluations = Evaluations(tables)
+        first = _call(evaluations, _database_sweep())
+        real_query = tables["complianceAssetStateStorage"].query
+        starts = []
+
+        def recording_query(**kwargs):
+            starts.append(kwargs.get("ExclusiveStartKey"))
+            return real_query(**kwargs)
+        with patch.object(evaluate_svc.asset_state_table, "query", side_effect=recording_query):
+            second = _call(evaluations, _database_sweep(first["NextToken"]))
+        assert starts and None not in starts
+        assert len(second["assetsTriggered"]) == 100 and "NextToken" not in second
 
     def test_an_asset_evaluated_meanwhile_is_not_evaluated_again(self, tables):
         _seed(tables, DB_A, 250)
         evaluations = Evaluations(tables)
         first = _call(evaluations, _database_sweep())
-        assert first["assetsRemaining"] == 50
+        assert first["assetsRemaining"] == 0 and first["NextToken"]
         reached = {asset_id for _, asset_id in evaluations.calls}
         # A trigger evaluation of one of the 50 unreached assets runs between the calls.
         unreached = sorted({f"x{index:04d}" for index in range(250)} - reached)
@@ -202,7 +240,19 @@ class TestTheSweepToken:
             datetime.now(timezone.utc) + timedelta(days=1)).isoformat()}).encode()).decode(),
     # Named ids: the future token is read from the clock at collection, and an id built from it
     # would differ between pytest-xdist workers, which then refuse the run.
-    ], ids=["not-base64", "not-an-object", "not-a-date", "in-the-future"])
+        base64.b64encode(json.dumps({"sweepStartedAt": "2026-01-01T00:00:00+00:00",
+                                     "phase": "elsewhere"}).encode()).decode(),
+        base64.b64encode(json.dumps({"sweepStartedAt": "2026-01-01T00:00:00+00:00",
+                                     "phase": "evaluate",
+                                     "cursor": {"databaseId": "another-db", "assetId": "a",
+                                                "schemaName": "another-schema",
+                                                "complianceState": "compliant"}}).encode()).decode(),
+        base64.b64encode(json.dumps({"sweepStartedAt": "2026-01-01T00:00:00+00:00",
+                                     "phase": "register", "databaseId": "another-db",
+                                     "cursor": {"databaseId": "a-third-db",
+                                                "assetId": "a"}}).encode()).decode(),
+    ], ids=["not-base64", "not-an-object", "not-a-date", "in-the-future", "unknown-phase",
+            "another-walks-cursor", "a-cursor-of-another-database"])
     def test_a_malformed_or_future_token_is_refused(self, tables, token):
         for event in (_database_sweep(token), _schema_sweep(token)):
             with patch.object(evaluate_svc, "request_to_claims", claims_for(USER)), \

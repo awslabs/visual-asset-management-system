@@ -57,7 +57,8 @@ class TestComplianceAssetFiles:
         monkeypatch.setattr(store, "s3_client", s3)
         monkeypatch.setattr(store, "asset_s3_location", lambda asset: (BUCKET, FILE_LOCATION))
         files = store.get_current_files("db1", "a1", asset={"assetId": "a1"})
-        assert [f[0] for f in files] == ["/model.glb", "/model.glb.previewFile.png", "/model.glb/model.glb", "/sub/x.obj"]
+        assert [f[0] for f in files] == [
+            "/model.glb", "/model.glb.previewFile.png", "/model.glb/model.glb", "/sub/x.obj"]
 
     @pytest.mark.parametrize("relative,key", [("/model.glb", FILE_LOCATION), ("/sub/x.obj", COMPANION)])
     def test_a_file_change_source_reads_the_asset_key(self, monkeypatch, relative, key):

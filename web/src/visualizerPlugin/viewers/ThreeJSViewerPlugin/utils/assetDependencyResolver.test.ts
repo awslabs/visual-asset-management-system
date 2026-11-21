@@ -22,6 +22,7 @@ import {
 } from "./assetDependencyResolver";
 import { downloadAsset } from "../../../../services/APIService";
 import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+import fileNotFound from "../../../core/fileNotFoundBody.testdata.json";
 
 jest.mock("../../../../services/APIService", () => ({
     downloadAsset: jest.fn(async ({ key }: { key: string }) => [
@@ -178,7 +179,7 @@ describe("AssetDependencyResolver.resolveDependencies", () => {
         expect(options?.credentials).toBeUndefined();
     });
 
-    it("records a dependency whose presign was refused as not loaded", async () => {
+    it("records a dependency whose presign was refused as refused, not as missing", async () => {
         installFetch({ "m/tex.png": {} });
         (downloadAsset as jest.Mock).mockResolvedValueOnce([false, "Forbidden", 403]);
         const resolver = new AssetDependencyResolver(CONTEXT);
@@ -187,7 +188,89 @@ describe("AssetDependencyResolver.resolveDependencies", () => {
 
         expect(result.resolved.size).toBe(0);
         expect(global.fetch).not.toHaveBeenCalled();
+        expect(resolver.notLoaded()).toEqual([{ path: "m/tex.png", reason: "refused" }]);
+        expect(describeUnloaded(resolver.notLoaded())).toEqual(["m/tex.png (download refused)"]);
+    });
+
+    // The download route checks the object before it signs, so a file missing from the asset comes
+    // back as the route's own 400 naming it (downloadAsset's tuple as the API answers it), never as
+    // a signed URL that S3 then refuses.
+    it("records a file the download route says is not in the bucket as not found", async () => {
+        installFetch({});
+        const missing = fileNotFound.body.message;
+        (downloadAsset as jest.Mock).mockResolvedValueOnce([
+            false,
+            missing,
+            fileNotFound.statusCode,
+            missing,
+        ]);
+        const resolver = new AssetDependencyResolver(CONTEXT);
+
+        await resolver.resolveDependencies("m/scene.obj", ["tex.png"]);
+
+        expect(global.fetch).not.toHaveBeenCalled();
         expect(resolver.notLoaded()).toEqual([{ path: "m/tex.png", reason: "not-found" }]);
+        expect(describeUnloaded(resolver.notLoaded())).toEqual([
+            "m/tex.png (not found in this asset)",
+        ]);
+    });
+
+    it("keeps refused for a 400 refusal with another reason", async () => {
+        installFetch({});
+        const quarantined = "Asset is quarantined and cannot be downloaded";
+        (downloadAsset as jest.Mock).mockResolvedValueOnce([false, quarantined, 400, quarantined]);
+        const resolver = new AssetDependencyResolver(CONTEXT);
+
+        await resolver.resolveDependencies("m/scene.obj", ["tex.png"]);
+
+        expect(resolver.notLoaded()).toEqual([{ path: "m/tex.png", reason: "refused" }]);
+    });
+
+    // A 403 from S3 on a URL the API has just signed is S3 refusing the read of a file that exists.
+    it("records S3's 403 on a freshly signed URL as could not be downloaded", async () => {
+        installFetch({ "m/tex.png": { status: 403 } });
+        const resolver = new AssetDependencyResolver(CONTEXT);
+
+        await resolver.resolveDependencies("m/scene.obj", ["tex.png"]);
+
+        expect(resolver.notLoaded()).toEqual([{ path: "m/tex.png", reason: "failed" }]);
+        expect(describeUnloaded(resolver.notLoaded())).toEqual([
+            "m/tex.png (could not be downloaded)",
+        ]);
+    });
+
+    it("keeps not found for a 404 and records any other failed read as failed", async () => {
+        installFetch({ "m/busy.png": { status: 503 } });
+        (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) =>
+            key === "m/gone.png"
+                ? [false, "Not found", 404]
+                : key === "m/slow.png"
+                ? [false, "Too many requests", 429]
+                : [true, `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`]
+        );
+        const resolver = new AssetDependencyResolver(CONTEXT);
+
+        await resolver.resolveDependencies("m/scene.obj", [
+            "gone.png",
+            "slow.png",
+            "busy.png",
+            "absent.png",
+        ]);
+
+        const byPath = (a: { path: string }, b: { path: string }) => a.path.localeCompare(b.path);
+        expect([...resolver.notLoaded()].sort(byPath)).toEqual([
+            { path: "m/absent.png", reason: "not-found" },
+            { path: "m/busy.png", reason: "failed" },
+            { path: "m/gone.png", reason: "not-found" },
+            { path: "m/slow.png", reason: "failed" },
+        ]);
+        expect(describeUnloaded([{ path: "m/slow.png", reason: "failed" }])).toEqual([
+            "m/slow.png (could not be downloaded)",
+        ]);
+        (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => [
+            true,
+            `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`,
+        ]);
     });
 
     it("never requests a rejected name", async () => {

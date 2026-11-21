@@ -33,6 +33,10 @@ from tests.handlers.assets.test_streamAuxiliaryPreviewAsset_range_header_casing 
 )
 
 
+# The viewer data of a companion entry {key}/preview/x.glb, inside the object's preview/ folder
+OBJECT_PREVIEW_COMPANION_DATA = "db1/p1/model.glb/preview/x.glb/preview/PotreeViewer/r.bin"
+
+
 @pytest.mark.unit
 class TestAuxiliaryDataOfTheObject:
     @pytest.mark.parametrize("location,key,expected", [
@@ -47,20 +51,47 @@ class TestAuxiliaryDataOfTheObject:
 
     def test_deleting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         calls = []
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", calls.append)
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files",
+                            lambda prefix, keep=None: calls.append((prefix, keep)))
         af.delete_file("db1", "a1", "/sub/x.obj", False, True, CLAIMS)
         af.delete_file("db1", "a1", "/model.glb", False, True, CLAIMS)
-        # A companion entry's own data goes with it; the object's stops at preview/
-        assert calls == ["db1/p1/model.glb/sub/x.obj/", "db1/p1/model.glb/preview/"]
+        # A companion entry's own data goes with it; the object's stops at preview/ and leaves the data of
+        # companion entries in {key}/preview/
+        assert [prefix for prefix, _ in calls] == ["db1/p1/model.glb/sub/x.obj/", "db1/p1/model.glb/preview/"]
+        assert calls[0][1] is None
+        assert calls[1][1]("db1/p1/model.glb/preview/r.bin") and not calls[1][1](OBJECT_PREVIEW_COMPANION_DATA)
 
     def test_reverting_the_object_deletes_its_preview_data_only(self, af, monkeypatch):
         first = af.test_client.list_object_versions(Bucket=BUCKET, Prefix=OWN_KEY)["Versions"]
         first_id = [v for v in first if v["Key"] == OWN_KEY][0]["VersionId"]
         af.test_client.put_object(Bucket=BUCKET, Key=OWN_KEY, Body=b"second")
         calls = []
-        monkeypatch.setattr(af, "delete_assetAuxiliary_files", calls.append)
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files",
+                            lambda prefix, keep=None: calls.append((prefix, keep)))
         af.revert_file_version("db1", "a1", "/model.glb", first_id, CLAIMS)
-        assert calls == ["db1/p1/model.glb/preview/"]
+        assert [prefix for prefix, _ in calls] == ["db1/p1/model.glb/preview/"]
+        assert calls[0][1]("db1/p1/model.glb/preview/r.bin") and not calls[0][1](OBJECT_PREVIEW_COMPANION_DATA)
+
+    def test_the_object_and_a_companion_folder_named_preview_keep_their_viewer_data_apart(self, af, monkeypatch):
+        """The object's data and that of companion entries in {key}/preview/ share db/{key}/preview/."""
+        calls = []
+        monkeypatch.setattr(af, "delete_assetAuxiliary_files",
+                            lambda prefix, keep=None: calls.append((prefix, keep)))
+        af.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/preview/x.glb", Body=b"x")
+        af.delete_file("db1", "a1", "/model.glb", False, True, CLAIMS)
+        af.delete_file("db1", "a1", "/preview/", True, True, CLAIMS)
+        (object_prefix, object_keep), (folder_prefix, folder_keep) = calls
+        object_data = "db1/p1/model.glb/preview/PotreeViewer/r.bin"
+        companion_data = "db1/p1/model.glb/preview/x.glb/preview/PotreeViewer/r.bin"
+        assert object_prefix == folder_prefix == "db1/p1/model.glb/preview/"
+        assert object_keep(object_data) and not object_keep(companion_data)
+        assert folder_keep(companion_data) and not folder_keep(object_data)
+        # A copy of the companion entry carries its own data only
+        keep = af.aux_owner_filter("db1", FILE_LOCATION, "p1/model.glb/preview/x.glb",
+                                   "db1/p1/model.glb/preview/x.glb/")
+        assert keep("db1/p1/model.glb/preview/x.glb/preview/a.bin") and not keep("db1/p1/model.glb/preview/x.glb/a.bin")
+        # A folder asset needs no filter
+        assert af.aux_owner_filter("db1", FOLDER_LOCATION, "proj/a/x.txt", "db1/proj/a/x.txt/") is None
 
     @pytest.mark.parametrize("source,dest,expected", [
         # The object copied out: its preview data lands in the destination file's preview folder
@@ -162,6 +193,17 @@ def engine(monkeypatch):
 
 @pytest.mark.unit
 class TestAssetTypeSampleReadsOnlyTheLocationsKeys:
+    def test_an_archived_object_and_one_companion_file_count_that_file_once(self, engine):
+        """With the object archived and no neighbour key, the one-key read of the location returns the
+        companion file, which the companion folder listing returns again; counted twice, the asset read as
+        a folder (D4)."""
+        client = engine.test_client
+        for version in client.list_object_versions(Bucket=BUCKET, Prefix="p1/model.glb-old/").get("Versions", []):
+            client.delete_object(Bucket=BUCKET, Key=version["Key"], VersionId=version["VersionId"])
+        client.delete_object(Bucket=BUCKET, Key=OWN_KEY)
+        client.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/part.obj", Body=b"x")
+        assert engine._determine_asset_type(BUCKET, FILE_LOCATION) == ".obj"
+
     def test_neighbours_do_not_fill_the_sample(self, engine):
         engine.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/part.obj", Body=b"x")
         assert engine._determine_asset_type(BUCKET, FILE_LOCATION) == "folder"

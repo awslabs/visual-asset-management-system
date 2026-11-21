@@ -776,6 +776,8 @@ def bind_schema_to_asset(event, database_id, asset_id, request: BindSchemaReques
             "schemaName": request.schemaName,
             "schemaSource": SCHEMA_SOURCE_ASSET,
             "updatedAt": now,
+            # An evaluation that began before this write ran under the binding before it.
+            engine.BINDING_CHANGED_AT_FIELD: now,
             **listing.asset_name_attributes(asset_id, (asset_item or {}).get("assetName")),
         }
         if previous_state == STATE_QUARANTINED:
@@ -880,7 +882,8 @@ def unbind_schema_from_asset(event, database_id, asset_id):
             if previous_state == STATE_QUARANTINED:
                 # Kept quarantined until an evaluation under the database binding (or a release)
                 # decides.
-                updates = {"updatedAt": now, **_awaiting(now, db_schema, REASON_OVERRIDE_CLEARED)}
+                updates = {"updatedAt": now, engine.BINDING_CHANGED_AT_FIELD: now,
+                           **_awaiting(now, db_schema, REASON_OVERRIDE_CLEARED)}
                 if db_schema:
                     updates.update(schemaName=db_schema, schemaSource=SCHEMA_SOURCE_DATABASE)
                 # With no database binding no schema applies: the record names none, so no reader
@@ -897,6 +900,7 @@ def unbind_schema_from_asset(event, database_id, asset_id):
                     "schemaSource": SCHEMA_SOURCE_DATABASE,
                     "complianceState": STATE_PENDING_EVALUATION,
                     "updatedAt": now,
+                    engine.BINDING_CHANGED_AT_FIELD: now,
                 }, computed_from=existing, return_old=True)
                 new_state = STATE_PENDING_EVALUATION
             else:

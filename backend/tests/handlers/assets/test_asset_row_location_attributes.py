@@ -46,7 +46,7 @@ EXPECTED_ASSET_ROW_WRITES = {
     ("handlers/assets/assetService.py", "unarchive_asset", "put_item"),
     ("handlers/assets/assetService.py", "unarchive_asset", "delete_item"),
     ("handlers/assets/assetService.py", "delete_asset_permanent", "delete_item"),
-    ("handlers/assets/assetVersions.py", "update_asset_current_version_reference", "put_item"),
+    ("handlers/assets/assetVersions.py", "update_asset_current_version_reference", "update_item"),
     ("handlers/assets/assetFiles.py", "delete_asset_preview", "put_item"),
     ("handlers/assets/largeObjectCopy.py", "_after_landing", "update_item"),
     ("handlers/assets/sqsUploadFileLarge.py", "update_asset_attributes", "update_item"),
@@ -64,7 +64,6 @@ WHOLE_ROW_PUTS_WITH_TESTS = {
     ("handlers/assets/createAsset.py", "save_asset_details"),
     ("handlers/assets/assetService.py", "archive_asset"),
     ("handlers/assets/assetService.py", "unarchive_asset"),
-    ("handlers/assets/assetVersions.py", "update_asset_current_version_reference"),
     ("handlers/assets/assetFiles.py", "delete_asset_preview"),
     ("handlers/indexing/sqsBucketSync.py", "restore_archived_asset"),
 }
@@ -291,12 +290,15 @@ class TestWholeRowWritersKeepTheAttributes:
         assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
 
     def test_current_version_reference(self, monkeypatch):
+        # A targeted update of the version attributes: it neither sets nor removes an index attribute.
         asset_table = MagicMock()
         monkeypatch.setattr(_assetVersions, "asset_table", asset_table)
         assert _assetVersions.update_asset_current_version_reference(_stored_row(), "3") is True
-        row = _put_item(asset_table)
-        assert row["currentVersionId"] == "3"
-        assert {k: row[k] for k in INDEX_ATTRIBUTES} == INDEX_ATTRIBUTES
+        asset_table.put_item.assert_not_called()
+        update = asset_table.update_item.call_args.kwargs
+        assert "currentVersionId" in update["ExpressionAttributeNames"].values()
+        assert not set(INDEX_ATTRIBUTES) & set(update["ExpressionAttributeNames"].values())
+        assert "locationBucket" not in update["UpdateExpression"] and "locationKey" not in update["UpdateExpression"]
 
     def test_preview_delete(self, monkeypatch):
         asset_table = MagicMock()

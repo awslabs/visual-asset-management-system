@@ -17,6 +17,16 @@ jest.mock("../api/queries", () => ({
 jest.mock("../../../services/appCache", () => ({
     appCache: { getItem: jest.fn(() => ({ featuresEnabled: [] })) },
 }));
+// The role's route listing: by default every route, as for an administrator.
+let mockCan: (method: string, path: string) => boolean = () => true;
+jest.mock("../permissions/useAllowedRoutes", () => ({
+    useAllowedRoutes: () => ({
+        loading: false,
+        failed: false,
+        retry: jest.fn(),
+        can: (method: string, path: string) => mockCan(method, path),
+    }),
+}));
 const mockToast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 jest.mock("../components/ToastProvider", () => ({
     ...jest.requireActual("../components/ToastProvider"),
@@ -48,6 +58,7 @@ describe("PipelineForm for a system pipeline", () => {
     beforeEach(() => {
         jest.clearAllMocks();
         mockUpdate.mockResolvedValue({});
+        mockCan = () => true;
     });
 
     it("locks every field except Enabled and says why", () => {
@@ -92,5 +103,25 @@ describe("PipelineForm for a system pipeline", () => {
         renderEdit({ ...systemPipeline, pipelineId: "mine", isSystem: false });
         expect(screen.getByText("Edit Pipeline")).toBeInTheDocument();
         expect(screen.queryByText("View Pipeline")).toBeNull();
+    });
+
+    it("offers Enabled and Update only to a role that may update the pipeline", async () => {
+        // A role from the database-readonly template lists the pipeline routes for GET only.
+        mockCan = (method) => method === "GET";
+        const user = userEvent.setup();
+        renderEdit(systemPipeline);
+
+        const enabled = screen.getByLabelText("Enabled");
+        const update = screen.getByRole("button", { name: "Update" });
+        const reason = "Your role does not allow changing this pipeline.";
+        expect(enabled).toHaveAttribute("aria-disabled", "true");
+        expect(enabled).toHaveAttribute("aria-description", reason);
+        expect(update).toHaveAttribute("aria-disabled", "true");
+        expect(update).toHaveAttribute("aria-description", reason);
+
+        await user.click(enabled);
+        expect(enabled).toBeChecked();
+        await user.click(update);
+        expect(mockUpdate).not.toHaveBeenCalled();
     });
 });

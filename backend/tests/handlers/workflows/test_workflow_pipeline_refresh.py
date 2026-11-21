@@ -328,11 +328,49 @@ class TestDeployPublishesAVersion:
         retained = wa.MAX_RETAINED_STATE_MACHINE_VERSIONS
         newest_first = list(range(retained + 3, 0, -1))
         client = _sf_client(versions=newest_first)
-        wa.prune_state_machine_versions(client, ARN, keep_version_arns=[f"{ARN}:1"])
+        wa.prune_state_machine_versions(client, ARN, keep_version_arns=[f"{ARN}:1"],
+                                        recorded_version_arn=f"{ARN}:{retained + 3}")
         deleted = {c.kwargs["stateMachineVersionArn"]
                    for c in client.delete_state_machine_version.call_args_list}
         # The newest `retained` survive, and so does any version named to keep.
         assert deleted == {f"{ARN}:{n}" for n in newest_first[retained:] if n != 1}
+
+    def test_no_version_newer_than_the_recorded_one_is_deleted(self):
+        # A burst of launch-time redeploys of one stale workflow each publish a version; the winning
+        # write records one of them. Every one of them read the older recorded version, so none
+        # newer than it may be pruned, however many there are.
+        retained = wa.MAX_RETAINED_STATE_MACHINE_VERSIONS
+        newest_first = list(range(retained + 7, 0, -1))
+        recorded = 3
+        client = _sf_client(versions=newest_first)
+        wa.prune_state_machine_versions(client, ARN, keep_version_arns=[f"{ARN}:{retained + 7}"],
+                                        recorded_version_arn=f"{ARN}:{recorded}")
+        deleted = {c.kwargs["stateMachineVersionArn"]
+                   for c in client.delete_state_machine_version.call_args_list}
+        assert deleted == {f"{ARN}:{n}" for n in range(1, recorded)}
+
+    @pytest.mark.parametrize("recorded", ["", f"{ARN}:99"])
+    def test_nothing_is_deleted_without_a_listed_recorded_version(self, recorded):
+        client = _sf_client(versions=list(range(wa.MAX_RETAINED_STATE_MACHINE_VERSIONS + 4, 0, -1)))
+        wa.prune_state_machine_versions(client, ARN, recorded_version_arn=recorded)
+        client.delete_state_machine_version.assert_not_called()
+
+    def test_a_deploy_prunes_past_the_version_the_record_named(self):
+        retained = wa.MAX_RETAINED_STATE_MACHINE_VERSIONS
+        client = _sf_client(versions=[9] + list(range(retained + 3, 0, -1)))
+        with patch(f"{ASL}._deploy_env", return_value=_ENV), \
+                patch(f"{ASL}._sf_client", return_value=client):
+            wa.deploy_state_machine("db1", "wf1", [(_ref(), _pipeline())], existing_arn=ARN,
+                                    recorded_version_arn=f"{ARN}:2")
+        deleted = {c.kwargs["stateMachineVersionArn"]
+                   for c in client.delete_state_machine_version.call_args_list}
+        assert deleted == {f"{ARN}:1"}
+
+    def test_the_redeploy_passes_the_version_the_record_names(self):
+        item = {"workflow_arn": ARN, "workflowVersionArn": f"{ARN}:4"}
+        with patch(f"{MOD}.workflowAsl.deploy_state_machine", return_value=(ARN, [], ARN + ":5")) as deploy:
+            ws._deploy_fields("db1", "wf1", [(_ref(), _pipeline())], item)
+        assert deploy.call_args.kwargs["recorded_version_arn"] == f"{ARN}:4"
 
     def test_a_prune_failure_does_not_fail_the_deploy(self):
         client = _sf_client()
@@ -362,7 +400,8 @@ class TestDeployPublishesAVersion:
 #######################
 
 def _deployed(version="4"):
-    def _deploy(database_id, workflow_id, ref_records, existing_arn="", job_names=None):
+    def _deploy(database_id, workflow_id, ref_records, existing_arn="", job_names=None,
+                recorded_version_arn=""):
         return existing_arn or ARN, job_names or ["fghij-pipe1"], f"{ARN}:{version}"
     return _deploy
 

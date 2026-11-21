@@ -375,8 +375,9 @@ describe("the ConfigBuilder mirrors the useFips EU Sovereign warning", () => {
  * `false` the operator supplies the network path and the configuration is accepted. The check is
  * keyed on the resolved partition, not `app.govCloud.enabled`. The commercial case is the control;
  * the no-cross-Region-bucket case proves the flag is inert until such a bucket appears, which is why
- * every shipped template carries it `true`. A cross-Region DEFAULT bucket is rejected in every
- * partition. The ConfigBuilder's hand-ported rules are asserted from the same arms.
+ * the commercial template carries it `true`. The GovCloud and EU Sovereign templates ship it `false`,
+ * so adding a bucket in another Region to either template is accepted as shipped. A cross-Region
+ * DEFAULT bucket is rejected in every partition. The ConfigBuilder's hand-ported rules are asserted from the same arms.
  */
 const CROSS_REGION_ENDPOINT_MESSAGE =
     /app\.useGlobalVpc\.addCrossRegionS3Endpoints is true, but cross-Region AWS PrivateLink to Amazon S3 is available in the commercial partition only/;
@@ -424,7 +425,13 @@ describe("cross-Region S3 interface endpoint partition gate", () => {
     test.each(restrictedArms)(
         "%s (%s) names the flag and both Regions in the error",
         (region, partition, bucketRegion, base) => {
-            const run = loadConfig(base(), region, withCrossRegionBucket(bucketRegion, partition));
+            const run = loadConfig(
+                base(),
+                region,
+                withCrossRegionBucket(bucketRegion, partition, (c) => {
+                    c.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
+                })
+            );
             expect(run).toThrow(
                 new RegExp(
                     `addCrossRegionS3Endpoints[\\s\\S]*'${bucketRegion}'[\\s\\S]*'${region}'[\\s\\S]*\\(${partition}\\)[\\s\\S]*Set app\\.useGlobalVpc\\.addCrossRegionS3Endpoints to false`
@@ -457,6 +464,16 @@ describe("cross-Region S3 interface endpoint partition gate", () => {
                     c.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
                 })
             );
+            expect(run).not.toThrow();
+        }
+    );
+
+    test.each(restrictedArms)(
+        "%s (%s) accepts a bucket in %s added to the shipped template as it ships",
+        (region, partition, bucketRegion, base) => {
+            // The template's own default must not be the value getConfig() refuses there.
+            expect((base() as any).app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(false);
+            const run = loadConfig(base(), region, withCrossRegionBucket(bucketRegion, partition));
             expect(run).not.toThrow();
         }
     );
@@ -590,19 +607,26 @@ describe("ConfigBuilder mirror of the cross-Region S3 endpoint rules", () => {
             const cfg = makeDefaultConfig(profile as any);
             cfg.env.region = region;
             withBucket(cfg, bucketRegion, partition);
+            cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = true;
             expect(ruleIds(cfg)).toEqual([CROSS_REGION_ENDPOINT_RULE_ID]);
             const rule = evaluateRules(cfg).find((r) => r.id === CROSS_REGION_ENDPOINT_RULE_ID);
             expect(rule?.severity).toBe("error");
         }
     );
 
-    test("govcloud preset clears the endpoint rule with the flag false", () => {
-        const cfg = makeDefaultConfig("govcloud");
-        cfg.env.region = "us-gov-west-1";
-        withBucket(cfg, "us-gov-east-1", "aws-us-gov");
-        cfg.app.useGlobalVpc.addCrossRegionS3Endpoints = false;
-        expect(ruleIds(cfg)).toEqual([]);
-    });
+    test.each([
+        ["govcloud", "us-gov-west-1", "us-gov-east-1", "aws-us-gov"],
+        ["eusovereign", "eusc-de-east-1", "eusc-de-west-1", "aws-eusc"],
+    ])(
+        "%s preset as it ships reports no endpoint rule with a cross-Region bucket",
+        (profile, region, bucketRegion, partition) => {
+            const cfg = makeDefaultConfig(profile as any);
+            cfg.env.region = region;
+            withBucket(cfg, bucketRegion, partition);
+            expect(cfg.app.useGlobalVpc.addCrossRegionS3Endpoints).toBe(false);
+            expect(ruleIds(cfg)).toEqual([]);
+        }
+    );
 
     test("govcloud preset with in-VPC Lambdas and the flag false reports the warning", () => {
         const cfg = makeDefaultConfig("govcloud");
@@ -775,5 +799,93 @@ describe("ConfigBuilder mirror of the Blender agent model id rules", () => {
 
     test("stays silent while the agent is disabled", () => {
         expect(agentModelRuleIds("govcloud", "us-gov-west-1", undefined, false)).toEqual([]);
+    });
+});
+
+/**
+ * GenAI CAD STEP agent internet research (issue #1703). With research on, the agent sends search
+ * queries written from a run's design prompt to third-party web search engines and fetches public web
+ * pages, so the data leaves AWS and the partition. Research is off by default everywhere, and
+ * `getConfig()` refuses it in the GovCloud and EU Sovereign partitions whether or not the pipeline is
+ * enabled. The commercial partition is the control.
+ */
+const RESEARCH_REFUSED_MESSAGE =
+    /app\.pipelines\.useGenAiCadStepAgent\.allowInternetResearch is true while deploying to the '(aws-us-gov|aws-eusc)' partition/;
+
+describe("CAD STEP agent internet research", () => {
+    const allowResearch = (c: any) => {
+        c.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+    };
+
+    test.each([
+        ["commercial", commercialTemplate],
+        ["GovCloud", govcloudTemplate],
+        ["EU Sovereign", eusovereignTemplate],
+    ])("the %s template ships it off", (_name, template) => {
+        expect((template as any).app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(
+            false
+        );
+    });
+
+    test("a config that leaves it unset resolves to off", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", (c) => {
+            delete c.app.pipelines.useGenAiCadStepAgent.allowInternetResearch;
+        })();
+        expect(config.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(false);
+    });
+
+    test.each([
+        ["GovCloud", govcloudTemplate, "us-gov-west-1"],
+        ["EU Sovereign", eusovereignTemplate, "eusc-de-east-1"],
+    ])("%s refuses it, even with the pipeline disabled", (_name, template, region) => {
+        expect(loadConfig(template, region, allowResearch)).toThrow(RESEARCH_REFUSED_MESSAGE);
+    });
+
+    test.each([
+        ["GovCloud", govcloudTemplate, "us-gov-west-1"],
+        ["EU Sovereign", eusovereignTemplate, "eusc-de-east-1"],
+    ])("%s accepts the shipped value", (_name, template, region) => {
+        expect(loadConfig(template, region)).not.toThrow();
+    });
+
+    test("the commercial partition still allows it when the operator turns it on", () => {
+        const config = loadConfig(commercialTemplate, "us-east-1", allowResearch)();
+        expect(config.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(true);
+    });
+});
+
+describe("the ConfigBuilder mirrors the CAD STEP research refusal", () => {
+    const fired = (cfg: ReturnType<typeof makeDefaultConfig>) =>
+        evaluateRules(cfg).filter(
+            (rule) => rule.id === "cad-step-agent-research-off-in-restricted-partitions"
+        );
+
+    test.each(["govcloud", "eusovereign"] as const)(
+        "the %s preset ships research off and raises nothing",
+        (preset) => {
+            const cfg = makeDefaultConfig(preset);
+            if (preset === "govcloud") cfg.env.region = "us-gov-west-1";
+            expect(cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch).toBe(false);
+            expect(fired(cfg)).toEqual([]);
+        }
+    );
+
+    test.each([
+        ["govcloud", "us-gov-west-1"],
+        ["eusovereign", "eusc-de-east-1"],
+    ] as const)("raises an error for research on in the %s preset", (preset, region) => {
+        const cfg = makeDefaultConfig(preset);
+        cfg.env.region = region;
+        cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+        const rules = fired(cfg);
+        expect(rules).toHaveLength(1);
+        expect(rules[0].severity).toBe("error");
+    });
+
+    test("is silent in the commercial preset with research on", () => {
+        const cfg = makeDefaultConfig("commercial");
+        cfg.env.region = "us-east-1";
+        cfg.app.pipelines.useGenAiCadStepAgent.allowInternetResearch = true;
+        expect(fired(cfg)).toEqual([]);
     });
 });

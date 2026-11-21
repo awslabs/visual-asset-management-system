@@ -43,6 +43,7 @@ import { countText, useTextFilter } from "../components/useTextFilter";
 import { useInFlight } from "../components/useInFlight";
 import { useRemovedRowRef } from "../../../features/orchestration/components/useReturnFocus";
 import NoMatches, { noMatchesText } from "../components/NoMatches";
+import RefreshFailedNotice from "../components/RefreshFailedNotice";
 import type { WorkstationState } from "../types";
 import { edhStateLabel } from "../labels";
 import ConfirmActionDialog, {
@@ -441,7 +442,6 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                         <label className="flex items-center gap-2 text-sm text-text-primary whitespace-nowrap">
                             Stopped for at least (minutes)
                             <input
-                                aria-label="Stopped minutes"
                                 type="number"
                                 min={1}
                                 className={`${control} w-24`}
@@ -457,9 +457,13 @@ const InstancesTab: React.FC<InstancesTabProps> = ({ can }) => {
                 </div>
             </div>
 
+            {!active.isLoading && active.error && active.data && (
+                <RefreshFailedNotice error={active.error} />
+            )}
+
             {active.isLoading ? (
                 <div className="p-8 text-center text-text-secondary">Loading sessions...</div>
-            ) : active.error ? (
+            ) : active.error && !active.data ? (
                 <div className="p-4 text-vams-error">
                     Error loading sessions: {toastErrorMessage(active.error)}
                 </div>

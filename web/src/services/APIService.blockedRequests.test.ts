@@ -115,6 +115,11 @@ describe("downloadAsset", () => {
         );
         expect(await download()).toStrictEqual(QUARANTINE_REFUSED_DOWNLOAD);
     });
+
+    it("says the service could not be reached when fetch rejects without a response", async () => {
+        (apiClient.post as jest.Mock).mockRejectedValue(new TypeError("Failed to fetch"));
+        expect(await download()).toStrictEqual([false, NETWORK_FAILURE_MESSAGE, undefined]);
+    });
 });
 
 describe("fetchAssetWithStatus", () => {

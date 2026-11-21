@@ -511,7 +511,8 @@ def silence_cli_request_log() -> None:
     config directory. A remote server serves many users in one process, so that file would mix their
     requests. ``vamscli.utils.logging.get_logger()`` builds the file handler only while its module
     logger is unset; setting it here to a logger with no file handler means nothing is written,
-    without changing the CLI. ``tests/test_remote_logging.py`` pins that contract.
+    without changing the CLI. ``tests/test_remote_mode.py`` (``test_the_cli_request_log_is_silenced_in_remote_mode``)
+    pins that contract.
     """
     import logging as _logging
 

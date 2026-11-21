@@ -68,7 +68,7 @@ class TestCreateRefusals:
         env.s3.add("xasset1/gone.glb", version="dm", delete_marker=True)
         fake = types.ModuleType("handlers.assets.assetVersions")
         fake.validate_asset_version_exists = lambda db, a, v: True
-        fake.get_asset_file_versions = lambda db, a, v: {"files": [
+        fake.get_asset_file_versions = lambda db, a, v, **_kw: {"files": [
             {"relativeKey": "/gone.glb", "versionId": "dm", "size": 1}]}
         fake.resolve_asset_version_id_from_alias = lambda db, a, alias: alias
         monkeypatch.setitem(sys.modules, "handlers.assets.assetVersions", fake)
@@ -98,6 +98,24 @@ class TestUrlRefusal:
             "POST", h.asset_path("db1", "asset1", f"/{item['requestId']}/url"),
             {"databaseId": "db1", "assetId": "asset1", "requestId": item["requestId"]}), None)
         assert _answer(response) == (400, "Asset not distributable")
+
+    def test_a_finished_archive_with_an_archived_file_answers_its_own_sentence(self, env):
+        """The archive is built, so the refusal names the archive, not a selection; a create keeps
+        its own sentence."""
+        item = h.body_of(_create(env, {"selection": [{"type": "file", "relativePath": "/a.glb"}]}))
+        row = env.zip.items[("alice", item["requestId"])]
+        row["status"] = "SUCCEEDED"
+        env.s3.add(row["archiveKey"], size=10, bucket=h.AUX)
+        h.write_resolved_manifest(env, row)
+        env.s3.add("xasset1/a.glb", version="vdm", delete_marker=True)
+        h.AUTH.user = "alice"
+        response = env.svc.lambda_handler(h.api_event(
+            "POST", h.asset_path("db1", "asset1", f"/{item['requestId']}/url"),
+            {"databaseId": "db1", "assetId": "asset1", "requestId": item["requestId"]}), None)
+        assert _answer(response) == (
+            400, "A file in this archive has since been archived or deleted. Restore it, or create a new "
+                 "zip download without it.")
+        assert env.zd.MSG_ARCHIVE_FILE_UNAVAILABLE != env.zd.MSG_ARCHIVED_IN_SELECTION
 
 
 def test_the_quarantine_refusal_is_unchanged():

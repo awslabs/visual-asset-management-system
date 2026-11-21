@@ -57,7 +57,8 @@ Parameter Store. Explicit ``*_table_name`` / ``vector_reindexer_function_name`` 
 supported as optional overrides.
 
 Safety: every run is a DRY RUN unless ``--execute`` is given and the config's ``dry_run`` is false (the
-shipped config sets it true). A real run that changes asset location keys, deletes trigger rows, deletes vectors, or launches
+shipped config sets it true). A real run that changes asset location keys, deletes trigger rows, deletes vectors,
+or launches
 Bedrock-billed executions is confirmed against the resolved AWS account id - typed at a prompt or
 passed as ``--confirm-account`` - and refused when the identity cannot be resolved or confirmed.
 
@@ -406,6 +407,8 @@ COPY_TABLE_KEYS = (
 )
 LEGACY_COPY_TABLE_KEY = ('legacy_asset_file_versions_storage_table_name', 'LEGACY_ASSET_FILE_VERSIONS_STORAGE_TABLE_V1')
 _FILE_PATH_INDEX = 'DatabaseIdAssetIdFilePathIndex'
+# Set on an asset row once part (b) finished for it; a row carrying it is skipped by every later run.
+COPY_DONE_ATTRIBUTE = 'assetLocationCopyRecordsMovedAt'
 _VERSIONS_BY_ASSET_INDEX = 'databaseIdAssetIdIndex'
 _HISTORY_VERSION_ID_PREFIXES = ('unarchive:',)
 
@@ -572,42 +575,59 @@ def move_record(dynamodb_client, table: str, item: Dict, key_names: Tuple[str, .
     return 'clash' if 'Item' in dynamodb_client.get_item(TableName=table, Key=target_key) else 'gone'
 
 
-def _moved_copies_path(output_dir: str) -> str:
-    """The ledger of assets whose copy records a real run moved; both modes read it, a real run appends."""
-    return os.path.join(output_dir, f"{LOCATION_STEP}-moved-copies.jsonl")
-
-
-def _read_moved_copies(output_dir: str) -> set:
-    path = _moved_copies_path(output_dir)
-    if not os.path.exists(path):
-        return set()
-    with open(path, 'r', encoding='utf-8') as f:
-        return {json.loads(line)['asset'] for line in f if line.strip()}
+def mark_copy_records_done(dynamodb_client, asset_table: str, row: Dict) -> str:
+    """Record on the asset row that part (b) finished for it. Conditional on the row existing and not being
+    marked yet; returns 'marked' or 'already marked'. The marker travels with the row (asset archive and
+    unarchive write the whole row back) and is not part of any API response model."""
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': row['databaseId'], 'assetId': row['assetId']},
+            UpdateExpression='SET #m = :now',
+            ConditionExpression='attribute_exists(assetId) AND attribute_not_exists(#m)',
+            ExpressionAttributeNames={'#m': COPY_DONE_ATTRIBUTE},
+            ExpressionAttributeValues={':now': {'S': datetime.now(timezone.utc).isoformat()}},
+        )
+        return 'marked'
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            return 'already marked'
+        raise
 
 
 def move_companion_copy_records(dynamodb_client, s3_client, cfg: Dict, row: Dict, bucket: str, key: str,
-                                dry_run: bool, counts: Dict[str, int], report: Callable[[Dict], None],
-                                moved_copies: set) -> None:
+                                dry_run: bool, counts: Dict[str, int], report: Callable[[Dict], None]) -> None:
     """Part (b) for one single-file location: move the records of its copy '{key}/{name}' from '/{name}' to
-    '/{name}/{name}'. Nothing is read beyond the copy's own versions when the location has no copy."""
-    name = key.rsplit('/', 1)[-1]
-    copy_versions = exact_key_versions(s3_client, bucket, f"{key}/{name}")
-    if not copy_versions:
-        return
+    '/{name}/{name}', then, on a real run without errors, mark the asset row done (with or without a copy) so
+    no later run, from any directory, reads or moves its records again. A marked row costs no read."""
     database_id = _attr_s(row, 'databaseId')
     database_id = database_id[:-len('#deleted')] if database_id.endswith('#deleted') else database_id
     asset_id = _attr_s(row, 'assetId')
     asset = f"{database_id}:{asset_id}"
-    counts['copy-locations'] += 1
     base = {'part': 'companion-copy', 'database_id': database_id, 'asset_id': asset_id, 'bucket': bucket,
             'key': key}
-    if asset in moved_copies:
+    if _attr_s(row, COPY_DONE_ATTRIBUTE):
         counts['copy-already-moved'] += 1
-        report(dict(base, table=None, action='skipped: moved by an earlier real run'))
         return
+    errors_before = counts['errors']
+
+    def finish() -> None:
+        if dry_run or counts['errors'] != errors_before:
+            return
+        try:
+            mark_copy_records_done(dynamodb_client, cfg['asset_storage_table_name'], row)
+        except ClientError as e:
+            counts['errors'] += 1
+            report(dict(base, table=None, action='failed to mark the asset done', detail=str(e)))
+
+    name = key.rsplit('/', 1)[-1]
+    copy_versions = exact_key_versions(s3_client, bucket, f"{key}/{name}")
+    if not copy_versions:
+        finish()
+        return
+    counts['copy-locations'] += 1
     object_versions = exact_key_versions(s3_client, bucket, key)
     sources = (f"/{name}", name)
-    errors_before = counts['errors']
 
     def target(path: str) -> str:
         return f"{path}/{name}"
@@ -709,10 +729,7 @@ def move_companion_copy_records(dynamodb_client, s3_client, cfg: Dict, row: Dict
                 move('file version history', table, item, ('databaseId:assetId:filePath', 'versionId'),
                      path_changes(item, 'databaseId:assetId:filePath', source), source)
 
-    if not dry_run and counts['errors'] == errors_before:
-        moved_copies.add(asset)
-        with open(_moved_copies_path(cfg['output_dir']), 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'asset': asset, 'key': key, 'bucket': bucket}) + '\n')
+    finish()
 
 
 def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_run: bool,
@@ -729,7 +746,6 @@ def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_ru
     counts = {'scanned': 0, 'appended': 0, 'changed': 0, 'errors': 0}
     counts.update({c: 0 for c in LOCATION_CLASSES})
     counts.update({c: 0 for c in COPY_COUNTERS})
-    moved_copies = _read_moved_copies(cfg['output_dir'])
 
     start_key = None
     checkpoint = _read_checkpoint(checkpoint_path, asset_table) if resume else None
@@ -757,7 +773,8 @@ def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_ru
 
         while True:
             scan_kwargs = {'TableName': asset_table, 'Limit': page_size,
-                           'ProjectionExpression': 'databaseId, assetId, bucketId, assetLocation'}
+                           'ProjectionExpression': ('databaseId, assetId, bucketId, assetLocation, '
+                                                    f'{COPY_DONE_ATTRIBUTE}')}
             if start_key:
                 scan_kwargs['ExclusiveStartKey'] = start_key
             response = dynamodb_client.scan(**scan_kwargs)
@@ -777,7 +794,7 @@ def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_ru
                 if location_class == 'single-file':
                     try:
                         move_companion_copy_records(dynamodb_client, s3_client, cfg, row, bucket, key, dry_run,
-                                                    counts, write_report, moved_copies)
+                                                    counts, write_report)
                     except ClientError as e:
                         counts['errors'] += 1
                         write_report({'part': 'companion-copy', 'database_id': _attr_s(row, 'databaseId'),
@@ -875,8 +892,9 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
     logger.info(f"  Keys with no objects (reported):      {counts['no-objects']}")
     logger.info(f"  Keys that could not be read:          {counts['unreadable']}")
     logger.info(f"  Single-file keys with a copy named like the file: {counts['copy-locations']}")
-    logger.info(f"    already moved by an earlier real run: {counts['copy-already-moved']}")
-    logger.info(f"    records {'that would be ' if dry_run else ''}moved to /{{name}}/{{name}}: {counts['records-moved']}")
+    logger.info(f"  Single-file assets already done (marked on the row): {counts['copy-already-moved']}")
+    moved_label = 'that would be moved' if dry_run else 'moved'
+    logger.info(f"    records {moved_label} to /{{name}}/{{name}}: {counts['records-moved']}")
     logger.info(f"    records left, a record is already at the new path: {counts['records-clash']}")
     logger.info(f"    records left, their version is the file's own:     {counts['records-left-object']}")
     logger.info(f"    records left, their version matches neither file:  {counts['records-left-unknown-version']}")
@@ -2366,9 +2384,12 @@ Notes:
     afterwards. The summary prints how to watch them.
   - --clear-vectors defaults to FALSE: the default re-embeds every latest file in place. Pass it only
     when the stored vectors must go first (a model change, or a rebuild from scratch).
-  - assetLocationFolderKeys reads one object and lists at most one key per asset row whose location key
-    has no trailing '/', writes each finding to assetLocationFolderKeys-<mode>-report.jsonl, and saves its
-    scan position after every page (--resume continues from it). It runs first under --steps all.
+  - assetLocationFolderKeys reads one object, the versions of that one key and at most one key under it per
+    asset row whose location key has no trailing '/', writes each finding to
+    assetLocationFolderKeys-<mode>-report.jsonl, and saves its scan position after every page (--resume
+    continues from it). Part (b) moves the records of a single-file asset's copy '{key}/{name}' to
+    '/{name}/{name}' and marks the asset row done, so no later run moves them again. Run it before users
+    edit metadata on single-file assets. It runs first under --steps all.
   - assetLocationIndex is required after the v2.7 deploy and runs after assetLocationFolderKeys (last under
     --steps all, and skipped in a real run when assetLocationFolderKeys failed): it writes locationBucket and
     locationKey on every asset row (one UpdateItem per row that lacks them, paced), verifies them with

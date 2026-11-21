@@ -21,6 +21,8 @@ import {
 } from "./dependencyLoading";
 import { loadFile } from "./fileLoaders";
 import { clearPresignedUrlCache } from "../../../core/presignedFetch";
+import { downloadAsset } from "../../../../services/APIService";
+import fileNotFound from "../../../core/fileNotFoundBody.testdata.json";
 
 jest.mock("../../../../services/APIService", () => ({
     downloadAsset: jest.fn(async ({ key }: { key: string }) => [
@@ -48,17 +50,26 @@ class FakeLoadingManager {
     }
 }
 
+/** The download route's answer for a key that is not in the bucket: it checks before it signs. */
+const MISSING_FILE = fileNotFound.body.message;
+
+/**
+ * Serves `files` by key: the presign answers as the download route does (a URL for a stored key,
+ * its missing-file 400 for any other), and S3 serves the signed URLs. Returns the keys presigned.
+ */
 function installFetch(files: Record<string, string>): string[] {
     clearPresignedUrlCache();
     const requested: string[] = [];
+    (downloadAsset as jest.Mock).mockImplementation(async ({ key }: { key: string }) => {
+        requested.push(key);
+        return files[key] === undefined
+            ? [false, MISSING_FILE, fileNotFound.statusCode, MISSING_FILE]
+            : [true, `https://s3.test/${encodeURIComponent(key)}?X-Amz-Signature=sig`];
+    });
     global.fetch = jest.fn(async (url: string) => {
         const key = decodeURIComponent(
             url.replace(/^https:\/\/s3\.test\//, "").replace(/\?.*$/, "")
         );
-        requested.push(key);
-        if (files[key] === undefined) {
-            return { ok: false, status: 403, headers: { get: (): string | null => null } };
-        }
         return {
             ok: true,
             status: 200,
@@ -432,6 +443,70 @@ describe("loadWithDependencies", () => {
         expect(passed.buffers[0].uri).toBe("blob:test/1");
         expect(result.warnings).toBeUndefined();
         expect(result.dependencyCount).toBe(1);
+    });
+
+    it("decodes a glTF's percent-encoded URIs before resolving them, and keeps an invalid one as written", async () => {
+        installFetch({ "m/my texture.png": "PNG", "m/100%.png": "PNG" });
+        installBundle();
+        mockedLoadFile.mockResolvedValue({ object: {} });
+
+        const result = await loadWithDependencies({
+            arrayBuffer: buffer(
+                JSON.stringify({ images: [{ uri: "my%20texture.png" }, { uri: "100%.png" }] })
+            ),
+            extension: "gltf",
+            fileKey: "m/a.gltf",
+            fileName: "a.gltf",
+            resolver: newResolver(),
+        });
+
+        const passed = JSON.parse(new TextDecoder().decode(mockedLoadFile.mock.calls[0][0]));
+        expect(passed.images.map((image: any) => image.uri)).toEqual([
+            "blob:test/1",
+            "blob:test/2",
+        ]);
+        expect(result.warnings).toBeUndefined();
+    });
+
+    it("lists a missing percent-encoded glTF name once, under the file it names", async () => {
+        installFetch({});
+        installBundle();
+        // As GLTFLoader does, ask the manager for every URI the glTF still names.
+        mockedLoadFile.mockImplementation(async (gltf, _ext, _name, manager) => {
+            const json = JSON.parse(new TextDecoder().decode(gltf as ArrayBuffer));
+            json.images.forEach((image: any) => manager.resolveURL(image.uri));
+            return { object: {} };
+        });
+
+        const result = await loadWithDependencies({
+            arrayBuffer: buffer(JSON.stringify({ images: [{ uri: "name%20with%20space.png" }] })),
+            extension: "gltf",
+            fileKey: "m/a.gltf",
+            fileName: "a.gltf",
+            resolver: newResolver(),
+        });
+
+        expect(result.warnings).toEqual(["m/name with space.png (not found in this asset)"]);
+    });
+
+    it("lists a missing glTF name with an encoded reserved character once", async () => {
+        installFetch({});
+        installBundle();
+        mockedLoadFile.mockImplementation(async (gltf, _ext, _name, manager) => {
+            const json = JSON.parse(new TextDecoder().decode(gltf as ArrayBuffer));
+            json.images.forEach((image: any) => manager.resolveURL(image.uri));
+            return { object: {} };
+        });
+
+        const result = await loadWithDependencies({
+            arrayBuffer: buffer(JSON.stringify({ images: [{ uri: "part%231.png" }] })),
+            extension: "gltf",
+            fileKey: "m/a.gltf",
+            fileName: "a.gltf",
+            resolver: newResolver(),
+        });
+
+        expect(result.warnings).toEqual(["m/part#1.png (not found in this asset)"]);
     });
 
     it("loads self-contained formats through an isolating manager without downloads", async () => {

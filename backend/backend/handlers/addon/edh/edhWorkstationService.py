@@ -1132,9 +1132,10 @@ def _instance_type_offered_for_image(recipe_build, instance_type):
 
 def _launch_reservation(event, request, os_family):
     """(the reservation fields the launch's row carries, None), or (None, the refusal), for a launch that may
-    name a capacity reservation. None named is today's launch: no field, no read. A named one runs eight checks
-    in order, before any row, mint, worker or further EDH call: registered and offered; Tier-2 ``POST`` on it (a
-    role that may see it, Tier-2 ``GET``, is told it may not launch into it; any other gets the generic refusal);
+    name a capacity reservation. None named is today's launch: no field, no read. A named one runs nine checks
+    in order, before any row, mint, worker or further EDH call: Tier-2 on the id, which needs no read (a role with
+    neither ``POST`` nor ``GET`` on it gets the generic refusal whether or not it is registered); registered and
+    offered; Tier-2 ``POST`` (a role that may see it, Tier-2 ``GET``, is told it may not launch into it);
     EC2 read (a failure refuses, since a reservation not read is not known to be full); active; EDH has a private
     subnet in its Availability Zone (not known passes); the requested instance type; a platform that suits the
     image's family; a free slot, or, when it has none, its fallback, which launches on-demand and records the
@@ -1142,16 +1143,17 @@ def _launch_reservation(event, request, os_family):
     capacity_reservation_id = request.capacityReservationId
     if capacity_reservation_id is None:
         return {}, None
+    enforcer = _enforcer()
+    auth_object = _reservation_auth_object(capacity_reservation_id)
+    may_launch = enforcer.enforce(auth_object, "POST")
+    if not may_launch and not enforcer.enforce(auth_object, "GET"):
+        return None, authorization_error(event=event)
     registration = reservations.get_registration(capacity_reservation_id)
     if registration is None or not registration['enabled']:
         return None, validation_error(body={'message': RESERVATION_NOT_REGISTERED_MESSAGE}, event=event)
-    enforcer = _enforcer()
-    auth_object = _reservation_auth_object(capacity_reservation_id)
-    if not enforcer.enforce(auth_object, "POST"):
-        if enforcer.enforce(auth_object, "GET"):
-            return None, authorization_error(event=event, body={
-                'message': RESERVATION_NOT_PERMITTED_MESSAGE, 'code': RESERVATION_NOT_PERMITTED_CODE})
-        return None, authorization_error(event=event)
+    if not may_launch:
+        return None, authorization_error(event=event, body={
+            'message': RESERVATION_NOT_PERMITTED_MESSAGE, 'code': RESERVATION_NOT_PERMITTED_CODE})
     try:
         facts = reservations.read_live([capacity_reservation_id])[capacity_reservation_id]
     except reservations.CapacityReservationReadError as err:

@@ -10,7 +10,7 @@
     "s3_asset_buckets_storage_table_name": null,
     "asset_location_output_dir": null,
     "asset_location_pace_seconds": 0.05,
-    "_comment_location_copy": "Part (b): for a single-file location whose copy '{key}/{name}' exists, the copy's records move from '/{name}' to '/{name}/{name}' in the tables below (resolved from the prefix; the legacy V1 file versions table is skipped when not published). A record already at the new path is never overwritten (the clash is reported). Vectors and execution history are not changed: run vectorBackfill afterwards. A real run lists each finished asset in assetLocationFolderKeys-moved-copies.jsonl in asset_location_output_dir, and later runs skip them.",
+    "_comment_location_copy": "Part (b): for a single-file location whose copy '{key}/{name}' exists, the copy's records move from '/{name}' to '/{name}/{name}' in the tables below (resolved from the prefix; the legacy V1 file versions table is skipped when not published). A record already at the new path is never overwritten (the clash is reported). Vectors and execution history are not changed: run vectorBackfill afterwards. A real run marks each single-file asset row it finished (assetLocationCopyRecordsMovedAt) and every later run skips marked rows. File metadata and attributes carry no time, so run the step before users edit metadata on single-file assets.",
     "asset_file_metadata_storage_table_name": null,
     "file_attribute_storage_table_name": null,
     "asset_versions_storage_table_name": null,

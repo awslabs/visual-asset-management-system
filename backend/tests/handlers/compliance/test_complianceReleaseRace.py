@@ -58,6 +58,10 @@ REVISION = "recordRevision"
 NOT_APPLIED_MESSAGES = {
     "released": "Not applied: the asset was released after this evaluation began",
     "exceptionGranted": "Not applied: an exception was granted after this evaluation began",
+    # A binding change after the evaluation began, and an outcome the record never received.
+    "bindingChanged": ("Not applied: the asset's compliance schema binding changed after this "
+                       "evaluation began"),
+    "notRecorded": "Not applied: the outcome could not be written to the asset",
 }
 RECORD_CHANGED_MESSAGE = ("The asset's compliance record changed while the request was made; "
                           "try again")

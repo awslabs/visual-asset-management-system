@@ -84,8 +84,10 @@ export function buildDatabaseService(
                 : undefined,
         environment: {
             // A database delete queues the move of its compliance data on the compliance job queue,
-            // where the compliance job Lambda runs it (`common/compliance/databaseRetirement.py`).
+            // where the compliance job Lambda runs it (`common/compliance/databaseRetirement.py`);
+            // a move it cannot queue goes to the queue's dead-letter queue, to be redriven.
             COMPLIANCE_JOB_QUEUE_URL: storageResources.sqs.complianceJobQueue.queueUrl,
+            COMPLIANCE_JOB_DLQ_URL: storageResources.sqs.complianceJobDLQ.queueUrl,
         },
     });
 
@@ -113,6 +115,7 @@ export function buildDatabaseService(
     );
     storageResources.dynamo.complianceAuditStorageTable.grant(fun, "dynamodb:PutItem");
     storageResources.sqs.complianceJobQueue.grantSendMessages(fun);
+    storageResources.sqs.complianceJobDLQ.grantSendMessages(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     setupSecurityAndLoggingEnvironmentAndPermissions(fun, storageResources);
     globalLambdaEnvironmentsAndPermissions(fun, config);

@@ -51,7 +51,7 @@ def database_binding():
     database bound to the swept schema. A test of the binding fallback configures the mocks."""
     with patch(f"{STORE}.get_database_item", return_value=None) as get_database_item, \
             patch(f"{STORE}.databases_bound_to_schema", return_value=[]) as bound, \
-            patch(f"{STORE}.register_unrecorded_assets", return_value=0) as register_unrecorded, \
+            patch(f"{STORE}.register_unrecorded_assets_page", return_value=(0, None)) as register_unrecorded, \
             patch(f"{STORE}.register_under_database_binding") as register:
         yield {"get_database_item": get_database_item, "databases_bound_to_schema": bound,
                "register_unrecorded_assets": register_unrecorded, "register": register}
@@ -164,12 +164,86 @@ class TestRouteDispatch:
         assert response["statusCode"] == 200
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, "bound-schema", USER)
 
-    def test_post_evaluate_prefers_the_requested_schema(self):
+    def test_post_evaluate_of_a_named_schema_other_than_the_bound_one_is_a_dry_run(self):
+        """Its results are returned and nothing is recorded: no evaluation, no cascade."""
+        dry_run = {"dryRun": True, "verdict": "non_compliant", "complianceState": "compliant",
+                   "ruleResults": [], "schemaVersion": 2, "hasRuleErrors": False,
+                   "errorRules": [], "pipelineRulesNotRun": 1}
+        with patch(f"{STORE}.dry_run_evaluation", return_value=dry_run) as dry:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
+                compliance_record={"schemaName": "bound-schema"},
+                schema_item=schema_row("requested"))
+        assert response["statusCode"] == 200, response
+        body = body_of(response)
+        assert body["dryRun"] is True
+        assert body["message"] == svc.DRY_RUN_MESSAGE
+        assert (body["schemaName"], body["verdict"], body["complianceState"],
+                body["pipelineRulesNotRun"]) == ("requested", "non_compliant", "compliant", 1)
+        assert "evaluationId" not in body
+        dry.assert_called_once_with(DB, ASSET, "requested")
+        mocks["run_evaluation"].assert_not_called()
+        mocks["cascade"].assert_not_called()
+
+    def test_post_evaluate_naming_the_bound_schema_evaluates_it(self):
         response, mocks = _run(
-            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
-            compliance_record={"schemaName": "bound-schema"})
-        assert response["statusCode"] == 200
-        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, "requested", USER)
+            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "bound-schema"}),
+            compliance_record={"schemaName": "bound-schema"},
+            schema_item=schema_row("bound-schema"))
+        assert response["statusCode"] == 200, response
+        assert body_of(response)["dryRun"] is False
+        mocks["run_evaluation"].assert_called_once_with(DB, ASSET, "bound-schema", USER)
+
+    def test_a_named_schema_the_caller_may_not_read_is_refused_before_the_asset_is_read(self):
+        casbin = enforcer()
+        casbin.enforce.side_effect = lambda obj, action: obj.get("object__type") != "complianceSchema"
+        with patch(f"{STORE}.dry_run_evaluation") as dry:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
+                compliance_record={"schemaName": "bound-schema"},
+                schema_item=schema_row("requested"), casbin=casbin)
+        assert response["statusCode"] == 403
+        dry.assert_not_called()
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_an_absent_named_schema_is_checked_in_the_global_scope(self):
+        casbin = enforcer()
+        response, _ = _run(
+            rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "missing"}),
+            compliance_record={"schemaName": "bound-schema"}, casbin=casbin)
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == "Evaluation could not run: Schema not found"
+        schema_checks = [call.args[0] for call in casbin.enforce.call_args_list
+                         if call.args[0].get("object__type") == "complianceSchema"]
+        assert schema_checks == [{"object__type": "complianceSchema",
+                                  "complianceSchemaName": "missing", "databaseId": "GLOBAL"}]
+
+    def test_a_named_schema_of_another_database_is_refused(self):
+        with patch(f"{STORE}.dry_run_evaluation") as dry:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "theirs"}),
+                compliance_record={"schemaName": "bound-schema"},
+                schema_item=schema_row("theirs", database_id=OTHER_DB))
+        assert response["statusCode"] == 400
+        assert body_of(response)["message"] == svc.SCHEMA_NOT_AVAILABLE_MESSAGE
+        dry.assert_not_called()
+        mocks["run_evaluation"].assert_not_called()
+
+    def test_a_named_schema_on_an_asset_without_a_binding_is_a_dry_run(self):
+        """No schema is bound (no record binding, no database binding): naming one changes no
+        state."""
+        with patch(f"{STORE}.dry_run_evaluation", return_value={"dryRun": True, "verdict": "compliant",
+                                                               "complianceState": "unknown"}) as dry, \
+                patch(f"{STORE}.get_database_item", return_value={"databaseId": DB}), \
+                patch(f"{STORE}.register_under_database_binding") as register:
+            response, mocks = _run(
+                rest_event("POST", EVALUATE_PATH, ASSET_PARAMS, body={"schemaName": "requested"}),
+                compliance_record=None, schema_item=schema_row("requested"))
+        assert response["statusCode"] == 200, response
+        assert body_of(response)["dryRun"] is True
+        dry.assert_called_once()
+        register.assert_not_called()
+        mocks["run_evaluation"].assert_not_called()
 
     def test_post_sweep_evaluates_every_bound_asset(self):
         response, mocks = _run(
@@ -467,7 +541,7 @@ class TestEvaluateFlow:
         assert body["hasRuleErrors"] is True
         assert body["verdict"] == "quarantined"
         assert body["complianceState"] == "exception"
-        assert set(body) == {"message", "evaluationId", "schemaName", "schemaVersion", "verdict",
+        assert set(body) == {"message", "dryRun", "evaluationId", "schemaName", "schemaVersion", "verdict",
                              "complianceState", "exceptionApplied", "hasRuleErrors", "ruleResults",
                              "pipelineRulesPending", "pipelineRulesWaiting"}
 
@@ -534,9 +608,9 @@ class TestSweep:
         assert body_of(response)["message"] == "Schema not found"
         mocks["state"].query.assert_not_called()
 
-    def test_bound_assets_are_read_from_the_schema_name_index_to_exhaustion(self):
-        """The schema's index partition is read once, following LastEvaluatedKey; the pending row
-        is evaluated first, then the rest."""
+    def test_bound_assets_are_read_from_the_schema_name_index_a_page_at_a_time(self):
+        """The schema's index partition is read a page at a time, following LastEvaluatedKey; within
+        a page the pending row is evaluated first, then the rest."""
         pending_row = {"databaseId": DB, "assetId": "p", "complianceState": PENDING}
         state_table = MagicMock()
         state_table.query.side_effect = [
@@ -552,7 +626,8 @@ class TestSweep:
                 patch(f"{MOD}.check_and_trigger_cascade"):
             response = svc.lambda_handler(
                 rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), MagicMock())
-        assert [t["assetId"] for t in body_of(response)["assetsTriggered"]] == ["p", "a", "b"]
+        assert [t["assetId"] for t in body_of(response)["assetsTriggered"]] == ["a", "p", "b"]
+        assert "NextToken" not in body_of(response)
         queries = state_table.query.call_args_list
         assert len(queries) == 2
         assert all(q.kwargs["IndexName"] == "SchemaNameIndex" for q in queries)
@@ -592,7 +667,8 @@ class TestSweep:
 
     def test_sweep_stops_launching_after_the_time_budget_and_reports_the_rest(self, monkeypatch):
         assert svc.SWEEP_TIME_BUDGET_SECONDS < 29
-        monkeypatch.setattr(svc, "monotonic", _clock(0, 0, svc.SWEEP_TIME_BUDGET_SECONDS + 1))
+        # The call's start, the check before its first page, the first evaluation; then past it.
+        monkeypatch.setattr(svc, "monotonic", _clock(0, 0, 0, svc.SWEEP_TIME_BUDGET_SECONDS + 1))
         response, mocks = _run(
             rest_event("POST", SWEEP_PATH, SCHEMA_PARAMS, body={}), schema_item=schema_row(),
             state_rows=[{"databaseId": DB, "assetId": f"a{i}"} for i in range(3)])
@@ -685,7 +761,7 @@ class TestSweep:
         assert "error" not in response["body"]
         assert [c.args for c in mocks["cascade"].call_args_list] == [(DB, "a")]
         logged = " ".join(str(c.args[0]) for c in mocks["logger"].info.call_args_list)
-        assert "2 triggered (1 superseded by a newer evaluation), 0 skipped" in logged
+        assert "2 triggered (1 superseded by a newer evaluation), 0 skipped as not authorized" in logged
 
 
 @pytest.mark.unit
@@ -713,7 +789,9 @@ class TestListings:
         {"offset": 5},
         {"evaluationId": "e2", "databaseId:assetId": f"{DB}:{ASSET}"},
         {"evaluationId": 7, "databaseId:assetId": f"{DB}:{ASSET}", "evaluatedAt": "t"},
-    ], ids=["quarantine-listing-key", "offset-token", "missing-sort-key", "non-string-key"])
+        {"evaluationId": "e2", "databaseId:assetId": f"{DB}:another-asset", "evaluatedAt": "t"},
+    ], ids=["quarantine-listing-key", "offset-token", "missing-sort-key", "non-string-key",
+            "another-assets-key"])
     def test_a_history_token_from_another_listing_is_rejected_before_any_read(self, token):
         """A key that is not the AssetIndex's never reaches ExclusiveStartKey, where DynamoDB would
         fail it as an internal error."""
