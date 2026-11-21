@@ -28,7 +28,9 @@ from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
-from common.assetLocations import contains, derive_location, location_attributes
+# normalize_base_prefix: the one normalization of a registration's baseAssetsPrefix ("assets",
+# "assets/" and "/assets/" are one prefix) that every prefix comparison here goes through.
+from common.assetLocations import contains, derive_location, location_attributes, normalize_base_prefix
 from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
@@ -104,23 +106,6 @@ def normalize_s3_path(asset_base_key, file_path):
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
-def normalize_base_assets_prefix(base_assets_prefix):
-    """Normalize a bucket record's baseAssetsPrefix to its canonical S3 form.
-
-    Bucket records can spell the same physical prefix root several ways
-    ("assets", "assets/", "/assets/"), so every comparison of one bucket record
-    against another goes through this single normalization: trailing slash
-    present, no leading slash.
-    """
-    if not base_assets_prefix:
-        return ''
-    if not base_assets_prefix.endswith('/'):
-        base_assets_prefix += '/'
-    if base_assets_prefix.startswith('/'):
-        base_assets_prefix = base_assets_prefix[1:]
-    return base_assets_prefix
-
-
 def get_default_bucket_details(databaseId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
     try:
@@ -145,7 +130,7 @@ def get_default_bucket_details(databaseId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
 
-        base_assets_prefix = normalize_base_assets_prefix(base_assets_prefix)
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -424,8 +409,8 @@ def prefix_roots_overlap(prefix_a, prefix_b):
     an asset registered under either can occupy a key the other's assets reach.
     An empty prefix is the bucket root, which contains every prefix in it.
     """
-    prefix_a = normalize_base_assets_prefix(prefix_a)
-    prefix_b = normalize_base_assets_prefix(prefix_b)
+    prefix_a = normalize_base_prefix(prefix_a)
+    prefix_b = normalize_base_prefix(prefix_b)
     return (prefix_a == prefix_b
             or prefix_a.startswith(prefix_b)
             or prefix_b.startswith(prefix_a))
@@ -840,12 +825,12 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         resolved_as_prefix = normalize_location_key(s3_key)
         if resolved_as_prefix and not resolved_as_prefix.endswith('/'):
             resolved_as_prefix += '/'
-        if resolved_as_prefix == normalize_base_assets_prefix(s3_bucket_prefix):
+        if resolved_as_prefix == normalize_base_prefix(s3_bucket_prefix):
             error_msg = ("The specified bucketExistingKey is the S3 bucket location root for this "
                          "database. An asset must be located in a folder beneath it.")
             logger.error(
                 f"{error_msg}: resolved {s3_key} equals base prefix root "
-                f"{normalize_base_assets_prefix(s3_bucket_prefix)!r}")
+                f"{normalize_base_prefix(s3_bucket_prefix)!r}")
             raise VAMSGeneralErrorResponse(error_msg)
 
         # A key inside a VAMS system folder holds system data, never an asset's files. Refused before any
