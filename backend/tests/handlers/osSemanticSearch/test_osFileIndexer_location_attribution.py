@@ -263,7 +263,12 @@ class TestIndexedAt:
         result = self._index(fileIndexer, update_error=error)
         assert result.success is True and result.operation == "index"
 
-    def test_an_unversioned_object_writes_no_ledger_update(self, fileIndexer):
-        result = self._index(fileIndexer, version_id="null")
+    @pytest.mark.parametrize("version_id", ["null", None, ""])
+    def test_an_unversioned_object_gets_indexed_at_on_its_null_version_row(self, fileIndexer, version_id):
+        # Bucket sync writes the ledger row of an object without versioning under versionId "null".
+        result = self._index(fileIndexer, version_id=version_id)
         assert result.success is True
-        assert not fileIndexer.asset_file_version_history_table.update_item.called
+        update = fileIndexer.asset_file_version_history_table.update_item
+        assert update.call_count == 1
+        assert update.call_args.kwargs["Key"] == {"databaseId:assetId:filePath": "db1:a1:/sub/m.glb",
+                                                  "versionId": "null"}

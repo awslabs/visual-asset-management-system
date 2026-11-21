@@ -1262,9 +1262,9 @@ def delete_file_documents_by_asset_and_path(asset_id: str, file_path: str,
 def record_indexed_version(database_id: str, asset_id: str, file_path: str, version_id: Optional[str]) -> bool:
     """Set `indexedAt` on the sync-ledger row of the version just indexed (the file version history
     row bucket sync writes per version). One conditional UpdateItem: a version with no row (an object
-    bucket sync has not recorded) is logged and left alone; a failure never fails the indexing."""
-    if not version_id or version_id == 'null':
-        return False
+    bucket sync has not recorded) is logged and left alone; a failure never fails the indexing. An
+    object of a bucket without versioning has the version id 'null', as on its ledger row."""
+    version_id = version_id or 'null'
     file_path = normalize_history_file_path(file_path)
     try:
         asset_file_version_history_table.update_item(
