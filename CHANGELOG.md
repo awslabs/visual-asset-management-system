@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file. See [standa
 
 -   **Backend** A Lambda cold start loads all of the deployment's resource names with one Parameter Store call (one more for each further 10 chunk parameters) instead of one call per 10 names, about nine on a default deployment, which lowers the load a burst of cold starts puts on the account's shared Parameter Store throughput. The deployment publishes the names a second time as a few JSON chunk parameters under `resourceNamesChunks/`, and the one-parameter-per-name layout stays for deployment tooling, external pipeline stacks and rollback. ([#1809](https://github.com/awslabs/visual-asset-management-system/issues/1809))
     -   Note: add-on names and a fork's names published with `publishCustomResourceName()` are included with no change on their side.
+    -   Note: VAMS Lambda roles gain one statement, `ssm:GetParameters` on `/<name>-<baseStackName>-<region>/resourceNamesChunks/*`. With pre-created VAMS roles (`app.iamRoleConfig.useCustomVamsStackRoles`) or a permissions boundary (`PermissionBoundaryArn`) that allows only the `resourceNames/*` path, add it to the roles or the boundary; until then each cold start reads every name one call per 10 names, as before.
 
 ### Bug Fixes
 
