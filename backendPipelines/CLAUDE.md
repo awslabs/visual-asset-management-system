@@ -818,7 +818,10 @@ at every hop (`MANIFEST_NAMED_VERSION_PIPELINES` in `backendPipelines/tests/test
     every version of the copy on success and on failure (the ECS task's `ResultPath` keeps that field
     in the state), and the bucket's lifecycle rule for the prefix (`Config.MODELOPS_STAGED_INPUT_PREFIX`)
     expires a copy a crashed run leaves. A current-version or no-version run reads the original object
-    and makes no extra call.
+    and makes no extra call, except a single-file asset's object (`inputAssetRootS3Key` without a trailing
+    `/`, equal to the input key, in the input's bucket: `single_file_asset_object`), which is always read
+    from that copy, so the folder the image is given holds that file only and not the other keys of the
+    object's own folder.
 -   **IAM.** S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod
     role built from explicit statements over `getS3AssetBucketRecords()` grants it beside `s3:GetObject`
     (`infra/test/pipelines/pipelineInputVersionGrants.test.ts`); a Lambda granted through
