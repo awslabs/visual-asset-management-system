@@ -28,7 +28,7 @@ def _job_config():
     """A job configuration shaped like the one ``executeBatchJob`` submits."""
     return {
         "name": "isaaclab-job",
-        "trainingConfig": {"mode": "evaluate", "task": "Isaac-Cartpole-v0", "numEnvs": 16},
+        "trainingConfig": {"mode": "evaluate", "task": "Isaac-Cartpole", "numEnvs": 16},
         "computeConfig": {"numNodes": 1},
         "policyS3Uri": _POLICY_VALUE,
         "outputS3AssetFilesPath": "s3://vams-assets-bucket/pipelines/isaaclab/JOB/output/E1/files/",
