@@ -179,9 +179,12 @@ uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o re
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-emit-project --only-group step --no-annotate -o requirements-step.txt
 
-# Five pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
-# coordinate transform, Potree): the same hashed export, written to that name
+# Six pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
+# coordinate transform, Potree, Isaac Lab training): the same hashed export, written to that name
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
+
+# Cosmos Transfer installs the same hashed export of its NCCL wheel as `requirements-nccl.lock`
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements-nccl.lock
 ```
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
@@ -226,8 +229,8 @@ The audit covers only the packages in a `uv.lock` and its committed exports. It 
 
 -   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
 -   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
--   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, only Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment) is locked. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), GR00T (after PR #1812 merges), Isaac Lab training (#1817), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`);
--   packages that come with a container base image or the Lambda runtime;
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, only Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment) is locked. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), GR00T (after PR #1812 merges), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`);
+-   packages that come with a container base image or the Lambda runtime and are not in a lock, including the Isaac Lab base image's other Python packages (the Isaac Lab training image's lock lists the packages the image adds and the base-image packages those need, at the base image's versions, and the audit reads all of them);
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
 
 The release-time image scan remains the record for a full container image.
@@ -253,7 +256,7 @@ Fix an advisory by moving the package to a fixed version (steps above). A securi
 
 Do not pass `--exclude-newer-package` on the `uv lock` command line instead: the override is then recorded in `uv.lock` but not in `pyproject.toml`, and the next `uv lock --check`, which the CI audit runs, fails.
 
-Allowlist an advisory only when no fixed release exists, or when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime). Add an entry to `.github/python-audit-allowlist.json`:
+Allowlist an advisory only when no fixed release exists, when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime), or when a vendor base image ships the package and the image's lock keeps the base image's version (the Isaac Lab training image, whose fixes arrive with the next base image digest). Add an entry to `.github/python-audit-allowlist.json`:
 
 ```json
 {
@@ -261,6 +264,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
         {
             "id": "PYSEC-2026-0000",
             "package": "examplepkg",
+            "projects": ["backend"],
             "reason": "No fixed release yet; the affected function is not called by VAMS.",
             "reviewBy": "2027-01-31"
         }
@@ -268,7 +272,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
 }
 ```
 
-`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `projects` lists the project directories the entry applies to (each a directory with a tracked `uv.lock`, written as the audit prints it, for example `backendPipelines/simulation/isaacLabTraining/container`), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. An entry matches on the advisory id, the package and the project, not on the version, so the same advisory in a project the entry does not name still fails the build. CI fails an entry with no reason, no projects, a project without a tracked `uv.lock`, or a `reviewBy` in the past, and fails each project where the entry's id no longer matches a finding, so a project is removed from an entry once the package moves there, and the entry once it names no project.
 
 ## Infrastructure Setup
 

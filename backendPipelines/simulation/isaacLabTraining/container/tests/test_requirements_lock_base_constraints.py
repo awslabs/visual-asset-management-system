@@ -42,8 +42,18 @@ def test_lock_does_not_change_a_package_the_base_image_ships():
 
 def test_lock_adds_the_direct_dependencies():
     lock = _pins(_read("requirements.lock"))
-    for name in _pins(_read("requirements.txt")):
+    direct = re.search(r"^dependencies = \[(.*?)^\]", _read("pyproject.toml"), re.MULTILINE | re.DOTALL).group(1)
+    names = _pins("\n".join(re.findall(r'"([^"]+)"', direct)))
+    assert names
+    for name in names:
         assert name in lock
+
+
+def test_pyproject_constraints_equal_the_base_constraints():
+    """uv reads constraint-dependencies from pyproject.toml, so the list is a copy of base-constraints.txt."""
+    block = re.search(r"^constraint-dependencies = \[(.*?)^\]", _read("pyproject.toml"), re.MULTILINE | re.DOTALL).group(1)
+    copied = _pins("\n".join(re.findall(r'"([^"]+)"', block)))
+    assert copied == _pins(_read("base-constraints.txt"))
 
 
 def test_constraints_header_digest_matches_the_dockerfile():

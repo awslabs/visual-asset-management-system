@@ -75,15 +75,6 @@ function normalize(name: string): string {
     return name.toLowerCase().replace(/[-_.]+/g, "-");
 }
 
-/** Direct dependency names in a plain requirements.txt (the GPU images, which are not uv projects yet). */
-function requirementsTxtDependencies(text: string): string[] {
-    return text
-        .split(/\r?\n/)
-        .map((l) => l.replace(/#.*/, "").trim())
-        .filter(Boolean)
-        .map((l) => normalize(/^[A-Za-z0-9][A-Za-z0-9._-]*/.exec(l)![0]));
-}
-
 /** Direct dependency names in a pyproject.toml's `[project] dependencies` list. */
 function directDependencies(text: string): string[] {
     const block = /^dependencies = \[([\s\S]*?)^\]/m.exec(text);
@@ -257,18 +248,32 @@ describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfil
         }
     });
 
-    it("locks every direct dependency of requirements.txt, with a hash on every pin", () => {
-        expect(lock).toMatch(
-            /^#\s+uv pip compile requirements\.txt (?:--constraint \S+ )?--generate-hashes /m
-        );
+    it("locks every direct dependency of pyproject.toml, with a hash on every pin", () => {
+        expect(lock).toMatch(/^#\s+uv export --frozen /m);
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
         expect(entries.length).toBeGreaterThan(0);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
         const locked = new Set(entries.map((e) => e.name));
-        const direct = requirementsTxtDependencies(
-            fs.readFileSync(path.join(root, "requirements.txt"), "utf-8")
+        const direct = directDependencies(
+            fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8")
         );
         expect(direct.length).toBeGreaterThan(0);
         expect(direct.filter((name) => !locked.has(name))).toEqual([]);
+    });
+});
+
+describe("the Isaac Lab training image", () => {
+    const root = path.join(PIPELINES_DIR, "simulation/isaacLabTraining/container");
+    const steps = instructions(fs.readFileSync(path.join(root, "Dockerfile"), "utf-8"));
+
+    it("builds its one source package with the base image's pinned setuptools, not a fetched build environment", () => {
+        const moviepySourceBuilds = installSteps(steps).filter((step) =>
+            /--no-binary moviepy/.test(step)
+        );
+        expect(moviepySourceBuilds).toHaveLength(1);
+        expect(moviepySourceBuilds[0]).toMatch(/--no-build-isolation/);
+        const baseConstraints = fs.readFileSync(path.join(root, "base-constraints.txt"), "utf-8");
+        expect(baseConstraints).toMatch(/^setuptools==\S+$/m);
     });
 });
 
@@ -334,22 +339,49 @@ describe("the GR00T image", () => {
 
     it("locks Isaac-GR00T's base dependencies and the image's own, a hash on every pin", () => {
         expect(lock).toMatch(
-            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements-image\.txt --generate-hashes /m
+            /^#\s+uv pip compile \/workspace\/pyproject\.toml --extra base requirements-image\.txt --override requirements-overrides\.txt --exclude-newer \S+ --generate-hashes /m
         );
         const entries = lockEntries(lock);
         expect(entries.length).toBeGreaterThan(100);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
         const locked = new Set(entries.map((e) => e.name));
-        for (const name of [
-            "torch",
-            "tensorflow",
-            "transformers",
-            "flash-attn",
-            "gpustat",
-            "setuptools-scm",
-        ]) {
+        for (const name of ["torch", "transformers", "flash-attn", "gpustat", "setuptools-scm"]) {
             expect([name, locked.has(name)]).toEqual([name, true]);
         }
+    });
+
+    it("locks the version of every override, and leaves out what an override removes", () => {
+        // requirements-overrides.txt replaces Isaac-GR00T's own pins; a never-matching marker removes a package.
+        const overrides = fs
+            .readFileSync(path.join(root, "requirements-overrides.txt"), "utf-8")
+            .split(/\r?\n/)
+            .map((l) => l.replace(/#.*/, "").trim())
+            .filter(Boolean);
+        const pinned = overrides
+            .map((l) => /^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)$/.exec(l))
+            .filter((m): m is RegExpExecArray => m !== null);
+        const removed = overrides
+            .map((l) => /^([A-Za-z0-9][A-Za-z0-9._-]*)\s*;\s*sys_platform == "never"$/.exec(l))
+            .filter((m): m is RegExpExecArray => m !== null);
+        expect(pinned.length + removed.length).toEqual(overrides.length);
+        expect(pinned.length).toBeGreaterThan(0);
+        const main = versions(lock);
+        for (const [, name, version] of pinned) {
+            expect([name, main.get(normalize(name))]).toEqual([name, version]);
+        }
+        expect(removed.map((m) => normalize(m[1]))).toEqual(["tensorflow"]);
+        for (const name of ["tensorflow", "keras"]) {
+            expect([name, main.has(name)]).toEqual([name, false]);
+        }
+    });
+
+    it("installs the flash-attn wheel built for the locked torch", () => {
+        const torch = versions(lock).get("torch")!;
+        const wheel = /^flash-attn @ \S+\+cu12torch(\d+\.\d+)cxx11abi(?:TRUE|FALSE)-cp310-/m.exec(
+            lock
+        );
+        expect(wheel).not.toBeNull();
+        expect(torch.split(".").slice(0, 2).join(".")).toEqual(wheel![1]);
     });
 
     it("builds with the same tool versions the main lock holds", () => {
