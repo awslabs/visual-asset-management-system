@@ -381,7 +381,8 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
     `bucketAccountId` is the bucket's owning account when it is not the deployment account.
     `excludeLocations`, present only when not empty, lists the stored locations of other assets nested in
     the input asset's location under a folder input: the keys they hold are those assets' files, so a
-    pipeline that lists the folder leaves them out."""
+    pipeline that lists the folder leaves them out. Every step's entry carries it (the interim step
+    recomputes it for steps 2+, `fileAttribution.folder_input_exclude_locations`)."""
     entry = {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",

@@ -44,7 +44,7 @@ from common.assetLocations import (
     folder_listing_prefix, in_folder, is_folder_location, normalize_base_prefix, normalize_location, object_key_for,
     relative_path_in,
 )
-from common.fileAttribution import nested_locations_of_asset
+from common.fileAttribution import folder_input_exclude_locations, nested_locations_of_asset
 from common.resourceNames import get_table_name, get_bucket_name, ResourceKeys
 from common.apiRoutes import (
     API_ASSET_METADATA,
@@ -1912,12 +1912,10 @@ def _build_input_manifest_entries(selected_inputs, asset_records):
         # and the persisted input row name the same version.
         version_id = item.get("resolvedVersionId") or item.get("versionId", "")
         # A folder input (or the whole asset) names the locations of assets nested in it: a pipeline that
-        # lists the folder leaves their keys out
-        exclude_locations = []
-        if not full_key or full_key.endswith("/"):
-            nested = nested_locations_of_asset(_asset_table(), _buckets_table(), asset, bucket, root,
-                                               asset_table_name=asset_table_name)
-            exclude_locations = [loc for loc in nested.locations if loc.startswith(full_key or "")]
+        # lists the folder leaves their keys out. The interim step recomputes them for steps 2+ by the
+        # same rule (folder_input_exclude_locations).
+        exclude_locations = folder_input_exclude_locations(_asset_table(), bucket, root, full_key,
+                                                           asset_table_name=asset_table_name)
         entries.append(er.build_manifest_entry(
             relative_path=relative, bucket=bucket, key=full_key,
             version_id=version_id, database_id=database_id, asset_id=asset_id,

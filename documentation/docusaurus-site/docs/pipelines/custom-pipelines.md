@@ -504,7 +504,7 @@ Four behaviors are worth knowing:
     bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
     Region), and `bucketAccountId`, its owning account when that is not the deployment account
     (`""` otherwise). A folder input (a `key` ending in `/`, or the whole asset) whose asset holds the
-    location of another asset inside it also carries `excludeLocations`, those stored locations: their
+    location of another asset inside it also carries `excludeLocations`, those stored locations, in every step's manifest: their
     keys are the other assets' files, so a pipeline that lists the folder leaves out every key one of
     them holds (a folder location holds every key under it; a single-file location its own key, the keys
     under `{key}/` and its previews). Read S3 with `bucket`, through a client for `bucketRegion`

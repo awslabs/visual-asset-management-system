@@ -1158,6 +1158,17 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
+    // A folder input of the next step leaves out the files of assets nested in it, whose locations are
+    // read from the asset table's location index, that index only (#1207 D9).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [
+                `${storageResources.dynamo.assetStorageTable.tableArn}/index/${ASSET_LOCATION_INDEX}`,
+            ],
+        })
+    );
     // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's

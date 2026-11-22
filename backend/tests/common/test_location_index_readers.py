@@ -43,6 +43,7 @@ class TestTheReading:
         handlers = lir.reader_handlers(lir.handler_entry_points())
         for handler in (
             "handlers.workflows.executeWorkflow.lambda_handler",
+            "handlers.workflows.sfn.interimPipelineTracking.lambda_handler",
             "handlers.workflows.sfn.workflowTriggerDispatch.lambda_handler",
             "handlers.assets.zipDownloadService.lambda_handler",
             "handlers.assets.assetFiles.lambda_handler",

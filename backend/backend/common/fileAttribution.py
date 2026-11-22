@@ -465,6 +465,25 @@ def nested_locations_of_asset(asset_table, buckets_table, asset: Optional[Dict[s
                                include_shared=include_shared)
 
 
+def folder_input_exclude_locations(asset_table, bucket_name: str, asset_root: Optional[str],
+                                   input_key: Optional[str], *,
+                                   asset_table_name: Optional[str] = None) -> List[str]:
+    """The stored locations of other assets nested in an asset's location that lie under one workflow input,
+    sorted: the manifest entry's `excludeLocations`, whose keys a pipeline that lists the folder leaves out.
+
+    Only a folder input (`input_key` empty or ending in `/`: the whole asset or a folder of it) names any; a
+    file input names none and reads nothing. The answer comes from the asset's own bucket (`bucket_name`) and
+    stored location (`asset_root`) and the input's key, never from a manifest entry's `bucket` and `key`, which
+    an earlier step's output may have replaced with a run-bucket key, so every step of a workflow gets it from
+    the same rule (executeWorkflow for step 1, the interim step for the rest). A read: from the location index
+    once it is ready; before, none."""
+    key = normalize_location(input_key)
+    if key and not key.endswith('/'):
+        return []
+    nested = nested_locations_of(asset_table, bucket_name, asset_root, asset_table_name=asset_table_name)
+    return sorted(location for location in nested.locations if location.startswith(key))
+
+
 def nested_locations_for_asset_type(asset_table, asset: Optional[Dict[str, Any]], bucket_name: str,
                                     location: Optional[str], *,
                                     asset_table_name: Optional[str] = None) -> Optional[NestedLocations]:
