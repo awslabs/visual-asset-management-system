@@ -174,9 +174,9 @@ def _assert_valid_retry_list(retriers):
         assert isinstance(names, list) and names and all(isinstance(n, str) and n for n in names)
         if "States.ALL" in names:
             assert names == ["States.ALL"] and index == len(retriers) - 1, retriers
-        for field in ("IntervalSeconds", "MaxDelaySeconds"):
+        for field, ceiling in (("IntervalSeconds", 99999999), ("MaxDelaySeconds", 31622400)):
             if field in retrier:
-                assert isinstance(retrier[field], int) and 1 <= retrier[field] <= 31622401
+                assert isinstance(retrier[field], int) and 1 <= retrier[field] <= ceiling
         if "MaxAttempts" in retrier:
             assert isinstance(retrier["MaxAttempts"], int) and 0 <= retrier["MaxAttempts"] <= 99999999
         if "BackoffRate" in retrier:
