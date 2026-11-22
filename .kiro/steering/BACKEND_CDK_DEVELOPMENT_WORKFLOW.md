@@ -25,6 +25,7 @@ backend/
 │   ├── common/                # Shared utilities
 │   │   ├── constants.py       # Constants and configuration
 │   │   ├── validators.py      # Input validation functions
+│   │   ├── assetLocations.py  # What an assetLocation.Key covers (folder ending in '/', else a single file with its companion folder and previews)
 │   │   └── dynamodb.py        # DynamoDB utilities (query_all_items, query_has_match, …)
 │   └── customLogging/         # Logging utilities
 ├── tests/                     # Test files (mirror handler structure)
