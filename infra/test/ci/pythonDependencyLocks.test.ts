@@ -636,6 +636,44 @@ describe("Python dependency lock coverage (control)", () => {
             expect(result.rc).toBe(1);
         });
 
+        test("an entry for a nested project silences nothing at a parent, sibling, child or prefix-sharing path", () => {
+            const scoped = "pipelines/sim/container";
+            const others = [
+                "pipelines/sim",
+                "pipelines/sim/other",
+                "pipelines/sim/container2",
+                "pipelines/sim/container/layer",
+            ];
+            const projects = [scoped, ...others];
+            const tree: Record<string, string> = {
+                ".github/python-audit-allowlist.json": JSON.stringify({
+                    entries: [entry([scoped])],
+                }),
+                ".github/python-lock-exemptions.json": JSON.stringify({
+                    exemptions: [],
+                    rangedInputs: [],
+                }),
+            };
+            projects.forEach((project) => {
+                tree[`${project}/uv.lock`] = "";
+                tree[`${project}/requirements.txt`] = exportFile;
+            });
+            const result = withTree(tree, (root, tracked) =>
+                auditRun(
+                    root,
+                    tracked,
+                    Object.fromEntries(projects.map((project) => [project, [pillow]]))
+                )
+            );
+            expect(result.out).toContain("Findings: 5. Allowlisted: 1.");
+            others.forEach((project) =>
+                expect(result.out).toContain(`pillow 12.3.0 in ${project}: PYSEC-2026-0001`)
+            );
+            expect(result.out).not.toContain(`pillow 12.3.0 in ${scoped}:`);
+            expect(result.out).not.toContain("matches no current finding");
+            expect(result.rc).toBe(1);
+        });
+
         test.each([
             ["no projects key", entry(), "has no projects"],
             ["an empty projects list", entry([]), "has no projects"],
