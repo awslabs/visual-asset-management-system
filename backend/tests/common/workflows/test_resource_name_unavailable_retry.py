@@ -153,11 +153,12 @@ class TestReach:
         assert retrier["JitterStrategy"] == "FULL"
         caps = [min(retrier["IntervalSeconds"] * retrier["BackoffRate"] ** n, retrier["MaxDelaySeconds"])
                 for n in range(retrier["MaxAttempts"])]
-        # With full jitter each delay is uniform in [0, cap]. On a test deployment the burst kept
-        # Parameter Store throttled for about 150 s: the mean total wait is well past it and the
-        # longest one stays bounded.
-        assert sum(caps) / 2 >= 240
+        # With full jitter each delay is uniform in [0, cap]. On a test deployment a burst kept
+        # Parameter Store throttled for up to 240 s: the mean total wait is past it, the longest one
+        # stays bounded, and the first retry waits long enough not to feed the burst.
+        assert sum(caps) / 2 > 240
         assert sum(caps) <= 15 * 60
+        assert retrier["IntervalSeconds"] >= 15
         assert retrier["MaxDelaySeconds"] <= 60
 
 
@@ -200,12 +201,13 @@ class TestTheDefinitionStaysValid:
 @pytest.mark.unit
 class TestDeployedWorkflowsPickItUp:
     def test_the_schema_version_moved(self):
-        assert asl.ASL_SCHEMA_VERSION == wa.ASL_SCHEMA_VERSION == 4
-        assert "aslSchemaVersion=4" in _definition()["Comment"]
+        assert asl.ASL_SCHEMA_VERSION == wa.ASL_SCHEMA_VERSION == 5
+        assert "aslSchemaVersion=5" in _definition()["Comment"]
 
-    def test_a_workflow_deployed_before_the_retrier_is_redeployed_at_launch(self):
+    @pytest.mark.parametrize("deployed_under", ["3", "4"])
+    def test_a_workflow_deployed_before_the_retrier_is_redeployed_at_launch(self, deployed_under):
         record = {"databaseId": "db", "pipelineId": "p1", "executionConfig": {"executionType": "Lambda"}}
-        deployed = {"workflowVersionArn": "arn:sm:1", "aslSchemaVersion": "3",
+        deployed = {"workflowVersionArn": "arn:sm:1", "aslSchemaVersion": deployed_under,
                     "pipelineFingerprints": wa.workflow_pipeline_fingerprints([record]),
                     "outputIngestionWaitHours": str(wa._max_wait_hours())}
         assert wa.fingerprints_match(deployed, [record]) is True
@@ -238,10 +240,12 @@ def _resolver_calls(tree):
 
 @pytest.mark.unit
 class TestTheRefusalCanOnlyComeFromInit:
-    """The retrier is safe because a scaffolding handler raises ResourceNameUnavailableError only while
-    its module loads, before its handler runs. A lookup added inside a function would be refused after
-    the handler may have written something; this pins that every such lookup is inside a try that
-    catches it."""
+    """A scaffolding handler's own lookups raise ResourceNameUnavailableError only while its module
+    loads, before its handler runs. A lookup added inside a function would be refused after the
+    handler may have written something; this pins that every such lookup is inside a try that catches
+    it. The process-output handler also raises the error on purpose when a function it calls could not
+    start, after releasing its ledger claims; that path is tested in
+    tests/handlers/workflows/test_processOutput_refused_callee.py."""
 
     @pytest.mark.parametrize("relative_path", SCAFFOLDING_HANDLERS)
     def test_names_are_resolved_at_import_and_lazy_lookups_are_caught(self, relative_path):

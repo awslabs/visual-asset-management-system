@@ -47,8 +47,8 @@ def _process_output_id(states):
 @pytest.mark.unit
 class TestSchemaTwoDefinition:
     def test_schema_version_is_two_and_stamped(self):
-        assert asl.ASL_SCHEMA_VERSION == 4 == wa.ASL_SCHEMA_VERSION
-        assert "aslSchemaVersion=4" in _generate()["Comment"]
+        assert asl.ASL_SCHEMA_VERSION == 5 == wa.ASL_SCHEMA_VERSION
+        assert "aslSchemaVersion=5" in _generate()["Comment"]
 
     def test_process_output_leads_to_the_choice_and_tells_the_step_a_wait_follows(self):
         states = _generate()["States"]
@@ -202,13 +202,13 @@ class TestExistingWorkflowsMoveAtNextLaunch:
         record["outputIngestionWaitHours"] = str(wa.MAX_OUTPUT_INGESTION_WAIT_HOURS)
         return record
 
-    @pytest.mark.parametrize("schema", [None, "", "1", 1, "2", 2, "3", 3])
+    @pytest.mark.parametrize("schema", [None, "", "1", 1, "2", 2, "3", 3, "4", 4])
     def test_an_older_schema_does_not_match(self, schema):
         record = self._deployed(schema)
         assert wa.fingerprints_match(record, [self.PIPELINE]) is True
         assert wa.deployment_matches(record, [self.PIPELINE]) is False
 
-    @pytest.mark.parametrize("schema", ["4", 4])
+    @pytest.mark.parametrize("schema", ["5", 5])
     def test_the_current_schema_matches(self, schema):
         assert wa.deployment_matches(self._deployed(schema), [self.PIPELINE]) is True
 

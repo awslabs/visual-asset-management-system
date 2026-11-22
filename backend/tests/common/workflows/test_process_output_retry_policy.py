@@ -65,12 +65,12 @@ class TestDeployedWorkflowsPickItUp:
         _state, definition = _process_output_state()
         assert f"aslSchemaVersion={wa.ASL_SCHEMA_VERSION}" in definition["Comment"]
 
-    @pytest.mark.parametrize("deployed_under", [None, "1", "2", "3"])
+    @pytest.mark.parametrize("deployed_under", [None, "1", "2", "3", "4"])
     def test_a_workflow_deployed_under_an_older_schema_is_redeployed_at_launch(self, deployed_under):
         # One mechanism (#1123 + #1271): the stored aslSchemaVersion, compared by deployment_matches.
         # Version 1 predates the large-output wait, 2 the Sandbox.Timedout / EarlierIngestionInProgress
-        # retry, 3 the resource-name retrier (#1187); each redeploys, and so does a record written
-        # before the field existed.
+        # retry, 3 and 4 the resource-name retrier and its first interval (#1187); each redeploys, and
+        # so does a record written before the field existed.
         record = {"databaseId": "db", "pipelineId": "p1", "executionConfig": {"executionType": "Lambda"}}
         prints = wa.workflow_pipeline_fingerprints([record])
         assert set(prints) == {"db:p1"}
@@ -79,6 +79,6 @@ class TestDeployedWorkflowsPickItUp:
         if deployed_under is not None:
             deployed["aslSchemaVersion"] = deployed_under
         assert wa.deployment_matches(deployed, [record]) is False
-        redeployed = {**deployed, "workflowVersionArn": "arn:sm:2", "aslSchemaVersion": "4"}
-        assert wa.ASL_SCHEMA_VERSION == 4
+        redeployed = {**deployed, "workflowVersionArn": "arn:sm:2", "aslSchemaVersion": "5"}
+        assert wa.ASL_SCHEMA_VERSION == 5
         assert wa.deployment_matches(redeployed, [record]) is True
