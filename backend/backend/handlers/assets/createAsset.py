@@ -296,7 +296,9 @@ def check_s3_prefix_exists(bucket_name, prefix):
     appends the slash and reads the very same objects. Widening the probe alone
     would match a sibling such as `<base>legacy-other/`, so each returned key is
     accepted only when it equals the bare form or sits under the slash-bearing
-    one — the same containment rule keys_conflict() applies.
+    one. This asks whether objects occupy one location in S3; whether two asset
+    locations overlap is a different question, which keys_conflict() answers with
+    common.assetLocations.locations_share_key.
 
     Args:
         bucket_name: S3 bucket name
@@ -496,9 +498,12 @@ def assert_existing_key_not_owned(bucket_ids, resolved_s3_key):
     Because multiple databases can share one bucket and prefix root, an asset's
     S3 location is only unambiguously owned when a single asset record maps to it.
     We query all assets in the colocated buckets (via the BucketIdGSI) and reject
-    if any existing asset's assetLocation.Key equals, is a parent of, or is a
-    child of the resolved key, so a new asset cannot be bound onto a location
-    another asset owns.
+    if any existing asset's location holds a key that the resolved location also
+    holds (keys_conflict(), through common.assetLocations.locations_share_key), so
+    a new asset cannot be bound onto a location another asset owns. That is more
+    than one location equal to, inside or around the other: a single file
+    `p/model.glb` and `p/model.glb.previewFile` share preview keys that neither
+    location key names, and are refused too.
 
     A caller-supplied bucketExistingKey is an arbitrary key, so every record in
     the partition has to be compared: this walks the full BucketIdGSI partition.
