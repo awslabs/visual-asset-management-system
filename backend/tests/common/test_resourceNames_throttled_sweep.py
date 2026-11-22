@@ -22,7 +22,6 @@ The SSM client is a fake that serves pages with string-offset NextTokens. It als
 paginator. Time is a fake clock driven through the module's ``_monotonic`` and ``_sleep``.
 """
 
-import json
 import os
 import threading
 import time
