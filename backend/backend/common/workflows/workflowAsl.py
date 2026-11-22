@@ -42,8 +42,9 @@ logger = safeLogger()
 # redeployed by its next launch or pipeline refresh (deployment_matches -> asl_schema_current, which
 # compares the stored aslSchemaVersion). Bump it, together with workflowAslBuilder.ASL_SCHEMA_VERSION,
 # whenever the builders change every definition. 2 adds the wait for large outputs (#1123); 3 adds the
-# process-output retry of Sandbox.Timedout and EarlierIngestionInProgress (#1290, #1271).
-ASL_SCHEMA_VERSION = 3
+# process-output retry of Sandbox.Timedout and EarlierIngestionInProgress (#1290, #1271); 4 the retry
+# of a refused resource-name lookup on the scaffolding states (#1187).
+ASL_SCHEMA_VERSION = 4
 
 # Published versions kept per workflow state machine. Step Functions caps a state machine at 1000
 # versions; older ones are deleted after each deploy. A launch reads the newest from the workflow

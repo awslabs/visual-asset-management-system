@@ -36,8 +36,9 @@ logger = safeLogger()
 # ASL schema version stamped in the definition Comment field; equal to workflowAsl.ASL_SCHEMA_VERSION
 # (bumped together, see there). 2 adds the wait for large outputs after the process-output state
 # (AwaitOutputIngestion + FinalizeOutputs); 3 the process-output retry of Sandbox.Timedout and
-# EarlierIngestionInProgress (#1290, #1271).
-ASL_SCHEMA_VERSION = 3
+# EarlierIngestionInProgress (#1290, #1271); 4 the retry of a refused resource-name lookup on the
+# scaffolding states (RESOURCE_NAME_UNAVAILABLE_RETRIER, #1187).
+ASL_SCHEMA_VERSION = 4
 
 # Default maximum wait for large outputs. Mirrors common.largeObjectCopy MAX_OUTPUT_INGESTION_WAIT_HOURS
 # (this module keeps its import-free contract; a unit test pins the two equal).
@@ -79,6 +80,28 @@ ENGINE_BUSY_RETRIER = {
     "BackoffRate": 2.0,
     "MaxAttempts": 8,
     "MaxDelaySeconds": 300,
+    "JitterStrategy": "FULL",
+}
+
+# The VAMS Lambdas behind the scaffolding states (process-output, the ingestion wait, finalize, the
+# interim pipeline tracking and the error handler) resolve their resource names at import (backend
+# Rule 10). When Parameter Store throttles a burst of cold starts, common.resourceNames refuses the
+# lookup with ResourceNameUnavailableError and the Lambda's init fails, so its handler never ran and
+# a retry repeats nothing. Lambda re-runs a failed init once and then discards the environment, so the
+# state's next attempt starts cold again: this retrier spaces the attempts out until the burst is
+# over instead of failing the run at the first refusal. A handler that has started holds every
+# published name from its init sweep and is never refused one. On a test deployment, 1,000 runs at
+# about 7 per second kept Parameter Store throttled for about 150 seconds (#1187). The delays double
+# from 5 s to a 60 s cap; with full jitter, 12 attempts wait about 4.6 minutes on average and at most
+# about 9.3 minutes, on top of each attempt's own refused init. Listed before any States.ALL retrier
+# the state carries, since Step Functions uses the first retrier whose errors match.
+RESOURCE_NAME_UNAVAILABLE_ERROR = "ResourceNameUnavailableError"
+RESOURCE_NAME_UNAVAILABLE_RETRIER = {
+    "ErrorEquals": [RESOURCE_NAME_UNAVAILABLE_ERROR],
+    "IntervalSeconds": 5,
+    "BackoffRate": 2.0,
+    "MaxAttempts": 12,
+    "MaxDelaySeconds": 60,
     "JitterStrategy": "FULL",
 }
 
@@ -211,6 +234,7 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         fail_state=failed_state_id,
         partition=aws_partition,
     )
+    error_handler_state["Retry"] = [dict(RESOURCE_NAME_UNAVAILABLE_RETRIER)] + error_handler_state["Retry"]
 
     # Generate GLOBAL output paths (shared by ALL pipelines)
     # Use the FIRST pipeline's name for the global output location
@@ -396,6 +420,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
                 error_handler_state=error_handler_state_id,
                 partition=aws_partition,
             )
+            # Ahead of the state's own States.ALL retrier, which would otherwise match first.
+            interim_state["Retry"] = [dict(RESOURCE_NAME_UNAVAILABLE_RETRIER)] + interim_state["Retry"]
             states.append((interim_state_id, interim_state))
 
     # Create SINGLE process output state (runs ONCE after ALL pipelines complete). Its body carries
@@ -485,7 +511,8 @@ def generate_workflow_asl(pipelines, databaseId, workflowId,
         catch_config=po_catch_config,
         partition=aws_partition
     )
-    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), dict(ENGINE_BUSY_RETRIER), po_retry_config]
+    process_output_state["Retry"] = [dict(THROTTLE_RETRIER), dict(RESOURCE_NAME_UNAVAILABLE_RETRIER),
+                                     dict(ENGINE_BUSY_RETRIER), po_retry_config]
 
     # Add the single process_output state to the states list
     states.append((process_output_state_id, process_output_state))
@@ -554,7 +581,8 @@ def _output_ingestion_states(process_output_state_id, process_workflow_output_fu
         partition=aws_partition,
     )
     for state in (await_state, finalize_state):
-        state["Retry"] = ([dict(THROTTLE_RETRIER), dict(ENGINE_BUSY_RETRIER)]
+        state["Retry"] = ([dict(THROTTLE_RETRIER), dict(RESOURCE_NAME_UNAVAILABLE_RETRIER),
+                           dict(ENGINE_BUSY_RETRIER)]
                           + list(state.get("Retry") or []))
     finalize_state["Next"] = WORKFLOW_SUCCEEDED_STATE_ID
     await_state["Next"] = FINALIZE_OUTPUTS_STATE_ID
