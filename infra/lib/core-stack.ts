@@ -652,12 +652,14 @@ export class CoreVAMSStack extends cdk.Stack {
 
         //Resource-name chunk parameters: every registered name again, as JSON in a few numbered
         //parameters, so a Lambda cold start reads them all in one GetParameters call per 10 chunks.
-        //Built last, once every stack that publishes resource names (core, add-on, custom) exists;
-        //each chunk lands in the stack that holds its names' per-key parameters.
+        //Built last, once every stack that publishes resource names (core, add-on, custom) exists.
+        //Every chunk is a resource of this root stack, so a layout change (an add-on turned on or
+        //off, more core names) only updates a chunk in place and never moves one between stacks.
         buildResourceNameChunks({
             config: props.config,
             registry: resourceNameRegistry,
-            coreOwner: resourceNamesNestedStack,
+            scope: this,
+            coreSource: resourceNamesNestedStack,
         });
 
         const resourceNamesSSMParamPrefixOutput = new cdk.CfnOutput(

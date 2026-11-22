@@ -10,14 +10,18 @@
  * `<prefix>Chunks/<i>`, which backend/common/resourceNames.py reads with one GetParameters call per
  * 10 chunks. Asserted here: the packing and its bounds on the planner itself, then on full synths of
  * the shipped templates (add-ons off and every add-on on) the layout, the header, the worst case of
- * every chunk, that each chunk lives in the stack holding its names' per-key parameters and adds no
- * cross-stack reference there, and the Lambda grant on the chunk path.
+ * every chunk, that each chunk carries the same value as its name's per-key parameter, that every
+ * chunk is a resource of the root core stack (so a layout change updates a chunk in place and never
+ * moves it between stacks, which CloudFormation would refuse with ParameterAlreadyExists), that the
+ * root template takes no new parameter and stays within the template quotas, and the Lambda grant
+ * on the chunk path.
  */
 
 import * as cdk from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
 import { ADDON_RESOURCE_PARAM_KEYS } from "../../common/addonResourceParamKeys";
+import { publishAddonResourceName } from "../../lib/nestedStacks/addon/addonStackHelpers";
 import { publishCustomResourceName } from "../../lib/nestedStacks/custom/customStackHelpers";
 import { ResourceNameRegistry } from "../../lib/nestedStacks/resourceNames/resourceNameRegistry";
 import {
@@ -33,6 +37,7 @@ import {
 import { enableEdh } from "../addon/edh/support/edhSynth";
 import {
     actionsOf,
+    resolveReference,
     resourcesOf,
     SynthResult,
     synthTemplate,
@@ -40,6 +45,16 @@ import {
     ALL_TEMPLATES,
 } from "../support/templateSynth";
 import { newTestApp } from "../support/testApp";
+import {
+    chunksOf,
+    expectChunksInRootStack,
+    expectRootTemplateWithinLimits,
+    prefixOf,
+    rawChunkValues,
+    rootStackKey,
+    SynthChunk,
+    sourceOf,
+} from "./support/resourceNameChunkSynth";
 
 jest.setTimeout(1_200_000);
 
@@ -79,8 +94,8 @@ describe("planResourceNameChunks", () => {
         }));
         const lane = [{ key: "custom/dynamoTables/widgets", value: tokenValue(other, "W") }];
         const plan = planResourceNameChunks([
-            { owner: s, entries: core },
-            { owner: other, entries: lane },
+            { source: s, entries: core },
+            { source: other, entries: lane },
         ]);
 
         expect(plan.chunks.map((c) => c.index)).toEqual(
@@ -92,7 +107,7 @@ describe("planResourceNameChunks", () => {
         // 40 table names at the 255-character bound fill 14 + 14 + 12; the lane stack gets its own.
         expect(plan.count).toBe(4);
         expect(plan.chunks.map((c) => c.entries.length)).toEqual([14, 14, 12, 1]);
-        expect(plan.chunks.map((c) => c.owner)).toEqual([s, s, s, other]);
+        expect(plan.chunks.map((c) => c.source)).toEqual([s, s, s, other]);
         expect(plan.chunks.flatMap((c) => c.entries.map((e) => e.key))).toEqual([
             ...core.map((e) => e.key),
             "custom/dynamoTables/widgets",
@@ -104,9 +119,9 @@ describe("planResourceNameChunks", () => {
         const s = stack();
         const entries = (n: number, value: (i: number) => string) =>
             Array.from({ length: n }, (_, i) => ({ key: `dynamoTables/t${i}`, value: value(i) }));
-        const a = planResourceNameChunks([{ owner: s, entries: entries(3, (i) => `a${i}`) }]);
-        const b = planResourceNameChunks([{ owner: s, entries: entries(3, (i) => `b${i}`) }]);
-        const c = planResourceNameChunks([{ owner: s, entries: entries(4, (i) => `a${i}`) }]);
+        const a = planResourceNameChunks([{ source: s, entries: entries(3, (i) => `a${i}`) }]);
+        const b = planResourceNameChunks([{ source: s, entries: entries(3, (i) => `b${i}`) }]);
+        const c = planResourceNameChunks([{ source: s, entries: entries(4, (i) => `a${i}`) }]);
         expect(a.layoutId).toBe(b.layoutId);
         expect(c.layoutId).not.toBe(a.layoutId);
     });
@@ -115,7 +130,7 @@ describe("planResourceNameChunks", () => {
         const s = stack();
         const plan = planResourceNameChunks([
             {
-                owner: s,
+                source: s,
                 entries: [
                     { key: "integration/prefix", value: 'vams."quoted"\\x' },
                     { key: "dynamoTables/b", value: "table-b" },
@@ -135,57 +150,106 @@ describe("planResourceNameChunks", () => {
     test("refuses a key SSM cannot name, a name no chunk holds and too many chunks", () => {
         const s = stack();
         expect(() =>
-            planResourceNameChunks([{ owner: s, entries: [{ key: 'bad"key', value: "x" }] }])
+            planResourceNameChunks([{ source: s, entries: [{ key: 'bad"key', value: "x" }] }])
         ).toThrow(/not a valid SSM parameter path/);
         expect(() =>
             planResourceNameChunks([
-                { owner: s, entries: [{ key: "integration/big", value: "x".repeat(4100) }] },
+                { source: s, entries: [{ key: "integration/big", value: "x".repeat(4100) }] },
             ])
         ).toThrow(/no 4096-character chunk holds/);
         const many = Array.from({ length: RESOURCE_NAME_CHUNK_COUNT_LIMIT + 1 }, (_, i) => ({
-            owner: new cdk.Stack(newTestApp(), `Owner${i}`),
+            source: new cdk.Stack(newTestApp(), `Source${i}`),
             entries: [{ key: `dynamoTables/t${i}`, value: "x" }],
         }));
         expect(() => planResourceNameChunks(many)).toThrow(/exceed the 100/);
     });
 });
 
-describe("lane names reach the chunks of their own stack", () => {
-    test("a custom name published in a nested stack lands in that stack's chunk", () => {
-        const app = newTestApp();
-        const root = new cdk.Stack(app, "Root");
+describe("lane names reach the chunks, which all live in the root stack", () => {
+    const config = { resourceNamesSSMParamPrefix: "/vams-test/resourceNames" } as any;
+
+    /** A root stack with a core source, an optional add-on source and a custom source. */
+    function app(withAddon: boolean) {
+        const root = new cdk.Stack(newTestApp(), "Root");
         const registry = new ResourceNameRegistry();
         ResourceNameRegistry.attach(root, registry);
-        const coreStack = new cdk.NestedStack(root, "ResourceNamesBuilder");
+        const coreSource = new cdk.NestedStack(root, "ResourceNamesBuilder");
         registry.register({ paramKey: "dynamoTables/assetStorage", value: "assets" });
+        if (withAddon) {
+            const addon = new cdk.NestedStack(root, "AddonBuilder");
+            const edh = new cdk.NestedStack(addon, "EdhWorkstationsBuilder");
+            publishAddonResourceName(
+                edh,
+                config,
+                "addon/dynamoTables/sessions",
+                tokenValue(edh, "S")
+            );
+        }
         const custom = new cdk.NestedStack(root, "CustomBuilder");
-        const config = { resourceNamesSSMParamPrefix: "/vams-test/resourceNames" } as any;
         publishCustomResourceName(
             custom,
             config,
             "custom/dynamoTables/widgetStorage",
             tokenValue(custom, "Widgets")
         );
+        const plan = buildResourceNameChunks({ config, registry, scope: root, coreSource });
+        return { root, coreSource, custom, plan };
+    }
 
-        const plan = buildResourceNameChunks({ config, registry, coreOwner: coreStack });
+    const chunkParameters = (stack: cdk.Stack) =>
+        Object.entries<any>(Template.fromStack(stack).findResources("AWS::SSM::Parameter")).filter(
+            ([, r]) => String(r.Properties.Name).startsWith("/vams-test/resourceNamesChunks/")
+        );
+
+    test("a custom name published in a nested stack lands in a root-stack chunk after the core", () => {
+        const { root, coreSource, custom, plan } = app(false);
 
         expect(plan.count).toBe(2);
-        expect(plan.chunks[1].owner).toBe(custom);
-        const template = Template.fromStack(custom);
-        template.hasResourceProperties("AWS::SSM::Parameter", {
-            Name: "/vams-test/resourceNamesChunks/1",
-            Tier: "Standard",
-        });
-        const chunk = Object.values(template.findResources("AWS::SSM::Parameter")).find(
-            (r: any) => r.Properties.Name === "/vams-test/resourceNamesChunks/1"
-        ) as any;
+        expect(plan.chunks[1].source).toBe(custom);
+        expect(chunkParameters(custom)).toEqual([]);
+        expect(chunkParameters(coreSource)).toEqual([]);
+        const inRoot = chunkParameters(root);
+        expect(inRoot.map(([, r]) => r.Properties.Name).sort()).toEqual([
+            "/vams-test/resourceNamesChunks/0",
+            "/vams-test/resourceNamesChunks/1",
+        ]);
+        const [, chunk] = inRoot.find(([, r]) => r.Properties.Name.endsWith("/1")) as [string, any];
+        expect(chunk.Properties.Tier).toBe("Standard");
+        // The root reads the custom stack's value through that nested stack's output.
         const flat = SynthResult.flatten(chunk.Properties.Value);
-        expect(flat).toBe(
-            `{"v":1,"n":2,"i":1,"l":"${plan.layoutId}","m":{"custom/dynamoTables/widgetStorage":"\${Widgets}"}}`
+        expect(flat).toMatch(
+            new RegExp(
+                `^\\{"v":1,"n":2,"i":1,"l":"${plan.layoutId}","m":\\{"custom/dynamoTables/widgetStorage":"\\$\\{CustomBuilderNestedStackCustomBuilderNestedStackResource[0-9A-F]{8}\\.Outputs\\.[A-Za-z0-9]+\\}"\\}\\}$`
+            )
         );
-        Template.fromStack(coreStack).hasResourceProperties("AWS::SSM::Parameter", {
-            Name: "/vams-test/resourceNamesChunks/0",
-        });
+    });
+
+    test("a source added before the custom one renumbers chunks inside the root stack only", () => {
+        const before = app(false);
+        const after = app(true);
+        expect(after.plan.count).toBe(3);
+        // The custom chunk moves from index 1 to 2 and the add-on takes index 1; every index is
+        // still a resource of the root stack with the same construct id, so CloudFormation updates
+        // its value in place.
+        const ids = (root: cdk.Stack) =>
+            chunkParameters(root)
+                .map(([logicalId, r]) => [String(r.Properties.Name).split("/").pop(), logicalId])
+                .sort();
+        const beforeIds = new Map(ids(before.root) as [string, string][]);
+        for (const [index, logicalId] of ids(after.root) as [string, string][]) {
+            if (beforeIds.has(index)) expect(logicalId).toBe(beforeIds.get(index));
+        }
+        expect([...beforeIds.keys()].sort()).toEqual(["0", "1"]);
+    });
+
+    test("refuses to build the chunks in a nested stack", () => {
+        const root = new cdk.Stack(newTestApp(), "Root");
+        const registry = new ResourceNameRegistry();
+        registry.register({ paramKey: "dynamoTables/assetStorage", value: "assets" });
+        const nested = new cdk.NestedStack(root, "ResourceNamesBuilder");
+        expect(() =>
+            buildResourceNameChunks({ config, registry, scope: nested, coreSource: nested })
+        ).toThrow(/root core stack/);
     });
 
     test("a stack outside a VAMS core stack publishes per key only", () => {
@@ -228,52 +292,26 @@ const synthFor = (name: TemplateName, addons: boolean): SynthResult =>
         ? synthTemplate(name, { mutate: allAddonsOn, mutateKey: "resourceNameChunksAllAddonsOn" })
         : synthTemplate(name);
 
-const prefixOf = (s: SynthResult) => `/vams-t1-${s.name}/resourceNames`;
-
-interface SynthChunk {
-    index: number;
-    stack: string;
-    flat: string;
-    parsed: any;
-    refs: string[];
-    tier: string;
-}
-
-/** The chunk parameters of a synth, parsed with every token replaced by a placeholder. */
-function chunksOf(s: SynthResult): SynthChunk[] {
-    const chunkPrefix = `${prefixOf(s)}Chunks/`;
-    return s
-        .ofType("AWS::SSM::Parameter")
-        .filter((r) => SynthResult.flatten(r.properties.Name).startsWith(chunkPrefix))
-        .map((r) => {
-            const flat = SynthResult.flatten(r.properties.Value);
-            const refs = flat.match(/\$\{[^}]+\}/g) ?? [];
-            return {
-                index: Number(SynthResult.flatten(r.properties.Name).slice(chunkPrefix.length)),
-                stack: r.stack,
-                flat,
-                parsed: JSON.parse(flat.replace(/\$\{[^}]+\}/g, "token")),
-                refs,
-                tier: r.properties.Tier,
-            };
-        })
-        .sort((a, b) => a.index - b.index);
-}
-
-/** The per-key parameters under the prefix, by key, with the stack holding each. */
-function perKeyParametersOf(s: SynthResult): Map<string, { stack: string; flat: string }> {
+/** The per-key parameters under the prefix, by key, with the stack and raw value of each. */
+function perKeyParametersOf(s: SynthResult): Map<string, { stack: string; value: unknown }> {
     const prefix = `${prefixOf(s)}/`;
-    const out = new Map<string, { stack: string; flat: string }>();
+    const out = new Map<string, { stack: string; value: unknown }>();
     for (const r of s.ofType("AWS::SSM::Parameter")) {
         const name = SynthResult.flatten(r.properties.Name);
         if (name.startsWith(prefix)) {
-            out.set(name.slice(prefix.length), {
-                stack: r.stack,
-                flat: SynthResult.flatten(r.properties.Value),
-            });
+            out.set(name.slice(prefix.length), { stack: r.stack, value: r.properties.Value });
         }
     }
     return out;
+}
+
+/** A value as a comparable target: the literal itself, or the resource a reference resolves to. */
+function targetOf(s: SynthResult, stack: string, value: unknown): string {
+    if (typeof value === "string") return `literal:${value}`;
+    const resource = resolveReference(s, stack, value);
+    return resource
+        ? `${resource.stack}/${resource.logicalId}`
+        : `unresolved:${JSON.stringify(value)}`;
 }
 
 /** Keys published per key but deliberately outside the registry and the lane helpers. */
@@ -337,39 +375,34 @@ describe.each([
         }
     });
 
-    test("carry every registered and lane name exactly once, beside its per-key parameter", () => {
+    test("carry every registered and lane name exactly once, with its per-key parameter's value", () => {
         const perKey = perKeyParametersOf(s);
         const carried = chunks.flatMap((c) =>
-            Object.keys(c.parsed.m).map((key) => ({ key, chunk: c }))
+            [...rawChunkValues(c)].map(([key, value]) => ({ key, value, chunk: c }))
         );
         const keys = carried.map((c) => c.key);
         expect(new Set(keys).size).toBe(keys.length);
+        expect([...keys].sort()).toEqual(chunks.flatMap((c) => Object.keys(c.parsed.m)).sort());
         const expected = [...perKey.keys()].filter((k) => !isLateBound(k)).sort();
         expect([...keys].sort()).toEqual(expected);
-        for (const { key, chunk } of carried) {
-            // Same stack as the per-key parameter, and the same value expression.
-            expect(perKey.get(key)?.stack).toBe(chunk.stack);
-            const value = chunk.flat.match(
-                new RegExp(`"${key.replace(/[/.]/g, "\\$&")}":"([^"]*)"`)
-            )?.[1];
-            expect(value).toBe(perKey.get(key)?.flat);
+        for (const { key, value, chunk } of carried) {
+            // The chunk (root stack) and the per-key parameter (its nested stack) name the same
+            // resource, or carry the same literal.
+            const own = perKey.get(key)!;
+            const target = targetOf(s, chunk.stack, value);
+            expect({ key, target }).toEqual({ key, target: targetOf(s, own.stack, own.value) });
+            expect(target).not.toMatch(/^unresolved:/);
         }
     });
 
-    test("reference nothing the per-key parameters of their stack do not", () => {
-        // A chunk adds no cross-stack parameter: every reference it makes is one a per-key
-        // parameter in the same template already makes.
-        const perKeyRefs = new Map<string, Set<string>>();
-        for (const [, p] of perKeyParametersOf(s)) {
-            const refs = perKeyRefs.get(p.stack) ?? new Set<string>();
-            (p.flat.match(/\$\{[^}]+\}/g) ?? []).forEach((r) => refs.add(r));
-            perKeyRefs.set(p.stack, refs);
-        }
+    test("are resources of the root core stack, which takes no new parameter", () => {
+        expect(chunks.every((c) => c.stack === rootStackKey(s))).toBe(true);
+        expectChunksInRootStack(s);
+        expectRootTemplateWithinLimits(s);
+        // The root reads every nested value through a nested-stack output.
         expect(chunks.some((c) => c.refs.length > 0)).toBe(true);
         for (const chunk of chunks) {
-            for (const ref of chunk.refs) {
-                expect(perKeyRefs.get(chunk.stack)?.has(ref)).toBe(true);
-            }
+            for (const ref of chunk.refs) expect(ref).toMatch(/\.Outputs\./);
         }
     });
 
@@ -398,31 +431,24 @@ describe.each([
     });
 });
 
-/** Nested stacks that hold chunks, most deeply nested first. */
-const CHUNK_STACKS = [
-    "EdhWorkstationsBuilder",
-    "PhysnaSyncBuilder",
-    "GarnetFrameworkBuilder",
-    "CustomBuilder",
-    "ResourceNamesBuilder",
-];
-
 describe("chunk layout per configuration (recorded: a change that adds names shows here)", () => {
     const layout = (s: SynthResult) => {
-        const perStack: Record<string, number> = {};
+        const perSource: Record<string, number> = {};
+        const stacks = new Set<string>();
         for (const chunk of chunksOf(s)) {
-            const stack = CHUNK_STACKS.find((label) => chunk.stack.includes(label)) ?? chunk.stack;
-            perStack[stack] = (perStack[stack] ?? 0) + 1;
+            perSource[sourceOf(chunk)] = (perSource[sourceOf(chunk)] ?? 0) + 1;
+            stacks.add(chunk.stack === rootStackKey(s) ? "root" : chunk.stack);
         }
         const names = chunksOf(s).reduce((sum, c) => sum + Object.keys(c.parsed.m).length, 0);
-        return { chunks: chunksOf(s).length, names, perStack };
+        return { chunks: chunksOf(s).length, names, perSource, stacks: [...stacks] };
     };
 
     test("commercial template, add-ons off", () => {
         expect(layout(synthFor("commercial", false))).toEqual({
             chunks: 8,
             names: 76,
-            perStack: { ResourceNamesBuilder: 8 },
+            perSource: { core: 8 },
+            stacks: ["root"],
         });
     });
 
@@ -431,11 +457,13 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
         expect(layout(s)).toEqual({
             chunks: 9,
             names: 78,
-            perStack: { ResourceNamesBuilder: 8, EdhWorkstationsBuilder: 1 },
+            perSource: { core: 8, addon: 1 },
+            stacks: ["root"],
         });
+        // The add-on's names are packed after the core's, in a chunk of their own.
         const edhKeys = Object.values(ADDON_RESOURCE_PARAM_KEYS.dynamoTables);
         const edhChunks = chunksOf(s).filter((c) => edhKeys.some((k) => k in c.parsed.m));
-        expect(edhChunks.every((c) => c.stack.includes("EdhWorkstationsBuilder"))).toBe(true);
+        expect(edhChunks.map((c) => c.index)).toEqual([8]);
     });
 
     test("one GetParameters call reads every chunk in each shipped template", () => {
@@ -444,5 +472,28 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
             expect(chunksOf(synthFor(name, false)).length).toBeLessThanOrEqual(10);
         }
         expect(chunksOf(synthFor("commercial", true)).length).toBeLessThanOrEqual(10);
+    });
+});
+
+describe("turning the add-ons on keeps every chunk on the same root-stack resource", () => {
+    test("each index has the same stack and logical id with add-ons off and on", () => {
+        const off = expectChunksInRootStack(synthFor("commercial", false));
+        const on = expectChunksInRootStack(synthFor("commercial", true));
+        const idOf = (chunks: SynthChunk[]) =>
+            new Map(
+                chunks.map((c) => [
+                    c.index,
+                    `${c.stack}/${c.logicalId}`.replace(/^vams-t1-\w+/, "root"),
+                ])
+            );
+        const offIds = idOf(off);
+        expect(off.length).toBeGreaterThan(0);
+        for (const [index, id] of idOf(on)) {
+            if (offIds.has(index)) expect({ index, id }).toEqual({ index, id: offIds.get(index) });
+        }
+        // The core chunks keep their contents too: only the add-on's chunk is new.
+        for (const chunk of off) {
+            expect(Object.keys(on[chunk.index].parsed.m)).toEqual(Object.keys(chunk.parsed.m));
+        }
     });
 });

@@ -18,9 +18,17 @@
  * chunks, and the per-key parameters stay published for them, for external bridge stacks and for
  * rollback.
  *
- * - Each chunk is built in the stack that holds the per-key parameters of its names (the
- *   ResourceNames stack for core names, the publishing add-on or custom stack for lane names), so a
- *   chunk references no value the per-key parameters do not already reference there.
+ * - Every chunk is a resource of the root core stack, reading nested values through the nested-stack
+ *   outputs CDK generates (the storage outputs ResourceNamesBuilder already reads, plus one per lane
+ *   value). A chunk's parameter name is its index, and the index of a later chunk moves whenever an
+ *   earlier source gains or loses a chunk (an add-on turned on, more core names), so a chunk built in
+ *   the stack that owns its names would move between stacks; CloudFormation creates the new
+ *   resource before the old stack deletes its copy, and the create fails with ParameterAlreadyExists.
+ *   In one stack the construct id is the index, so a layout change only updates a chunk in place,
+ *   adds the highest one or removes it.
+ * - Names are packed per source (the core registry, then each lane stack in the order it first
+ *   published), so toggling an add-on adds or removes that source's chunks and leaves the others'
+ *   contents as they were.
  * - Values are deploy-time tokens, so chunks are sized by the longest each value can be: the
  *   descriptor's `maxLength`, the literal's own length, or the limit of the key's category
  *   (TOKEN_MAX_LENGTH_BY_CATEGORY; UNKNOWN_TOKEN_MAX_LENGTH otherwise). Every chunk's worst case
@@ -69,13 +77,14 @@ export interface ResourceNameChunkEntry {
 }
 
 export interface ResourceNameChunkGroup {
-    owner: Stack;
+    /** The stack holding the per-key parameters of the group's names; packing never mixes sources. */
+    source: Stack;
     entries: ResourceNameChunkEntry[];
 }
 
 export interface PlannedResourceNameChunk {
     index: number;
-    owner: Stack;
+    source: Stack;
     entries: ResourceNameChunkEntry[];
     /** Longest the rendered value can be once every token is resolved. */
     worstCaseChars: number;
@@ -129,7 +138,7 @@ function worstCaseChunkChars(entries: ResourceNameChunkEntry[], headerChars: num
  * planned chunk's worst case passes RESOURCE_NAME_CHUNK_MAX_CHARS.
  */
 export function planResourceNameChunks(groups: ResourceNameChunkGroup[]): ResourceNameChunkPlan {
-    const packed: { owner: Stack; entries: ResourceNameChunkEntry[] }[] = [];
+    const packed: { source: Stack; entries: ResourceNameChunkEntry[] }[] = [];
     for (const group of groups) {
         let current: ResourceNameChunkEntry[] = [];
         for (const entry of group.entries) {
@@ -150,14 +159,14 @@ export function planResourceNameChunks(groups: ResourceNameChunkGroup[]): Resour
                 current.length > 0 &&
                 worstCaseChunkChars(next, HEADER_RESERVE) > RESOURCE_NAME_CHUNK_MAX_CHARS
             ) {
-                packed.push({ owner: group.owner, entries: current });
+                packed.push({ source: group.source, entries: current });
                 current = [entry];
             } else {
                 current = next;
             }
         }
         if (current.length > 0) {
-            packed.push({ owner: group.owner, entries: current });
+            packed.push({ source: group.source, entries: current });
         }
     }
 
@@ -175,7 +184,7 @@ export function planResourceNameChunks(groups: ResourceNameChunkGroup[]): Resour
 
     const chunks = packed.map((chunk, index) => ({
         index,
-        owner: chunk.owner,
+        source: chunk.source,
         entries: chunk.entries,
         worstCaseChars: worstCaseChunkChars(chunk.entries, header(count, index, layoutId).length),
     }));
@@ -212,19 +221,27 @@ export function renderResourceNameChunk(
 /**
  * Group every registered name by the stack that holds its per-key parameter (core names first, in
  * registration order, then each lane stack in the order it first published), plan the chunks and
- * create one standard-tier String parameter per chunk in its group's stack.
+ * create one standard-tier String parameter per chunk in `scope`, the root core stack.
  *
  * Call once, after every stack that publishes resource names has been built.
  */
 export function buildResourceNameChunks(props: {
     config: Config.Config;
     registry: ResourceNameRegistry;
+    /** The root core stack, which holds every chunk. */
+    scope: Stack;
     /** The stack that publishes the core per-key parameters (ResourceNamesBuilderNestedStack). */
-    coreOwner: Stack;
+    coreSource: Stack;
 }): ResourceNameChunkPlan {
+    if (props.scope.nested) {
+        throw new Error(
+            "Resource-name chunks: build them in the root core stack, not in a nested stack, so " +
+                "a layout change never moves a chunk between stacks"
+        );
+    }
     const groups: ResourceNameChunkGroup[] = [
         {
-            owner: props.coreOwner,
+            source: props.coreSource,
             entries: props.registry.list().map((d) => ({
                 key: d.paramKey,
                 value: d.value,
@@ -242,9 +259,9 @@ export function buildResourceNameChunks(props: {
             );
             continue;
         }
-        let group = groups.find((g) => g.owner === lane.owner);
+        let group = groups.find((g) => g.source === lane.owner);
         if (!group) {
-            group = { owner: lane.owner, entries: [] };
+            group = { source: lane.owner, entries: [] };
             groups.push(group);
         }
         group.entries.push({ key: lane.paramKey, value: lane.value });
@@ -253,7 +270,7 @@ export function buildResourceNameChunks(props: {
     const plan = planResourceNameChunks(groups.filter((g) => g.entries.length > 0));
     const prefix = resourceNameChunkPrefix(props.config);
     for (const chunk of plan.chunks) {
-        new ssm.StringParameter(chunk.owner, `ResourceNameChunk${chunk.index}`, {
+        new ssm.StringParameter(props.scope, `ResourceNameChunk${chunk.index}`, {
             parameterName: `${prefix}/${chunk.index}`,
             stringValue: renderResourceNameChunk(plan, chunk),
             tier: ssm.ParameterTier.STANDARD,

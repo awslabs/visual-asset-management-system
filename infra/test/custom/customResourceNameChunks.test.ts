@@ -9,11 +9,18 @@
  * `customResources.ts` ships empty, so this file stands in for a fork: its `buildCustomResources()`
  * creates one table-like resource in the custom nested stack and publishes its name with
  * `publishCustomResourceName()`, exactly as `customizing-vams.md` describes. The full app is then
- * synthesized from the commercial template and the chunk carrying the name is looked for. The mock
+ * synthesized from the commercial template and the chunk carrying the name is looked for: it is a
+ * resource of the root core stack like every chunk, numbered after the core chunks. The mock
  * changes what the synth emits, so this file never shares the per-run synth cache.
  */
 
-import { SynthResult, synthTemplate } from "../support/templateSynth";
+import { resolveReference, SynthResult, synthTemplate } from "../support/templateSynth";
+import {
+    expectChunksInRootStack,
+    expectRootTemplateWithinLimits,
+    rawChunkValues,
+    rootStackKey,
+} from "../storage/support/resourceNameChunkSynth";
 
 const FORK_KEY = "custom/dynamoTables/widgetStorage";
 
@@ -49,11 +56,6 @@ describe("a fork's custom resource name", () => {
     });
 
     const chunkPrefix = "/vams-t1-commercial/resourceNamesChunks/";
-    const chunks = () =>
-        s
-            .ofType("AWS::SSM::Parameter")
-            .filter((r) => SynthResult.flatten(r.properties.Name).startsWith(chunkPrefix));
-
     test("is published per key in the custom stack, as before", () => {
         const perKey = s
             .ofType("AWS::SSM::Parameter")
@@ -66,25 +68,33 @@ describe("a fork's custom resource name", () => {
         expect(perKey[0].stack).toMatch(/CustomBuilder/);
     });
 
-    test("lands in a chunk of the custom stack, numbered after the core chunks", () => {
-        const all = chunks();
-        const carrying = all.filter((r) =>
-            SynthResult.flatten(r.properties.Value).includes(`"${FORK_KEY}":"`)
-        );
+    test("lands in a root-stack chunk numbered after the core chunks, read from the custom stack", () => {
+        const all = expectChunksInRootStack(s);
+        const carrying = all.filter((c) => FORK_KEY in c.parsed.m);
         expect(carrying).toHaveLength(1);
-        expect(carrying[0].stack).toMatch(/CustomBuilder/);
-
-        const flat = SynthResult.flatten(carrying[0].properties.Value);
-        expect(flat).toContain(`"${FORK_KEY}":"\${ForkWidgetTable}"`);
-        const header = JSON.parse(flat.replace(/\$\{[^}]+\}/g, "token"));
-        expect(header.n).toBe(all.length);
-        expect(header.i).toBe(all.length - 1);
-        expect(SynthResult.flatten(carrying[0].properties.Name)).toBe(
-            `${chunkPrefix}${all.length - 1}`
+        const chunk = carrying[0];
+        expect(chunk.stack).toBe(rootStackKey(s));
+        expect(chunk.parsed.n).toBe(all.length);
+        expect(chunk.index).toBe(all.length - 1);
+        expect(SynthResult.flatten(chunk.resource.properties.Name)).toBe(
+            `${chunkPrefix}${chunk.index}`
         );
-        // The core chunks before it are in the ResourceNames stack.
-        const others = all.filter((r) => r !== carrying[0]);
+        // The root reads the fork's value through the custom stack's output, and it names the fork's
+        // own resource.
+        const value = rawChunkValues(chunk).get(FORK_KEY);
+        expect(JSON.stringify(value)).toMatch(/CustomBuilder.*Outputs\./);
+        const target = resolveReference(s, chunk.stack, value);
+        expect(target?.logicalId).toMatch(/^ForkWidgetTable/);
+        expect(target?.stack).toMatch(/CustomBuilder/);
+        // The core chunks before it hold only core names.
+        const others = all.filter((c) => c !== chunk);
         expect(others.length).toBeGreaterThan(0);
-        expect(others.every((r) => /ResourceNamesBuilder/.test(r.stack))).toBe(true);
+        expect(
+            others.every((c) => Object.keys(c.parsed.m).every((k) => !k.startsWith("custom/")))
+        ).toBe(true);
+    });
+
+    test("the root template takes no new parameter and stays within the template quotas", () => {
+        expectRootTemplateWithinLimits(s);
     });
 });
