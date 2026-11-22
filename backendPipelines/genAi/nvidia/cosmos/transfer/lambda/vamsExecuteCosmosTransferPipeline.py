@@ -9,6 +9,7 @@ COSMOS_TRANSFER_PROMPT, COSMOS_TRANSFER_CONTROL_TYPE, and COSMOS_TRANSFER_CONTRO
 from file metadata and invoking the openPipeline Lambda.
 """
 import os
+import re
 import boto3
 import json
 from customLogging.logger import safeLogger
@@ -28,13 +29,42 @@ s3_client = boto3.client('s3', config=retry_config)
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
+# The control input is a file of the run's asset, named relative to the asset root.
+MAX_CONTROL_PATH_LENGTH = 1024
+_CONTROL_PATH_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_PATH_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+CONTROL_PATH_RULE = (
+    "The control path must name a file in the asset, relative to the asset root: no URI scheme, "
+    f"backslash, control character, or '.', '..' or empty path segment, at most {MAX_CONTROL_PATH_LENGTH} "
+    "characters")
+
+
+def normalize_control_path(value) -> str:
+    """The control input path as a file path relative to the asset root (a leading ``/`` names the
+    asset root, as asset file paths do), or ``""`` when the run names none. A value that is not such a
+    path raises ``ValueError``: the run asked for that file, so it fails before its job is scheduled
+    rather than running without it."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(CONTROL_PATH_RULE)
+    path = value.strip()
+    if (len(path) > MAX_CONTROL_PATH_LENGTH or _CONTROL_PATH_CONTROL_CHARACTERS.search(path)
+            or "\\" in path or _CONTROL_PATH_SCHEME.match(path)):
+        raise ValueError(CONTROL_PATH_RULE)
+    segments = path.lstrip("/").split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError(CONTROL_PATH_RULE)
+    return "/".join(segments)
+
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path,
                       output_s3_asset_metadata_path, inputOutput_s3_assetAuxiliary_files_path,
                       input_metadata_s3_location, input_configuration_s3_location, orchestration_event_prefix,
                       external_task_token, executing_userName, executing_requestContext,
                       asset_id, database_id, cosmos_prompt, control_type, control_path,
-                      input_bucket_region="", output_bucket_region="", input_version_id=""):
+                      input_bucket_region="", output_bucket_region="", input_version_id="",
+                      input_asset=None):
     """
     Execute the Cosmos Transfer pipeline by invoking the openPipeline Lambda.
     Transfer requires an input file path (source video) and optionally a control signal.
@@ -61,6 +91,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "inputBucketRegion": input_bucket_region,
         # The S3 version the run reads its input at, recorded at launch; "" reads the current object.
         "inputVersionId": input_version_id,
+        # Where the input sits in its asset, from its manifest entry (empty without one): its
+        # asset-relative path, whose folder is the output subfolder, and the asset root.
+        "inputRelativePath": (input_asset or {}).get("relativePath") or "",
+        "inputAssetRootS3Key": (input_asset or {}).get("assetRootS3Key") or "",
+        "inputAssetRootBucket": (input_asset or {}).get("assetRootBucket") or "",
         "outputBucketRegion": output_bucket_region,
         "cosmosPrompt": cosmos_prompt,
         "controlType": control_type,
@@ -148,7 +183,8 @@ def lambda_handler(event, context):
         cosmos_prompt = _setting(("PROMPT", "prompt"), "COSMOS_TRANSFER_PROMPT")
         control_type = _setting(
             ("CONTROL_TYPE", "controlType"), "COSMOS_TRANSFER_CONTROL_TYPE", default="edge")
-        control_path = _setting(("CONTROL_PATH", "controlPath"), "COSMOS_TRANSFER_CONTROL_PATH")
+        control_path = normalize_control_path(
+            _setting(("CONTROL_PATH", "controlPath"), "COSMOS_TRANSFER_CONTROL_PATH"))
         logger.info(
             f"Resolved transfer settings: controlType={control_type} "
             f"promptSupplied={bool(cosmos_prompt)} controlPathSupplied={bool(control_path)}")
@@ -184,6 +220,7 @@ def lambda_handler(event, context):
             control_path,
             input_bucket_region=resolved['inputBucketRegion'],
             input_version_id=resolved['inputVersionId'],
+            input_asset=(resolved['inputFiles'] or [None])[0],
             output_bucket_region=resolved['outputBucketRegion'],
         )
 

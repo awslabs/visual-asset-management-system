@@ -21,6 +21,7 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
+from common.assetLocations import is_folder_location, object_key_for
 from common.assetProvenance import (
     METADATA_ROW_DELETED_BY_WORKFLOW_ATTRIBUTE,
     METADATA_ROW_WORKFLOW_EXECUTION_ATTRIBUTE,
@@ -844,16 +845,22 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
         
         # Use the asset's actual location as the base path
         asset_base_path = asset['assetLocation']['Key']
-        
-        # Ensure asset base path ends with slash
-        if not asset_base_path.endswith('/'):
-            asset_base_path += '/'
-        
-        # Remove leading slash from file_path before combining (to avoid double slash)
-        normalized_file_path = file_path.lstrip('/')
-        
-        # Construct full S3 key using asset's actual location
-        full_key = f"{asset_base_path}{normalized_file_path}"
+
+        if asset_base_path and not is_folder_location(asset_base_path):
+            # A single-file location's paths name its object, its previews and its companion folder {key}/
+            full_key = object_key_for(asset_base_path, file_path)
+            if full_key is None:
+                raise VAMSGeneralErrorResponse("File not found in S3")
+        else:
+            # Ensure asset base path ends with slash
+            if not asset_base_path.endswith('/'):
+                asset_base_path += '/'
+
+            # Remove leading slash from file_path before combining (to avoid double slash)
+            normalized_file_path = file_path.lstrip('/')
+
+            # Construct full S3 key using asset's actual location
+            full_key = f"{asset_base_path}{normalized_file_path}"
         
         # Check if file exists in S3
         try:

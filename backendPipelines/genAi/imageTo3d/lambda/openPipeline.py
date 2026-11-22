@@ -257,6 +257,11 @@ def lambda_handler(event, context):
         "inputBucketRegion": event.get('inputBucketRegion', ''),
         # The S3 version of the primary input (empty reads the current object); each view carries its own.
         "inputVersionId": event.get('inputVersionId', ''),
+        # Where the primary input sits in its asset (manifest relativePath, assetRootS3Key,
+        # assetRootBucket); empty from an older Lambda or without a manifest.
+        "inputRelativePath": event.get("inputRelativePath", ""),
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
+        "inputAssetRootBucket": event.get("inputAssetRootBucket", ""),
         "outputBucketRegion": event.get('outputBucketRegion', ''),
         "executingUserName": event.get('executingUserName', ''),
         "executingRequestContext": event.get('executingRequestContext', ''),

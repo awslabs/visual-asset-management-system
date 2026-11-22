@@ -81,6 +81,7 @@ from common.compliance import listing
 from common.compliance.auditRecord import build_audit_item
 from common.dynamodb import query_all_items, to_update_expr
 from common.resourceNames import ResourceKeys, get_table_name
+from common.assetLocations import contains, object_key_for, relative_path_in
 from common.s3 import (
     bucket_region_fields,
     list_all_object_versions,
@@ -702,8 +703,9 @@ def get_template_item(pipeline_database_id: str, pipeline_id: str,
 
 
 def asset_s3_location(asset: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-    """`(bucket name, key prefix ending in '/')` under which an asset's files live: the bucket row
-    named by the asset's `bucketId` and the asset's `assetLocation.Key`. None when either is not
+    """`(bucket name, location key)` of an asset's files: the bucket row named by the asset's
+    `bucketId` and the asset's `assetLocation.Key` (a folder ending in '/', or a single-file asset's
+    key; `common.assetLocations` decides which keys it holds). None when either is not
     resolvable. The bucket row's Region is recorded for the bucket name, so `s3_client` signs the
     calls on it for that Region without a second read of the buckets table."""
     location = asset.get("assetLocation") or {}
@@ -718,7 +720,7 @@ def asset_s3_location(asset: Dict[str, Any]) -> Optional[Tuple[str, str]]:
     if not bucket_name:
         return None
     bucket_region_fields(rows[0])
-    return bucket_name, key if key.endswith("/") else key + "/"
+    return bucket_name, key
 
 
 def resolve_asset_s3_location(database_id: str, asset_id: str) -> Optional[Tuple[str, str]]:
@@ -738,10 +740,9 @@ def list_file_keys_under(bucket: str, prefix: str) -> List[str]:
     keys = set()
     for entry in list_all_objects(bucket, prefix, client=s3_client):
         key = entry.get("Key", "")
-        if not key or key.endswith("/"):
+        if not key or key.endswith("/") or not contains(prefix, key):
             continue
-        relative = key[len(prefix):] if key.startswith(prefix) else key
-        keys.add("/" + relative.lstrip("/"))
+        keys.add(relative_path_in(prefix, key))
     return sorted(keys)
 
 
@@ -769,7 +770,7 @@ def object_change_source(bucket: str, key: str) -> str:
 def asset_file_change_source(location: Tuple[str, str], relative_key: str) -> str:
     """`object_change_source` of an asset-relative `/…` key under the asset's S3 location."""
     bucket, prefix = location
-    return object_change_source(bucket, prefix + relative_key.lstrip("/"))
+    return object_change_source(bucket, object_key_for(prefix, relative_key))
 
 
 # --- File-structure and version-coverage inputs ---
@@ -803,9 +804,10 @@ def get_current_files(database_id: str, asset_id: str,
     files: Dict[str, Optional[str]] = {}
     for version in listing.get("Versions") or []:
         key = version.get("Key", "")
-        if not version.get("IsLatest") or not key or key.endswith("/"):
+        if (not version.get("IsLatest") or not key or key.endswith("/")
+                or not contains(prefix, key)):
             continue
-        relative = key[len(prefix):] if key.startswith(prefix) else key
+        relative = relative_path_in(prefix, key)
         version_id = version.get("VersionId")
         files[engine.normalize_relative_key(relative)] = (
             version_id if version_id and version_id != S3_NULL_VERSION_ID else None)

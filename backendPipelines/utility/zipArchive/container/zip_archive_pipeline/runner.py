@@ -237,6 +237,26 @@ class Heartbeat:
         self._stop.set()
 
 
+def input_asset_root(entry, asset_id):
+    """The asset root (ending in ``/``) a run manifest input entry's key lies under, or None.
+
+    The entry's ``assetRootS3Key`` names it when the entry is read from that root's bucket
+    (``assetRootBucket``, else the entry's own) and its key is the root or lies under it, which holds
+    for an asset created on an existing bucket folder, whose keys need not contain the asset ID. An
+    entry without a root takes the key up to its asset ID segment. Any other entry (another asset's
+    file, or an earlier step's output read from the run bucket) is None."""
+    key = entry.get("key") or ""
+    root = (entry.get("assetRootS3Key") or "").lstrip("/")
+    if root:
+        root = root if root.endswith("/") else root + "/"
+        root_bucket = entry.get("assetRootBucket") or entry.get("bucket") or ""
+        return root if root_bucket == entry.get("bucket") and key.startswith(root) else None
+    parts = key.split("/")
+    if not asset_id or asset_id not in parts:
+        return None
+    return "/".join(parts[:parts.index(asset_id) + 1]) + "/"
+
+
 class Job:
     """One zipArchive job. ``stop()`` (the SIGTERM handler) aborts the upload and records the stop.
 
@@ -479,11 +499,9 @@ class Job:
         bucket, base_key, inputs = None, None, []
         for entry in manifest.get("inputFiles") or []:
             key = entry.get("key", "")
-            parts = key.split("/")
-            if not asset_id or asset_id not in parts:
+            entry_base = input_asset_root(entry, asset_id)
+            if entry_base is None:
                 raise Refusal("An input file is outside the run's asset")
-            index = parts.index(asset_id)
-            entry_base = "/".join(parts[:index + 1]) + "/"
             if bucket is None:
                 bucket, base_key = entry.get("bucket", ""), entry_base
             elif entry.get("bucket") != bucket or entry_base != base_key:

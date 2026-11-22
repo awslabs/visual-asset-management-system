@@ -104,8 +104,10 @@ def _log_peak_memory(chunk_size: int, total_points: int) -> None:
     )
 
 
-def run(params: dict) -> PipelineExecutionParams:
-    """Run the coordinate transform pipeline."""
+def run(params: dict, input_asset: dict = None) -> PipelineExecutionParams:
+    """Run the coordinate transform pipeline. ``input_asset`` is where the input sits in its asset,
+    from its manifest entry (``{"relativePath", "assetRootS3Key", "assetRootBucket"}``); None when the
+    launching Lambda named none, and the output subfolder is then derived from the input key."""
     definition = PipelineDefinition(**params)
     # Sign each asset bucket's requests for its own Region before any S3 call (see utils s3 helper).
     s3.register_bucket_regions(definition.bucketRegions)
@@ -141,6 +143,7 @@ def run(params: dict) -> PipelineExecutionParams:
         definition.inputParameters,
         definition.localTest == "True",
         definition.assetId,
+        (input_asset or {}).get("relativePath") or "",
     )
 
     if definition.completedStages is None:
@@ -182,6 +185,7 @@ def _run_transform_stage(
     input_parameters: str,
     local_test: bool,
     asset_id: str = "",
+    relative_path: str = "",
 ) -> PipelineStage:
     """Execute the coordinate transformation stage."""
     from coord_xform.config import (
@@ -329,7 +333,7 @@ def _run_transform_stage(
         # Upload output files to S3
         if not local_test:
             relative_subdir = _relative_subdir_from_object_key(
-                stage_input.objectKey, asset_id
+                stage_input.objectKey, asset_id, relative_path
             )
             metadata_configured = bool(
                 stage_output_meta.bucketName and stage_output_meta.objectDir
@@ -537,14 +541,20 @@ def _is_metadata_sidecar(filename: str) -> bool:
     return filename.endswith(METADATA_SIDECAR_SUFFIXES)
 
 
-def _relative_subdir_from_object_key(object_key: str, asset_id: str) -> str:
-    """The input file's subdirectory within the asset, sliced at the threaded assetId segment.
+def _relative_subdir_from_object_key(object_key: str, asset_id: str, relative_path: str = "") -> str:
+    """The input file's subdirectory within the asset.
 
+    The input's manifest ``relativePath`` names it for every input: `/scans/room1/cloud.laz` gives
+    `scans/room1`, whether the key is under the asset ID, under an existing bucket folder the asset was
+    created on, or under the run's output folder (an earlier workflow step's output). Without one (a
+    launch that named none) the key is sliced at the threaded assetId segment:
     `xd130a6d6/scans/room1/cloud.laz` with assetId `xd130a6d6` gives `scans/room1`; an input at the
-    asset root gives `""`. The assetId is threaded through the pipeline definition rather than inferred
-    from the key, so a key that does not contain it — a direct invoke carrying no asset — yields no
-    subdirectory and the outputs land at the output prefix root, as they did before.
+    asset root gives `""`. A key that does not contain the asset ID — a direct invoke carrying no asset —
+    yields no subdirectory and the outputs land at the output prefix root, as they did before.
     """
+    relative = (relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] if "/" in relative else ""
     if not asset_id:
         return ""
     parts = object_key.split("/")
