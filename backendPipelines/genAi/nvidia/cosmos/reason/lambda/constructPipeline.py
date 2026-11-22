@@ -63,6 +63,11 @@ def lambda_handler(event, context):
         "bucketRegions": bucket_regions(event),
         # The S3 version the container reads the input file at; "" reads the current object.
         "inputVersionId": event.get("inputVersionId") or "",
+        # Where the input sits in its asset, from its manifest entry; "" from an older Lambda or
+        # without a manifest, and the container then derives the subfolder from the input key.
+        "inputRelativePath": event.get("inputRelativePath") or "",
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key") or "",
+        "inputAssetRootBucket": event.get("inputAssetRootBucket") or "",
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token

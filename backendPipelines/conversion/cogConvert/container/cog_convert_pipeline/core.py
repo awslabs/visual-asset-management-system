@@ -36,8 +36,11 @@ SKIP_NOTE_FILENAME = "cog-convert-skipped.json"
 REFUSED_ERROR_NAME = "CogConvertRefused"
 
 
-def run(params: dict) -> PipelineExecutionParams:
-    """Run the conversion and report the outcome on the internal task token."""
+def run(params: dict, input_asset: dict = None) -> PipelineExecutionParams:
+    """Run the conversion and report the outcome on the internal task token. ``input_asset`` is where the
+    input sits in its asset, from its manifest entry (``{"relativePath", "assetRootS3Key",
+    "assetRootBucket"}``); None when the launching Lambda named none, and the output subfolder is then
+    derived from the input key."""
     definition = PipelineDefinition(**params)
     s3.register_bucket_regions(definition.bucketRegions)
     logger.info(f"Pipeline Definition: {definition.jobName}")
@@ -58,7 +61,8 @@ def run(params: dict) -> PipelineExecutionParams:
         result_stage = current_stage
     else:
         result_stage = _run_convert_stage(
-            current_stage, definition.inputParameters, definition.localTest == "True", definition.assetId)
+            current_stage, definition.inputParameters, definition.localTest == "True", definition.assetId,
+            (input_asset or {}).get("relativePath") or "")
 
     if definition.completedStages is None:
         definition.completedStages = []
@@ -111,7 +115,7 @@ def _write_result(stage: PipelineStage, file_name: str, body: dict) -> bool:
 
 
 def _run_convert_stage(stage: PipelineStage, input_parameters, local_test: bool,
-                       asset_id: str = "") -> PipelineStage:
+                       asset_id: str = "", relative_path: str = "") -> PipelineStage:
     stage.status = PipelineStatus.RUNNING
     logger.info("Starting COG conversion stage")
     work_dir = None
@@ -133,7 +137,7 @@ def _run_convert_stage(stage: PipelineStage, input_parameters, local_test: bool,
         os.makedirs(output_dir)
 
         input_name = os.path.basename(stage_input.objectKey)
-        subdir = convert.relative_subdir(stage_input.objectKey, asset_id)
+        subdir = convert.relative_subdir(stage_input.objectKey, asset_id, relative_path)
         local_input = os.path.join(input_dir, input_name)
 
         # The version converted is recorded on the COG; a run with no launch version reads the current object

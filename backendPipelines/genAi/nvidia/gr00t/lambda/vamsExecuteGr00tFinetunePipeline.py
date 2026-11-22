@@ -97,8 +97,10 @@ def resolve_input_asset_prefix(resolved):
     Gr00t fine-tuning consumes the WHOLE asset, so the container needs a prefix, not an object key. A
     whole-asset selection already resolves to a prefix and is used as-is. A single-FILE selection
     resolves to an object key, and appending "/" to that would produce a prefix matching nothing — so
-    the asset root recorded on the manifest's first input file (``assetRootS3Key``) is used instead.
-    With no manifest entry to read, fall back to the file's parent prefix.
+    the asset root recorded on the manifest's first input file (``assetRootS3Key``, in the bucket
+    ``assetRootBucket``) is used instead. An entry an earlier step's output shadows is read from the
+    run bucket, so ``bucket`` is not the asset root's bucket; a manifest without ``assetRootBucket``
+    pairs the root with ``bucket``. With no manifest entry to read, fall back to the file's parent prefix.
     """
     path = (resolved or {}).get("inputS3AssetFilePath") or ""
     if not path:
@@ -107,7 +109,7 @@ def resolve_input_asset_prefix(resolved):
         return path
     input_files = (resolved or {}).get("inputFiles") or []
     first = input_files[0] if input_files else {}
-    bucket = first.get("bucket") or ""
+    bucket = first.get("assetRootBucket") or first.get("bucket") or ""
     asset_root = first.get("assetRootS3Key") or ""
     if bucket and asset_root:
         return f"s3://{bucket}/{asset_root.lstrip('/')}"
