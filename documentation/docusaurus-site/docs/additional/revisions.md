@@ -291,7 +291,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 
 **Key fixes:**
 
--   **Isaac Lab run record** — The `train-config.json` and `evaluate-config.json` an Isaac Lab run uploads keep only the run's settings and the recorded Isaac Lab and GPU driver versions. The workflow's callback fields and the input, output and metadata locations are left out.
+-   **Isaac Lab run record** — The `train-config.json` and `evaluate-config.json` an Isaac Lab run uploads keep only the run's settings and the recorded Isaac Lab and GPU driver versions. The workflow's callback fields and the input, output and metadata locations are left out. (PR #1835)
 -   **3MF size check on the uncompressed size** — 3D Basic Conversion checks a 3MF package's declared uncompressed size against the function's memory after the download and before any part is parsed, and the refusal names that size. A package that compresses better than about 5 to 1 passed the zip-size check and could run out of memory. (issue #1743)
 -   **CAD STEP agent runs on the default model** — Every GenAI CAD STEP agent run failed at its first model call with the default `global.anthropic.claude-sonnet-5-5`, which refuses a `temperature`. The agent sends none, so each model uses its own default. (issue #1711)
 -   **API stack template under the CloudFormation limit** — A deployment with, for example, a customer managed key, every Lambda function in the VPC and Download as Zip failed on the `ApiBuilder2` nested stack, whose template was over 1,000,000 bytes. The shared CDK Nag suppressions are written only on the IAM roles and policies they apply to, so the template is about a third smaller; no resource is replaced. (issue #1647)
