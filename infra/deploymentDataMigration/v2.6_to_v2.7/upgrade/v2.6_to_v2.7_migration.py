@@ -937,8 +937,8 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
         logger.info("  Re-run the step to move the records that were edited during this run; their assets are not")
         logger.info("  marked done.")
     if counts['copy-chains-deeper'] and not dry_run:
-        logger.info("  Move the records of each copy with a copy of its own by hand and mark its asset row (see the")
-        logger.info("  README), then re-run the step; until then it exits non-zero.")
+        logger.info("  Move the records of each copy of the copy by hand and mark its asset row (see the README),")
+        logger.info("  then re-run the step; until then it exits non-zero.")
     if counts['records-moved'] and not dry_run:
         logger.info("  Run the vectorBackfill step afterwards (it runs next under --steps all) so the moved copy's")
         logger.info("  search vectors are rewritten for its new path.")
