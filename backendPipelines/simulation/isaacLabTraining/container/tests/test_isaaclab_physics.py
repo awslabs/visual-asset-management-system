@@ -298,6 +298,39 @@ class TestRunRecord:
         assert record["trainingConfig"] == {"mode": "train", "physics": "isaacsim_physx"}
         assert record["isaacLabVersion"] == "3.0.0"
 
+    def test_the_uploaded_config_keeps_the_run_settings_and_leaves_out_workflow_fields(
+            self, main_module):
+        uploaded = {}
+
+        class S3:
+            def upload_file(self, local_path, s3_uri):
+                with open(local_path, encoding="utf-8") as f:
+                    uploaded.update(json.load(f))
+
+        job_config = {
+            "jobName": "j",
+            "trainingConfig": {"mode": "evaluate", "task": "Isaac-Cartpole", "rlLibrary": "rsl_rl",
+                               "physics": "isaacsim_physx", "policyS3Uri": "s3://b/k.pt",
+                               "physicsNote": "a transfer test"},
+            "customEnvironmentS3Uri": "s3://b/env.whl",
+            "stageAssetFiles": {"rootS3Uri": "s3://b/a/", "paths": ["x"]},
+            "externalSfnTaskToken": "callback-value",
+            "inputS3AssetFilePath": "s3://b/in.json",
+            "outputS3AssetFilesPath": _OUTPUT_PREFIX,
+            "inputMetadataS3Location": "s3://b/meta.json",
+            "inputConfigurationS3Location": "s3://b/cfg.json",
+            "bucketRegions": {"b": "us-east-1"},
+        }
+        main_module.upload_config(S3(), _config(), job_config)
+
+        assert set(uploaded) == {"jobName", "trainingConfig", "customEnvironmentS3Uri",
+                                 "stageAssetFiles", "isaacLabVersion"} | (
+                                 {"gpuDriverVersion"} & set(uploaded))
+        assert "callback-value" not in json.dumps(uploaded)
+        assert uploaded["trainingConfig"]["physics"] == "newton_mjwarp"
+        assert uploaded["trainingConfig"]["physicsNote"] == "a transfer test"
+        assert uploaded["trainingConfig"]["policyS3Uri"] == "s3://b/k.pt"
+
     def test_a_job_config_without_a_training_section_still_records_the_engine(
             self, main_module):
         uploaded = {}
