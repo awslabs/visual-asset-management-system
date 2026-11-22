@@ -64,8 +64,16 @@ def derived_output_name(input_name: str) -> str:
     return input_name + COG_SUFFIX
 
 
-def relative_subdir(object_key: str, asset_id: str) -> str:
-    """The input's folder within the asset, sliced at the threaded assetId segment ('' at the asset root)."""
+def relative_subdir(object_key: str, asset_id: str, relative_path: str = "") -> str:
+    """The input's folder within the asset ('' at the asset root).
+
+    The input's manifest ``relativePath`` names it for every input: `/maps/north/site.tif` gives `maps/north`,
+    whether the key is under the asset ID, under an existing bucket folder the asset was created on, or under
+    the run's output folder (an earlier workflow step's output). Without one (a launch that named none) the
+    key is sliced at the threaded assetId segment, and a key without that segment gives ''."""
+    relative = (relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] if "/" in relative else ""
     if not asset_id:
         return ""
     parts = object_key.split("/")

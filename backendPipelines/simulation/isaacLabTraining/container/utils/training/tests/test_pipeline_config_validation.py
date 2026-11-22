@@ -119,7 +119,7 @@ class TestAbsentAndNullTakeTheDefault:
     def test_empty_config_is_all_defaults(self):
         config = PipelineConfig.from_dict({})
         assert (config.job_name, config.mode, config.task) == (
-            "isaaclab-job", "train", "Isaac-Cartpole-v0")
+            "isaaclab-job", "train", "Isaac-Cartpole")
         assert (config.num_envs, config.max_iterations) == (4096, 1500)
         assert (config.num_episodes, config.steps_per_episode) == (50, 1000)
         assert config.seed is None

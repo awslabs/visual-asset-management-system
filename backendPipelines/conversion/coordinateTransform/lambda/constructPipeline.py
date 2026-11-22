@@ -25,15 +25,36 @@ sfn = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us
 # argument, so a run that reaches such an image during an upgrade still starts. executeBatchJob
 # submits the whole list as the command.
 INPUT_VERSIONS_KEY = "inputVersions"
+# Where the input sits in its asset, from its manifest entry, in the same second argument:
+# {"relativePath", "assetRootS3Key", "assetRootBucket"}. That document always carries INPUT_VERSIONS_KEY
+# (empty when the run has no version): an image that reads only the version accepts an empty one and
+# ignores the other key, while it refuses a document without it.
+INPUT_ASSET_KEY = "inputAsset"
+
+
+def input_asset(event) -> dict:
+    """The input's asset-relative path and asset root from the event, or None when the event names
+    neither (a payload without a manifest, or an event from an older Lambda)."""
+    location = {
+        "relativePath": event.get("inputRelativePath") or "",
+        "assetRootS3Key": event.get("inputAssetRootS3Key") or "",
+        "assetRootBucket": event.get("inputAssetRootBucket") or "",
+    }
+    return location if location["relativePath"] or location["assetRootS3Key"] else None
 
 
 def definition_command(definition, event) -> list:
-    """The Batch command for ``definition``: the definition, then the first stage's launch version when
-    the run has one. Without a version it is the one-element command written before the field."""
+    """The Batch command for ``definition``: the definition, then, when the run has a launch version or
+    an input asset location, one document naming them. With neither it is the one-element command
+    written before those fields."""
     command = [json.dumps(definition)]
     version_id = event.get("inputVersionId") or ""
-    if version_id:
-        command.append(json.dumps({INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id}}))
+    asset = input_asset(event)
+    if version_id or asset:
+        extra = {INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id} if version_id else {}}
+        if asset:
+            extra[INPUT_ASSET_KEY] = asset
+        command.append(json.dumps(extra))
     return command
 
 
@@ -183,10 +204,12 @@ def _validated_transform_params(input_parameters):
     return json.dumps(params)
 
 
-def _asset_relative_file_key(input_key, asset_id):
-    """The asset-relative file key ('/folder/file.ext') of an input S3 key, sliced at the
-    threaded assetId path segment. Returns the asset-level key ('/') when the asset id is not a
-    segment of the key."""
+def _asset_relative_file_key(input_key, asset_id, relative_path=""):
+    """The asset-relative file key ('/folder/file.ext') of the input: its manifest relativePath when the
+    event carries one, else the input S3 key sliced at the threaded assetId path segment. Returns the
+    asset-level key ('/') when neither names it."""
+    if relative_path:
+        return "/" + relative_path.lstrip("/")
     parts = input_key.split("/")
     if asset_id and asset_id in parts:
         return "/" + "/".join(parts[parts.index(asset_id) + 1:])
@@ -279,7 +302,7 @@ def _build_execution_params(event):
         metadata_body,
         event.get('databaseId', ''),
         event.get('assetId', ''),
-        _asset_relative_file_key(input_key, event.get('assetId', '')),
+        _asset_relative_file_key(input_key, event.get('assetId', ''), event.get('inputRelativePath', '')),
     ) if metadata_body else {}
     input_parameters = _validated_transform_params(_merge_metadata_into_params(
         json.dumps(input_configuration) if input_configuration else '',

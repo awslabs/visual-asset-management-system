@@ -111,7 +111,7 @@ def _invoke(event, sfn=None, s3=None):
 REJECTIONS = {
     "unrecognized_mode": _event(trainingConfig={"mode": "sideways"}),
     "unsupported_rl_library": _event(
-        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0", "rlLibrary": "sb3"}),
+        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct", "rlLibrary": "sb3"}),
     "checkpoint_path_without_asset_root": _event(
         bucketAsset="", trainingConfig={"mode": "evaluate", "checkpointPath": "ckpt/model_300.pt"}),
     "custom_environment_without_asset_root": _event(
@@ -122,14 +122,14 @@ REJECTIONS = {
     # (pip runs the environment package's setup code; torch deserializes the policy), so a URI
     # outside the executing asset's own bucket is rejected here rather than deep inside the job.
     "custom_environment_uri_outside_asset_bucket": _event(
-        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0",
+        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct",
                         "customEnvironmentS3Uri": "s3://other-asset-bucket/env.tar.gz"}),
     "custom_environment_uri_without_asset_bucket": _event(
         bucketAsset="",
-        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0",
+        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct",
                         "customEnvironmentS3Uri": "s3://asset-bucket/env.tar.gz"}),
     "custom_environment_uri_with_a_non_s3_scheme": _event(
-        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0",
+        trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct",
                         "customEnvironmentS3Uri": "https://example.invalid/env.tar.gz"}),
     "policy_uri_outside_asset_bucket": _event(
         trainingConfig={"mode": "evaluate", "policyS3Uri": "s3://other-asset-bucket/model.pt"}),
@@ -202,7 +202,7 @@ class TestCallbackDiscipline:
         sfn = MagicMock()
         with patch.object(mod, "s3_client", _empty_s3()), patch.object(mod, "sfn_client", sfn):
             out = mod.lambda_handler(
-                _event(trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0"}),
+                _event(trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct"}),
                 MagicMock())
         assert out["status"] == "STARTING"
         sfn.send_task_failure.assert_not_called()
@@ -227,13 +227,13 @@ class TestOperatorSuppliedUrisAreScopedToTheAssetBucket:
     def test_a_same_bucket_custom_environment_uri_is_passed_through(self):
         uri = "s3://asset-bucket/xid130a6/environments/env.tar.gz"
         _, payload = self._build(_event(
-            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0",
+            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct",
                             "customEnvironmentS3Uri": uri}))
         assert json.loads(payload["definition"])["customEnvironmentS3Uri"] == uri
 
     def test_a_relative_custom_environment_path_still_resolves(self):
         _, payload = self._build(_event(
-            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0",
+            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct",
                             "customEnvironmentPath": "environments/env.tar.gz"}))
         assert json.loads(payload["definition"])["customEnvironmentS3Uri"] == \
             "s3://asset-bucket/xid130a6/environments/env.tar.gz"
@@ -241,7 +241,7 @@ class TestOperatorSuppliedUrisAreScopedToTheAssetBucket:
     def test_no_custom_environment_stays_empty_rather_than_being_rejected(self):
         # The guard must not fire for a run that names no package at all.
         _, payload = self._build(_event(
-            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct-v0"}))
+            trainingConfig={"mode": "train", "task": "Isaac-Cartpole-Direct"}))
         assert json.loads(payload["definition"])["customEnvironmentS3Uri"] == ""
 
     def test_a_same_bucket_policy_uri_is_passed_through(self):
