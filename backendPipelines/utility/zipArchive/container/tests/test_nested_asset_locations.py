@@ -96,3 +96,35 @@ def test_the_lists_of_several_inputs_are_merged(s3):
         {"bucket": ASSETS, "key": BASE + "sub/", "versionId": "", "excludeLocations": [BASE + "inner/"]},
         {"bucket": ASSETS, "key": BASE, "versionId": "", "excludeLocations": [BASE + "model.glb", 7, ""]}]).run()
     assert _archived(s3, result) == ["a.glb", "model.glb2.txt", "sub/b.obj"]
+
+
+def _existing_key_bucket():
+    """An asset created on an existing bucket folder (its keys carry no asset ID) holding a nested asset."""
+    s = FakeS3()
+    for name in ["projects/site-a/left/part.glb", "projects/site-a/right/part.glb",
+                 "projects/site-a/inner/i1.glb", "projects/site-a/inner/sub/i2.glb"]:
+        s.add(name, name.encode(), content_type="model/x")
+    return s
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("projects/site-a/", ["left/part.glb", "right/part.glb"]),
+    ("projects/site-a/right/", ["right/part.glb"]),
+], ids=["whole-asset", "folder"])
+def test_a_run_over_an_existing_key_asset_runs_and_leaves_its_nested_asset_out(key, expected):
+    """#1751 derives the root from the entry's assetRootS3Key (the keys carry no asset ID, so the run was
+    refused as outside the run's asset); this branch's excludeLocations leaves the nested asset's files out.
+    Both apply to one entry."""
+    s3 = _existing_key_bucket()
+    entry = {"bucket": ASSETS, "key": key, "versionId": "", "assetRootS3Key": "projects/site-a/",
+             "assetRootBucket": ASSETS, "excludeLocations": ["projects/site-a/inner/"]}
+    result = _archive_run(s3, [entry]).run()
+    assert _archived(s3, result) == expected
+
+
+def test_control_without_the_root_the_existing_key_run_is_refused():
+    s3 = _existing_key_bucket()
+    with pytest.raises(runner.ArchiveFailure) as e:
+        _archive_run(s3, [{"bucket": ASSETS, "key": "projects/site-a/", "versionId": "",
+                           "excludeLocations": ["projects/site-a/inner/"]}]).run()
+    assert e.value.refusal and "outside the run's asset" in e.value.reason
