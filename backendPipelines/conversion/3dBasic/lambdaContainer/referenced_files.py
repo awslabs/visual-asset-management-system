@@ -246,7 +246,7 @@ def local_path_for(local_root: str, relative_path: str) -> Optional[str]:
     return target
 
 
-def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, str]:
+def confinement_root(input_key: str, relative_subdir: str = "", asset_root: str = "") -> Tuple[str, str]:
     """``(root_key, input_relative_path)``: the S3 prefix references are confined to, and the input's
     path below it.
 
@@ -256,9 +256,23 @@ def confinement_root(input_key: str, relative_subdir: str = "") -> Tuple[str, st
     file an earlier workflow step wrote, which is keyed by its asset-relative path under the run's
     output files folder. When the key does not end with that path -- a direct invocation with no
     manifest, for one -- the root is the input file's own directory, the narrowest confinement.
+
+    ``asset_root`` is the manifest's ``assetRootS3Key`` when the input is read from that root's bucket.
+    One without a trailing ``/`` is a single-file asset: it names one object, and what the asset holds
+    besides it is its companion folder ``{key}/``. An input that is that object, or lies in that
+    folder, is confined to the folder, never to the object's parent directory, which holds keys the
+    asset does not hold. The object itself sits at its file name there, beside the folder's files, as
+    the asset presents them.
     """
     input_key = input_key or ""
     name = posixpath.basename(input_key)
+    single_file = (asset_root or "").lstrip("/")
+    if single_file and not single_file.endswith("/"):
+        folder = single_file + "/"
+        if input_key == single_file:
+            return folder, name
+        if input_key.startswith(folder) and len(input_key) > len(folder):
+            return folder, input_key[len(folder):]
     own_directory = input_key[:len(input_key) - len(name)]
     subdir = (relative_subdir or "").strip("/")
     if subdir:
