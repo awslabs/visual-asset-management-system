@@ -35,19 +35,14 @@
             "plannedIn": "not planned: upstream-owned file (#1741 / #1808)"
         },
         {
-            "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",
-            "reason": "Input of requirements.lock: the packages the Isaac Lab training image adds to Isaac Sim's bundled Python 3.12 environment (boto3, MoviePy 1.x with imageio-ffmpeg).",
-            "plannedIn": "#1741: Isaac Lab training (#1817)"
-        },
-        {
-            "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile` with --generate-hashes, constrained by base-constraints.txt so the base image's packages keep their versions) that the Dockerfile installs with --require-hashes into Isaac Sim's bundled Python; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
-            "plannedIn": "#1741: Isaac Lab training (#1817)"
-        },
-        {
             "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-image.txt",
             "reason": "What the GR00T image installs besides Isaac-GR00T's own dependencies; an input of requirements.lock.",
             "plannedIn": "#1741: after #1812 merges"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-overrides.txt",
+            "reason": "The versions that replace Isaac-GR00T's own exact pins when requirements.lock is compiled (uv --override); an input of requirements.lock, not installed itself.",
+            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
         },
         {
             "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements.lock",

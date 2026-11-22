@@ -1,3 +1,280 @@
 {
-    "entries": []
+    "entries": [
+        {
+            "id": "PYSEC-2026-4320",
+            "package": "certifi",
+            "reason": "certifi 2026.7.22 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (2026.10.18) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-215",
+            "package": "idna",
+            "reason": "idna 3.10 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (3.15) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "GHSA-78g4-xqwv-q3g8",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4328",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4333",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4336",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4339",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4342",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "reason": "pillow 12.3.0 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (13.0.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-1872",
+            "package": "requests",
+            "reason": "requests 2.32.3 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (2.32.4) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        },
+        {
+            "id": "PYSEC-2026-2275",
+            "package": "requests",
+            "reason": "requests 2.32.3 is the version the digest-pinned Isaac Lab base image ships (backendPipelines/simulation/isaacLabTraining/container/base-constraints.txt). The image's lock must leave every base-image package at the base's version so a build never changes a package NVIDIA ships, so the fix (2.33.0) cannot be taken here. The fix arrives with the next base image digest, when base-constraints.txt is regenerated.",
+            "reviewBy": "2027-01-31"
+        }
+    ]
 }

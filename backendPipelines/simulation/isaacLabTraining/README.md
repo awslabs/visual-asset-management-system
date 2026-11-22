@@ -444,8 +444,9 @@ isaacLabTraining/
 ├── ISAACLAB_CLI_REFERENCE.md   # Isaac Lab CLI reference
 ├── container/                   # Docker container
 │   ├── Dockerfile
-│   ├── requirements.txt        # Direct dependencies
-│   ├── requirements.lock       # Hashed lock; adds only what the base image lacks
+│   ├── pyproject.toml          # uv project: direct dependencies and the base image's constraints
+│   ├── uv.lock
+│   ├── requirements.lock       # Hashed uv export; adds only what the base image lacks
 │   ├── base-constraints.txt    # Base image's frozen package set (regenerate when the digest moves)
 │   ├── __main__.py             # Main entry point
 │   ├── entrypoint.sh
