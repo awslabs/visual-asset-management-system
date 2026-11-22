@@ -16,6 +16,10 @@ dependencies = [
 # list as base-constraints.txt (a test keeps the two equal), so the resolution leaves every package the
 # base image ships at the base's version. MoviePy 1.0.3 publishes no wheel, so it is the one package
 # resolved from its source archive.
+# environments is Linux x86_64 only: the image is amd64. Adding Linux aarch64 and macOS (for developer test
+# runs) was tried and changes the export (wider markers on every line and the wheel hashes of those
+# platforms), so the install set is no longer the one the image installs today; it stays narrow. On an arm64
+# or macOS machine the pipeline test runner therefore installs none of the lock for this image's tests.
 [tool.uv]
 package = false
 required-version = "==0.13.8"
