@@ -27,16 +27,14 @@ def rn(monkeypatch):
     for var in ALL_OVERRIDE_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     import common.resourceNames as resourceNames
-    # Reset module state instead of reloading (reload doesn't work with import_module_from_path)
-    resourceNames._cache = {}
-    resourceNames._cache_fetched_at = 0.0
-    resourceNames._ssm_client = None
-    # Reset alongside the positive cache: a negative record carries its own timestamp, so
-    # zeroing _cache_fetched_at alone would leave a recorded miss live in the next test.
-    resourceNames._missing_keys = {}
-    # A failed sweep in one test would otherwise refuse the next test's lookups for its back-off window.
-    resourceNames._failed_sweeps = 0
-    resourceNames._sweep_retry_after = 0.0
+    # Reset module state instead of reloading (reload doesn't work with import_module_from_path),
+    # through monkeypatch so the next test gets the module back as it was. The negative record is
+    # reset with the positive cache because it carries its own timestamp, and the back-off state
+    # because a failed sweep would otherwise refuse the next test's lookups for its window.
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                        ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                        ("_window_logged_for", None)):
+        monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 
 
