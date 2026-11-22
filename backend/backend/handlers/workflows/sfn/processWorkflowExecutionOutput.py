@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
-from common.resourceNames import get_table_name, ResourceKeys
+from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, object_key_for
+from common.resourceNames import get_table_name, ResourceKeys, ResourceNameUnavailableError
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     COPY_PRESERVED_HEADER_FIELDS,
@@ -97,6 +98,12 @@ CROSS_CALL_CONNECT_TIMEOUT_SECONDS = 10
 # Attempts of a synchronous cross-call that Lambda throttled (refused before the function ran).
 CROSS_CALL_THROTTLE_ATTEMPTS = 4
 CROSS_CALL_THROTTLE_BACKOFF_SECONDS = 1
+# The error type a VAMS function answers with when Parameter Store throttling refused the resource
+# names it resolves at import (common.resourceNames): it could not start, so its handler did not run.
+# A synchronous callee answering with it ends this step's attempt with the same error, which the
+# workflow definition retries (workflowAslBuilder RESOURCE_NAME_UNAVAILABLE_RETRIER), instead of
+# recording a failed write-back (_raise_if_refused_at_start).
+RESOURCE_NAME_UNAVAILABLE_ERROR = ResourceNameUnavailableError.__name__
 # Generic write-back failure summary recorded on the execution when the asset file write-back did
 # not land every output file (specifics go to the log).
 FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
@@ -106,6 +113,9 @@ FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
 MAX_FILES_PER_COMPLETION_CALL = MAX_FILES_PER_UPLOAD_REQUEST
 # Output files a failed write-back names in the run's error; the rest are counted.
 MAX_NAMED_WRITE_BACK_FAILURES = 20
+# Per-file refusals of the file ingestion that the user can act on. The run's error repeats one by its
+# fixed text after the file it refused; any other per-file error stays in the log.
+USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL})
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
@@ -231,12 +241,36 @@ def _engine(operation, **fields):
     """The copy work of this step, done by the copy engine with its own role: this function holds no
     grant on the copy jobs table, the copy state machine or its executions. Raises
     loc.EngineCallFailed, which fails this step like a failed write of its own, so a run is never
-    reported done on a call that did not happen."""
+    reported done on a call that did not happen; an engine that could not start because its resource
+    names were refused raises ResourceNameUnavailableError instead, which the workflow retries."""
     context = _invocation_context
     remaining = getattr(context, "get_remaining_time_in_millis", None)
-    return loc.call_engine(engine_invoke_client,
-                           lambda: loc.engine_function_name(ssm_client=_ssm_client()),
-                           operation, remaining_ms=remaining, **fields)
+    try:
+        return loc.call_engine(engine_invoke_client,
+                               lambda: loc.engine_function_name(ssm_client=_ssm_client()),
+                               operation, remaining_ms=remaining, **fields)
+    except loc.EngineCallFailed as e:
+        if getattr(e, "error_type", "") == RESOURCE_NAME_UNAVAILABLE_ERROR:
+            raise ResourceNameUnavailableError(
+                f"The copy engine could not start for the {operation} call: its resource names were "
+                f"refused while Parameter Store was throttled") from e
+        raise
+
+
+def _raise_if_refused_at_start(response, answer, callee):
+    """Raise ResourceNameUnavailableError when a synchronous cross-call answered with that function
+    error: an unhandled error (``FunctionError`` set) whose ``errorType`` names it. The callee raised
+    it while loading (it resolves its names at import, backend Rule 10, and a name its finished init
+    cached is never refused), so its handler did not run and nothing was written. Any other answer
+    returns, for the caller's own handling."""
+    if not (response or {}).get('FunctionError') or not isinstance(answer, dict):
+        return
+    if answer.get('errorType') != RESOURCE_NAME_UNAVAILABLE_ERROR:
+        return
+    logger.warning(f"The {callee} function could not start: its resource names were refused")
+    raise ResourceNameUnavailableError(
+        f"The {callee} function could not start: its resource names were refused while Parameter "
+        f"Store was throttled")
 
 
 def _invoke_request_response(function_name, payload):
@@ -538,11 +572,26 @@ def _completion_chunks(objects, max_files=MAX_FILES_PER_COMPLETION_CALL):
     return chunks
 
 
-def _named_write_back_failures(relative_keys):
+def _refused_write_back_reasons(result):
+    """{relativeKey: reason} of the files a file-ingestion response refused for a reason the user can
+    correct (USER_CORRECTABLE_WRITE_BACK_REFUSALS)."""
+    file_results = (result or {}).get('fileResults')
+    if not isinstance(file_results, list):
+        return {}
+    return {entry.get('relativeKey', ''): entry.get('error')
+            for entry in file_results
+            if isinstance(entry, dict) and not entry.get('success')
+            and entry.get('error') in USER_CORRECTABLE_WRITE_BACK_REFUSALS}
+
+
+def _named_write_back_failures(relative_keys, reasons=None):
     """Run-error entries naming the output files the write-back did not land: the first
-    MAX_NAMED_WRITE_BACK_FAILURES by name, the rest counted."""
+    MAX_NAMED_WRITE_BACK_FAILURES by name, each followed by its refusal when the ingestion refused it
+    for a reason the user can correct, the rest counted."""
     keys = sorted(relative_keys)
-    entries = [f"Writing output file '{key}' into the asset failed."
+    reasons = reasons or {}
+    entries = [f"Writing output file '{key}' into the asset failed: {reasons[key]}" if reasons.get(key)
+               else f"Writing output file '{key}' into the asset failed."
                for key in keys[:MAX_NAMED_WRITE_BACK_FAILURES]]
     if len(keys) > MAX_NAMED_WRITE_BACK_FAILURES:
         entries.append(f"{len(keys) - MAX_NAMED_WRITE_BACK_FAILURES} more output files were not "
@@ -638,8 +687,9 @@ def _destination_key(descriptor, asset, base_assets_prefix):
     if descriptor.get("fileType") == "preview":
         return f"{base_assets_prefix}{PREVIEW_PREFIX}{asset_id}/{os.path.basename(relative)}"
     base = (asset.get('assetLocation') or {}).get('Key') or f"{base_assets_prefix}{asset_id}/"
-    if not base.endswith('/'):
-        base += '/'
+    if not is_folder_location(base):
+        # A single-file asset (common.assetLocations), resolved as the upload handler resolves it
+        return object_key_for(base, relative) or base
     return relative if relative.startswith(base) else base + relative
 
 
@@ -730,6 +780,33 @@ def _remove_then_settle(workflow_execution_id, descriptors, landed, holder, sour
     _drop_ingest_ledger_rows(
         workflow_execution_id,
         [d for d in descriptors if eo.ingest_ledger_sort_key(d) not in landed_keys], holder=holder)
+
+
+def _release_refused_call(workflow_execution_id, claimed, stamped_keys, holder, source_bucket):
+    """Undo this attempt's part of a write-back call whose function could not start (it answered
+    ResourceNameUnavailableError, so nothing moved and no copy job started).
+
+    The provenance stamp already wrote a full copy of each stamped object as its current version, so
+    the version this attempt listed is deleted (as after a move, #1291): its content stays staged in
+    the stamped copy, which the retried attempt lists, stamps and ingests, and no older version is left
+    behind. A listed version is deleted only while the key's current version is another one, so the
+    copy holding the content is never the one removed. Then this holder's `moving` rows are released,
+    so the retry claims those outputs again. An unstamped object (a large file a copy job would read)
+    keeps its listed version."""
+    def _superseded(d):
+        listed = d.get("s3VersionId") or ""
+        if listed in ("", "null"):
+            return None
+        try:
+            current = s3c.head_object(Bucket=d.get("s3Bucket") or source_bucket, Key=d.get("s3Key") or "")
+        except Exception as e:
+            logger.warning(f"Could not read the staged {d.get('s3Key')} (non-critical): {e}")
+            return None
+        return d if (current.get("VersionId") or listed) != listed else None
+
+    stamped = [d for d in claimed if d.get("s3Key") in stamped_keys]
+    _remove_listed_staged_versions([d for d in _in_s3_pool(_superseded, stamped) if d], source_bucket)
+    _drop_ingest_ledger_rows(workflow_execution_id, claimed, holder=holder)
 
 
 def _remove_listed_staged_versions(descriptors, default_bucket):
@@ -1011,7 +1088,8 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
                 json_response = json.loads(stream.read().decode("utf-8"))
                 logger.info("fileIngestion response:")
                 logger.info(json_response)
-                
+                _raise_if_refused_at_start(response, json_response, "file ingestion")
+
                 if "statusCode" in json_response and json_response["statusCode"] == 200:
                     if "body" in json_response:
                         return json.loads(json_response["body"])
@@ -1027,6 +1105,9 @@ def process_external_upload(upload_id, asset_id, database_id, upload_type, files
         else:
             logger.error("Invalid response from fileIngestion Lambda")
             return None
+    except ResourceNameUnavailableError:
+        # Nothing was written: the caller releases its claims and ends the attempt (retried).
+        raise
     except Exception as e:
         logger.exception(f"Error processing external upload: {e}")
         return None
@@ -1265,7 +1346,8 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
             if response and 'Payload' in response:
                 stream = response['Payload']
                 json_response = json.loads(stream.read().decode("utf-8"))
-                
+                _raise_if_refused_at_start(response, json_response, "metadata service")
+
                 if json_response.get('statusCode') == 200:
                     body = json.loads(json_response['body'])
                     logger.info(f"Successfully processed {metadata_type} with updateType={update_type}: {body.get('message')}")
@@ -1276,6 +1358,9 @@ def process_metadata_file(bucket_name, s3_key, metadata_path_key, database_id, a
 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in {s3_key}: {e}")
+    except ResourceNameUnavailableError:
+        # The metadata service could not start and wrote nothing: the step's attempt ends (retried).
+        raise
     except Exception as e:
         logger.exception(f"Error processing {metadata_type} file {s3_key}: {e}")
     return None
@@ -2251,6 +2336,9 @@ def _finalize_ingestion(event, audit_event=None):
                     output_metadata, "/" + deferred["filePath"].lstrip("/"), deferred["key"], applied,
                     er.OUTPUT_METADATA_TYPE_ATTRIBUTE if metadata_type == 'attribute'
                     else er.OUTPUT_METADATA_TYPE_METADATA)
+        except ResourceNameUnavailableError:
+            # Nothing recorded yet: the FinalizeOutputs state is retried and re-applies the same values.
+            raise
         except Exception as e:
             logger.exception(f"Error applying deferred {metadata_type} {deferred.get('key')}: {e}")
             output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -2530,6 +2618,7 @@ def lambda_handler(event, context):
                             # Ingested by an earlier attempt (recorded from the ledger) or held by a live one.
                             logger.info("Preview output already ingested or held by another attempt")
                         else:
+                            claimed = []
                             try:
                                 # Create external upload record
                                 upload_id = create_external_upload_record(
@@ -2600,6 +2689,13 @@ def lambda_handler(event, context):
                                     output_failures.append("The asset preview write-back failed.")
                             except _NothingClaimed:
                                 logger.info("Preview output was claimed by another attempt")
+                            except ResourceNameUnavailableError:
+                                # The ingestion function could not start, so the preview did not move:
+                                # release this attempt's claim on it and end the attempt; the retried
+                                # step claims and ingests it.
+                                _release_refused_call(ledger_execution_id, claimed, {preview_file},
+                                                      attempt_holder, source_bucket)
+                                raise
                             except Exception as e:
                                 logger.exception(f"Error processing preview upload: {e}")
                                 output_failures.append("The asset preview write-back failed.")
@@ -2658,6 +2754,7 @@ def lambda_handler(event, context):
                         # the relative keys of those that were not written.
                         landed_keys = set()
                         not_landed_keys = set()
+                        refusal_reasons = {}
                         write_back_failed = False
                         chunks = _completion_chunks(file_objects)
                         if len(chunks) > 1:
@@ -2674,6 +2771,7 @@ def lambda_handler(event, context):
                             result = None
                             chunk_keys = {}
                             claimed = []
+                            stamped_objects = []
                             try:
                                 # Create external upload record
                                 upload_id = create_external_upload_record(
@@ -2742,6 +2840,16 @@ def lambda_handler(event, context):
                                     ingestion_batch_id=ingestion_batch_id,
                                     workflow_database_id=event.get('workflowDatabaseId', ''),
                                 )
+                            except ResourceNameUnavailableError:
+                                # The ingestion function could not start, so nothing of this call
+                                # moved or was handed to a copy job: release this attempt's claims on
+                                # it and end the attempt. The retried step records from the ledger what
+                                # earlier calls of this attempt settled (`ingested`, `engine-copying`)
+                                # and claims and ingests the rest.
+                                _release_refused_call(ledger_execution_id, claimed,
+                                                      {o['Key'] for o in stamped_objects},
+                                                      attempt_holder, source_bucket)
+                                raise
                             except Exception as e:
                                 logger.exception(f"Error processing asset file upload "
                                                  f"(call {chunk_index + 1} of {len(chunks)}): {e}")
@@ -2765,6 +2873,7 @@ def lambda_handler(event, context):
                             # Ingestion answers 200 when only SOME files landed, so read the
                             # per-file outcome and record rows only for what actually landed.
                             all_ingested, ingested_keys = _ingestion_outcome(result)
+                            refusal_reasons.update(_refused_write_back_reasons(result))
                             if not result:
                                 landed = set()
                             elif ingested_keys is None:
@@ -2806,7 +2915,8 @@ def lambda_handler(event, context):
                             d for d in to_claim if d["s3Key"] in landed_keys)
                         if write_back_failed:
                             output_failures.append(FILE_WRITE_BACK_FAILURE)
-                            output_failures.extend(_named_write_back_failures(not_landed_keys))
+                            output_failures.extend(_named_write_back_failures(not_landed_keys,
+                                                                              refusal_reasons))
                     elif not earlier_keys:
                         logger.warning("No files found in asset output folder")
 
@@ -2884,6 +2994,8 @@ def lambda_handler(event, context):
                                 _record_applied_metadata(
                                     collected_output_metadata, "/", asset_metadata_file['Key'], applied,
                                     er.OUTPUT_METADATA_TYPE_METADATA)
+                        except ResourceNameUnavailableError:
+                            raise
                         except Exception as e:
                             logger.exception(f"Error processing asset metadata: {e}")
                             output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -2929,6 +3041,8 @@ def lambda_handler(event, context):
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                        except ResourceNameUnavailableError:
+                            raise
                         except Exception as e:
                             logger.exception(f"Error processing file metadata {file_obj['Key']}: {e}")
                             output_failures.append(METADATA_WRITE_BACK_FAILURE)
@@ -2968,6 +3082,8 @@ def lambda_handler(event, context):
                             else:
                                 logger.error(f"Could not extract file path from: {file_obj['Key']}")
                                 output_failures.append(METADATA_WRITE_BACK_FAILURE)
+                        except ResourceNameUnavailableError:
+                            raise
                         except Exception as e:
                             logger.exception(f"Error processing file attribute {file_obj['Key']}: {e}")
                             output_failures.append(METADATA_WRITE_BACK_FAILURE)

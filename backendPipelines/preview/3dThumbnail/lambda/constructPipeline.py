@@ -17,6 +17,20 @@ INPUT_VERSIONS_KEY = "inputVersions"
 # always carries INPUT_VERSIONS_KEY (empty when the run has no version): an image that reads only the
 # version accepts an empty one and ignores the other key, while it refuses a document without it.
 RESULTS_LOCATION_KEY = "outputResults"
+# Where the input sits in its asset, from its manifest entry, in the same second argument:
+# {"relativePath", "assetRootS3Key", "assetRootBucket"}. An older image ignores the key.
+INPUT_ASSET_KEY = "inputAsset"
+
+
+def input_asset(event) -> dict:
+    """The input's asset-relative path and asset root from the event, or None when the event names
+    neither (a payload without a manifest, or an event from an older Lambda)."""
+    location = {
+        "relativePath": event.get("inputRelativePath") or "",
+        "assetRootS3Key": event.get("inputAssetRootS3Key") or "",
+        "assetRootBucket": event.get("inputAssetRootBucket") or "",
+    }
+    return location if location["relativePath"] or location["assetRootS3Key"] else None
 
 
 def results_location(event) -> dict:
@@ -32,16 +46,19 @@ def results_location(event) -> dict:
 
 
 def definition_command(definition, event) -> list:
-    """The Batch command for ``definition``: the definition, then, when the run has a launch version or
-    a results folder, one document naming them. With neither it is the one-element command written
-    before those fields."""
+    """The Batch command for ``definition``: the definition, then, when the run has a launch version, a
+    results folder or an input asset location, one document naming them. With none it is the
+    one-element command written before those fields."""
     command = [json.dumps(definition)]
     version_id = event.get("inputVersionId") or ""
     results = results_location(event)
-    if version_id or results:
+    asset = input_asset(event)
+    if version_id or results or asset:
         extra = {INPUT_VERSIONS_KEY: {definition["stages"][0]["type"]: version_id} if version_id else {}}
         if results:
             extra[RESULTS_LOCATION_KEY] = results
+        if asset:
+            extra[INPUT_ASSET_KEY] = asset
         command.append(json.dumps(extra))
     return command
 

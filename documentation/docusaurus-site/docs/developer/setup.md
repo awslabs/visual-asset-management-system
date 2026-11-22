@@ -226,8 +226,8 @@ The audit covers only the packages in a `uv.lock` and its committed exports. It 
 
 -   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
 -   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
--   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
--   packages that come with a container base image or the Lambda runtime;
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, only Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment) is locked. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), GR00T (after PR #1812 merges), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`);
+-   packages that come with a container base image or the Lambda runtime, including the Isaac Lab base image's own Python packages (the Isaac Lab training image's lock covers only what it adds, and keeps the base image's versions);
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
 
 The release-time image scan remains the record for a full container image.
@@ -268,7 +268,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
 }
 ```
 
-`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves. An entry matches on the advisory id and the package only, not on the project or the version, so it also covers any other project that locks the same package.
 
 ## Infrastructure Setup
 

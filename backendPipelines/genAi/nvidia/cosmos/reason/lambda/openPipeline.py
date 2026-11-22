@@ -226,6 +226,11 @@ def lambda_handler(event, context):
         "inputBucketRegion": event.get("inputBucketRegion", ""),
         # The S3 version the run reads its input at; "" reads the current object.
         "inputVersionId": event.get("inputVersionId", ""),
+        # Where the input sits in its asset (manifest relativePath, assetRootS3Key, assetRootBucket);
+        # empty from an older Lambda or without a manifest.
+        "inputRelativePath": event.get("inputRelativePath", ""),
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
+        "inputAssetRootBucket": event.get("inputAssetRootBucket", ""),
         "outputBucketRegion": event.get("outputBucketRegion", ""),
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,

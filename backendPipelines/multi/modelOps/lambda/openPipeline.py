@@ -196,7 +196,12 @@ def lambda_handler(event, context):
         "externalSfnTaskToken": external_sfn_task_token,
         "outputFileType": output_file_type,
         "assetId": asset_id,
-        "inputVersionId": input_version_id
+        "inputVersionId": input_version_id,
+        # Where the input sits in its asset (manifest relativePath, assetRootS3Key, assetRootBucket);
+        # empty from an older Lambda or without a manifest.
+        "inputRelativePath": event.get("inputRelativePath", ""),
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key", ""),
+        "inputAssetRootBucket": event.get("inputAssetRootBucket", ""),
     }
 
     try:
