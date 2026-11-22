@@ -37,13 +37,13 @@ ARG ISAAC_LAB_VERSION
 ENV ISAAC_LAB_VERSION=${ISAAC_LAB_VERSION}
 
 # Install additional dependencies into Isaac Lab's own environment: every package at the version and hash
-# in the lock (generated from requirements.txt for Python 3.12; its header holds the command). The lock is
-# resolved against the base image's frozen package set (base-constraints.txt), so it leaves every package
-# the base ships at the base's version; regenerate base-constraints.txt whenever ISAAC_LAB_DIGEST moves,
-# then the lock. boto3 is
-# not in the base image; MoviePy 1.x with imageio-ffmpeg is what Isaac Lab's --video recording needs
-# (MoviePy 2.x fails to import there). MoviePy 1.0.3 publishes no wheel, so it is the one package built
-# from its source archive (--no-binary moviepy); its hash is still checked. --no-build-isolation builds it
+# in requirements.lock, the hashed uv export of the uv.lock beside it (its header holds the command). The
+# uv project's constraint-dependencies are the base image's frozen package set (base-constraints.txt), so
+# the lock leaves every package the base ships at the base's version; regenerate base-constraints.txt
+# whenever ISAAC_LAB_DIGEST moves, then copy it into pyproject.toml, then run `uv lock` and the export.
+# boto3 is not in the base image; MoviePy 1.x with imageio-ffmpeg is what Isaac Lab's --video recording
+# needs (MoviePy 2.x fails to import there). MoviePy 1.0.3 publishes no wheel, so it is the one package
+# built from its source archive (--no-binary moviepy); its hash is still checked. --no-build-isolation builds it
 # with the setuptools the base image ships (pinned in base-constraints.txt) instead of a build environment
 # fetched from PyPI without hashes, so the build tool is fixed by the digest too.
 COPY requirements.lock /tmp/requirements.lock
