@@ -251,7 +251,7 @@ ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 
 CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`).
 
-**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
+**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names, bounded by `SWEEP_BUDGET_SECONDS` (4 s, its own jittered retries included) and run one at a time per container. A failed sweep opens a back-off window (about 2 s, doubling up to 30 s) in which no sweep starts: a lookup is answered from the cache, stale or not, or refused with `ResourceNameUnavailableError`, which is not a `KeyError`. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 

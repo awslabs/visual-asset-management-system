@@ -104,3 +104,7 @@ A minimum of 128 IPv4 addresses per subnet is recommended.
 | ------------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **AWS-managed keys** (default) | `useKmsCmkEncryption.enabled: false` | Uses default or AWS-managed encryption for Amazon S3, Amazon DynamoDB, Amazon SQS, and Amazon SNS.                                                    |
 | **Customer-managed KMS key**   | `useKmsCmkEncryption.enabled: true`  | VAMS creates a customer-managed AWS KMS key and applies it to all storage resources. Optionally import an existing key with `optionalExternalCmkArn`. |
+
+### Deployments sharing an account and Region
+
+VAMS AWS Lambda functions read their resource names from AWS Systems Manager Parameter Store when they start, and Parameter Store throughput is shared by every application in an account and Region. Several deployments in one account and Region share that throughput; see [Requests time out or workflow runs fail after an idle period](../troubleshooting/common-issues.md#requests-time-out-or-workflow-runs-fail-after-an-idle-period) for the symptoms and the higher-throughput setting.
