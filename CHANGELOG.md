@@ -748,6 +748,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Cosmos Transfer reads its control input relative to the asset root the manifest records ([#382](https://github.com/awslabs/visual-asset-management-system/issues/382))
     -   GR00T and Isaac Lab resolve the asset root in the asset's own bucket for a chained input ([#382](https://github.com/awslabs/visual-asset-management-system/issues/382))
     -   **Manifest** Each input file entry also carries `assetRootBucket`, the bucket its `assetRootS3Key` is in; the manifest schema version is unchanged. A custom pipeline that joins `bucket` with `assetRootS3Key` should use `assetRootBucket` ([#382](https://github.com/awslabs/visual-asset-management-system/issues/382))
+-   **Pipelines/Security** The NVIDIA GR00T fine-tuning image installs patched versions of its Python dependencies where the GR00T code allows: PyTorch 2.8.0 with torchvision 0.23.0 and flash-attn 2.8.3, onnx 1.22.0, protobuf 5.29.6, Ray 2.56.0, Diffusers 0.38.0, PyArrow 23.0.1, Hydra 1.3.8, Requests 2.33.0, OpenCV 4.8.1.78 and cryptography 50.0.2. TensorFlow and Keras, which the pipeline does not use, are no longer installed. Transformers stays at 4.51.3, which the GR00T model code needs, and Pillow and filelock stay at their current versions until the image moves to Python 3.11. ([#1812](https://github.com/awslabs/visual-asset-management-system/pull/1812))
 
 ### Chores
 
