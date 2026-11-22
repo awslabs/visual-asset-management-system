@@ -29,6 +29,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Web** When the first search on the search page fails (an API error such as a 504 timeout, or a network failure), the page shows a **Search did not finish** message above an empty results table instead of "Loading.." until the next search runs. Results already on screen stay when a later search fails. ([#1791](https://github.com/awslabs/visual-asset-management-system/issues/1791))
 -   **Pipelines** NVIDIA Cosmos Transfer accepts a pre-computed control signal path (`COSMOS_TRANSFER_CONTROL_PATH` metadata, or the template's `CONTROL_PATH` field) only as a file path within the run's asset, relative to the asset root, with or without a leading `/`, and reads it from the asset's own folder, also for an asset created on an existing bucket folder or in a bucket with a base prefix. Any other value fails the run before its GPU job starts, with a message that says what the path must be. ([#1751](https://github.com/awslabs/visual-asset-management-system/pull/1751))
     -   Note: deployments that enable the Cosmos Transfer pipeline rebuild its container image on the next deploy. ([#1751](https://github.com/awslabs/visual-asset-management-system/pull/1751))
+-   **Pipelines** The `train-config.json` and `evaluate-config.json` an Isaac Lab run uploads beside its outputs keep only the run's settings (`jobName`, `trainingConfig` and `customEnvironmentS3Uri`). The workflow's callback fields and the input, output and metadata locations are left out.
 
 ### Chores
 

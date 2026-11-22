@@ -320,7 +320,7 @@ Pipeline outputs are organized under the job UUID for easy identification when r
     │   ├── <name>.pth            # rl_games: best, plus last_<name>_ep_<epoch>_rew_<reward>.pth
     │   └── agent_<n>.pt          # skrl: agent_<timestep>.pt and best_agent.pt
     ├── metrics.csv           # Training metrics from TensorBoard
-    ├── train-config.json     # Copy of input configuration
+    ├── train-config.json     # The run settings
     └── *.txt                 # Log files
 ```
 
@@ -332,7 +332,7 @@ Pipeline outputs are organized under the job UUID for easy identification when r
     ├── videos/
     │   └── *.mp4             # Recorded evaluation videos
     ├── metrics.csv           # Evaluation metrics
-    ├── evaluate-config.json  # Copy of input configuration
+    ├── evaluate-config.json  # The run settings
     └── *.txt                 # Log files
 ```
 
