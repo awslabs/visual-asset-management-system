@@ -16,8 +16,10 @@ hand-kept list) it:
 3. audits each export with pip-audit and fails on every advisory that is not on the allowlist
    `.github/python-audit-allowlist.json`.
 
-The allowlist is validated first: every entry needs `id`, `package`, `reason` and a `reviewBy` date
-(ISO, not in the past). An entry that matches no current finding is stale and also fails the run.
+The allowlist is validated first: every entry needs `id`, `package`, `reason`, a `reviewBy` date
+(ISO, not in the past) and `projects`, the uv project directories it applies to (each one a directory
+with a tracked uv.lock). An entry silences its advisory only in the projects it names. An entry that
+matches no current finding in one of its projects is stale for that project and also fails the run.
 A pip-audit run that cannot reach the advisory service fails the run; it never passes silently.
 
 Only package names, versions and advisory ids are printed or written to the job summary.
@@ -144,7 +146,7 @@ def read_export_command(path):
     return checked
 
 
-def load_allowlist(root, today):
+def load_allowlist(root, today, lock_dirs):
     path = os.path.join(root, ALLOWLIST_PATH)
     try:
         with open(path, encoding="utf-8") as handle:
@@ -167,10 +169,18 @@ def load_allowlist(root, today):
                 problems.append(f"{label} has no {key}")
         if isinstance(entry.get("id"), str) and not ID_PATTERN.match(entry["id"]):
             problems.append(f"{label} has an invalid id")
-        key = (str(entry.get("id")).lower(), canonical_name(entry.get("package")))
-        if key in seen:
-            problems.append(f"{label} is listed twice")
-        seen.add(key)
+        projects = entry.get("projects")
+        if not isinstance(projects, list) or not projects:
+            problems.append(f"{label} has no projects (the uv project directories it applies to)")
+            projects = []
+        for project in projects:
+            if not isinstance(project, str) or project not in lock_dirs:
+                problems.append(f"{label} names project {project!r}, which has no tracked uv.lock")
+                continue
+            key = (str(entry.get("id")).lower(), canonical_name(entry.get("package")), project)
+            if key in seen:
+                problems.append(f"{label} is listed twice for {project}")
+            seen.add(key)
         if isinstance(entry.get("reviewBy"), str) and entry["reviewBy"].strip():
             try:
                 review_by = datetime.date.fromisoformat(entry["reviewBy"])
@@ -184,6 +194,37 @@ def load_allowlist(root, today):
     if problems:
         raise AuditError(f"{ALLOWLIST_PATH} is invalid:\n  " + "\n  ".join(problems))
     return entries
+
+
+def apply_allowlist(allowlist, findings):
+    """Split findings into blocking ones and return the stale (entry, project) pairs as well.
+
+    A finding is allowlisted when an entry names its package, one of its advisory ids and its project.
+    An entry is stale for each of its projects where it matched no finding.
+    """
+    used = set()
+    blocking = []
+    for project, package, pkg_version, ids in findings:
+        match = None
+        for index, entry in enumerate(allowlist):
+            if (
+                canonical_name(entry["package"]) == canonical_name(package)
+                and entry["id"] in ids
+                and project in entry["projects"]
+            ):
+                match = index
+                break
+        if match is None:
+            blocking.append((project, package, pkg_version, ids))
+        else:
+            used.add((match, project))
+    stale = [
+        (entry, project)
+        for index, entry in enumerate(allowlist)
+        for project in entry["projects"]
+        if (index, project) not in used
+    ]
+    return blocking, stale
 
 
 # Files that can install a requirements file: Dockerfiles, CI and recipe YAML, shell scripts, and the
@@ -392,12 +433,6 @@ def audit():
 
     errors = []
     try:
-        allowlist = load_allowlist(root, today)
-    except AuditError as exc:
-        error("Python audit allowlist", exc)
-        return 1
-
-    try:
         tracked = tracked_files(root)
     except AuditError as exc:
         error("Python audit", f"{root} is not a git checkout the audit can list: {last_line(exc)}")
@@ -407,6 +442,12 @@ def audit():
         error("Python audit", "no tracked uv.lock found; the discovery is broken")
         return 1
     print(f"Found {len(lock_dirs)} uv.lock project(s): {', '.join(lock_dirs)}")
+
+    try:
+        allowlist = load_allowlist(root, today, set(lock_dirs))
+    except AuditError as exc:
+        error("Python audit allowlist", exc)
+        return 1
 
     try:
         ranged_inputs = check_ranged_inputs(root, tracked, set(lock_dirs))
@@ -478,20 +519,8 @@ def audit():
             error(f"Python audit ({project})", exc)
         print("::endgroup::")
 
-    # Apply the allowlist; an entry that matches nothing is stale.
-    used = set()
-    blocking = []
-    for project, package, pkg_version, ids in all_findings:
-        match = None
-        for index, entry in enumerate(allowlist):
-            if canonical_name(entry["package"]) == canonical_name(package) and entry["id"] in ids:
-                match = index
-                break
-        if match is None:
-            blocking.append((project, package, pkg_version, ids))
-        else:
-            used.add(match)
-    stale = [e for i, e in enumerate(allowlist) if i not in used]
+    # Apply the allowlist; an entry that matches nothing in one of its projects is stale there.
+    blocking, stale = apply_allowlist(allowlist, all_findings)
 
     summary = [
         "## Python dependency audit",
@@ -513,11 +542,14 @@ def audit():
             "Fix by bumping the package in the project's pyproject.toml and re-locking, "
             "or add a reasoned entry to the allowlist."
         )
-    for entry in stale:
-        message = f"allowlist entry {entry['id']} ({entry['package']}) matches no current finding; remove it"
+    for entry, project in stale:
+        message = (
+            f"allowlist entry {entry['id']} ({entry['package']}) matches no current finding in {project}; "
+            f"remove {project} from its projects, or remove the entry"
+        )
         errors.append(message)
         error("Python audit allowlist", message)
-        summary.append(f"- Stale allowlist entry: {entry['id']} ({entry['package']})")
+        summary.append(f"- Stale allowlist entry: {entry['id']} ({entry['package']}) in {project}")
     if errors:
         summary.append("")
         summary.append(f"{len(errors)} check(s) failed; see the job log.")
