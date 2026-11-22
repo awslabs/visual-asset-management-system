@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
+from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, object_key_for
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
@@ -106,6 +107,9 @@ FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
 MAX_FILES_PER_COMPLETION_CALL = MAX_FILES_PER_UPLOAD_REQUEST
 # Output files a failed write-back names in the run's error; the rest are counted.
 MAX_NAMED_WRITE_BACK_FAILURES = 20
+# Per-file refusals of the file ingestion that the user can act on. The run's error repeats one by its
+# fixed text after the file it refused; any other per-file error stays in the log.
+USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL})
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
@@ -538,11 +542,26 @@ def _completion_chunks(objects, max_files=MAX_FILES_PER_COMPLETION_CALL):
     return chunks
 
 
-def _named_write_back_failures(relative_keys):
+def _refused_write_back_reasons(result):
+    """{relativeKey: reason} of the files a file-ingestion response refused for a reason the user can
+    correct (USER_CORRECTABLE_WRITE_BACK_REFUSALS)."""
+    file_results = (result or {}).get('fileResults')
+    if not isinstance(file_results, list):
+        return {}
+    return {entry.get('relativeKey', ''): entry.get('error')
+            for entry in file_results
+            if isinstance(entry, dict) and not entry.get('success')
+            and entry.get('error') in USER_CORRECTABLE_WRITE_BACK_REFUSALS}
+
+
+def _named_write_back_failures(relative_keys, reasons=None):
     """Run-error entries naming the output files the write-back did not land: the first
-    MAX_NAMED_WRITE_BACK_FAILURES by name, the rest counted."""
+    MAX_NAMED_WRITE_BACK_FAILURES by name, each followed by its refusal when the ingestion refused it
+    for a reason the user can correct, the rest counted."""
     keys = sorted(relative_keys)
-    entries = [f"Writing output file '{key}' into the asset failed."
+    reasons = reasons or {}
+    entries = [f"Writing output file '{key}' into the asset failed: {reasons[key]}" if reasons.get(key)
+               else f"Writing output file '{key}' into the asset failed."
                for key in keys[:MAX_NAMED_WRITE_BACK_FAILURES]]
     if len(keys) > MAX_NAMED_WRITE_BACK_FAILURES:
         entries.append(f"{len(keys) - MAX_NAMED_WRITE_BACK_FAILURES} more output files were not "
@@ -638,8 +657,9 @@ def _destination_key(descriptor, asset, base_assets_prefix):
     if descriptor.get("fileType") == "preview":
         return f"{base_assets_prefix}{PREVIEW_PREFIX}{asset_id}/{os.path.basename(relative)}"
     base = (asset.get('assetLocation') or {}).get('Key') or f"{base_assets_prefix}{asset_id}/"
-    if not base.endswith('/'):
-        base += '/'
+    if not is_folder_location(base):
+        # A single-file asset (common.assetLocations), resolved as the upload handler resolves it
+        return object_key_for(base, relative) or base
     return relative if relative.startswith(base) else base + relative
 
 
@@ -2658,6 +2678,7 @@ def lambda_handler(event, context):
                         # the relative keys of those that were not written.
                         landed_keys = set()
                         not_landed_keys = set()
+                        refusal_reasons = {}
                         write_back_failed = False
                         chunks = _completion_chunks(file_objects)
                         if len(chunks) > 1:
@@ -2765,6 +2786,7 @@ def lambda_handler(event, context):
                             # Ingestion answers 200 when only SOME files landed, so read the
                             # per-file outcome and record rows only for what actually landed.
                             all_ingested, ingested_keys = _ingestion_outcome(result)
+                            refusal_reasons.update(_refused_write_back_reasons(result))
                             if not result:
                                 landed = set()
                             elif ingested_keys is None:
@@ -2806,7 +2828,8 @@ def lambda_handler(event, context):
                             d for d in to_claim if d["s3Key"] in landed_keys)
                         if write_back_failed:
                             output_failures.append(FILE_WRITE_BACK_FAILURE)
-                            output_failures.extend(_named_write_back_failures(not_landed_keys))
+                            output_failures.extend(_named_write_back_failures(not_landed_keys,
+                                                                              refusal_reasons))
                     elif not earlier_keys:
                         logger.warning("No files found in asset output folder")
 

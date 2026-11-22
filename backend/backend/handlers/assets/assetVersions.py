@@ -31,6 +31,7 @@ from models.common import APIGatewayProxyResponseV2, internal_error, success, va
 from models.common import VAMSAuthorizationDeniedResponse, VAMSAssetNotFoundResponse
 from common.dynamodb import to_update_expr, query_all_items, get_asset_record, asset_authorization_object
 from common.assetProvenance import ASSET_VERSION_STAMPED_FIELDS, stamp_asset_version_provenance
+from common.assetLocations import aux_scope, contains, object_key_for, relative_path_in
 from common.s3 import is_object_version_archived, list_all_object_versions, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from models.assetsV3 import (
     AssetFileVersionItemModel, CreateAssetVersionRequestModel, RevertAssetVersionRequestModel,
@@ -350,7 +351,7 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
 
-def delete_assetAuxiliary_files(prefix):
+def delete_assetAuxiliary_files(prefix, keep=None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
 
     The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
@@ -358,6 +359,7 @@ def delete_assetAuxiliary_files(prefix):
 
     Args:
         prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
+        keep: Optional predicate (``common.assetLocations.aux_owner_filter``); only the keys it accepts go
     """
 
     if not prefix:
@@ -375,7 +377,8 @@ def delete_assetAuxiliary_files(prefix):
         paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if keep is None or keep(entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3_client.delete_objects(
@@ -414,9 +417,9 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
     result = []
 
     try:
-        # Ensure prefix ends with a slash if it doesn't already
-        if not prefix.endswith('/'):
-            prefix = prefix + '/'
+        # The listing prefix is the location key itself; a single-file location also matches keys
+        # that only share its characters, so each listed key is kept only when the location holds it
+        location = prefix
 
         # Use a single paginated list_object_versions walk rather than a
         # head_object per file. list_object_versions returns VersionId + IsLatest
@@ -435,10 +438,10 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
             key = version['Key']
             # Skip folder markers (keys ending with '/')
-            if key.endswith('/'):
+            if key.endswith('/') or not contains(location, key):
                 continue
 
-            relative_key = key[len(prefix):]
+            relative_key = relative_path_in(location, key).lstrip('/')
             result.append({
                 'relativeKey': relative_key,
                 'key': key,
@@ -468,10 +471,10 @@ def list_s3_files_with_versions(bucket: str, prefix: str, include_archived: bool
 
                 key = marker['Key']
                 # Skip folder markers (keys ending with '/')
-                if key.endswith('/'):
+                if key.endswith('/') or not contains(location, key):
                     continue
 
-                relative_key = key[len(prefix):]
+                relative_key = relative_path_in(location, key).lstrip('/')
                 # Most recent content version behind the delete marker (if any).
                 candidates = content_versions_by_key.get(key, [])
                 latest_content = max(candidates, key=lambda v: v['LastModified'], default=None)
@@ -506,12 +509,8 @@ def validate_s3_files_exist(bucket: str, prefix: str, files: List[AssetFileVersi
     """
     invalid_files = []
     
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
     for file in files:
-        full_key = prefix + file.relativeKey.lstrip('/')
+        full_key = object_key_for(prefix, file.relativeKey)
         
         try:
             # Check if file exists with specified version
@@ -1831,7 +1830,7 @@ def create_asset_version(databaseId: str, assetId: str, request_model: CreateAss
             if file.relativeKey not in invalid_files:
                 # Get additional metadata
                 try:
-                    full_key = prefix + file.relativeKey.lstrip('/')
+                    full_key = object_key_for(prefix, file.relativeKey)
                     response = s3_client.head_object(
                         Bucket=bucket,
                         Key=full_key,
@@ -1946,7 +1945,7 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
         (None, relative_key) when the file should be skipped."""
         relative_key = file['relativeKey']
         source_version_id = file['versionId']
-        full_key = prefix + relative_key.lstrip('/')
+        full_key = object_key_for(prefix, relative_key)
 
         try:
             # Check if the file version still exists (wasn't permanently deleted)
@@ -1962,8 +1961,14 @@ def revert_asset_version(databaseId: str, assetId: str, request_model: RevertAss
             if not new_version_id:
                 return None, relative_key
 
-            # Delete the aux files since they are most likely wrong with the version revert
-            delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+            # Delete the file's own aux files since they are most likely wrong with the version revert. The
+            # object of a single-file location keeps its data in {db}/{key}/preview/; the rest of
+            # {db}/{key}/, and a companion folder named preview inside it, holds its companion entries' data.
+            aux_prefix, aux_keep = aux_scope(databaseId, prefix, full_key)
+            if aux_keep is None:
+                delete_assetAuxiliary_files(aux_prefix)
+            else:
+                delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
             return {
                 'relativeKey': relative_key,
@@ -2192,10 +2197,6 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     # Get asset location for checking file existence
     bucket, prefix = get_asset_s3_location(asset)
     
-    # Ensure prefix ends with a slash if it doesn't already
-    if not prefix.endswith('/'):
-        prefix = prefix + '/'
-    
     # Resolve every file's existence and archive state from ONE paginated
     # list_object_versions walk of the asset prefix rather than two head_object calls
     # per file. The listing carries each version's id plus IsLatest inline, so both
@@ -2224,7 +2225,7 @@ def get_asset_version_details(databaseId: str, assetId: str, request_model: GetA
     files = []
     for file in snapshot_files:
         # Construct full S3 key
-        full_key = prefix + file['relativeKey'].lstrip('/')
+        full_key = object_key_for(prefix, file['relativeKey'])
 
         files.append(AssetVersionFileModel(
             relativeKey=file['relativeKey'],

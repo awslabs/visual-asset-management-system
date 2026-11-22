@@ -6,11 +6,12 @@
 ``resolve_and_sign_file_key`` decides whether a caller-supplied key is already
 asset-prefixed with a bare ``raw_key.startswith(asset_base_key)`` test. The base
 key comes from ``assetLocation.Key``, which is ``<prefix><assetId>/`` for normally
-created assets but can lack the trailing slash when the asset was created against
-an existing bucket key. With a base of ``assets/pfx``, the key
+created assets but lacks the trailing slash when the asset was created against
+an existing object (a single-file asset). With a base of ``assets/pfx``, the key
 ``assets/pfxOTHER/secret.txt`` passes ``startswith`` and is signed verbatim, so a
 caller authorized on one asset can read any sibling object in the same bucket --
 including another database's assets or a registered external bucket.
+A single-file asset resolves its one object and nothing else.
 
 The permitted-input matrix in this file is the counterweight: the web viewer
 passes the FULL S3 key from listFiles, the CLI passes a leading-slash relative
@@ -43,8 +44,8 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 from tests.handlers.assets.test_downloadAsset_bulk import _load  # noqa: E402
 
 # Base key of the asset under test WITHOUT a trailing slash -- the shape
-# createAsset produces for a bucketExistingKey asset, and the shape that makes
-# the startswith test unsafe.
+# createAsset produces for a bucketExistingKey that names an object (a
+# single-file asset), and the shape that makes the startswith test unsafe.
 UNSLASHED_BASE = "assets/pfx"
 SLASHED_BASE = "assets/pfx/"
 # A sibling object that shares the base key's string prefix but belongs to a
@@ -117,12 +118,12 @@ class TestDownloadKeyContainment:
         rather than the whole request failing.
         """
         m = _wire(_load(), UNSLASHED_BASE)
-        request = _parse({'downloadType': 'assetFile', 'keys': ['/legit.txt', ESCAPE_KEY]})
+        request = _parse({'downloadType': 'assetFile', 'keys': ['/pfx', ESCAPE_KEY]})
 
         response = m.download_asset_files_bulk('db1', 'asset1', request)
 
         by_key = {f.key: f for f in response.files}
-        assert by_key['/legit.txt'].success is True
+        assert by_key['/pfx'].success is True
         assert by_key[ESCAPE_KEY].success is False
         assert by_key[ESCAPE_KEY].downloadUrl is None
         assert ESCAPE_KEY not in _signed_keys(m), (
@@ -134,23 +135,21 @@ class TestDownloadKeyContainment:
 class TestPermittedKeyShapesUnchanged:
     """Anti-over-tightening control for FIX-008.
 
-    Every accepted caller shape, against a base key both with and without a
-    trailing slash. These pass today and must keep producing the identical S3 key
-    once containment is enforced -- a containment assert that assumes
-    asset-relative input breaks the web viewers (which pass the full key from
-    listFiles) and the recursive whole-asset download (which passes '/' or
-    nothing).
+    Every accepted caller shape, against a folder base key and against a
+    single-file base key. These must keep producing the identical S3 key once
+    containment is enforced -- a containment assert that assumes asset-relative
+    input breaks the web viewers (which pass the full key from listFiles) and the
+    recursive whole-asset download (which passes '/' or nothing).
     """
 
-    @pytest.mark.parametrize("base_key", [UNSLASHED_BASE, SLASHED_BASE])
     @pytest.mark.parametrize("raw_key,expected_key", [
         ('/dir/f.glb', 'assets/pfx/dir/f.glb'),            # CLI / vamscli relative shape
         ('assets/pfx/dir/f.glb', 'assets/pfx/dir/f.glb'),  # web DynamicViewer files[0].key
-        (None, None),                                      # key omitted -> asset root
+        (None, SLASHED_BASE),                              # key omitted -> asset root
         ('/', 'assets/pfx/'),                              # recursive prefix download
     ])
-    def test_permitted_shape_resolves_to_same_key(self, base_key, raw_key, expected_key):
-        m = _wire(_load(), base_key)
+    def test_permitted_shape_resolves_to_same_key(self, raw_key, expected_key):
+        m = _wire(_load(), SLASHED_BASE)
         body = {'downloadType': 'assetFile'}
         if raw_key is not None:
             body['key'] = raw_key
@@ -158,10 +157,56 @@ class TestPermittedKeyShapesUnchanged:
 
         response = m.download_asset_file('db1', 'asset1', request)
 
-        # An omitted key resolves to the base key verbatim, whatever its shape.
-        want = expected_key if expected_key is not None else base_key
-        assert _signed_keys(m) == [want]
-        assert response.downloadUrl == f"https://signed.example/{want}"
+        assert _signed_keys(m) == [expected_key]
+        assert response.downloadUrl == f"https://signed.example/{expected_key}"
+
+    @pytest.mark.parametrize("raw_key", [
+        '/pfx',          # CLI / vamscli relative shape: the file name
+        'assets/pfx',    # web DynamicViewer files[0].key
+        None,            # key omitted
+        '/',             # whole-asset download
+    ])
+    def test_every_shape_of_a_single_file_asset_resolves_to_its_object(self, raw_key):
+        m = _wire(_load(), UNSLASHED_BASE)
+        body = {'downloadType': 'assetFile'}
+        if raw_key is not None:
+            body['key'] = raw_key
+
+        response = m.download_asset_file('db1', 'asset1', _parse(body))
+
+        assert _signed_keys(m) == [UNSLASHED_BASE]
+        assert response.downloadUrl == f"https://signed.example/{UNSLASHED_BASE}"
+
+    @pytest.mark.parametrize("raw_key,expected_key", [
+        ('/dir/f.glb', 'assets/pfx/dir/f.glb'),            # companion folder, CLI shape
+        ('assets/pfx/dir/f.glb', 'assets/pfx/dir/f.glb'),  # companion folder, listFiles key
+        ('/pfx.previewFile.png', 'assets/pfx.previewFile.png'),
+    ])
+    def test_a_single_file_asset_signs_its_companion_folder_and_previews(self, raw_key, expected_key):
+        m = _wire(_load(), UNSLASHED_BASE)
+
+        m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': raw_key}))
+
+        assert _signed_keys(m) == [expected_key]
+
+    @pytest.mark.parametrize("raw_key", ['assets/pfx.bak', ESCAPE_KEY])
+    def test_a_single_file_asset_signs_no_key_that_only_shares_its_characters(self, raw_key):
+        m = _wire(_load(), UNSLASHED_BASE)
+
+        with pytest.raises(m.VAMSGeneralErrorResponse):
+            m.download_asset_file('db1', 'asset1', _parse({'downloadType': 'assetFile', 'key': raw_key}))
+
+        assert m.s3.generate_presigned_url.call_count == 0
+
+    @pytest.mark.parametrize("raw_key,relative", [('/pfx', 'pfx'), ('/dir/f.glb', 'dir/f.glb')])
+    def test_a_single_file_asset_version_pin_uses_the_asset_relative_key(self, raw_key, relative):
+        m = _wire(_load(), UNSLASHED_BASE)
+        m.resolve_file_version_from_asset_version = MagicMock(return_value='v-pinned')
+
+        m.download_asset_file('db1', 'asset1', _parse(
+            {'downloadType': 'assetFile', 'key': raw_key, 'assetVersionId': '2'}))
+
+        m.resolve_file_version_from_asset_version.assert_called_once_with('db1', 'asset1', '2', relative)
 
 
 @pytest.mark.unit
@@ -174,10 +219,9 @@ class TestVersionPinInvariance:
     degrades to 'latest' -- wrong bytes with a 200 status.
     """
 
-    @pytest.mark.parametrize("base_key", [UNSLASHED_BASE, SLASHED_BASE])
     @pytest.mark.parametrize("raw_key", ['/dir/f.glb', 'assets/pfx/dir/f.glb'])
-    def test_asset_version_id_resolves_same_relative_key(self, base_key, raw_key):
-        m = _wire(_load(), base_key)
+    def test_asset_version_id_resolves_same_relative_key(self, raw_key):
+        m = _wire(_load(), SLASHED_BASE)
         # The pinned version deliberately differs from 'latest' (None), so a
         # silent fallback to latest fails this test rather than passing it.
         m.resolve_file_version_from_asset_version = MagicMock(return_value='v-pinned')
@@ -193,7 +237,7 @@ class TestVersionPinInvariance:
 
     @pytest.mark.parametrize("raw_key", ['/dir/f.glb', 'assets/pfx/dir/f.glb'])
     def test_asset_version_alias_resolves_same_relative_key(self, raw_key):
-        m = _wire(_load(), UNSLASHED_BASE)
+        m = _wire(_load(), SLASHED_BASE)
         m.resolve_asset_version_id_from_alias = MagicMock(return_value='7')
         m.resolve_file_version_from_asset_version = MagicMock(return_value='v-alias')
         request = _parse({'downloadType': 'assetFile', 'key': raw_key,
