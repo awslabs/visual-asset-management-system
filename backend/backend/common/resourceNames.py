@@ -7,13 +7,8 @@ import threading
 import time
 import boto3
 from botocore.config import Config
-from botocore.exceptions import (
-    ClientError,
-    ConnectionClosedError,
-    ConnectTimeoutError,
-    EndpointConnectionError,
-    ReadTimeoutError,
-)
+from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from customLogging.logger import safeLogger
 
 logger = safeLogger()
@@ -63,8 +58,11 @@ _RETRYABLE_ERROR_CODES = frozenset({
     "ServiceUnavailable",
 })
 
-# Connection failures and timeouts a page is retried on inside the budget.
-_RETRYABLE_CONNECTION_ERRORS = (ConnectTimeoutError, ReadTimeoutError, EndpointConnectionError, ConnectionClosedError)
+# Connection failures and timeouts a page is retried on inside the budget: the two exception classes
+# botocore's standard retry mode treats as transient. They cover connect and read timeouts, an
+# unreachable endpoint, a closed connection, a TLS failure (SSLError), a proxy failure
+# (ProxyConnectionError) and any other socket failure the HTTP client reports (HTTPClientError).
+_RETRYABLE_CONNECTION_ERRORS = (BotocoreConnectionError, HTTPClientError)
 
 # Clock, sleep and jitter the sweep and the back-off window use.
 _monotonic = time.monotonic
@@ -80,11 +78,12 @@ class ResourceNameUnavailableError(RuntimeError):
 
 
 class ResourceNameAccessError(RuntimeError):
-    """A resource name could not be resolved because Parameter Store refused the sweep with an error
-    a retry cannot fix, most often AccessDeniedException: the function's role may not call
-    ssm:GetParametersByPath on the deployment's parameters (its policy, a permissions boundary or a
-    service control policy). Opens no back-off window, and no workflow state retries it as it does
-    ResourceNameUnavailableError, so the lookup fails at once with the SSM error as its cause."""
+    """A resource name could not be resolved because the sweep was refused with an error a retry
+    cannot fix: a client error that is not throttling or a service fault (most often
+    AccessDeniedException, when the function's role may not call ssm:GetParametersByPath on the
+    deployment's parameters; also ValidationException or UnrecognizedClientException), or missing
+    credentials. Opens no back-off window, and no workflow state retries it as it does
+    ResourceNameUnavailableError, so the lookup fails at once with the original error as its cause."""
 
 
 class ResourceParamKey:
@@ -398,11 +397,16 @@ def get_resource_name(key: ResourceParamKey) -> str:
                 return _cache[key.param_key]
             if not transient:
                 # Not throttling: a retry meets the same refusal, so it is reported for what it is.
+                code = _error_code(e)
+                if code.startswith("AccessDenied"):
+                    raise ResourceNameAccessError(
+                        f"Resource name parameters could not be read from SSM ({code}): the "
+                        f"function's role needs ssm:GetParametersByPath on the deployment's resource-name "
+                        f"parameters; check its policy, permissions boundary and service control "
+                        f"policies: {key.param_key}") from e
                 raise ResourceNameAccessError(
-                    f"Resource name parameters could not be read from SSM ({_error_code(e)}): the "
-                    f"function's role needs ssm:GetParametersByPath on the deployment's resource-name "
-                    f"parameters; check its policy, permissions boundary and service control policies: "
-                    f"{key.param_key}") from e
+                    f"Resource name parameters could not be read from SSM ({code}), and a retry cannot "
+                    f"fix it: {key.param_key}") from e
             raise ResourceNameUnavailableError(
                 f"Resource name parameters could not be read from SSM: {key.param_key}") from e
         _record_completed_sweep()

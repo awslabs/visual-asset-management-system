@@ -28,7 +28,14 @@ import threading
 import time
 
 import pytest
-from botocore.exceptions import ClientError, ReadTimeoutError
+from botocore.exceptions import (
+    ClientError,
+    HTTPClientError,
+    NoCredentialsError,
+    ProxyConnectionError,
+    ReadTimeoutError,
+    SSLError,
+)
 from unittest.mock import MagicMock
 
 # The audit module resolves its nine log groups at import. Seeded first, so that import resolves
@@ -347,6 +354,43 @@ class TestSweepBudget:
 
         assert rn._failed_sweeps == 0 and not rn._in_backoff_window()
         assert fake.tokens == [None, None]
+
+    # botocore's standard retry mode treats every ConnectionError and HTTPClientError as transient.
+    @pytest.mark.parametrize("make_error", [
+        lambda: SSLError(endpoint_url="https://ssm.example.invalid/", error="EOF occurred in violation of protocol"),
+        lambda: ProxyConnectionError(proxy_url="https://proxy.example.invalid/", error="refused"),
+        lambda: HTTPClientError(error="connection reset by peer"),
+    ], ids=["SSLError", "ProxyConnectionError", "HTTPClientError"])
+    def test_a_transport_failure_is_retried_and_backs_off_like_throttling(self, rn, clock, monkeypatch, make_error):
+        fake = install(rn, monkeypatch, FakeSsm(fault=always(make_error)))
+
+        with pytest.raises(rn.ResourceNameUnavailableError) as refused:
+            rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+
+        assert not isinstance(refused.value, rn.ResourceNameAccessError)
+        assert len(fake.tokens) > 1, "the page was not retried inside the budget"
+        assert rn._in_backoff_window()
+
+    # A refusal that is not about the role's permissions names its code and claims no IAM cause.
+    @pytest.mark.parametrize("make_error, code", [
+        (lambda: ClientError({"Error": {"Code": "ValidationException", "Message": "bad path"},
+                              "ResponseMetadata": {"HTTPStatusCode": 400}}, "GetParametersByPath"),
+         "ValidationException"),
+        (lambda: ClientError({"Error": {"Code": "UnrecognizedClientException", "Message": "bad token"},
+                              "ResponseMetadata": {"HTTPStatusCode": 400}}, "GetParametersByPath"),
+         "UnrecognizedClientException"),
+        (lambda: NoCredentialsError(), "NoCredentialsError"),
+    ], ids=["ValidationException", "UnrecognizedClientException", "NoCredentialsError"])
+    def test_another_refusal_fails_at_once_without_an_iam_diagnosis(self, rn, clock, monkeypatch, make_error, code):
+        fake = install(rn, monkeypatch, FakeSsm(fault=always(make_error)))
+
+        with pytest.raises(rn.ResourceNameAccessError) as refused:
+            rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+
+        assert code in str(refused.value)
+        assert "ssm:GetParametersByPath" not in str(refused.value)
+        assert fake.tokens == [None]
+        assert rn._failed_sweeps == 0
 
     def test_a_non_retryable_error_still_serves_a_stale_cached_name(self, rn, clock, monkeypatch):
         monkeypatch.setattr(rn, "_cache", {"dynamoTables/assetStorage": "asset-table"})
