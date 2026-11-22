@@ -226,11 +226,13 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
     """Resolve the next pipeline's input FILE entries (the shadowing logic).
 
     original_inputs: list of self-locating entries {relativePath, databaseId, assetId,
-        assetRootS3Key, auxPreviewPrefix, bucket, key, versionId} for the execution's original
-        input files. For each original input, if a file exists at the SAME asset-relative path
+        assetRootS3Key, assetRootBucket, auxPreviewPrefix, bucket, key, versionId} for the
+        execution's original input files (assetRootBucket defaults to bucket). For each original
+        input, if a file exists at the SAME asset-relative path
         under the output files prefix, the resolved entry points at that output file's
         bucket/key/latest versionId (a prior pipeline shadowed it) -- preserving the original's
-        databaseId/assetId/root/aux-preview for traceability; otherwise it keeps the original
+        databaseId/assetId/root (with its asset bucket)/aux-preview for traceability; otherwise it
+        keeps the original
         entry. Only the output FILES folder shadows. Output files at relative paths with no
         matching input are appended as additional inputs (new files a prior pipeline produced),
         located in the output bucket.
@@ -263,11 +265,13 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
         shadow = output_by_rel.get(rel)
         if shadow:
             # Shadowed in place: point at the output file's version but keep the original's
-            # asset identity/root/aux-preview for traceability.
+            # asset identity/root/aux-preview for traceability. The root stays paired with the
+            # original's asset bucket, since the entry's own bucket is now the output bucket.
             resolved.append(er.build_manifest_entry(
                 rel, output_bucket, shadow["key"], shadow.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
+                asset_root_bucket=entry.get("assetRootBucket") or entry.get("bucket", ""),
                 aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
                 bucket_region=output_bucket_region))
         else:
@@ -275,6 +279,7 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
                 rel, entry.get("bucket", ""), entry.get("key", ""), entry.get("versionId", ""),
                 database_id=entry.get("databaseId", ""), asset_id=entry.get("assetId", ""),
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
+                asset_root_bucket=entry.get("assetRootBucket", ""),
                 aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
                 bucket_region=entry.get("bucketRegion", ""),
                 bucket_account_id=entry.get("bucketAccountId", "")))

@@ -649,6 +649,10 @@ export class RapidPipelineEKSConstruct extends Construct {
                 // current object). DefaultInputVersionId supplies "" when the execution input
                 // has no such field (an openPipeline from before it, during an upgrade).
                 inputVersionId: sfn.JsonPath.stringAt("$.inputVersionId"),
+                // The input's asset-relative path from its manifest entry; CONSTRUCT_PIPELINE takes the
+                // output subfolder from it. DefaultInputVersionId supplies "" for an execution input
+                // without it.
+                inputRelativePath: sfn.JsonPath.stringAt("$.inputRelativePath"),
                 // The execution's name, under which CONSTRUCT_PIPELINE records the job name it builds,
                 // so a cleanup started after a stopped execution can find the job. A context-object
                 // path is always present.
@@ -1122,7 +1126,7 @@ export class RapidPipelineEKSConstruct extends Construct {
         // States.JsonMerge keeps every field the execution input has and adds only what it lacks.
         const stageInputVersionDefault = new sfn.Pass(this, "StageInputVersionDefault", {
             parameters: {
-                defaults: { inputVersionId: "" },
+                defaults: { inputVersionId: "", inputRelativePath: "" },
                 "input.$": "$",
             },
         });

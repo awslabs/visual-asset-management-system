@@ -594,6 +594,17 @@ def route_operation(event, context):
             }
         }
 
+def input_relative_subdir_of(event, input_s3_asset_file_key):
+    """The input file's subdirectory within the asset ('parts/housing', or ''): the folder of its
+    manifest relativePath (``inputRelativePath``) when the event carries one, which holds for an asset
+    created on an existing bucket folder and for a chained step's input alike; else located by the
+    threaded assetId (``relative_subdir_from_asset_id``)."""
+    relative = (event.get('inputRelativePath') or '').strip('/')
+    if relative:
+        return relative.rsplit('/', 1)[0] if '/' in relative else ''
+    return relative_subdir_from_asset_id(input_s3_asset_file_key, event.get('assetId', ''))
+
+
 def relative_subdir_from_asset_id(input_s3_asset_file_key, asset_id):
     """The input file's subdirectory within the asset, located by the threaded assetId within the
     file's full S3 key ('base/xidM/parts/housing/pump.glb' + 'xidM' -> 'parts/housing'). Yields ''
@@ -740,8 +751,7 @@ def handle_construct_pipeline(event):
         # The converted file keeps the input file's subdirectory within the asset, so the workflow's
         # process-output step places it beside its source rather than at the asset root - where two
         # sources sharing a basename in different folders would overwrite each other.
-        input_relative_subdir = relative_subdir_from_asset_id(
-            input_s3_asset_file_key, event.get('assetId', ''))
+        input_relative_subdir = input_relative_subdir_of(event, input_s3_asset_file_key)
 
         # Get auxiliary bucket information with validation
         inputOutput_s3_assetAuxiliary_files_uri = event.get('inputOutputS3AssetAuxiliaryFilesPath', '')

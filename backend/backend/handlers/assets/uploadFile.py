@@ -45,6 +45,9 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import (
+    OWN_FILE_OUTPUT_REFUSAL, contains, held_objects, is_folder_location, names_own_object, object_key_for,
+)
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -615,14 +618,16 @@ def determine_asset_type(assetId, bucket, prefix):
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
+        contents = list(held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+            bucket, list_prefix, client=s3,
+            max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE))))
         
         # Filter out archived files
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
+                # Skip folder markers and keys the location does not hold
                 continue
                 
             try:
@@ -822,6 +827,11 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
 
+# A single-file asset's own object is the key its location names. A user upload at its path writes a new
+# version of it, as for any other file; a workflow output never replaces it.
+OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
+
+
 def normalize_s3_path(asset_base_key, file_path):
     """
     Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
@@ -833,6 +843,14 @@ def normalize_s3_path(asset_base_key, file_path):
     Returns:
         The properly resolved S3 key without duplication
     """
+    # A single-file location (common.assetLocations): its file name names the object, its preview
+    # name its own preview, and any other path lands in its companion folder
+    if asset_base_key and not is_folder_location(asset_base_key):
+        resolved = object_key_for(asset_base_key, file_path)
+        if resolved is None:
+            raise VAMSGeneralErrorResponse("Invalid file path")
+        return resolved
+
     # Normalize the asset base key to ensure it ends with '/'
     if asset_base_key and not asset_base_key.endswith('/'):
         asset_base_key = asset_base_key + '/'
@@ -1711,6 +1729,15 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+                if names_own_object(asset_base_key, file.relativeKey):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",  # External uploads don't have S3 upload IDs
+                        success=False,
+                        error=OWN_FILE_PATH_MESSAGE
+                    ))
+                    has_failures = True
+                    continue
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
