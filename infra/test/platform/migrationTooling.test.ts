@@ -496,7 +496,7 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
         // Only assetLocationFolderKeys reads Amazon S3: one HeadObject, the versions of one exact key at a
-        // time, and one single-key listing under '{key}/'.
+        // time, one single-key listing under '{key}/', and one single-version listing under '{key}/'.
         const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
         const end = script.indexOf("# STEP: orphanedTriggers\n");
         expect(start).toBeGreaterThan(-1);
@@ -510,8 +510,12 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         const listings = locationStep.match(/list_objects_v2\([^)]*\)/g) ?? [];
         expect(listings).toHaveLength(1);
         expect(listings[0]).toContain("MaxKeys=1");
-        const versionListings = locationStep.match(/\.list_object_versions\(/g) ?? [];
-        expect(versionListings).toHaveLength(1);
+        const versionListings = locationStep.match(/\.list_object_versions\([^)]*\)/g) ?? [];
+        expect(versionListings).toHaveLength(2);
+        // The second listing is the archived-folder probe under '{key}/', one entry only.
+        expect(versionListings.filter((call) => call.includes('Prefix=f"{key}/"'))).toEqual([
+            '.list_object_versions(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)',
+        ]);
         const exact = locationStep.slice(locationStep.indexOf("def exact_key_versions("));
         expect(exact.slice(0, 900)).toContain("if entry['Key'] == key");
         expect(script).not.toMatch(/auxiliary/i);
@@ -519,8 +523,8 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
 
     it("moves the copy's records without overwriting, and leaves vectors and execution history", () => {
         const move = script.slice(script.indexOf("def move_record("));
-        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
-        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_exists(#k)'");
+        expect(move.slice(0, 3000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move.slice(0, 3000)).toContain("unchanged = ['attribute_exists(#k)']");
         const block = script.slice(script.indexOf("COPY_TABLE_KEYS = ("));
         const tables = Array.from(
             block.slice(0, block.indexOf("\n)\n")).matchAll(/'([A-Z0-9_]+)'/g)
@@ -557,8 +561,103 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(body).toMatch(/gated=run_location_keys or /);
         expect(script).toContain("ConditionExpression='#loc.#key = :old'");
         expect(script).toMatch(/parser\.add_argument\('--resume'/);
-        expect(readme).toContain("assetLocationFolderKeys-dry-run-report.jsonl");
+        expect(readme).toContain("assetLocationFolderKeys-dry-run-report-<UTC time>.jsonl");
         expect(readme).toContain("--resume");
+    });
+
+    /** The source of one top-level Python function, up to the next top-level definition. */
+    function pyFunction(name: string): string {
+        const start = script.indexOf(`\ndef ${name}(`);
+        expect(start).toBeGreaterThan(-1);
+        const next = script.slice(start + 1).search(/\n(def |class |#{5,})/);
+        return script.slice(start + 1, next < 0 ? undefined : start + 1 + next + 1);
+    }
+
+    it("classes an archived folder by its versions under '{key}/', after the live listing finds none", () => {
+        const classify = pyFunction("classify_asset_location");
+        const live = classify.indexOf(
+            'list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)'
+        );
+        const archived = classify.indexOf(
+            'list_object_versions(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)'
+        );
+        expect(live).toBeGreaterThan(-1);
+        expect(archived).toBeGreaterThan(live);
+        expect(classify.slice(archived)).toMatch(
+            /if versions\.get\('Versions'\) or versions\.get\('DeleteMarkers'\):\s*\n\s*return 'folder-without-slash', 'archived'/
+        );
+        expect(classify.slice(archived).indexOf("return 'no-objects'")).toBeGreaterThan(-1);
+    });
+
+    it("re-reads each record consistently and deletes it only if it is unchanged since that read", () => {
+        const move = pyFunction("move_record");
+        const read = move.indexOf("get_item(TableName=table, Key=old_key, ConsistentRead=True)");
+        const transact = move.indexOf("transact_write_items(");
+        expect(read).toBeGreaterThan(-1);
+        expect(transact).toBeGreaterThan(read);
+        // The new record is built from the read, and a record that differs from the listing is left.
+        expect(move).toContain("new_item = dict(current)");
+        expect(move).toMatch(/if current != item:\s*\n\s*return 'changed'/);
+        // The delete is conditioned on every non-key attribute of that read.
+        expect(move).toMatch(
+            /for index, attr in enumerate\(sorted\(a for a in current if a not in key_names\)\)/
+        );
+        expect(move).toContain('unchanged.append(f"#a{index} = :a{index}")');
+        expect(move).toContain("'ReturnValuesOnConditionCheckFailure': 'ALL_OLD'");
+    });
+
+    it("decides a cancelled move by its cancellation reasons and raises on any other reason", () => {
+        const move = pyFunction("move_record");
+        expect(move).toContain("e.response.get('CancellationReasons')");
+        expect(move).toMatch(
+            /if codes\[:1\] == \['ConditionalCheckFailed'\]:\s*\n\s*return 'clash'/
+        );
+        expect(move).toMatch(
+            /codes\[1\] == 'ConditionalCheckFailed':\s*\n\s*return 'changed' if reasons\[1\]\.get\('Item'\) else 'gone'/
+        );
+        // Any other cancellation (a transaction conflict, throttling) is an error: the function ends in a raise.
+        expect(move.trimEnd()).toMatch(/\n\s+raise$/);
+        // No probe of the target decides the outcome after a cancellation.
+        const after = move.slice(move.indexOf("except ClientError as e:"));
+        expect(after).not.toContain("get_item(");
+    });
+
+    it("leaves an asset unmarked, and the step non-zero, while a record of it was edited during the move", () => {
+        const part = pyFunction("move_companion_copy_records");
+        expect(part).toMatch(
+            /if dry_run or counts\['errors'\] != errors_before or counts\['records-changed'\] != changed_before:\s*\n\s*return/
+        );
+        expect(tuple(script, "COPY_COUNTERS")).toEqual(
+            expect.arrayContaining(["records-changed", "copy-chains-deeper"])
+        );
+        const step = pyFunction("run_asset_location_folder_keys_step");
+        expect(step).toContain(
+            "incomplete = counts['errors'] or counts['unreadable'] or (counts['records-changed'] and not dry_run)"
+        );
+        expect(readme).toContain("edited during the move");
+    });
+
+    it("writes one report per run, so a later run keeps the lines an earlier one wrote", () => {
+        const files = pyFunction("_location_files");
+        expect(files).toContain("stamp = started.strftime('%Y%m%dT%H%M%SZ')");
+        expect(files).toContain('f"{LOCATION_STEP}-{mode}-report-{stamp}.jsonl"');
+        const fix = pyFunction("fix_asset_location_folder_keys");
+        expect(fix).toContain("with open(report_path, 'a', encoding='utf-8') as report:");
+        expect(fix).not.toMatch(/report_mode|open\(report_path, 'w'/);
+        expect(fix).toContain("report_path = checkpoint['report']");
+    });
+
+    it("holds the billed backfills on a real run whose location step did not finish", () => {
+        const body = pyFunction("main");
+        expect(body).toContain(
+            "backfills_held = not dry_run and (run_vector_backfill or run_metadata_backfill)"
+        );
+        expect(body.indexOf("backfills_held = not dry_run")).toBeLessThan(
+            body.indexOf("run_vector_backfill_step(")
+        );
+        expect(body).toContain("if run_vector_backfill and not backfills_held:");
+        expect(body).toContain("if run_metadata_backfill and not backfills_held:");
+        expect(readme).toContain("skips `vectorBackfill` and `metadataBackfill`");
     });
 
     it("documents what the deploy creates for Download as Zip and the copy engine", () => {
