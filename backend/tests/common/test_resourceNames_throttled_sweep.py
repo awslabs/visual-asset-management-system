@@ -325,12 +325,36 @@ class TestSweepBudget:
     def test_a_non_retryable_error_ends_the_sweep_at_once(self, rn, clock, monkeypatch):
         fake = install(rn, monkeypatch, FakeSsm(fault=always(access_denied)))
 
-        with pytest.raises(rn.ResourceNameUnavailableError) as refused:
+        with pytest.raises(rn.ResourceNameAccessError) as refused:
             rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
 
+        # Not the throttling error the workflow states wait out, and the message names the permission.
+        assert not isinstance(refused.value, rn.ResourceNameUnavailableError)
+        assert "ssm:GetParametersByPath" in str(refused.value)
+        assert "AccessDeniedException" in str(refused.value)
         assert isinstance(refused.value.__cause__, ClientError)
         assert fake.tokens == [None]
         assert clock.sleeps == []
+
+    def test_a_non_retryable_error_opens_no_backoff_window(self, rn, clock, monkeypatch):
+        # The next lookup reads SSM again and meets the same refusal, instead of being answered
+        # inside a window with the error the workflow states retry.
+        fake = install(rn, monkeypatch, FakeSsm(fault=always(access_denied)))
+
+        for _ in range(2):
+            with pytest.raises(rn.ResourceNameAccessError):
+                rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+
+        assert rn._failed_sweeps == 0 and not rn._in_backoff_window()
+        assert fake.tokens == [None, None]
+
+    def test_a_non_retryable_error_still_serves_a_stale_cached_name(self, rn, clock, monkeypatch):
+        monkeypatch.setattr(rn, "_cache", {"dynamoTables/assetStorage": "asset-table"})
+        monkeypatch.setattr(rn, "_cache_fetched_at", time.time() - rn.CACHE_TTL_SECONDS - 1)
+        install(rn, monkeypatch, FakeSsm(fault=always(access_denied)))
+
+        assert rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "asset-table"
+        assert rn._failed_sweeps == 0
 
 
 @pytest.mark.unit

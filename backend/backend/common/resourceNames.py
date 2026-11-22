@@ -74,8 +74,17 @@ _uniform = random.uniform
 
 class ResourceNameUnavailableError(RuntimeError):
     """A resource name could not be resolved because Parameter Store could not be read: the sweep
-    failed, or the lookup came inside the back-off window that follows a failed sweep. Not a
-    KeyError, because the parameter may well be published."""
+    failed with throttling, a service fault or a timeout, or the lookup came inside the back-off
+    window that follows such a failure. Not a KeyError, because the parameter may well be published.
+    The workflow scaffolding states retry it (workflowAslBuilder.RESOURCE_NAME_UNAVAILABLE_RETRIER)."""
+
+
+class ResourceNameAccessError(RuntimeError):
+    """A resource name could not be resolved because Parameter Store refused the sweep with an error
+    a retry cannot fix, most often AccessDeniedException: the function's role may not call
+    ssm:GetParametersByPath on the deployment's parameters (its policy, a permissions boundary or a
+    service control policy). Opens no back-off window, and no workflow state retries it as it does
+    ResourceNameUnavailableError, so the lookup fails at once with the SSM error as its cause."""
 
 
 class ResourceParamKey:
@@ -213,6 +222,12 @@ def _is_retryable(error: Exception) -> bool:
     return False
 
 
+def _is_transient_sweep_failure(error: Exception) -> bool:
+    """A sweep that ran out of its budget on retryable errors (or on none, TimeoutError), as
+    opposed to one a non-retryable error ended at once."""
+    return isinstance(error, TimeoutError) or _is_retryable(error)
+
+
 def _sweep_parameters(prefix: str) -> dict:
     """Read every parameter under the prefix with GetParametersByPath, page by page, inside
     SWEEP_BUDGET_SECONDS, and return them keyed by their path below the prefix.
@@ -343,10 +358,12 @@ def get_resource_name(key: ResourceParamKey) -> str:
     sweep did not carry is remembered as missing for MISSING_KEY_TTL_SECONDS, so an
     unpublished parameter costs one sweep per window rather than one per call.
 
-    A sweep is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A failed
-    sweep opens a back-off window in which no sweep starts: a lookup inside it is answered from
-    the cache, stale or not, or refused with ResourceNameUnavailableError, as is a failed sweep
-    for a name the cache does not hold. A cache hit takes no lock and reads no SSM."""
+    A sweep is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A sweep that
+    fails on throttling, a service fault or a timeout opens a back-off window in which no sweep
+    starts: a lookup inside it is answered from the cache, stale or not, or refused with
+    ResourceNameUnavailableError, as is the failed sweep for a name the cache does not hold. A sweep
+    a non-retryable error ends (access denied, for one) opens no window and, for a name the cache
+    does not hold, raises ResourceNameAccessError. A cache hit takes no lock and reads no SSM."""
     for env_name in key.env_var_names:
         value = os.environ.get(env_name)
         if value:
@@ -373,10 +390,19 @@ def get_resource_name(key: ResourceParamKey) -> str:
                     return _cache[key.param_key]
                 logger.exception(f"Failed loading resource name parameters from SSM: {e}")
                 raise
-            _record_failed_sweep()
+            transient = _is_transient_sweep_failure(e)
+            if transient:
+                _record_failed_sweep()
             if key.param_key in _cache:
                 logger.warning(f"SSM refresh failed; serving cached value for {key.param_key}")
                 return _cache[key.param_key]
+            if not transient:
+                # Not throttling: a retry meets the same refusal, so it is reported for what it is.
+                raise ResourceNameAccessError(
+                    f"Resource name parameters could not be read from SSM ({_error_code(e)}): the "
+                    f"function's role needs ssm:GetParametersByPath on the deployment's resource-name "
+                    f"parameters; check its policy, permissions boundary and service control policies: "
+                    f"{key.param_key}") from e
             raise ResourceNameUnavailableError(
                 f"Resource name parameters could not be read from SSM: {key.param_key}") from e
         _record_completed_sweep()
