@@ -321,11 +321,17 @@ class TestRunRecord:
             "inputConfigurationS3Location": "s3://b/cfg.json",
             "bucketRegions": {"b": "us-east-1"},
         }
-        main_module.upload_config(S3(), _config(), job_config)
+        # Pin the recorded driver so the key-set check covers it on a host without nvidia-smi.
+        original_driver = main_module.gpu_driver_version
+        main_module.gpu_driver_version = lambda: "580.178.04"
+        try:
+            main_module.upload_config(S3(), _config(), job_config)
+        finally:
+            main_module.gpu_driver_version = original_driver
 
         assert set(uploaded) == {"jobName", "trainingConfig", "customEnvironmentS3Uri",
-                                 "stageAssetFiles", "isaacLabVersion"} | (
-                                 {"gpuDriverVersion"} & set(uploaded))
+                                 "stageAssetFiles", "isaacLabVersion", "gpuDriverVersion"}
+        assert uploaded["gpuDriverVersion"] == "580.178.04"
         assert "callback-value" not in json.dumps(uploaded)
         assert uploaded["trainingConfig"]["physics"] == "newton_mjwarp"
         assert uploaded["trainingConfig"]["physicsNote"] == "a transfer test"

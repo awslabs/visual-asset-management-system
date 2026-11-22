@@ -247,7 +247,7 @@ Training results are added to the asset the run executed against. Both Isaac Lab
 | `checkpoints/<executionId>/*`     | PyTorch | Model checkpoint files saved during training, named by the RL library (below) |
 | `<executionId>/metrics.csv`       | CSV     | Training metrics exported from TensorBoard event files                        |
 | `<executionId>/*_git_diff.txt`    | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility)      |
-| `<executionId>/train-config.json` | JSON    | Input configuration saved for reference                                       |
+| `<executionId>/train-config.json` | JSON    | The run's settings, Isaac Lab version and GPU driver, saved for reference     |
 
 For example, a run whose execution id is `3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a` writes its last rsl_rl checkpoint to `checkpoints/3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a/model_99.pt`.
 
@@ -305,11 +305,11 @@ The **Template tag** column names the execute-form field that supplies each para
 
 Evaluation outputs use the same per-execution folders as training:
 
-| Output                               | Format | Description                                                          |
-| ------------------------------------ | ------ | -------------------------------------------------------------------- |
-| `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                  |
-| `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true` |
-| `<executionId>/evaluate-config.json` | JSON   | Input configuration saved for reference                              |
+| Output                               | Format | Description                                                               |
+| ------------------------------------ | ------ | ------------------------------------------------------------------------- |
+| `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                       |
+| `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true`      |
+| `<executionId>/evaluate-config.json` | JSON   | The run's settings, Isaac Lab version and GPU driver, saved for reference |
 
 ## Custom environments
 
