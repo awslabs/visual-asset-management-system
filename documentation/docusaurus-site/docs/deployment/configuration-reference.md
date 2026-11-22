@@ -1754,6 +1754,8 @@ The boundary ARN must be an IAM managed policy ARN in the partition you deploy t
 
 Adding, changing, or removing the boundary on an existing deployment updates each role in place; no role is replaced. The policy must allow everything VAMS grants its roles, because a boundary limits a role to the intersection of the boundary and the role's own policies. Use the IAM policy report (see [VAMS stack role customization](#vams-stack-role-customization-vamsstacks)) to list those permissions.
 
+Every VAMS Lambda role reads resource names with two statements: `ssm:GetParameter`, `ssm:GetParameters` and `ssm:GetParametersByPath` on `arn:<partition>:ssm:<region>:<account-id>:parameter/<name>-<baseStackName>-<region>/resourceNames` and `.../resourceNames/*`, and `ssm:GetParameters` on `.../resourceNamesChunks/*`, the resource-name chunk parameters. A boundary that allows only the `resourceNames/*` path denies the chunk read; functions then fall back to reading every name under the prefix, one call per 10 names, and log `Resource name chunk parameters not used (GetParameters failed (AccessDeniedException))` at each refresh.
+
 The large object copy engine is invoked through resource-based permissions on its function (`largeObjectCopy`), which name the calling roles: the workflow output step, the workflow error handler, the execution service and the engine itself. IAM checks such a same-account call against the calling role's permissions boundary, so a boundary must allow `lambda:InvokeFunction` (on the copy engine function, or on the deployment's functions). These grants are not statements in the callers' role policies, so they do not appear in the IAM policy report (`iam-policy-report.txt` / `iam-policy-report.json`); add them to the boundary yourself.
 
 Setting, changing, or removing `IamRoleNamePrefix` on an existing deployment renames, and so replaces, each IAM role in the core stack and its nested stacks. The REST API moves to a new deployment that uses the renamed authorizer role in the same update. The API Gateway account CloudWatch role is retained by design, so the update creates the renamed role and leaves the old one in the account, outside any stack. Delete the old role only when `aws apigateway get-account` in that Region no longer names it, as [Step 7 of the uninstall guide](uninstall.md#step-7-delete-the-api-gateway-account-cloudwatch-role) describes. Each workflow's state machine keeps the workflow role it was built with, so save every workflow again with its pipeline list after the rename, as [Renaming the IAM roles](update-the-solution.md#v267-and-later-renaming-the-iam-roles) describes.
@@ -1840,6 +1842,8 @@ The cloud assembly produced with `generateReportOnly` set to `true` is for the r
 :::
 
 Because the roles in `precreatedRoles` are created outside VAMS, `environments.aws.PermissionBoundaryArn` does not apply to them; set the boundary when you create them.
+
+A pre-created Lambda role carries the statements of the current report only, so regenerate the report after an upgrade and add what is new. Since 2.8.0, every VAMS Lambda role also has `ssm:GetParameters` on `arn:<partition>:ssm:<region>:<account-id>:parameter/<name>-<baseStackName>-<region>/resourceNamesChunks/*`, beside the existing statement on `.../resourceNames/*`. Without it, functions fall back to reading every resource name one call per 10 names, as before.
 
 #### `iamRoleConfig.json` format
 
