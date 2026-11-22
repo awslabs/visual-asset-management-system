@@ -397,8 +397,8 @@ The API builder stacks stay split, and consolidating them would remove headroom 
 
 | Limit                                     | Value                           | Scope            | Current (worst-case commercial cell)                                  |
 | ----------------------------------------- | ------------------------------- | ---------------- | --------------------------------------------------------------------- |
-| CloudFormation resources per template     | 500, not adjustable             | Per nested stack | `apiBuilder` 150, `apiBuilder2` 237, `apiBuilder3` 3                  |
-| CloudFormation template body in Amazon S3 | 1,000,000 bytes, not adjustable | Per nested stack | `apiBuilder` ~0.45 MB, `apiBuilder2` ~0.68 MB, `apiBuilder3` ~0.02 MB |
+| CloudFormation resources per template     | 500, not adjustable             | Per nested stack | `apiBuilder` 150, `apiBuilder2` 238, `apiBuilder3` 3                  |
+| CloudFormation template body in Amazon S3 | 1,000,000 bytes, not adjustable | Per nested stack | `apiBuilder` ~0.45 MB, `apiBuilder2` ~0.69 MB, `apiBuilder3` ~0.02 MB |
 | API Gateway resources per REST API        | 300 default, adjustable         | Per REST API     | 165 path-tree nodes (132 OpenAPI paths) across **all** the API stacks |
 
 The figures are for the commercial template with a customer managed key, every Lambda in the VPC, Deadline Cloud and Download as Zip enabled, measured with the construct-path and asset metadata a deployment writes (MB here is 1,000,000 bytes). That is the cell where the API templates are largest. `test/api/apiStackCeilings.test.ts` also holds both API stacks under 900,000 bytes in that cell and in the GovCloud and EU sovereign equivalents.

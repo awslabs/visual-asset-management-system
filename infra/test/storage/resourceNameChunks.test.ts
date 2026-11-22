@@ -331,6 +331,7 @@ describe.each([
     });
 
     test("every chunk's worst case fits 4,096 characters", () => {
+        expect(chunks.length).toBeGreaterThan(0);
         for (const chunk of chunks) {
             expect(worstCaseOf(chunk)).toBeLessThanOrEqual(RESOURCE_NAME_CHUNK_MAX_CHARS);
         }
@@ -364,6 +365,7 @@ describe.each([
             (p.flat.match(/\$\{[^}]+\}/g) ?? []).forEach((r) => refs.add(r));
             perKeyRefs.set(p.stack, refs);
         }
+        expect(chunks.some((c) => c.refs.length > 0)).toBe(true);
         for (const chunk of chunks) {
             for (const ref of chunk.refs) {
                 expect(perKeyRefs.get(chunk.stack)?.has(ref)).toBe(true);
@@ -438,6 +440,7 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
 
     test("one GetParameters call reads every chunk in each shipped template", () => {
         for (const name of ALL_TEMPLATES) {
+            expect(chunksOf(synthFor(name, false)).length).toBeGreaterThan(0);
             expect(chunksOf(synthFor(name, false)).length).toBeLessThanOrEqual(10);
         }
         expect(chunksOf(synthFor("commercial", true)).length).toBeLessThanOrEqual(10);
