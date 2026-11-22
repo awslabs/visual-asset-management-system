@@ -259,6 +259,7 @@ def _crs_label(srs_id: Optional[int], srs: Dict[int, dict]) -> Optional[str]:
 def _bounded_count(connection: sqlite3.Connection, table: str) -> Tuple[int, bool]:
     """Rows in `table`, counted up to DATA_MAX_ROWS_COUNTED + 1 so a cap is reported rather than guessed."""
     quoted = '"' + table.replace('"', '""') + '"'
+    # nosemgrep: sqlalchemy-execute-raw-query -- quoted SQLite identifier on a read-only connection
     row = connection.execute(
         f"SELECT COUNT(*) FROM (SELECT 1 FROM {quoted} LIMIT ?)", (DATA_MAX_ROWS_COUNTED + 1,)).fetchone()
     count = int(row[0]) if row else 0
@@ -269,6 +270,7 @@ def _bounded_count(connection: sqlite3.Connection, table: str) -> Tuple[int, boo
 
 def _columns(connection: sqlite3.Connection, table: str, geometry_column: Optional[str]) -> List[str]:
     quoted = '"' + table.replace('"', '""') + '"'
+    # nosemgrep: sqlalchemy-execute-raw-query, formatted-sql-query -- quoted SQLite identifier, read-only connection
     names = [str(row[1]) for row in connection.execute(f"PRAGMA table_info({quoted})")]
     return [_name(name) or "" for name in names if name != geometry_column][:DATA_MAX_COLUMNS]
 
