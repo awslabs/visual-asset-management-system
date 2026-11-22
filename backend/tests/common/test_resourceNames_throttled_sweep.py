@@ -22,10 +22,22 @@ The SSM client is a fake that serves pages with string-offset NextTokens. It als
 paginator. Time is a fake clock driven through the module's ``_monotonic`` and ``_sleep``.
 """
 
+import json
+import os
 import threading
 
 import pytest
 from botocore.exceptions import ClientError, ReadTimeoutError
+from unittest.mock import MagicMock
+
+# The audit module resolves its nine log groups at import. Seeded first, so that import resolves
+# offline through the break-glass overrides; the audit tests below clear them and point the module at
+# their own resolver.
+for _name in ("AUTHENTICATION", "AUTHORIZATION", "FILEUPLOAD", "FILEDOWNLOAD", "FILEDOWNLOAD_STREAMED",
+              "AUTHOTHER", "AUTHCHANGES", "ACTIONS", "ERRORS"):
+    os.environ.setdefault(f"AUDIT_LOG_{_name}", f"test-audit-log-{_name.lower()}")
+
+from backend.backend.customLogging import auditLogging  # noqa: E402
 
 PREFIX = "/vams-test/resourceNames"
 
@@ -546,3 +558,77 @@ class TestSweepLogging:
         assert len(recorder.at("error", "exception")) == 2
         assert len(recorder.at("warning")) == 2
         assert "Rate exceeded" not in " ".join(message for _, message in recorder.lines)
+
+
+# --- Audit log groups: the import-time pass and the writes after it ---------------------------------
+
+def _audit_event():
+    return {"requestContext": {"http": {"method": "POST", "path": "/database/db1/assets"}},
+            "_claims": {"tokens": ["alice"], "roles": ["admin"], "mfaEnabled": False}}
+
+
+@pytest.fixture
+def audit(rn, monkeypatch):
+    """The real audit module, resolving through this test's resourceNames module with fresh state."""
+    monkeypatch.setattr(auditLogging, "get_log_group_name", rn.get_log_group_name)
+    monkeypatch.setattr(auditLogging, "_audit_log_group_names", {})
+    monkeypatch.setattr(auditLogging, "_created_log_streams", {})
+    monkeypatch.setattr(auditLogging, "request_to_claims", lambda event: dict(event["_claims"]))
+    client = MagicMock()
+    client.exceptions.ResourceAlreadyExistsException = type("AlreadyExists", (Exception,), {})
+    monkeypatch.setattr(auditLogging, "cloudwatch_logs", client)
+    return auditLogging
+
+
+def _import_pass(audit):
+    """What the module does at import: resolve each of the nine audit log groups once."""
+    for key in audit._AUDIT_LOG_GROUP_KEYS:
+        audit._audit_log_group_names[key.param_key] = audit._resolve_audit_log_group(key)
+
+
+@pytest.mark.unit
+class TestAuditImportPass:
+    def test_the_import_time_pass_makes_one_sweep_when_ssm_throttles(self, rn, clock, audit, monkeypatch):
+        fake = install(rn, monkeypatch, FakeSsm(fault=always(throttled)))
+        sweeps = count_sweeps(rn, monkeypatch)
+
+        _import_pass(audit)
+
+        assert len(audit._AUDIT_LOG_GROUP_KEYS) == 9
+        assert set(audit._audit_log_group_names.values()) == {None}
+        assert len(sweeps) == 1
+        assert fake.tokens
+
+    def test_a_write_after_the_window_resolves_and_caches_its_group(self, rn, clock, audit, monkeypatch):
+        fake = install(rn, monkeypatch, FakeSsm(parameters={"cloudwatchLogGroups/auditActions": "actions-group"},
+                                                fault=always(throttled)))
+        _import_pass(audit)
+        fake.fault = None
+        clock.advance(rn.SWEEP_BACKOFF_MAX_SECONDS + 1)
+
+        audit.log_actions(_audit_event(), "assetCreate", {"note": "after the window"})
+
+        assert audit.cloudwatch_logs.put_log_events.called
+        assert audit.cloudwatch_logs.put_log_events.call_args.kwargs["logGroupName"] == "actions-group"
+        assert audit._audit_log_group_names["cloudwatchLogGroups/auditActions"] == "actions-group"
+
+
+@pytest.mark.unit
+class TestAuditWriteInsideTheBackoffWindow:
+    """R4: inside the window an audit write reads no SSM and never raises. This release has no audit
+    fallback line, so the entry is dropped with an error log, as it was before the bounded sweep."""
+
+    def test_the_entry_is_dropped_without_a_sweep_or_an_exception(self, rn, clock, audit, monkeypatch):
+        fake = install(rn, monkeypatch, FakeSsm(fault=always(throttled)))
+        _import_pass(audit)
+        fake.tokens.clear()
+        recorder = RecordingLogger()
+        monkeypatch.setattr(audit, "logger", recorder)
+
+        audit.log_actions(_audit_event(), "assetCreate", {"note": "inside the window"})
+
+        assert fake.tokens == []
+        assert not audit.cloudwatch_logs.put_log_events.called
+        assert audit._audit_log_group_names["cloudwatchLogGroups/auditActions"] is None
+        assert recorder.at("error"), "the dropped entry left no error line in the function log"
+        assert not recorder.at("exception")
