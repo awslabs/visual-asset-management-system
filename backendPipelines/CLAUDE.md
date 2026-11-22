@@ -821,7 +821,8 @@ at every hop (`MANIFEST_NAMED_VERSION_PIPELINES` in `backendPipelines/tests/test
     and makes no extra call, except a single-file asset's object (`inputAssetRootS3Key` without a trailing
     `/`, equal to the input key, in the input's bucket: `single_file_asset_object`), which is always read
     from that copy, so the folder the image is given holds that file only and not the other keys of the
-    object's own folder.
+    object's own folder. The image therefore reads none of the file's companion files from a copy
+    (`documentation/docusaurus-site/docs/pipelines/model-ops.md` says so).
 -   **IAM.** S3 authorizes a read that names a version as `s3:GetObjectVersion`. A container, job or pod
     role built from explicit statements over `getS3AssetBucketRecords()` grants it beside `s3:GetObject`
     (`infra/test/pipelines/pipelineInputVersionGrants.test.ts`); a Lambda granted through
