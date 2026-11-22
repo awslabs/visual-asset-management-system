@@ -353,7 +353,7 @@ All three metadata keys must be set as **file-level metadata** on the specific s
 
 **Minimum required:** Only the source video file is needed. If no metadata is set, Transfer defaults to edge-based transformation with an auto-computed edge map and the prompt "Transform the video."
 
-**With pre-computed control signal:** Set `COSMOS_TRANSFER_CONTROL_PATH` to the path of the control signal video within the same asset, relative to the asset root (a leading `/` is accepted, as in other asset file paths). A path that is not a file within the asset (a URI, a `.` or `..` segment, an empty segment, a backslash or a control character, or more than 1,024 characters) fails the run before its job starts. For example, if the asset has files:
+**With pre-computed control signal:** Set `COSMOS_TRANSFER_CONTROL_PATH` to the path of the control signal video within the same asset, relative to the asset root (a leading `/` is accepted, as in other asset file paths). The pipeline reads it from the asset's own folder, which the execution records, so the path works the same for an asset in a bucket with a base prefix and for an asset created on an existing bucket folder. A path that is not a file within the asset (a URI, a `.` or `..` segment, an empty segment, a backslash or a control character, or more than 1,024 characters) fails the run before its job starts. For example, if the asset has files:
 
 ```
 asset-id/source_video.mp4

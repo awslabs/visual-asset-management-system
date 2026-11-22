@@ -201,16 +201,24 @@ def normalize_control_path(value) -> str:
     return "/".join(segments)
 
 
-def control_input_s3_uri(control_path: str, input_s3_path: str, asset_id: str) -> str:
-    """The ``s3://`` URI of the control input: ``control_path`` under the asset root, ``{assetId}/``
-    in the input file's bucket. A path that is not a file within that root raises ``ValueError``."""
+def control_input_s3_uri(control_path: str, definition: Dict, input_s3_path: str, asset_id: str) -> str:
+    """The ``s3://`` URI of the control input: ``control_path`` under the asset root.
+
+    The asset root is the manifest's ``inputAssetRootS3Key``, in the input file's bucket. A definition
+    that names no asset root (a launch without a manifest entry) takes the input key up to its asset ID
+    segment, and fails when the key has none. A path that is not a file within that root raises
+    ``ValueError``."""
     relative = normalize_control_path(control_path)
     if not relative:
         raise ValueError(CONTROL_PATH_RULE)
-    if not asset_id:
-        raise ValueError("The control input cannot be located: the run names no asset ID")
-    bucket, _ = parse_s3_uri(input_s3_path)
-    root = f"{asset_id}/"
+    bucket, input_key = parse_s3_uri(input_s3_path)
+    root = (definition.get("inputAssetRootS3Key") or "").lstrip("/")
+    if not root:
+        parts = input_key.split("/")
+        if not asset_id or asset_id not in parts[:-1]:
+            raise ValueError("The control input cannot be located: the run names no asset root")
+        root = "/".join(parts[:parts.index(asset_id) + 1])
+    root = root if root.endswith("/") else root + "/"
     key = posixpath.normpath(root + relative)
     if not key.startswith(root) or key == root.rstrip("/"):
         raise ValueError(CONTROL_PATH_RULE)
@@ -369,7 +377,7 @@ def main():
 
         # A control input the run names is located, and its path checked, before any model or file
         # is fetched.
-        control_s3_uri = (control_input_s3_uri(control_path, input_s3_asset_file_path, asset_id)
+        control_s3_uri = (control_input_s3_uri(control_path, definition, input_s3_asset_file_path, asset_id)
                           if normalize_control_path(control_path) else "")
 
         # Determine prompt (cosmosPrompt takes precedence)
@@ -411,8 +419,8 @@ def main():
             logger.info("Step 3: Downloading control signal video")
             logger.info("=" * 80)
 
-            # control_path names a file of the run's asset, relative to the asset root
-            # ({assetId}/ in the input file's bucket)
+            # control_path names a file of the run's asset, relative to the asset root the manifest
+            # recorded (assetRootS3Key, in the input file's bucket)
             control_video_path = INPUT_DIR / "control.mp4"
             download_from_s3(control_s3_uri, control_video_path)
         else:
