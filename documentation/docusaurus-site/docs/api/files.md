@@ -73,7 +73,7 @@ Returns a list of all files in the specified asset, including file metadata, siz
 }
 ```
 
-`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. A file under `{key}/` named exactly like the object is listed one level down, at `/{file name}/{file name}` (its previews at `/{file name}/{file name}.previewFile.{ext}`), so every file has its own path. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, an upload at `/{file name}` writes a new version of the object (a workflow output at that path is refused), its file cannot be moved or renamed, and a request for `/` alone answers `400` `Requested file is not part of this asset`.
+`key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns. An asset whose base key names one object (created with a `bucketExistingKey` that has no trailing `/`) holds that object at `relativePath` `/{file name}`, every key under `{key}/` at the path after the key (`{key}/sub/x.obj` is `/sub/x.obj`), and its previews `{key}.previewFile.{ext}`. A file under `{key}/` named exactly like the object is listed one level down, at `/{file name}/{file name}` (its previews at `/{file name}/{file name}.previewFile.{ext}`), so every file has its own path. Other keys that start with the same characters are not part of it. A path of such an asset never names a key outside it, an upload at `/{file name}` writes a new version of the object (a workflow output at that path is refused), its file cannot be moved or renamed, and a file route given `/` alone answers `400`: delete and archive with a `message` that contains `Cannot delete the top-level asset folder` or `Cannot archive the top-level asset folder`, and the other file and stream routes with one that contains `Requested file is not part of this asset`. Download resolves `/` to the object.
 
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
@@ -187,11 +187,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                |
-| `500`  | Internal server error.                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, the source is the file of a single-file asset (`The file of a single-file asset cannot be moved or renamed.`), or the destination file name has a blocked extension. |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                               |
+| `500`  | Internal server error.                                                                                                                                                                                                                      |
 
 ---
 
@@ -612,7 +612,7 @@ For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.ph
 :::
 
 :::info[Single-file assets]
-For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.` The run then ends `FAILED`, and its error names the file with that message: `The asset file write-back failed. Writing output file '{file name}' into the asset failed: A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
+For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, `/{file name}.previewFile.{ext}` writes its own preview `{key}.previewFile.{ext}`, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.` The run then ends `FAILED`, and its error names the file with that message: `The asset file write-back failed. Writing output file '{file name}' into the asset failed: A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
 :::
 
 :::info[Preview File Extensions]

@@ -95,7 +95,7 @@ Virtual folders can be created within an asset by specifying a relative key endi
 Archiving a file creates an Amazon S3 delete marker on the object, which hides the file from normal listing operations without removing any version history. Archived files can be restored later.
 
 -   Single files can be archived by path.
--   All files under a prefix can be archived at once by setting `isPrefix: true`.
+-   All files in a folder can be archived at once by setting `isPrefix: true` (`/sub` is the folder `/sub/`).
 
 ### Unarchive (restore)
 

@@ -665,7 +665,7 @@ Where:
 -   `relative_path` is zero or more subdirectory levels within the asset
 -   `filename` is the actual file name
 
-An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root.
+An asset created on an existing bucket folder (`bucketExistingKey`, see [Assets](../concepts/assets.md)) uses that folder as its root instead of `{baseAssetsPrefix}{assetId}/`, so its keys need not contain the asset ID. A file's relative path is the part of its key after the asset's root. An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
 #### File Output Conventions
 
