@@ -243,11 +243,13 @@ const ISAAC_LAB_UNSUPPORTED_FAMILIES: Record<string, string> = {
     p5en: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
 };
 
-// Instance families whose GPU has 24 GB of memory or less, with that GPU. A GR00T-N1.5-3B fine-tune job
-// reserves one GPU, and the default fine-tune (loraRank 0, projector and diffusion model tuned, AdamW)
-// runs out of memory at step 0 on a 24 GB A10G even at batch size 2: PyTorch had 21.29 GiB allocated
-// of the 22.06 GiB usable. It runs on a 48 GB L40S (g6e). VAMS has not measured a GPU between those
-// sizes (V100 32 GB in p3dn, A100 40 GB in p4d), so those families are not listed.
+// The instance families in GPU_COUNT_BY_INSTANCE_TYPE whose GPU has 24 GB of memory or less, with that
+// GPU. A family outside that table (for example the fractional-GPU g6f and gr6f) is not checked.
+// A GR00T-N1.5-3B fine-tune job reserves one GPU, and the default fine-tune (loraRank 0, projector and
+// diffusion model tuned, AdamW) runs out of memory at step 0 on a 24 GB A10G even at batch size 2:
+// PyTorch had 21.29 GiB allocated of the 22.06 GiB usable. It runs on a 48 GB L40S (g6e). VAMS has not
+// measured a GPU between those sizes (V100 32 GB in p3dn, A100 40 GB in p4d), so those families are
+// not listed.
 export const GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES: Record<string, string> = {
     g4dn: "NVIDIA T4, 16 GB",
     g5: "NVIDIA A10G, 24 GB",
@@ -1961,7 +1963,7 @@ export function getConfig(app: cdk.App): Config {
 
         if (
             gr00tModels.gr00tN1_5_3B.enabled &&
-            (!gr00tModels.gr00tN1_5_3B.instanceTypes ||
+            (!Array.isArray(gr00tModels.gr00tN1_5_3B.instanceTypes) ||
                 gr00tModels.gr00tN1_5_3B.instanceTypes.length === 0)
         ) {
             throw new Error(
@@ -1986,9 +1988,10 @@ export function getConfig(app: cdk.App): Config {
                 `Configuration Warning: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes ` +
                     `includes ${named}. Each fine-tune job uses one GPU, and the default fine-tune ` +
                     `(loraRank 0, projector and diffusion model tuned) runs out of GPU memory at step 0 ` +
-                    `on a 24 GB GPU, even at batch size 2. AWS Batch places a job on these types ` +
-                    `whenever the others have no capacity. Remove them and use GPUs with 48 GB (for ` +
-                    `example g6e.4xlarge), unless you have checked that your fine-tune settings fit.`
+                    `on a 24 GB GPU, even at batch size 2. AWS Batch (BEST_FIT_PROGRESSIVE) can place ` +
+                    `a job on any listed type, and it prefers the type with the lowest cost per vCPU, ` +
+                    `which can be one of these. Remove them and use GPUs with 48 GB (for example ` +
+                    `g6e.4xlarge), unless you have checked that your fine-tune settings fit.`
             );
         }
     }
