@@ -125,6 +125,69 @@ export function expectChunksInRootStack(s: SynthResult): SynthChunk[] {
     return chunks;
 }
 
+/** The explicit DependsOn of a chunk, sorted. */
+export const dependsOnOf = (chunk: SynthChunk): string[] =>
+    ([] as string[]).concat(chunk.resource.raw.DependsOn ?? []).sort();
+
+/** The root-template resources whose outputs any chunk reads (`Fn::GetAtt [<id>, Outputs.*]`). */
+export function stacksReadByChunks(chunks: SynthChunk[]): string[] {
+    const ids = new Set<string>();
+    const visit = (value: unknown): void => {
+        if (Array.isArray(value)) value.forEach(visit);
+        else if (value && typeof value === "object") {
+            const getAtt = (value as any)["Fn::GetAtt"];
+            if (Array.isArray(getAtt) && /^Outputs\./.test(String(getAtt[1]))) ids.add(getAtt[0]);
+            Object.values(value).forEach(visit);
+        }
+    };
+    chunks.forEach((c) => visit(c.resource.properties.Value));
+    return [...ids].sort();
+}
+
+/**
+ * Resource logical ids of one template that sit on a dependency cycle, following DependsOn and
+ * every Ref / Fn::GetAtt / Fn::Sub reference to another resource of the same template. Empty when
+ * the template is acyclic.
+ */
+export function dependencyCycleIn(template: any): string[] {
+    const resources: Record<string, any> = template.Resources ?? {};
+    const edges = new Map<string, Set<string>>();
+    const refsIn = (value: unknown, out: Set<string>): void => {
+        if (Array.isArray(value)) value.forEach((v) => refsIn(v, out));
+        else if (value && typeof value === "object") {
+            const v = value as any;
+            if (typeof v.Ref === "string" && v.Ref in resources) out.add(v.Ref);
+            if (Array.isArray(v["Fn::GetAtt"]) && v["Fn::GetAtt"][0] in resources)
+                out.add(v["Fn::GetAtt"][0]);
+            if (typeof v["Fn::Sub"] === "string") {
+                for (const m of v["Fn::Sub"].matchAll(/\$\{([A-Za-z0-9]+)[.}]/g))
+                    if (m[1] in resources) out.add(m[1]);
+            }
+            Object.values(v).forEach((x) => refsIn(x, out));
+        }
+    };
+    for (const [id, r] of Object.entries(resources)) {
+        const out = new Set<string>(([] as string[]).concat(r.DependsOn ?? []));
+        refsIn(r.Properties ?? {}, out);
+        edges.set(id, out);
+    }
+    const state = new Map<string, "open" | "done">();
+    const cycle: string[] = [];
+    const walk = (id: string, path: string[]): boolean => {
+        if (state.get(id) === "done") return false;
+        if (state.get(id) === "open") {
+            cycle.push(...path.slice(path.indexOf(id)));
+            return true;
+        }
+        state.set(id, "open");
+        for (const next of edges.get(id) ?? []) if (walk(next, [...path, id])) return true;
+        state.set(id, "done");
+        return false;
+    };
+    for (const id of edges.keys()) if (walk(id, [])) break;
+    return cycle;
+}
+
 /**
  * The root template takes no CloudFormation parameter beyond CDK's bootstrap version (the chunks
  * read nested values through nested-stack outputs, never through parameters), and stays within the

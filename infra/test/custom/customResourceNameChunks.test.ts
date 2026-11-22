@@ -16,6 +16,9 @@
 
 import { resolveReference, SynthResult, synthTemplate } from "../support/templateSynth";
 import {
+    dependencyCycleIn,
+    dependsOnOf,
+    stacksReadByChunks,
     expectChunksInRootStack,
     expectRootTemplateWithinLimits,
     rawChunkValues,
@@ -96,5 +99,18 @@ describe("a fork's custom resource name", () => {
 
     test("the root template takes no new parameter and stays within the template quotas", () => {
         expectRootTemplateWithinLimits(s);
+    });
+
+    test("every chunk, the core ones included, waits for the custom stack and storage", () => {
+        const all = expectChunksInRootStack(s);
+        const unhashed = (ids: string[]) => ids.map((id) => id.replace(/[0-9A-F]{8}$/, ""));
+        for (const chunk of all) {
+            expect(unhashed(dependsOnOf(chunk))).toEqual([
+                "CustomBuilderNestedStackCustomBuilderNestedStackResource",
+                "StorageResourcesBuilderNestedStackStorageResourcesBuilderNestedStackResource",
+            ]);
+            expect(dependsOnOf(chunk)).toEqual(stacksReadByChunks(all));
+        }
+        expect(dependencyCycleIn(s.templates[rootStackKey(s)])).toEqual([]);
     });
 });

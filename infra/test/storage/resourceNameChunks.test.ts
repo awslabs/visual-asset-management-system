@@ -50,6 +50,9 @@ import {
 import { newTestApp } from "../support/testApp";
 import {
     chunksOf,
+    dependencyCycleIn,
+    dependsOnOf,
+    stacksReadByChunks,
     expectChunksInRootStack,
     expectRootTemplateWithinLimits,
     prefixOf,
@@ -262,6 +265,60 @@ describe("lane names reach the chunks, which all live in the root stack", () => 
         expect([...beforeIds.keys()].sort()).toEqual(["0", "1"]);
     });
 
+    test("a literal-valued lane chunk waits for the stacks the core chunks read", () => {
+        // A chunk whose values are literals reads no stack; without the shared dependency it
+        // would update at once while the core chunks wait for storage.
+        const root = new cdk.Stack(newTestApp(), "Root");
+        const registry = new ResourceNameRegistry();
+        ResourceNameRegistry.attach(root, registry);
+        const storage = new cdk.NestedStack(root, "StorageResourcesBuilder");
+        const coreSource = new cdk.NestedStack(root, "ResourceNamesBuilder");
+        registry.register({
+            paramKey: "dynamoTables/assetStorage",
+            value: tokenValue(storage, "A"),
+        });
+        const custom = new cdk.NestedStack(root, "CustomBuilder");
+        publishCustomResourceName(custom, config, "custom/dynamoTables/widgetStorage", "widgets");
+
+        const plan = buildResourceNameChunks({ config, registry, scope: root, coreSource });
+
+        expect(plan.count).toBe(2);
+        const dependsOn = Object.fromEntries(
+            chunkParameters(root).map(([, r]) => [
+                String(r.Properties.Name).split("/").pop(),
+                ([] as string[]).concat(r.DependsOn ?? []),
+            ])
+        );
+        expect(dependsOn["0"]).toHaveLength(1);
+        expect(dependsOn["0"][0]).toMatch(/^StorageResourcesBuilderNestedStack/);
+        expect(dependsOn["1"]).toEqual(dependsOn["0"]);
+    });
+
+    test("the cycle check finds a cycle through DependsOn and references, and none without", () => {
+        const resource = (props: object, dependsOn?: string[]) => ({
+            Type: "AWS::SSM::Parameter",
+            Properties: props,
+            ...(dependsOn ? { DependsOn: dependsOn } : {}),
+        });
+        expect(
+            dependencyCycleIn({
+                Resources: {
+                    A: resource({}, ["B"]),
+                    B: resource({ Value: { "Fn::GetAtt": ["A", "x"] } }),
+                },
+            }).sort()
+        ).toEqual(["A", "B"]);
+        expect(
+            dependencyCycleIn({
+                Resources: {
+                    A: resource({}, ["B"]),
+                    B: resource({ Value: { Ref: "C" } }),
+                    C: resource({}),
+                },
+            })
+        ).toEqual([]);
+    });
+
     test("refuses to build the chunks in a nested stack", () => {
         const root = new cdk.Stack(newTestApp(), "Root");
         const registry = new ResourceNameRegistry();
@@ -447,6 +504,31 @@ describe.each([
         }
     });
 
+    test("all wait for the same nested stacks, every one any chunk reads, with no cycle", () => {
+        // Same DependsOn on every chunk, so a layout change updates them together.
+        const read = stacksReadByChunks(chunks);
+        expect(read.length).toBeGreaterThan(0);
+        for (const chunk of chunks) {
+            expect({ index: chunk.index, dependsOn: dependsOnOf(chunk) }).toEqual({
+                index: chunk.index,
+                dependsOn: read,
+            });
+        }
+        const root = s.templates[rootStackKey(s)];
+        for (const id of read) expect(root.Resources[id].Type).toBe("AWS::CloudFormation::Stack");
+        expect(read.some((id) => id.startsWith("StorageResourcesBuilder"))).toBe(true);
+        // No dependency cycle in the root template, and no nested stack waits for a chunk.
+        expect(dependencyCycleIn(root)).toEqual([]);
+        const chunkIds = new Set(chunks.map((c) => c.logicalId));
+        const waiting = Object.entries<any>(root.Resources)
+            .filter(([, r]) => r.Type === "AWS::CloudFormation::Stack")
+            .filter(([, r]) =>
+                ([] as string[]).concat(r.DependsOn ?? []).some((d) => chunkIds.has(d))
+            )
+            .map(([id]) => id);
+        expect(waiting).toEqual([]);
+    });
+
     test("Lambda roles read the chunk path with ssm:GetParameters only", () => {
         const chunkArnTail = `:parameter/vams-t1-${name}/resourceNamesChunks/*`;
         const statements = [
@@ -510,6 +592,14 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
         const edhKeys = Object.values(ADDON_RESOURCE_PARAM_KEYS.dynamoTables);
         const edhChunks = chunksOf(s).filter((c) => edhKeys.some((k) => k in c.parsed.m));
         expect(edhChunks.map((c) => c.index)).toEqual([7]);
+        // Every chunk, the core ones included, waits for the add-on stack as well as storage.
+        const unhashed = (ids: string[]) => ids.map((id) => id.replace(/[0-9A-F]{8}$/, "")).sort();
+        for (const chunk of chunksOf(s)) {
+            expect(unhashed(dependsOnOf(chunk))).toEqual([
+                "AddonBuilderNestedStackAddonBuilderNestedStackResource",
+                "StorageResourcesBuilderNestedStackStorageResourcesBuilderNestedStackResource",
+            ]);
+        }
     });
 
     test.each([

@@ -35,9 +35,12 @@
  *   Every chunk's worst case stays within the 4,096-character standard-tier limit.
  * - The layout id is a hash of n and the ordered keys of every chunk, so a reader that meets chunks
  *   of two layouts (a deployment mid-update) can tell, and reads the prefix instead.
+ * - Every chunk depends on the same nested stacks: each one any chunk reads a value from. A deploy
+ *   that changes the layout then updates all chunks together, after the last of those stacks, so
+ *   the time readers meet two layouts is the length of a parallel parameter update.
  */
 
-import { Annotations, Stack, Token } from "aws-cdk-lib";
+import { Annotations, CfnResource, Reference, Stack, Token, Tokenization } from "aws-cdk-lib";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { createHash } from "crypto";
 import * as Config from "../../../config/config";
@@ -306,13 +309,48 @@ export function buildResourceNameChunks(props: {
     }
 
     const plan = planResourceNameChunks(groups.filter((g) => g.entries.length > 0));
+    // Every chunk waits for every nested stack any chunk reads, so a deploy that changes the
+    // layout updates all of them together, once the last of those stacks is done. A chunk that
+    // waited only for its own sources would update earlier (a literal-valued one at once), and
+    // readers in between would meet two layouts and fall back to the sweep.
+    const readStacks = nestedStacksReadBy(
+        props.scope,
+        plan.chunks.flatMap((c) => c.entries)
+    );
     const prefix = resourceNameChunkPrefix(props.config);
     for (const chunk of plan.chunks) {
-        new ssm.StringParameter(props.scope, `ResourceNameChunk${chunk.index}`, {
+        const parameter = new ssm.StringParameter(props.scope, `ResourceNameChunk${chunk.index}`, {
             parameterName: `${prefix}/${chunk.index}`,
             stringValue: renderResourceNameChunk(plan, chunk),
             tier: ssm.ParameterTier.STANDARD,
         });
+        for (const stack of readStacks) {
+            (parameter.node.defaultChild as CfnResource).addDependency(
+                stack.nestedStackResource as CfnResource
+            );
+        }
     }
     return plan;
+}
+
+/**
+ * The nested stacks directly under `root` that hold, at any depth, a resource the deploy-time
+ * values of `entries` reference, in first-reference order. A literal value references none.
+ */
+export function nestedStacksReadBy(root: Stack, entries: ResourceNameChunkEntry[]): Stack[] {
+    const found: Stack[] = [];
+    for (const entry of entries) {
+        if (!Token.isUnresolved(entry.value)) continue;
+        for (const token of Tokenization.reverseString(entry.value).tokens) {
+            if (!(token instanceof Reference)) continue;
+            let stack: Stack | undefined = Stack.of(token.target);
+            while (stack?.nested && stack.nestedStackParent !== root) {
+                stack = stack.nestedStackParent;
+            }
+            if (stack?.nested && stack.nestedStackResource && !found.includes(stack)) {
+                found.push(stack);
+            }
+        }
+    }
+    return found;
 }
