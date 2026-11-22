@@ -26,11 +26,22 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 OPEN_PIPELINE_FUNCTION_NAME = os.environ["OPEN_PIPELINE_FUNCTION_NAME"]
 
 
+def input_asset_fields(entry):
+    """``inputRelativePath``, ``inputAssetRootS3Key`` and ``inputAssetRootBucket`` from a manifest input
+    entry (``relativePath``, ``assetRootS3Key``, ``assetRootBucket``), each ``""`` when absent."""
+    entry = entry or {}
+    return {
+        "inputRelativePath": entry.get("relativePath") or "",
+        "inputAssetRootS3Key": entry.get("assetRootS3Key") or "",
+        "inputAssetRootBucket": entry.get("assetRootBucket") or "",
+    }
+
+
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
                                         , executing_userName, executing_requestContext, asset_id, orchestration_event_prefix="",
                      input_bucket_region="", output_bucket_region="", input_version_id="",
-                     output_s3_asset_results_path=""):
+                     output_s3_asset_results_path="", input_asset=None):
 
     # Create the object message to be sent
     messagePayload = {
@@ -55,7 +66,11 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
         "assetId": asset_id,
-        "orchestrationEventPrefix": orchestration_event_prefix
+        "orchestrationEventPrefix": orchestration_event_prefix,
+        # Where the input sits in its asset, from its manifest entry: the asset-relative path (its
+        # folder is the preview's subfolder) and the asset root with that root's bucket. Empty without
+        # a manifest entry, and the container then derives them from the input key.
+        **input_asset_fields(input_asset),
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -176,7 +191,8 @@ def lambda_handler(event, context):
                                             input_bucket_region=resolved['inputBucketRegion'],
                                             output_bucket_region=resolved['outputBucketRegion'],
                                             input_version_id=resolved['inputVersionId'],
-                                            output_s3_asset_results_path=resolved['outputS3AssetResultsPath'])
+                                            output_s3_asset_results_path=resolved['outputS3AssetResultsPath'],
+                                            input_asset=(resolved['inputFiles'] or [None])[0])
 
         return {
             'statusCode': 200,

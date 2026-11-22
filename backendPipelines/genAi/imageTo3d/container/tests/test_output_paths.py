@@ -73,6 +73,33 @@ class TestRelativeSubdir:
 
 
 @pytest.mark.unit
+class TestRelativeSubdirFromTheManifest:
+    """The definition's ``inputRelativePath`` (the primary input's manifest relativePath) names the folder."""
+
+    def test_an_asset_on_an_existing_bucket_folder(self):
+        key = "projects/site-a/scans/photo.png"
+        # Without the manifest path the key holds neither the asset ID nor a pipeline output folder.
+        with pytest.raises(export.ExportError, match="does not appear in the input key"):
+            export.compute_relative_subdir(key, _ASSET_ID)
+        assert export.compute_relative_subdir(key, _ASSET_ID, "/scans/photo.png") == "scans/"
+
+    def test_a_chained_input(self):
+        assert export.compute_relative_subdir(
+            f"{_OUTPUT_DIR}scans/user_supplied.png", _ASSET_ID, "/scans/user_supplied.png") == "scans/"
+
+    def test_same_named_inputs_in_two_folders_keep_apart(self):
+        assert (export.compute_relative_subdir("projects/site-a/left/photo.png", _ASSET_ID, "/left/photo.png"),
+                export.compute_relative_subdir("projects/site-a/right/photo.png", _ASSET_ID, "/right/photo.png")) == (
+            "left/", "right/")
+
+    def test_a_file_at_the_asset_root(self):
+        assert export.compute_relative_subdir("projects/site-a/photo.png", _ASSET_ID, "/photo.png") == ""
+
+    def test_without_it_the_key_decides(self):
+        assert export.compute_relative_subdir(f"{_ASSET_ID}/scans/photo.png", _ASSET_ID, "") == "scans/"
+
+
+@pytest.mark.unit
 class TestComposeOutputKey:
     def test_an_asset_root_input_writes_directly_under_the_output_prefix(self):
         key = export.compose_output_key(_OUTPUT_DIR, "", "photo.glb")

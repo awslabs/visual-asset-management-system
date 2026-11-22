@@ -27,7 +27,8 @@ sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGIO
 
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, orchestration_event_prefix="", asset_id="", input_version_id=""):
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix="", asset_id="", input_version_id="",
+                                        input_asset=None):
 
     # Create the object message to be sent
     messagePayload = {
@@ -47,7 +48,12 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         # beside its source rather than at the asset root.
         "assetId": asset_id,
         # The S3 version the run reads its input at, recorded at launch; "" reads the current object.
-        "inputVersionId": input_version_id
+        "inputVersionId": input_version_id,
+        # Where the input sits in its asset, from its manifest entry (empty without one): its
+        # asset-relative path, whose folder is the output subfolder, and the asset root.
+        "inputRelativePath": (input_asset or {}).get("relativePath") or "",
+        "inputAssetRootS3Key": (input_asset or {}).get("assetRootS3Key") or "",
+        "inputAssetRootBucket": (input_asset or {}).get("assetRootBucket") or "",
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -148,7 +154,8 @@ def lambda_handler(event, context):
                                             , resolved['outputS3AssetMetadataPath'], resolved['inputOutputS3AssetAuxiliaryFilesPath']
                                             , resolved['inputMetadataS3Location'], resolved['inputConfigurationS3Location'], external_task_token, executing_userName,
                                             executing_requestContext, resolved['orchestrationEventPrefix'], resolved['assetId'],
-                                            input_version_id=resolved['inputVersionId'])
+                                            input_version_id=resolved['inputVersionId'],
+                                            input_asset=(resolved['inputFiles'] or [None])[0])
 
         return {
             'statusCode': 200,
