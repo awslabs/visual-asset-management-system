@@ -805,10 +805,11 @@ class TestHandleRetention:
     def test_a_running_search_is_never_set_to_expire_before_its_deadline(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "5")
         handle = started_handle(env)
-        env.table.items[handle]["deadlineAt"] = now() + 800
+        deadline = now() + 800
+        env.table.items[handle]["deadlineAt"] = deadline
         env.logs.status = "Running"
         get(handle)
-        assert env.table.items[handle]["expiresAt"] >= now() + 800
+        assert env.table.items[handle]["expiresAt"] >= deadline
 
     def test_a_closed_search_gets_the_retention_from_the_moment_it_closed(self, env, monkeypatch):
         monkeypatch.setenv(svc.ENV_HANDLE_RETENTION_MINUTES, "10")
