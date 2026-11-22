@@ -524,8 +524,9 @@ function isaacLabInstanceTypes(cfg: ConfigShape): unknown[] | undefined {
     return types === undefined ? undefined : Array.isArray(types) ? types : [];
 }
 
-// Families whose GPU has 24 GB of memory or less, mirroring GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES in
-// infra/config/config.ts. The default GR00T fine-tune runs out of memory at step 0 on them.
+// The families in GPU_COUNT_BY_INSTANCE_TYPE whose GPU has 24 GB of memory or less, mirroring
+// GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES in infra/config/config.ts. The default GR00T fine-tune runs
+// out of memory at step 0 on them. A family outside that table (g6f, gr6f) is not checked.
 const GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES = ["g4dn", "g5", "g6", "gr6", "p3"];
 
 /** The enabled GR00T model's instanceTypes entries whose GPU is too small for the default fine-tune. */
@@ -1526,10 +1527,11 @@ const CORE_RULES: Rule[] = [
             gr00tUndersizedGpuInstanceTypes(c).length > 0,
         message:
             "useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes includes an instance type whose " +
-            "GPU has 24 GB of memory or less (g4dn, g5, g6, gr6 or p3). Each fine-tune job uses one GPU, " +
-            "and the default fine-tune (loraRank 0, projector and diffusion model tuned) runs out of GPU " +
-            "memory at step 0 on a 24 GB GPU. Use GPUs with 48 GB (for example g6e.4xlarge), unless " +
-            "you have checked that your fine-tune settings fit.",
+            "GPU has 24 GB of memory or less " +
+            `(${GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES.join(", ")}). ` +
+            "Each fine-tune job uses one GPU, and the default fine-tune (loraRank 0, projector and " +
+            "diffusion model tuned) runs out of GPU memory at step 0 on a 24 GB GPU. Use GPUs with " +
+            "48 GB (for example g6e.4xlarge), unless you have checked that your fine-tune settings fit.",
     },
 
     // ----- RapidPipeline EKS cluster version (config.ts: "RapidPipeline EKS cluster version") -----

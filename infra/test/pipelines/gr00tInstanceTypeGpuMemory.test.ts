@@ -10,8 +10,9 @@
  * A fine-tune job reserves one GPU. The default fine-tune template (loraRank 0, projector and diffusion
  * model tuned, AdamW) ran out of memory at step 0 on the 22.06 GiB A10G of a g5.12xlarge at batch sizes
  * 16, 4 and 2, and ran on the 48 GB L40S of a g6e.4xlarge. The compute environment is
- * BEST_FIT_PROGRESSIVE, so a small-GPU type in the list receives jobs whenever the others have no
- * capacity, and each such job fails after its instance start and model sync.
+ * BEST_FIT_PROGRESSIVE, so AWS Batch can place a job on any listed type and prefers the type with the
+ * lowest cost per vCPU, which can be the small-GPU one (g5.12xlarge costs less per vCPU than
+ * g6e.4xlarge). Each job placed there fails after its instance start and model sync.
  *
  * The check is a warning, not an error: a LoRA run or a smaller set of tuned components may fit a
  * 24 GB GPU, and an existing configuration that names one must keep deploying.
@@ -64,7 +65,7 @@ function resolve(mutate: (c: any) => void): () => Config.Config {
 }
 
 /** GR00T ships disabled; every enabled case also needs the global VPC and a token. */
-function withGr00tInstanceTypes(instanceTypes: string[]) {
+function withGr00tInstanceTypes(instanceTypes: unknown) {
     return resolve((c) => {
         c.app.useGlobalVpc.enabled = true;
         const gr00t = c.app.pipelines.useNvidiaGr00t;
@@ -168,6 +169,13 @@ describe("GR00T fine-tune instance types and GPU memory", () => {
         ])("%s is warned about as %s", (instanceType, gpu) => {
             expect(withGr00tInstanceTypes([instanceType])).not.toThrow();
             expect(gr00tWarnings(warnSpy).join("\n")).toContain(`${instanceType} (${gpu})`);
+        });
+
+        test("a string instead of a list gets the configured error, not a TypeError", () => {
+            // The ConfigBuilder treats a non-array the same way (modelInstanceTypesEmpty).
+            expect(withGr00tInstanceTypes("g5.12xlarge")).toThrow(
+                /Configuration Error: useNvidiaGr00t\.modelsFinetune\.gr00tN1_5_3B\.instanceTypes must be a non-empty array/
+            );
         });
 
         test("a type outside the table (g6e.48xlarge, p4d.24xlarge) is not warned about", () => {
