@@ -16,6 +16,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from common.dynamodb import to_update_expr
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived
+from common.assetLocations import contains
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     DATABASE_ID_METADATA_KEY,
@@ -520,8 +521,8 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
+                # Skip folder markers and keys the location does not hold
                 continue
                 
             try:

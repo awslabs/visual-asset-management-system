@@ -43,6 +43,7 @@ from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload
 from botocore.exceptions import ClientError
 from common.s3 import validateS3AssetExtensionsAndContentType, validateUnallowedFileExtensionAndContentType, list_all_objects, is_object_version_archived
+from common.assetLocations import contains
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, commonHeaders, validation_error_message
 from models.assetsV3 import (
     InitializeUploadRequestModel, InitializeUploadResponseModel, UploadPartModel, UploadFileResponseModel,
@@ -448,8 +449,8 @@ def determine_asset_type(assetId, bucket, prefix):
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
+                # Skip folder markers and keys the location does not hold
                 continue
                 
             try:

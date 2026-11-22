@@ -38,6 +38,7 @@ from common.s3MetadataKeys import (
     UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
+from common.assetLocations import contains
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
@@ -787,12 +788,14 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     
     return deleted_files
 
-def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
+def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
     
     Args:
         bucket: The S3 bucket
         prefix: The S3 key prefix
+        location: The asset location the deleted keys must belong to (``common.assetLocations``);
+            a single-file location deletes its own key, its companion folder and its own previews only
         
     Returns:
         List of deleted file keys
@@ -810,6 +813,8 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
                 key = entry['Key']
+                if location is not None and not contains(location, key):
+                    continue
                 if key not in processed_keys:
                     processed_keys.add(key)
                     keys_to_delete.append(key)
@@ -827,16 +832,17 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str) -> List[str]:
         # Check if the prefix folder itself exists and delete it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        try:
-            # Check if the folder marker exists
-            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
-            # Delete the folder marker if it exists
-            if delete_s3_object_all_versions(bucket, folder_prefix):
-                deleted_files.append(folder_prefix)
-        except ClientError as e:
-            # If the folder doesn't exist, that's fine
-            if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
-                logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
+        if location is None or contains(location, folder_prefix):
+            try:
+                # Check if the folder marker exists
+                s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+                # Delete the folder marker if it exists
+                if delete_s3_object_all_versions(bucket, folder_prefix):
+                    deleted_files.append(folder_prefix)
+            except ClientError as e:
+                # If the folder doesn't exist, that's fine
+                if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
+                    logger.warning(f"Error checking folder marker {folder_prefix}: {e}")
     
     except Exception as e:
         logger.exception(f"Error deleting all versions under prefix {prefix}: {e}")
@@ -1284,7 +1290,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     
     Args:
         bucket: The S3 bucket
-        prefix: The S3 key prefix
+        prefix: The S3 key prefix (the asset's location key)
         query_params: Dictionary containing pagination parameters
         include_archived: Whether to include archived files
         basic_mode: If True, skip expensive head_object calls and return only S3 list data
@@ -1293,6 +1299,10 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         Dictionary containing the list of files and pagination token if applicable
     """
     logger.info(f"Listing files from bucket: {bucket}, prefix: {prefix}, basic_mode: {basic_mode}")
+
+    # The S3 prefix also matches keys that only share the location's characters; a single-file
+    # location holds its own key, its companion folder and its own previews only
+    location = prefix
     
     # If prefix filter is provided, append it to the base prefix
     if query_params.get('prefix'):
@@ -1325,6 +1335,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
 
         # Process objects from this single page
         for obj in page.get('Contents', []):
+            if not contains(location, obj['Key']):
+                continue
+
             # Extract filename from key
             file_name = os.path.basename(obj['Key'])
             
@@ -1447,6 +1460,10 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                         
                         # Skip if we already have this key in our results
                         if key in existing_keys:
+                            continue
+
+                        # Skip keys outside the asset location
+                        if not contains(location, key):
                             continue
                         
                         # Skip folders
