@@ -6,7 +6,7 @@
 import React from "react";
 import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useRasterLayers } from "./useRasterLayers";
+import { STALE_COG_PINNED_TEXT, useRasterLayers } from "./useRasterLayers";
 import RasterLayerPanel from "./RasterLayerPanel";
 import { RasterFileRef } from "./presignedUrl";
 import { MapLike } from "./RasterLayerManager";
@@ -221,7 +221,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         props.entries[0].failed = null as any;
         render(<RasterLayerPanel layers={props} visibilityToggle />);
         expect(screen.queryByRole("button", { name: /^Remove / })).not.toBeInTheDocument();
-        const toggle = screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' });
+        const toggle = screen.getByRole("checkbox", { name: "Visible: s.tif.cog.tif" });
         expect(toggle).toBeChecked();
         expect(screen.getByTestId("raster-layer-visibility")).toHaveTextContent("Visible");
         await userEvent.click(toggle);
@@ -237,7 +237,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         render(<RasterLayerPanel layers={props} visibilityToggle />);
         expect(screen.queryByTestId("raster-hidden-badge")).not.toBeInTheDocument();
         expect(screen.getByTestId("raster-layer-row")).toHaveAttribute("data-hidden", "true");
-        const toggle = screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' });
+        const toggle = screen.getByRole("checkbox", { name: "Visible: s.tif.cog.tif" });
         expect(toggle).not.toBeChecked();
         // No opacity on the label: its colour comes from the inactive text token.
         const label = screen.getByTestId("raster-layer-label");
@@ -276,7 +276,7 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
         const props = layers(jest.fn(), "tile");
         props.entries[0].failed = null as any;
         render(<RasterLayerPanel layers={props} visibilityToggle />);
-        screen.getByRole("checkbox", { name: 'Show "s.tif.cog.tif" on the map' }).focus();
+        screen.getByRole("checkbox", { name: "Visible: s.tif.cog.tif" }).focus();
         await userEvent.keyboard(" ");
         expect(props.setVisible).toHaveBeenCalledWith("r1", false);
     });
@@ -292,5 +292,38 @@ describe("RasterLayerPanel: failed rasters offer Retry (r2-D4)", () => {
     it("offers no Retry on a raster that is not drawn from tiles", () => {
         render(<RasterLayerPanel layers={layers(jest.fn(), "placed")} />);
         expect(screen.queryByTestId("raster-layer-retry")).not.toBeInTheDocument();
+    });
+});
+
+describe("useRasterLayers: the stale COG notice (R4-1)", () => {
+    it("says the COG is older when an unpinned source is drawn from a stale COG", async () => {
+        (prepareRaster as jest.Mock).mockImplementation(async (file: RasterFileRef) => ({
+            ...resolveTo(file),
+            staleCog: true,
+        }));
+        const result = await addAll([SOURCE]);
+        expect(result.current.notices).toEqual([
+            expect.objectContaining({
+                label: "s.tif.cog.tif",
+                text: "COG is from an earlier version of the source",
+            }),
+        ]);
+    });
+
+    it("says the version is drawn from the source when a pinned file's COG is of another version", async () => {
+        const pinned = { ...SOURCE, versionId: "v1" };
+        (prepareRaster as jest.Mock).mockImplementation(async () => ({
+            ...resolveTo(pinned),
+            id: rasterId(pinned),
+            label: "s.tif (version v1)",
+            file: pinned,
+            usedCog: false,
+            staleCog: true,
+        }));
+        const result = await addAll([pinned]);
+        expect(result.current.entries).toHaveLength(1);
+        expect(result.current.notices).toEqual([
+            expect.objectContaining({ label: "s.tif (version v1)", text: STALE_COG_PINNED_TEXT }),
+        ]);
     });
 });

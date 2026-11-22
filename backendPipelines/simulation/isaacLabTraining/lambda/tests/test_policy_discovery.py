@@ -104,7 +104,7 @@ class TestDiscoverPolicyFile:
             assert mod.discover_policy_file("abkt", "xid/") == ""
 
 
-# Real file names each library writes under Isaac Lab 2.3.0 (issue #1315); the layouts are in
+# Real file names each library writes under Isaac Lab 3.0.0 (issues #1315, #1669); the layouts are in
 # container/utils/training/checkpoints.py.
 RL_GAMES_NAMES = ["Cartpole.pth", "last_Cartpole_ep_50_rew__3.1_.pth",
                   "last_Cartpole_ep_150_rew__12.5_.pth", "last_Cartpole_ep_1000_rew__9.75_.pth"]

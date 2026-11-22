@@ -166,7 +166,8 @@ def ensure_display(display: str = DEFAULT_DISPLAY, timeout_seconds: float = 15.0
         raise RuntimeError("Xvfb is not installed in this image; rendering needs an X server")
     os.makedirs(socket_dir, exist_ok=True)
     try:
-        os.chmod(socket_dir, 0o1777)
+        # nosemgrep: insecure-file-permissions -- 1777 (sticky, world-writable) is the X11 socket dir mode
+        os.chmod(socket_dir, 0o1777)  # nosec B103 - X11 socket dir standard mode, set by the Dockerfile too
     except OSError:
         pass
     # No server answers on the display and no live process holds its lock, so a lock or socket still there

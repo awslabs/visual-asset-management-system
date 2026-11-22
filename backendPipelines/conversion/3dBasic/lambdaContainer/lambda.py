@@ -1151,8 +1151,8 @@ def _remember_deadline(context):
 def lambda_handler(event, context):
     _remember_deadline(context)
     # The logger keeps its keys in a reused execution environment, so the previous invocation's
-    # workflow execution id is removed before anything is logged.
-    logger.remove_keys(['workflowExecutionId'])
+    # execution ids are removed before anything is logged.
+    logger.remove_keys(['workflowExecutionId', 'pipelineExecutionId'])
 
     # Nothing from the event is logged until the task-token check has passed, and the event itself
     # is never logged: a run whose pipeline was registered with a callback by mistake carries a
@@ -1213,12 +1213,14 @@ def convert(data):
     result (``escalate`` true, with the reason and what the router needs) instead of raising. Returns
     ``{'statusCode': 200, 'body': message or 'Success'}``, or that result."""
     # VAMS shows this step's log by reading the function's log group, which every run shares, for the
-    # lines that contain the run's workflow execution id. A warning about a skipped referenced file
-    # names no S3 path that would carry it, so the id goes on every line from here on. A direct
-    # invocation without one logs without it.
-    workflow_execution_id = data.get('workflowExecutionId')
-    if isinstance(workflow_execution_id, str) and workflow_execution_id:
-        logger.append_keys(workflowExecutionId=workflow_execution_id)
+    # lines that contain the run's workflow execution id, and, where the Batch tier's launcher
+    # registered the group, the pipeline execution id as well. A warning about a skipped referenced
+    # file names no S3 path that would carry them, so the ids go on every line from here on. A direct
+    # invocation without them logs without them.
+    for key in ('workflowExecutionId', 'pipelineExecutionId'):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            logger.append_keys(**{key: value})
 
     logger.info("Conversion request received", extra={
         "inputManifestS3Location": data.get('inputManifestS3Location', ''),

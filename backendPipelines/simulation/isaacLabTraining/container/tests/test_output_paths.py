@@ -114,7 +114,7 @@ class TestUploadConfig:
         config = main_module.PipelineConfig(
             job_name="isaaclab-job",
             mode=mode,
-            task="Isaac-Cartpole-v0",
+            task="Isaac-Cartpole",
             rl_library="rsl_rl",
             input_s3_path="s3://in/asset/config.json",
             output_s3_path=_OUTPUT_PREFIX,

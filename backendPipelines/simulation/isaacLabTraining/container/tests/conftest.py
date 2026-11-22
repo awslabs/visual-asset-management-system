@@ -93,12 +93,15 @@ def apply_chmod_mode(current, spec):
 class IsaacLabImage:
     """What the Dockerfile hands the runtime user before its ``USER`` line."""
 
-    # The base image keeps Ubuntu's /tmp at mode 1777 (sticky, world-writable): the Isaac Lab 2.3.0
-    # base only re-owns it (`chown -R isaac-sim /tmp`), so any user can create a folder there.
-    world_writable = ("/tmp",)
+    # The base image keeps Ubuntu's /tmp at mode 1777 (sticky, world-writable), so any user can
+    # create a folder there. The Isaac Lab 3.0.0 base ships its Python environment's site-packages
+    # world-writable too (drwxrwxrwx, read from the image), which is where pip installs a custom
+    # environment package.
+    world_writable = ("/tmp", "/opt/isaaclab-venv/lib/python3.12/site-packages")
 
-    # Root-owned entries the Isaac Lab 2.3.0 base image ships in its working directory (the
-    # `COPY ../ /workspace/isaaclab` layer, after Isaac Lab's .dockerignore, plus `_isaac_sim`).
+    # Entries the Isaac Lab 3.0.0 base image ships in its working directory (owned by the image's own
+    # user, uid 1000, so they are not writable by the runtime user either; the `COPY` layer of
+    # Isaac Lab's tree after its .dockerignore).
     base_entries = {
         "/workspace/isaaclab": (
             ".dockerignore", ".flake8", ".gitattributes", ".pre-commit-config.yaml", ".vscode",

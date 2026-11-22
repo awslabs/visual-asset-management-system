@@ -46,8 +46,10 @@ from backend.tests.handlers.addon.edh.edhRootKeySyncTestSupport import (
 INSTANCE_ID = "i-0123456789abcdef0"
 COMMAND_ID = "6f1f3c0a-1b2c-4d5e-8f90-0a1b2c3d4e5f"
 # Sentinel keys: neither may appear in any log record, metric line, return value or exception text.
-CURRENT_KEY = "Kq3ZtR8mWv2NpXc7LbYd5HsJf9GaUe4E"
-NEW_KEY = "Pz7XwQ2rTn5VbMc8LkJh3GdFs6AyUe9R"
+# Made-up values in the form the sync accepts (32 characters of [A-Za-z0-9]), spelled as words so
+# they cannot be mistaken for a real root key.
+CURRENT_KEY = "FakeCurrentRootKeyForUnitTests01"
+NEW_KEY = "FakeNewRootKeyForTheUnitTests002"
 # The reserved row of the session table the rate limit is held on.
 LOCK_KEY = "SETTINGS#rootKeySync"
 # The clock the fakes start from, in seconds since the epoch.

@@ -213,7 +213,7 @@ When a pipeline writes output files that correspond to a specific input file (e.
 
 -   An asset file's key is the asset's root key followed by the file's relative path: `{assetRoot}{relative_path}/{filename}`, where the relative path has zero or more subdirectories. The root is usually `{baseAssetsPrefix}{assetId}/`, but an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, so its keys need not contain the asset ID.
 -   The output paths (`outputS3AssetFilesPath`, etc.) point to the run's output folders, not to the asset. The process-output step writes each file it finds there to the same relative path within the asset.
--   Containers must include the input file's relative subdirectory in the output S3 key: `{outputDir}{relative_subdir}/{filename}.previewFile.X`.
+-   Containers must include the input file's relative subdirectory in the output S3 key: `{outputDir}{relative_subdir}/{filename}.previewFile.X`. The subdirectory is the folder of the input's manifest `relativePath`, threaded as `inputRelativePath` (see [`assetId` Threading](#assetid-threading)); the key is searched for the asset ID only when a launch carries no `relativePath`.
 
 ```
 Input key:  xd130a6d6.../test/pump.e57
@@ -227,13 +227,13 @@ Output dir: {outputS3AssetFilesPath}
 
 A container job role usually reads every asset bucket, so a path written inside an uploaded file (a glTF URI, a USD sublayer/reference/payload or texture path, an OBJ `mtllib`, an FBX texture name) is untrusted input that could pull another asset's content into this one's output. `preview/3dThumbnail/container/preview_pipeline/dependencies.py` is the worked example (ARCC BSC1, allowlist validation):
 
--   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix (the key up to the `assetId` segment; the run's output files folder for a file an earlier step wrote; else the input's own directory — the case for an asset on a `bucketExistingKey` folder). Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
+-   Accept only relative paths that, normalised against the referring file's directory, stay inside the input's asset prefix: `dependencies.confinement_root` takes the manifest's `assetRootS3Key` when it is in the input's own bucket and a proper prefix of the key, then the key up to the `assetId` segment, then the key with its `relativePath` removed from the end (an asset on a `bucketExistingKey` folder, or a file an earlier step wrote, which sits in the run's output files folder at that path), else the input's own directory. Reject absolute paths, `..` escapes, any URI scheme, control characters and values over 1,024 characters. Percent-decode only formats whose references are URIs (glTF), and check the decoded value.
 -   Bound the fetch: a file count, a byte total from HeadObject before each download, a free-disk check, and a recursion depth for formats whose fetched files reference more files (USD layers).
 -   Mirror the input and each fetched file at its asset-relative path under one local root, confirm with `realpath` that the local path stays under it, and skip — never fail on — a rejected or missing reference. Report what was skipped: one WARNING summary listing each skipped file with its reason (quoted with `repr`), grouped by what the loss costs (geometry layers from a USD layer's composition arcs to USD layer files, never from layer or prim metadata such as an `assetInfo` `identifier` or `customLayerData`, which stay unreported; data files, value clips included; textures and other files; read only `asset`-typed attributes to classify, never geometry samples), and a completion message that says the output is incomplete (`dependencies.IncompletePreview`). When the run has a results folder, also write one small, bounded result document there (`preview-incomplete.json`: the message, the counts by kind, at most 100 entries with a `truncated` flag, asset-relative paths, and for a reference refused as outside the asset only its reason and at most a sanitized base file name, never a bucket, host or folder), so the run's Output Results show it; a prim type the loader does not draw (points, curves, patches, planes, tetrahedral meshes) is named in the log and added to the same document as `counts.skippedPrimTypes` and `skippedPrims` only when present (the final document is held to the size cap by shortening the file list; a document without them is unchanged), so the document of every other run is unchanged; a complete run writes none, and a failed write is a WARNING, never a failed run.
 -   When a third-party tool opens the referenced files itself (splat-transform reads an `.lcc2` scene's chunk files by the names its description lists), check every name the description lists before the tool starts, and refuse the conversion when one would leave the work directory or a needed file is missing. Do not rely on the fetch having skipped it: the tool would still open the path. `format_handlers/splat_handler.prepare_lcc2` is the worked example.
 -   To render a whole scene, use `resolve()` in the same module rather than the thumbnail's one-pass `fetch_referenced_files`: discovery downloads only the documents that name further files and sizes the rest with HeadObject, pinning each version it returned; the fetch then downloads at those versions, so a file replaced mid-run never mixes two versions into one scene. Between the phases a caller can compare the predicted bytes with its budget and re-route the run (the SYSTEM GenAI Blender branch hands an over-budget scene to its Fargate job). Every bound stops the walk instead of failing it, and the run receives a `DependencyReport` (fetched, missing, refused, cycles, the bound that stopped it, the graph) for its manifest. The SYSTEM GenAI Blender image carries a byte-identical copy as `containers/blender/scene_dependencies.py`, pinned by `system/genAiMetadata/lambda/tests/test_sysgenai_vendored_copies.py`: edit the thumbnail module, then `cp` it over the copy.
 -   Ask only for the files the loader or tool reads, and report only what it uses: an `.lcc` scene's `shcoef.bin` only when splat-transform reads it (`format_handlers/lcc_meta.lcc_data_files`, the same test as its reader) and never its `environment.bin`; an FBX's texture names are fetched but never reported in the thumbnail's incomplete preview, since its FBX loader samples no textures (`dependencies.KIND_UNSAMPLED_TEXTURE`); the scene report `resolve()` returns still lists a missing one, because Blender's FBX importer loads them. Each collector entry is `(name, percent_encoded, required, kind)`: a three-element entry reads its third element as `required`. Load the fetched files through a resolver confined to the same local root (`format_handlers/mesh_handler.asset_resolver` for glTF and OBJ), not one rooted at the input's folder: otherwise a `../` reference the fetch accepted is refused by the loader, while one outside the asset must still be refused.
--   Files an operator names in the run configuration, rather than files an input references, are validated where the run starts and again in the container, and a bad path, a missing file or a selection over the limits fails the run instead of being skipped, because the task asked for those files. `simulation/isaacLabTraining` (`trainingConfig.stageAssetPaths`) is the worked example: `lambda/openPipeline.py` resolves the paths against the manifest's asset root and counts files and bytes before the Batch job is submitted; `container/utils/aws/staging.py` lists them again, checks free disk and `realpath`, and exports the staging folder to the task as `VAMS_ASSET_FILES_DIR`.
+-   Files an operator names in the run configuration, rather than files an input references, are validated where the run starts and again in the container, and a bad path, a missing file or a selection over the limits fails the run instead of being skipped, because the task asked for those files. `simulation/isaacLabTraining` (`trainingConfig.stageAssetPaths`) is the worked example: `lambda/openPipeline.py` resolves the paths against the manifest's asset root and counts files and bytes before the Batch job is submitted; `container/utils/aws/staging.py` lists them again, checks free disk and `realpath`, and exports the staging folder to the task as `VAMS_ASSET_FILES_DIR`. Cosmos Transfer's control input (`controlPath`) follows the same rule for one file: `vamsExecute` accepts only a file path relative to the asset root (no URI scheme, backslash, control character, `.`, `..` or empty segment, at most 1,024 characters) and the container checks it again and joins it to the manifest's `assetRootS3Key` in `assetRootBucket` before anything is fetched.
 
 ## Parsing XML From Uploaded Files
 
@@ -244,7 +244,7 @@ An uploaded XML file (COLLADA, 3MF, any XML sidecar) can carry a DTD that expand
 A pipeline whose facts all live in a file's header (a TIFF's directories) reads that header by ranged GETs of the S3 object at the run's version, never the whole file and never a pixel. `media_extractors/raster.py` is the worked example, over `media_extractors/s3_ranged.RangedS3Reader` (a seekable file object that serves a read from the bytes a previous GET returned and refuses a read past its byte or request bound):
 
 -   Walk the structure with `struct` under limits before a library decodes anything: a directory count, the entries in one directory, the bytes of any single array the library loads whole (tifffile loads the strip and tile offset arrays, strings and `SubIFDs` eagerly), and a total for all of them. Compare every declared count and offset with the object's size before reading or allocating, so a tag that claims gigabytes is refused by arithmetic and not by running out of memory.
--   A header past a limit is described from what the walk read and flagged (`offsetsTruncated: true`), not failed; a file that is not the format falls back to the `other` class with a warning that names the reason.
+-   A header past a limit, or bytes that are not the format, end the header read without failing the run. For a TIFF neither result is georeferenced, so the handler gives the `.tif` or `.tiff` the `image` path and keeps no `sys_raster` (`handler.py`: only a result `raster.is_georeferenced` accepts keeps the `raster` class); `offsetsTruncated` stays internal to `extract_raster`.
 -   Decode the first image with the library only when the walk passed, and hand the library the reader positioned at 0 (tifffile takes a file object's current position as the start of the file). A library's convenience default can invent a value (tifffile reports `nodata` 0 for a file with no `GDAL_NODATA` tag): read the tag itself.
 -   A footprint comes from one shared helper (`media_extractors/geo_reproject.py`): longitude-first axis order, edges densified, an antimeridian crossing cut into a `MultiPolygon`, no footprint for an extent containing a pole, and no footprint (never an assumed WGS84) for a CRS that does not resolve.
 
@@ -267,6 +267,7 @@ Install a container's dependencies so that two builds of one commit ship the sam
 
 -   Python packages come from the hashed `uv export` of the directory's `uv.lock` (direct dependencies are in `pyproject.toml`; the export's header carries the command that regenerates it), installed with `pip install --require-hashes --only-binary :all:`. The export is `requirements.txt`, or `requirements.lock` where the Dockerfile installs that name (CAD STEP agent, video SOP BOM, zip archive, coordinate transform and Potree): the CI audit regenerates it from the lock and fails on a difference, so no second, hand-made source of versions exists.
     -   A Lambda container image follows the same rule: the SYSTEM GenAI Blender image (`system/genAiMetadata/containers/blender/Dockerfile`) and media image (`system/genAiMetadata/containers/media/Dockerfile`) install their hashed `requirements.txt`, and the 3D render Lambda image (`preview/3dThumbnail/container/Dockerfile.lambda`) the hashed `lambdaImage/requirements.txt` (its own uv project, because it needs other versions than the Fargate image), with `--require-hashes --only-binary=:all:`. The Potree PDAL image installs `requirements.lock` into the interpreter its entrypoint runs; its conda build environment comes from `pdal-build.explicit.txt` and is outside the lock.
+    -   A container built on a vendor base image that ships its own Python packages (the Isaac Lab image, `simulation/isaacLabTraining/container/`) is not a uv project: its hashed `requirements.lock` is compiled from `requirements.txt` with `uv pip compile --generate-hashes --constraint base-constraints.txt` (the lock's header carries the command), so the lock never changes a package the base ships. `base-constraints.txt` is the `pip freeze` of the digest-pinned base image; regenerate it, then the lock, whenever the base image digest moves.
 -   npm tools come from a committed `package-lock.json`, installed with `npm ci`.
 -   A release tarball (Node.js) is downloaded at a fixed version and its SHA-256 is checked in the same `RUN`.
 -   Compilers and build tools stay in a builder stage; the runtime stage copies only the installed results, from the same digest-pinned base image.
@@ -627,16 +628,20 @@ keyword, so no module imports that file by name). Do not copy conversion logic i
     failed Lambda run writes none (its error is in the workflow).
 -   **Launcher.** `conversion/3dBasic/lambda/` holds the callback form's Lambdas, deployed only with
     `useConversion3dBasic.batchTier.enabled`: `vamsExecuteConversion3dBasicPipeline` (what the workflow calls, in
-    place of the converter), `openPipeline` (starts the state machine, registers the converter and Batch container
-    log sources), `selectJobSize` and `constructPipeline` (the tier selector and the job's `VAMS_CONVERSION_EVENT`),
+    place of the converter), `openPipeline` (starts the state machine, registers its log and the converter's, and passes the
+    pipeline execution id to the converter, which logs it beside the workflow execution id), `selectJobSize`
+    and `constructPipeline` (the tier selector, and the job's `VAMS_CONVERSION_EVENT` and the container log
+    source, registered under the Batch state the run is routed to),
     `pipelineEnd` (the only function that answers the workflow's task token), the selector module `computeTier`, and the
     vendored `manifestHelper` and `customLogging`. The builders are in
     `infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/conversion3dBasicLauncherFunctions.ts`, each with
     its own `states:SendTaskFailure` grant (`infra/test/pipelines/taskTokenFailureGrants.test.ts`). The container's
     contract with them: the converter never receives the workflow's task token, the Batch task gets only locations in
-    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets
-    `linuxParameters.initProcessEnabled` (the entry runs as PID 1 and does not reap orphaned grandchildren such as
-    Assimp) and `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
+    `VAMS_CONVERSION_EVENT`, and the job role has no `states:` permission. The job definition sets no ECS init
+    process: `batch_entry.py` is the task's PID 1, so the descendants reparented to it are reaped (`reap_orphans`),
+    and it makes itself non-dumpable before the worker starts (`harden_process`), so a worker child of the same user
+    cannot read its environment -- the task's credential endpoint -- through `/proc/1/environ`. It sets
+    `AWS_REGION` / `AWS_DEFAULT_REGION` explicitly (the S3 clients read the Region at import). The job
     ladder (4/30, 8/60, 16/120) is one list in `size_check.BATCH_TASK_SIZES`, `computeTier.JOB_SIZES` and
     `CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES` in `infra/config/config.ts`; tests compare them.
 -   **Tests.** `tests/test_3dbasic_batch_tier.py` (unit), and against the built image `tests/golden/run_golden.sh`
@@ -695,34 +700,52 @@ file, so a change made across the deployable four does not reach it.
 
 ## `assetId` Threading
 
-**`assetId` is a workflow state variable — thread it, don't derive it.** The task body does not carry the `assetId`. The `vamsExecute` lambda resolves it from the manifest (`inputManifestS3Location`) with `manifestHelper.resolve_pipeline_inputs(data, s3_client)` (`resolved['assetId']`) and forwards it to `constructPipeline`, which includes it in the pipeline definition; the container uses it directly. Never attempt to reverse-engineer the asset ID from S3 path segments.
+**`assetId` is a workflow state variable — thread it, don't derive it.** The task body does not carry the `assetId`. The `vamsExecute` lambda resolves it from the manifest (`inputManifestS3Location`) with `manifestHelper.resolve_pipeline_inputs(data, s3_client)` (`resolved['assetId']`) and forwards it to `constructPipeline`, which includes it in the pipeline definition; the container uses it directly. Never attempt to reverse-engineer the asset ID, or the input's place in its asset, from S3 path segments.
 
-An input's S3 key does not always contain the asset ID: an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, and from the second step of a workflow on, an input can be a file an earlier step wrote, keyed under the run's output folder. A container that searches the key for the `assetId` must allow for a key that does not contain it (`list.index` raises `ValueError`); for such a key the search returns `""` and the output is written at the top of the output folder. To keep the subfolder, take it from the input file's path within its asset, which is that file's manifest `relativePath` (with a leading `/`). In a `vamsExecute` lambda it is `resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns normalized (`/` when the run has no input file).
+**Where an input sits in its asset comes from the manifest, never from the key.** An input's S3 key does not always contain the asset ID: an asset created on an existing bucket folder (`bucketExistingKey`) keeps that folder as its root, a bucket's `baseAssetsPrefix` sits in front of the asset ID, and from the second step of a workflow on an input can be a file an earlier step wrote, keyed under the run's output folder in the run bucket. Each manifest input entry carries what a pipeline needs instead:
 
-To compute the relative subdirectory in container code using the explicit `assetId`:
+| Entry field       | What it is                                                                     | Use it for                                                                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relativePath`    | the file's path within its asset, with a leading `/` (`/` for the whole asset) | the output subfolder: the folder of `relativePath` (`/scans/a/pump.e57` gives `scans/a`)                                                                                                                                                                                                              |
+| `assetRootS3Key`  | the asset's root folder (its stored `assetLocation.Key`)                       | resolving a path the run names relative to the asset root, and confining what the input references                                                                                                                                                                                                    |
+| `assetRootBucket` | the bucket `assetRootS3Key` is in                                              | the bucket to join with `assetRootS3Key`. An entry an earlier step's output shadows is read from the run bucket (`bucket`) while its root stays in the asset bucket, so never join `bucket` with `assetRootS3Key`; an entry written before the field has none, and `bucket` is then the root's bucket |
+| `key`             | the exact object                                                               | the file a run reads when it is not asset-level                                                                                                                                                                                                                                                       |
 
-```python
-# assetId comes from the pipeline definition (threaded from workflow state)
-input_parts = stage_input.objectKey.split("/")
-relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
-                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+Carry the first entry's values the way `inputVersionId` is carried, as `inputRelativePath`, `inputAssetRootS3Key` and `inputAssetRootBucket`:
+
+```
+manifest inputFiles[0].relativePath / assetRootS3Key / assetRootBucket
+  → vamsExecute: copied from resolved['inputFiles'][0] into the openPipeline message ("" without a manifest entry)
+    → openPipeline: event.get("inputRelativePath", "") (and the other two) on the state machine input
+      → constructPipeline: on the container definition, or, for a strict-dataclass image, as
+        "inputAsset": {"relativePath", "assetRootS3Key", "assetRootBucket"} in the second Batch command
+        element (see "Input Version Threading"); a state machine whose task payload names its fields
+        names them too, with a "" default (RapidPipeline EKS)
+        → container: relative subfolder from relativePath; key derivation only when it is absent
 ```
 
-**A chained step's input is not under the asset.** A later workflow step receives the prior step's outputs
-(item 11 below), whose keys follow `pipelines/{pipelineId}/{jobName}/output/{executionId}/files/{relative}/{filename}`
-and carry no `assetId`, so `input_parts.index(assetId)` raises on them. When the `assetId` is absent, take
-the relative subdirectory from the segments between `output/{executionId}/files/` and the filename, and
-still refuse a key that is neither shape rather than guessing. Image to 3D's `export.compute_relative_subdir`
-does both (`container/tests/test_output_paths.py`); its two-step workflow failed in the container on exactly
-this before the fallback existed, with the Lambda and the mesh selection already fixed for chaining.
+**The asset-ID search is the fallback for a launch without them** (a payload without a manifest, or an event from an older Lambda during an upgrade):
 
-**Pipeline state threading pattern** (applies to all pipelines, not just preview):
+```python
+# relative_path is the definition's inputRelativePath ("" when the launch named none)
+relative = (relative_path or "").strip("/")
+if relative:
+    relative_subdir = relative.rsplit("/", 1)[0] if "/" in relative else ""
+else:
+    input_parts = stage_input.objectKey.split("/")
+    relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                       if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+```
+
+The fallback must allow for a key that does not contain the asset ID (`list.index` raises `ValueError`). A chained step's key follows `pipelines/{pipelineId}/{jobName}/output/{executionId}/files/{relative}/{filename}` and carries no `assetId`; a fallback may take the subdirectory from the segments between `output/{executionId}/files/` and the filename, and refuses a key that is neither shape rather than guessing (Image to 3D's `export.compute_relative_subdir`, CAD STEP's `cad_step_naming.relative_subdir_of`). `backendPipelines/tests/test_pipeline_input_asset_location.py` calls each hop of every pipeline listed there with stub events (every `boto3.client` it creates is a stub) and checks the Cosmos containers' subfolder; add a pipeline that keeps the input's subfolder to its `MANIFEST_PATH_PIPELINES`, and the suite that pins its container's use of the values to `PER_PIPELINE_SUITES`.
+
+**`assetId` still travels** for asset identity (metadata lookups, output naming, the arity-`none` fallback):
 
 ```
 Workflow manifest (inputManifestS3Location: assetId, inputFiles, paths, ...)
   → vamsExecute lambda: resolve assetId from the manifest, include in messagePayload
     → constructPipeline lambda: read assetId from event, include in definition dict
-      → Container: read assetId from PipelineDefinition, use for relative path computation
+      → Container: read assetId from PipelineDefinition
 ```
 
 ## Input Version Threading
@@ -1485,9 +1508,10 @@ What every built-in emits (the `register_sub_execution` helper in each `openPipe
      "sourceType": "batch", "label": "<Batch state name> container"}
     ```
 
-    Which group that is depends on the compute family. The seven **Fargate** job definitions (coordinate
-    transform, Blender renderer, 3D thumbnail, PDAL, Potree, video SOP/BOM extraction, and the GenAI CAD
-    STEP agent on its `fargate` runtime) write through the `awslogs` driver to a VAMS-owned,
+    Which group that is depends on the compute family. The ten **Fargate** job definitions (coordinate
+    transform, COG conversion, the 3D Basic Conversion Batch tier, Blender renderer, 3D thumbnail, PDAL,
+    Potree, video SOP/BOM extraction, zip archive, and the GenAI CAD STEP agent on its `fargate` runtime)
+    write through the `awslogs` driver to a VAMS-owned,
     KMS-encrypted `/aws/vendedlogs/Pipelines/<Name><hash>` group, and
     register **that** group;
     the **GPU** Batch pipelines (NVIDIA Cosmos, GR00T, Isaac Lab, Splat Toolbox) set no log configuration,
@@ -1787,23 +1811,39 @@ change, do not `chown` it: give it the user's group and mode `1775` (`chgrp <gro
 renaming or deleting the root-owned ones. A write the base image cannot hold fails only at run time:
 the image builds green and the job starts before the `PermissionError: [Errno 13]`.
 
-The Isaac Lab image is the example (#1312). `__main__.py` runs Isaac Lab's `train.py` and `play.py`
-with `cwd=/workspace/isaaclab`, which `nvcr.io/nvidia/isaac-lab:2.3.0` copies root-owned `0755`.
-Hydra creates its run folder at `outputs/<date>/<time>` relative to that directory, `train.py` writes
-its run under `logs/<library>/...`, and the AutoMate tasks download their asset JSON and meshes into
-`./` while the environment is built. The image creates `logs` and `outputs` for the user and makes
-`/workspace/isaaclab` itself group `vams`, mode `1775`; `isaaclab.sh`, `scripts/` and `source/` stay
-root-owned. Paths a tool derives from an input count too: `play.py` writes its video beside the
+The Isaac Lab image is the example (#1312, #1669). `__main__.py` runs `./isaaclab.sh train` and `play`
+with `cwd=/workspace/isaaclab`, which `nvcr.io/nvidia/isaac-lab:3.0.0` gives to its own user (uid 1000)
+with mode `0755`. Hydra creates its run folder at `outputs/<date>/<time>` relative to that directory,
+training writes its run under `logs/<library>/...`, and the AutoMate tasks download their asset JSON and
+meshes into `./` while the environment is built. The Dockerfile runs its build steps as `USER root` (the
+base image runs as `ubuntu`) and ends with `USER 10000:10000`. It creates `logs` and `outputs` for the
+user and makes `/workspace/isaaclab` itself group `vams`, mode `1775`; `isaaclab.sh`, `scripts/` and
+`source/` stay owned by the image's user. The user needs a passwd entry (`useradd`), because torch calls
+`getpass.getuser()` and raises `KeyError` for a uid with none, and the Warp, CUDA and XDG caches point
+under `/home/vams`. Python is `/opt/isaaclab-venv/bin/python` (not on the base `PATH`; the Dockerfile puts
+it first), with a world-writable `site-packages` for custom environment installs and a group-writable,
+sticky `bin`. Paths a tool derives from an input count too: `play` writes its video beside the
 `--checkpoint` it is given (rl_games and skrl one folder above it), so the container downloads the
 policy two folders below its owned log root (`EVALUATION_POLICY_PATH`) and creates that folder first.
 `simulation/isaacLabTraining/container/tests/test_isaaclab_nonroot_write_paths.py` reads the working
-directory from the pipeline's own `subprocess.run` call, parses the Dockerfile's `mkdir`, `chown`,
-`chgrp` and `chmod` lines before `USER`, and fails when a write is not possible as the runtime user,
-when the working directory is group-writable without the sticky bit, or when the Dockerfile's
+directory from the pipeline's own `run_isaac_lab` call, parses the Dockerfile's `mkdir`, `chown`,
+`chgrp` and `chmod` lines before the final `USER`, and fails when a write is not possible as the runtime
+user, when the working directory is group-writable without the sticky bit, or when the Dockerfile's
 `ISAAC_LAB_VERSION` differs from the Isaac Lab release the modelled write paths were read from. Copy
 it for a new container that runs an upstream tool as a non-root user.
 
-What an upstream tool writes is a second thing to read from its source rather than from memory (#1315). Isaac Lab's three RL libraries lay a run out differently (`rsl_rl`: `model_<n>.pt` in the run folder; `rl_games`: `nn/*.pth`; `skrl`: `checkpoints/agent_<n>.pt` and `best_agent.pt`), and a pipeline that globbed one library's files finished green with an empty `checkpoints/` folder for the others. The layouts live in one table per side: `CHECKPOINT_PATTERNS` in `simulation/isaacLabTraining/container/utils/training/checkpoints.py` (what the container uploads) and `CHECKPOINT_RANKING` in `lambda/openPipeline.py` (which file an evaluation without a `checkpointPath` picks, per library). A lambda test asserts the two agree, and `container/tests/test_checkpoint_layouts.py` builds a log tree per library. An Isaac Lab release bump (the base image tag, `ISAAC_LAB_VERSION`) means re-reading `scripts/reinforcement_learning/<library>/{train,play}.py` at that tag and editing those two tables, not the upload code. The EFS access point mounted at `/mnt/efs/checkpoints` is not written by training today (`train.py` takes no log-root argument and writes under `<cwd>/logs`); only the upload's search roots mention it.
+The Isaac Lab runs take a physics engine, `trainingConfig.physics` (`newton_mjwarp` by default,
+`isaacsim_physx`), passed as the last argument `physics=<engine>`. The allowed list exists in four
+places (the Lambda's `SUPPORTED_PHYSICS`, the container's `PHYSICS_ENGINES`, and the `PHYSICS` tag's
+`enumValues` in the two templates) and `lambda/tests/test_isaaclab_physics.py` and
+`test_vams_schema_bundles.py` assert they agree. The Lambda must copy `physics` into the
+`trainingConfig` it emits, because it lists the keys it passes on and drops any other. A task that
+rejects the engine fails with `Unknown preset(s)`, which `utils/training/task_physics.py` turns into a
+message naming the options. A task that lists no physics presets (the Lambda's `TASKS_WITHOUT_PHYSICS_PRESETS`, read from `list_envs`; the container also reads the `Typed preset selector(s)` rejection and runs once more) gets no `physics=` argument and records `physics: task-default`, a value operators cannot set. The container's play process runs in its own session and a timeout kills the group. The image owns `/isaac-sim/kit/{cache,data,logs}` for the runtime user, because Kit's RTX renderer cannot start without them and the PhysX video comes out black. An rsl_rl checkpoint of Isaac Lab 2.x is named and refused before play (`old_rsl_rl_checkpoint_message`). `--headless` does not exist in Isaac Lab 3.0 (`--viz none` replaces it), and
+the evaluation process runs under a wall-clock limit (`evaluation_time_limit`).
+The time limit is per mode: 28800 s for training and 32400 s for evaluation, in each vamsSchema bundle's `taskTimeout`, in `TASK_TIMEOUT_SECONDS` in `lambda/openPipeline.py` (emitted as `taskTimeoutSeconds`, which the batch task reads as `TimeoutSecondsPath` and `executeBatchJob.py` passes as the Batch attempt duration), with the job definition at the larger value and the state machine at 10 hours. The playback watchdog cap is 27000 s, 1.5 hours under the evaluation limit. `infra/test/pipelines/isaacLabTimeoutChain.test.ts` asserts the chain.
+
+What an upstream tool writes is a second thing to read from its source rather than from memory (#1315). Isaac Lab's three RL libraries lay a run out differently (`rsl_rl`: `model_<n>.pt` in the run folder; `rl_games`: `nn/last_*.pth`; `skrl`: `checkpoints/agent_<n>.pt`), and a pipeline that globbed one library's files finished green with an empty `checkpoints/` folder for the others. The layouts live in one table per side: `CHECKPOINT_PATTERNS` in `simulation/isaacLabTraining/container/utils/training/checkpoints.py` (what the container uploads) and `CHECKPOINT_RANKING` in `lambda/openPipeline.py` (which file an evaluation without a `checkpointPath` picks, per library). A lambda test asserts the two agree, and `container/tests/test_checkpoint_layouts.py` builds a log tree per library. An Isaac Lab release bump (the base image tag, `ISAAC_LAB_VERSION`) means re-reading the `isaaclab train` and `play` entry points and a short run of each library at that tag and editing those two tables, not the upload code. The EFS access point mounted at `/mnt/efs/checkpoints` is not written by training today (`train.py` takes no log-root argument and writes under `<cwd>/logs`); only the upload's search roots mention it.
 
 ## A Pipeline That Writes a Derived File Beside Its Input (TIF to COG Conversion)
 
@@ -2071,4 +2111,4 @@ What an upstream tool writes is a second thing to read from its source rather th
     `backend/tests/common/workflows/test_pipeline_boto_clients_configured.py`, whose exemption is a
     DENY list precisely so a future upstream file turns the rule red instead of vanishing from it).
 
-22. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`.
+22. **Python dependencies are uv projects, audited in CI.** Every directory the build pip-installs from (a pipeline container, a pipeline Lambda layer, a Lambda whose code ships its own requirements) has a `pyproject.toml` (`requires-python` at the image or runtime Python, `[tool.uv]` with `package = false`, the repository's `required-version`, `exclude-newer = "7 days"`, `environments = ["sys_platform == 'linux'"]`), a `uv.lock`, and the committed `requirements.txt` export the Dockerfile or layer bundling installs with pip (see `backend/CLAUDE.md` "Updating Python Dependencies (uv-Managed)"). The `python-dependency-audit` CI job finds the new lock by itself and must stay green. `infra/test/ci/pythonDependencyLocks.test.ts` fails a pyproject or requirements file with no `uv.lock` beside it unless `.github/python-lock-exemptions.json` lists it with a `reason` and `plannedIn`. GPU images whose requirement sets are not yet locked (Image to 3D, GR00T, Isaac Lab, Splat Toolbox) are listed there with the change that will lock them; Cosmos Transfer's NCCL wheel is locked.

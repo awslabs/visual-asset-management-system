@@ -118,6 +118,11 @@ export interface OpenPipelineLogSources {
     /** The converter Lambda's log group (the Lambda attempt's source). */
     converterLogGroupName: string;
     converterLogGroupArn: string;
+}
+
+/** The Batch container's log source, which constructPipeline registers for the state the run takes. */
+export interface BatchContainerLogSource {
+    orchestrationBus: events.IEventBus;
     /** The Batch container's vended group and the job definition whose streams it holds. */
     batchLogGroup: logs.ILogGroup;
     batchJobDefinitionName: string;
@@ -146,10 +151,6 @@ export function buildOpenConversion3dBasicPipelineFunction(
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
             CONVERTER_LOG_GROUP_NAME: logSources.converterLogGroupName,
             CONVERTER_LOG_GROUP_ARN: logSources.converterLogGroupArn,
-            // The Batch task's vended container group and its job definition name, registered as the
-            // Batch state's log source (streams are `<jobDefinitionName>/default/<task-id>`).
-            ...vendedBatchJobLogGroupEnvironment(logSources.batchLogGroup),
-            BATCH_JOB_DEFINITION_NAME: logSources.batchJobDefinitionName,
         }),
         handler: `${name}.lambda_handler`,
     });
@@ -193,18 +194,29 @@ export function buildSelectJobSizeFunction(
     return fun;
 }
 
-/** Builds the Batch task's request (VAMS_CONVERSION_EVENT) from the state machine's input. */
+/**
+ * Builds the Batch task's request (VAMS_CONVERSION_EVENT) from the state machine's input, and registers
+ * the Batch container's log source under the Batch state the run is routed to. The construct adds
+ * BATCH_STATE_NAMES (memory to state name) once the states exist.
+ */
 export function buildConstructConversionPipelineFunction(
     scope: Construct,
     layer: LayerVersion,
     network: LauncherNetwork,
+    logSource: BatchContainerLogSource,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "constructPipeline";
     const fun = new lambda.Function(scope, name, {
-        ...launcherProps(layer, network),
+        ...launcherProps(layer, network, {
+            ORCHESTRATION_BUS_NAME: logSource.orchestrationBus.eventBusName,
+            // Streams are `<jobDefinitionName>/default/<task-id>`.
+            ...vendedBatchJobLogGroupEnvironment(logSource.batchLogGroup),
+            BATCH_JOB_DEFINITION_NAME: logSource.batchJobDefinitionName,
+        }),
         handler: `${name}.lambda_handler`,
     });
+    logSource.orchestrationBus.grantPutEventsTo(fun);
     kmsKeyLambdaPermissionAddToResourcePolicy(fun, kmsKey);
     globalLambdaEnvironmentsAndPermissions(fun, network.config);
     suppressCdkNagLambda(fun);

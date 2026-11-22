@@ -121,7 +121,8 @@ class TestSearch:
     def test_filters_reach_the_api_and_rows_are_read(self, cli_runner, generic_command_mocks):
         with generic_command_mocks("audit") as mocks:
             api = mocks["api_client"]
-            api.start_audit_query.return_value = {"queryId": QID, "status": "Running", "warnings": []}
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running",
+                                                  "warnings": []}
             api.get_audit_query.return_value = _complete([_row(1), _row(2)])
             result = _invoke(
                 cli_runner, "search", "--group", "auditActions", "--group", "auditAuth",
@@ -596,3 +597,131 @@ class TestHandleSurvivesAFailureWhileWaiting:
             result = _invoke(cli_runner, "search", "--json-output")
         assert result.exit_code != 0
         assert f"vamscli audit stop --handle {QID}" in result.output
+
+
+RECHECK = "recheckTimeBudget"
+
+
+def _chunk(content, warnings=(), token=None, rows=2, fmt="csv"):
+    chunk = {"queryId": QID, "format": fmt, "content": content, "rowCount": rows,
+             "warnings": list(warnings)}
+    if token:
+        chunk["NextToken"] = token
+    return chunk
+
+
+class TestWarningsReachEveryOutput:
+    """The API sets `recheckTimeBudget` on the page or export chunk whose server-side recheck ran
+    out of time, so rows may be missing. Every read keeps the warnings of every page and chunk,
+    once."""
+
+    def test_results_all_keeps_a_later_page_s_warning(self, cli_runner, generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].get_audit_query.side_effect = [
+                _complete([_row(1)], token="1"), _complete([_row(2)], warnings=[RECHECK])]
+            result = _invoke(cli_runner, "results", "--handle", QID, "--all", "--json-output")
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["Items"]) == 2 and data["warnings"] == [RECHECK]
+
+    def test_search_text_prints_a_later_page_s_warning_once(self, cli_runner,
+                                                            generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running",
+                                                  "warnings": []}
+            api.get_audit_query.side_effect = [
+                _complete([_row(1)], token="1"), _complete([_row(2)], warnings=[RECHECK])]
+            result = _invoke(cli_runner, "search", "--page-size", "1", "--max-rows", "5")
+        assert result.exit_code == 0, result.output
+        assert result.output.count(f"Warning: {RECHECK}") == 1
+
+    def test_search_json_keeps_the_start_and_the_page_warnings(self, cli_runner,
+                                                               generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running",
+                                                  "warnings": ["widerScan"]}
+            api.get_audit_query.return_value = _complete([_row(1)], warnings=["widerScan", RECHECK])
+            result = _invoke(cli_runner, "search", "--json-output")
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["warnings"] == ["widerScan", RECHECK]
+
+    def test_search_json_keeps_a_start_warning_the_page_does_not_repeat(self, cli_runner,
+                                                                        generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running",
+                                                  "warnings": ["widerScan"]}
+            api.get_audit_query.return_value = _complete([_row(1)], warnings=[RECHECK])
+            result = _invoke(cli_runner, "search", "--json-output")
+        assert json.loads(result.output)["warnings"] == ["widerScan", RECHECK]
+
+    def test_export_text_prints_a_chunk_warning_after_the_wrote_line(
+            self, cli_runner, generic_command_mocks, tmp_path):
+        out = tmp_path / "audit.csv"
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].export_audit_query.side_effect = [
+                _chunk("h\na\n", token="2"), _chunk("b\n", warnings=[RECHECK])]
+            result = _invoke(cli_runner, "export", "--handle", QID, "-o", str(out))
+        assert result.exit_code == 0, result.output
+        lines = result.output.strip().splitlines()
+        assert lines[-2:] == [f"Wrote 4 records to {out}", f"Warning: {RECHECK}"]
+
+    def test_export_to_stdout_keeps_the_text_clean_and_warns_on_stderr(self, cli_runner,
+                                                                       generic_command_mocks):
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].export_audit_query.side_effect = [
+                _chunk('{"a":1}\n', token="2", fmt="ndjson"),
+                _chunk('{"a":2}\n', warnings=[RECHECK], fmt="ndjson")]
+            result = _invoke(cli_runner, "export", "--handle", QID, "--format", "ndjson")
+        assert result.exit_code == 0, result.output
+        assert result.stdout == '{"a":1}\n{"a":2}\n'
+        assert f"Warning: {RECHECK}" in result.stderr
+
+    def test_export_json_carries_each_chunk_warning_once(self, cli_runner, generic_command_mocks,
+                                                         tmp_path):
+        out = tmp_path / "audit.csv"
+        with generic_command_mocks("audit") as mocks:
+            mocks["api_client"].export_audit_query.side_effect = [
+                _chunk("h\na\n", warnings=[RECHECK], token="2"), _chunk("b\n", warnings=[RECHECK])]
+            result = _invoke(cli_runner, "export", "--handle", QID, "-o", str(out), "--json-output")
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["warnings"] == [RECHECK]
+
+
+class TestEveryAuditCommandReturnsItsResult:
+    """Rule 16: a command returns what it printed, so `ctx.invoke` gets the result, not a
+    sentinel."""
+
+    @pytest.mark.parametrize("argv, expected", [
+        (["groups"], {"logGroups": []}),
+        (["search", "--no-wait"], {"queryId": QID, "status": "Running", "warnings": []}),
+        (["search"], "page"),
+        (["results", "--handle", QID], "page"),
+        (["show", "--handle", QID, "--record-id", "rec-1"], "row"),
+        (["stop", "--handle", QID], {"queryId": QID, "status": "Cancelled"}),
+        (["export", "--handle", QID], "export"),
+    ])
+    def test_the_result_is_returned(self, cli_runner, generic_command_mocks, argv, expected):
+        with generic_command_mocks("audit") as mocks:
+            api = mocks["api_client"]
+            api.list_audit_log_groups.return_value = {"logGroups": []}
+            api.start_audit_query.return_value = {"queryId": QID, "status": "Running",
+                                                  "warnings": []}
+            api.get_audit_query.return_value = _complete([_row(1)])
+            api.stop_audit_query.return_value = {"queryId": QID, "status": "Cancelled"}
+            api.export_audit_query.side_effect = [_chunk("h\na\n", warnings=[RECHECK])]
+            result = cli_runner.invoke(cli, ["audit", *argv], standalone_mode=False)
+        assert result.exception is None, result.output
+        returned = result.return_value
+        if expected == "page":
+            assert returned["queryId"] == QID
+            assert [r["recordId"] for r in returned["Items"]] == ["rec-1"]
+        elif expected == "row":
+            assert returned == _row(1)
+        elif expected == "export":
+            assert returned == {"queryId": QID, "format": "csv", "output": None, "rowCount": 2,
+                                "warnings": [RECHECK]}
+        else:
+            assert returned == expected

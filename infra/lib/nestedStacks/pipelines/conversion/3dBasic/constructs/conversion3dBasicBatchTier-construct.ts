@@ -30,6 +30,12 @@ import {
     infrastructureFaultRetry,
 } from "../../../constructs/batch-fargate-pipeline";
 import {
+    pipelineJobTags,
+    suppressBatchJobTaggingNag,
+    VAMS_PIPELINE_TAG_VALUES,
+} from "../../../constructs/pipelineJobTags";
+import { StateTimeoutBatchSubmitJob } from "../../../constructs/stateTimeoutBatchSubmitJob";
+import {
     CONVERSION_3D_BASIC_BATCH_STATE_ID,
     CONVERSION_3D_BASIC_LAMBDA_STATE_ID,
     buildConstructConversionPipelineFunction,
@@ -57,21 +63,6 @@ export const CONVERSION_3D_BASIC_REGISTERED_TASK_TIMEOUT_SECONDS = 6.5 * 60 * 60
 export const CONVERSION_3D_BASIC_BATCH_MAX_VCPUS = 128;
 /** Ephemeral storage of a job in GiB (the Fargate maximum), so memory and not disk binds the limit. */
 export const CONVERSION_3D_BASIC_BATCH_EPHEMERAL_STORAGE_GIB = 200;
-
-/**
- * A Batch state with the state-level TimeoutSeconds the CDK integration cannot set next to the job's
- * own attempt duration (BatchSubmitJob maps its timeout properties to the job's attempt duration
- * only). Without it a job that never leaves RUNNABLE (a Fargate vCPU quota that is too low) waits for
- * the state machine's timeout and the workflow's task for its own.
- */
-export class BoundedBatchSubmitJob extends tasks.BatchSubmitJob {
-    public toStateJson(queryLanguage?: sfn.QueryLanguage): object {
-        return {
-            ...super.toStateJson(queryLanguage),
-            TimeoutSeconds: CONVERSION_3D_BASIC_BATCH_STATE_TIMEOUT.toSeconds(),
-        };
-    }
-}
 
 export interface Conversion3dBasicBatchTierProps {
     config: Config.Config;
@@ -248,7 +239,12 @@ export class Conversion3dBasicBatchTier extends Construct {
                 imageBuildArgs: { ENABLE_STEP_INPUT: enableStepInput ? "true" : "false" },
                 ephemeralStorageGiB: CONVERSION_3D_BASIC_BATCH_EPHEMERAL_STORAGE_GIB,
                 maxvCpus: CONVERSION_3D_BASIC_BATCH_MAX_VCPUS,
-                initProcessEnabled: true,
+                // No ECS init process: the image's ENTRYPOINT (batch_entry.py) is PID 1. It makes
+                // itself non-dumpable before it starts the conversion worker and reaps orphaned
+                // descendants, so a worker child of the same user cannot read PID 1's environment
+                // (the task's credential endpoint) through /proc/1/environ. The init ECS would inject
+                // is an ordinary same-uid process that holds the whole task environment and answers
+                // /proc/1/environ to any same-uid reader.
                 environment: {
                     // The S3 clients read the Region at import; do not rely on the platform setting it.
                     AWS_REGION: region,
@@ -277,6 +273,11 @@ export class Conversion3dBasicBatchTier extends Construct {
             this,
             props.lambdaCommonBaseLayer,
             network,
+            {
+                orchestrationBus: props.storageResources.eventBridge.orchestrationBus,
+                batchLogGroup: containerLogGroup,
+                batchJobDefinitionName: this.batchPipeline.batchJobDefinition.jobDefinitionName,
+            },
             kmsKey
         );
         const pipelineEndFunction = buildConversionPipelineEndFunction(
@@ -319,43 +320,43 @@ export class Conversion3dBasicBatchTier extends Construct {
         }).addCatch(handleError, { resultPath: "$.error" });
 
         // One state per job size: a Batch state's vCPU and memory overrides are static.
+        const jobTags = pipelineJobTags(props.config, VAMS_PIPELINE_TAG_VALUES.conversion3dBasic);
         const batchStates = jobSizes.map((size) => {
             const memoryMiB = Config.fargateMemoryMiB(size.memoryGiB);
+            const stateName =
+                size === jobSizes[0]
+                    ? CONVERSION_3D_BASIC_BATCH_STATE_ID
+                    : `${CONVERSION_3D_BASIC_BATCH_STATE_ID}${size.vcpu}Vcpu`;
             return {
                 memoryMiB,
-                state: new BoundedBatchSubmitJob(
-                    this,
-                    // The first state keeps the id openPipeline registers the container log under.
-                    size === jobSizes[0]
-                        ? CONVERSION_3D_BASIC_BATCH_STATE_ID
-                        : `${CONVERSION_3D_BASIC_BATCH_STATE_ID}${size.vcpu}Vcpu`,
-                    {
-                        jobName: sfn.JsonPath.stringAt("$.jobName"),
-                        jobDefinitionArn: this.batchPipeline.batchJobDefinition.jobDefinitionArn,
-                        jobQueueArn: this.batchPipeline.batchJobQueue.jobQueueArn,
-                        // The job's own attempt bound, counted from RUNNING. The state's bound, which also
-                        // covers the time the job waits in RUNNABLE, is added by BoundedBatchSubmitJob.
-                        taskTimeout: sfn.Timeout.duration(
-                            CONVERSION_3D_BASIC_BATCH_ATTEMPT_TIMEOUT
-                        ),
-                        resultPath: sfn.JsonPath.DISCARD,
-                        containerOverrides: {
-                            vcpus: size.vcpu,
-                            memory: cdk.Size.mebibytes(memoryMiB),
-                            environment: {
-                                VAMS_CONVERSION_EVENT: sfn.JsonPath.stringAt(
-                                    "$.construct.conversionEvent"
-                                ),
-                                // The task's memory, which a Fargate container cannot read from its cgroup
-                                VAMS_TASK_MEMORY_MIB: String(memoryMiB),
-                                VAMS_TASK_VCPU: String(size.vcpu),
-                                VAMS_ATTEMPT_SECONDS: String(
-                                    CONVERSION_3D_BASIC_CONTAINER_ATTEMPT_SECONDS
-                                ),
-                            },
+                stateName,
+                state: new StateTimeoutBatchSubmitJob(this, stateName, {
+                    jobName: sfn.JsonPath.stringAt("$.jobName"),
+                    jobDefinitionArn: this.batchPipeline.batchJobDefinition.jobDefinitionArn,
+                    jobQueueArn: this.batchPipeline.batchJobQueue.jobQueueArn,
+                    jobTags,
+                    // The state's bound also covers the time the job waits in RUNNABLE (a Fargate
+                    // vCPU quota that is too low keeps a job there); taskTimeout is the job's own
+                    // attempt bound, counted from RUNNING.
+                    stateTimeout: CONVERSION_3D_BASIC_BATCH_STATE_TIMEOUT,
+                    taskTimeout: sfn.Timeout.duration(CONVERSION_3D_BASIC_BATCH_ATTEMPT_TIMEOUT),
+                    resultPath: sfn.JsonPath.DISCARD,
+                    containerOverrides: {
+                        vcpus: size.vcpu,
+                        memory: cdk.Size.mebibytes(memoryMiB),
+                        environment: {
+                            VAMS_CONVERSION_EVENT: sfn.JsonPath.stringAt(
+                                "$.construct.conversionEvent"
+                            ),
+                            // The task's memory, which a Fargate container cannot read from its cgroup
+                            VAMS_TASK_MEMORY_MIB: String(memoryMiB),
+                            VAMS_TASK_VCPU: String(size.vcpu),
+                            VAMS_ATTEMPT_SECONDS: String(
+                                CONVERSION_3D_BASIC_CONTAINER_ATTEMPT_SECONDS
+                            ),
                         },
-                    }
-                )
+                    },
+                })
                     .addCatch(handleError, { resultPath: "$.error" })
                     .next(pipelineEndTask),
             };
@@ -369,6 +370,14 @@ export class Conversion3dBasicBatchTier extends Construct {
         });
         sizeChoice.otherwise(batchStates[0].state);
         const constructAndRun = constructPipelineTask.next(sizeChoice);
+        // constructPipeline registers the container log under the state the run is routed to, so it
+        // gets the same memory-to-state map the Choice routes on (anything else runs the first state).
+        constructPipelineFunction.addEnvironment(
+            "BATCH_STATE_NAMES",
+            JSON.stringify(
+                Object.fromEntries(batchStates.map((e) => [String(e.memoryMiB), e.stateName]))
+            )
+        );
 
         // A forced Batch run (the input configuration's computeTier) skips the Lambda attempt.
         const useForcedSize = new sfn.Pass(this, "UseForcedJobSize", {
@@ -496,8 +505,6 @@ export class Conversion3dBasicBatchTier extends Construct {
                 converterLogGroupArn: `arn:${ServiceHelper.Partition()}:logs:${region}:${account}:log-group:/aws/lambda/${
                     props.converterFunction.functionName
                 }`,
-                batchLogGroup: containerLogGroup,
-                batchJobDefinitionName: this.batchPipeline.batchJobDefinition.jobDefinitionName,
             },
             maxMemoryGiB,
             kmsKey
@@ -511,6 +518,7 @@ export class Conversion3dBasicBatchTier extends Construct {
             kmsKey
         );
 
+        suppressBatchJobTaggingNag(this.stateMachine);
         NagSuppressions.addResourceSuppressions(this.stateMachine, [
             {
                 id: "AwsSolutions-SF1",

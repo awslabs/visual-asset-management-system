@@ -1,0 +1,9 @@
+[WARNING] isaaclab.sh is deprecated and will be removed in Isaac Lab 3.1. Use 'uv run isaaclab' instead.
+Traceback (most recent call last):
+  File "/workspace/isaaclab/source/isaaclab_rl/isaaclab_rl/entrypoints/backends/train_rl_games.py", line 128, in _run
+    env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+  File "/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/utils/hydra.py", line 675, in register_task
+    _validate_typed_presets(requested_targets, typed_hits)
+  File "/workspace/isaaclab/source/isaaclab_tasks/isaaclab_tasks/utils/hydra.py", line 554, in _validate_typed_presets
+    raise ValueError(
+ValueError: Typed preset selector(s) physics=isaacsim_physx did not match a selectable preset of that type for this task. Choose a declared preset, or remove the selector(s) to use the task's registered default configuration.

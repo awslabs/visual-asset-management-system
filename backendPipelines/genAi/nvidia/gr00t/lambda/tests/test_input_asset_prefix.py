@@ -68,6 +68,27 @@ class TestResolveInputAssetPrefix:
         resolved = {"inputS3AssetFilePath": "s3://abkt/xid/data/episode_0.parquet", "inputFiles": []}
         assert mod.resolve_input_asset_prefix(resolved) == "s3://abkt/xid/data/"
 
+    def test_a_shadowed_file_pairs_the_root_with_the_asset_bucket(self):
+        # From the second workflow step on, an input an earlier step rewrote is read from the run
+        # bucket; its asset root stays in the asset's own bucket (assetRootBucket).
+        mod = _load()
+        resolved = {
+            "inputS3AssetFilePath": "s3://run-bkt/pipelines/p1/J/output/E1/files/data/episode_0.parquet",
+            "inputFiles": [{"bucket": "run-bkt",
+                            "key": "pipelines/p1/J/output/E1/files/data/episode_0.parquet",
+                            "assetRootS3Key": "projects/site-a/", "assetRootBucket": "abkt"}],
+        }
+        assert mod.resolve_input_asset_prefix(resolved) == "s3://abkt/projects/site-a/"
+
+    def test_a_manifest_without_the_root_bucket_keeps_the_entry_bucket(self):
+        mod = _load()
+        resolved = {
+            "inputS3AssetFilePath": "s3://abkt/xid/data/episode_0.parquet",
+            "inputFiles": [{"bucket": "abkt", "key": "xid/data/episode_0.parquet",
+                            "assetRootS3Key": "xid/"}],
+        }
+        assert mod.resolve_input_asset_prefix(resolved) == "s3://abkt/xid/"
+
     def test_empty_input_path_stays_empty(self):
         mod = _load()
         assert mod.resolve_input_asset_prefix({"inputS3AssetFilePath": "", "inputFiles": []}) == ""

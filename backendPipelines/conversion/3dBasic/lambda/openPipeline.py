@@ -39,18 +39,14 @@ MAX_MEMORY_GIB = computeTier.max_memory_gib(os.environ.get("MAX_MEMORY_GIB"))
 ORCHESTRATION_BUS_NAME = os.environ.get("ORCHESTRATION_BUS_NAME", "")
 STATE_MACHINE_LOG_GROUP_NAME = os.environ.get("STATE_MACHINE_LOG_GROUP_NAME", "")
 STATE_MACHINE_LOG_GROUP_ARN = os.environ.get("STATE_MACHINE_LOG_GROUP_ARN", "")
-# The converter Lambda's log group (the Lambda attempt) and this pipeline's vended container log group
-# (the Batch task, streamed under the job definition's name); each source is registered only when
-# configured.
+# The converter Lambda's log group (the Lambda attempt), registered only when configured. The Batch
+# task's container log is registered by constructPipeline, which knows the job size and so the Batch
+# state the run takes.
 CONVERTER_LOG_GROUP_NAME = os.environ.get("CONVERTER_LOG_GROUP_NAME", "")
 CONVERTER_LOG_GROUP_ARN = os.environ.get("CONVERTER_LOG_GROUP_ARN", "")
-BATCH_JOB_LOG_GROUP_NAME = os.environ.get("BATCH_JOB_LOG_GROUP_NAME", "")
-BATCH_JOB_LOG_GROUP_ARN = os.environ.get("BATCH_JOB_LOG_GROUP_ARN", "")
-BATCH_JOB_DEFINITION_NAME = os.environ.get("BATCH_JOB_DEFINITION_NAME", "")
-# The state-machine states that run each attempt (their CDK construct ids), the stage names a log source
-# is registered under.
+# The state-machine state that runs the Lambda attempt (its CDK construct id), the stage name its log
+# source is registered under.
 LAMBDA_STATE_NAME = "ConversionLambdaAttempt"
-BATCH_STATE_NAME = "ConversionBatchJob"
 REGISTER_DETAIL_TYPE = "pipeline.execution.register"
 
 
@@ -64,25 +60,10 @@ def abort_external_workflow(error, task_token):
         )
 
 
-def batch_container_log_entry(job_definition_name, state_name):
-    """The log source for the Batch task's container: the job's vended group, streamed under
-    `<jobDefinitionName>/default/`. None when the group or the job definition is not configured."""
-    if not (BATCH_JOB_LOG_GROUP_NAME or BATCH_JOB_LOG_GROUP_ARN) or not job_definition_name:
-        return None
-    return {
-        "logGroupArn": BATCH_JOB_LOG_GROUP_ARN,
-        "logGroupName": BATCH_JOB_LOG_GROUP_NAME,
-        "logStreamName": "",
-        "logStreamPrefix": f"{job_definition_name}/default/",
-        "stageName": state_name,
-        "sourceType": "batch",
-        "label": "Conversion job container (AWS Batch)",
-    }
-
-
 def converter_log_entry():
-    """The log source of the Lambda attempt, which VAMS reads for the lines of this run's workflow
-    execution id. None when the converter's log group is not configured."""
+    """The log source of the Lambda attempt, which VAMS reads for the lines that carry both this run's
+    workflow and pipeline execution ids (the converter logs both). None when the converter's log group
+    is not configured."""
     if not (CONVERTER_LOG_GROUP_NAME or CONVERTER_LOG_GROUP_ARN):
         return None
     return {
@@ -97,9 +78,9 @@ def converter_log_entry():
 
 def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
                            sub_execution_arn, state_machine_arn):
-    """Best-effort: report this pipeline's sub-SFN execution + its log sources (the state machine, the
-    Lambda attempt and the Batch container) to the orchestration bus, so a run that used both tiers
-    shows both attempts."""
+    """Best-effort: report this pipeline's sub-SFN execution + its log sources (the state machine and
+    the Lambda attempt) to the orchestration bus. A run that continues on Batch adds the container's
+    source from constructPipeline."""
     if not orchestration_bus_name or not orchestration_event_prefix:
         logger.info("Orchestration bus/prefix not configured; skipping sub-process registration")
         return
@@ -125,9 +106,9 @@ def register_sub_execution(orchestration_bus_name, orchestration_event_prefix,
             "sourceType": "stateMachine",
             "label": "3D conversion state machine",
         })
-    for entry in (converter_log_entry(), batch_container_log_entry(BATCH_JOB_DEFINITION_NAME, BATCH_STATE_NAME)):
-        if entry:
-            logs.append(entry)
+    converter = converter_log_entry()
+    if converter:
+        logs.append(converter)
     if logs:
         detail["logs"] = logs
     try:
@@ -159,9 +140,16 @@ def forced_tier(event):
 
 def conversion_request(event):
     """The request body the converter receives (the same fields the workflow's task body carries),
-    with ``allowEscalation`` set by the state machine on the Lambda attempt."""
-    return {key: event.get(key, "") for key in ("inputManifestS3Location", "inputConfigurationS3Location",
-                                                "workflowExecutionId") if event.get(key)}
+    with ``allowEscalation`` set by the state machine on the Lambda attempt. It also carries the
+    pipeline execution id, which the converter and the Batch task put on every line beside the
+    workflow execution id: VAMS reads a registered shared log group for lines that carry both."""
+    request = {key: event.get(key, "") for key in ("inputManifestS3Location", "inputConfigurationS3Location",
+                                                   "workflowExecutionId") if event.get(key)}
+    pipeline_execution_id = manifestHelper.pipeline_execution_id_from_event_prefix(
+        event.get("orchestrationEventPrefix", ""))
+    if pipeline_execution_id:
+        request["pipelineExecutionId"] = pipeline_execution_id
+    return request
 
 
 def lambda_handler(event, context):
@@ -235,6 +223,8 @@ def lambda_handler(event, context):
         # The S3 version of the input the run reads (empty reads the current object).
         "inputVersionId": event.get("inputVersionId", ""),
         "externalSfnTaskToken": external_sfn_task_token,
+        # constructPipeline registers the Batch container's log source on this pipeline execution.
+        "orchestrationEventPrefix": orchestration_event_prefix,
         "assetId": event.get('assetId', ''),
         "databaseId": event.get('databaseId', ''),
     }

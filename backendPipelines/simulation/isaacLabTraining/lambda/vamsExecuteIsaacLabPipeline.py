@@ -148,10 +148,13 @@ def lambda_handler(event, context):
 
         # The asset-files root (bucket + base location key) used by openPipeline to resolve
         # relative paths (checkpointPath, customEnvironmentPath). It comes from the manifest's
-        # first resolved input file: its own bucket + assetRootS3Key (a bucket-relative asset
-        # root key), falling back to the legacy payload fields for non-manifest invocations.
+        # first resolved input file: the asset root's own bucket (assetRootBucket; an entry an
+        # earlier step's output shadows is read from the run bucket, so its `bucket` is not the
+        # root's) + assetRootS3Key (a bucket-relative asset root key), falling back to the entry's
+        # bucket and then to the legacy payload fields for non-manifest invocations.
         first_input_file = (resolved.get("inputFiles") or [{}])[0]
-        asset_bucket = first_input_file.get("bucket", "") or data.get("workflowExecutionS3InputOutputBucket", "")
+        asset_bucket = (first_input_file.get("assetRootBucket", "") or first_input_file.get("bucket", "")
+                        or data.get("workflowExecutionS3InputOutputBucket", ""))
         asset_location_key = first_input_file.get("assetRootS3Key", "") or data.get("inputAssetLocationKey", "")
         input_asset_file_key = first_input_file.get("key", "") or data.get("inputAssetFileKey", "")
 

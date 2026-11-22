@@ -88,8 +88,12 @@ def _relative_within_pipeline_output(parts):
     return None
 
 
-def compute_relative_subdir(object_key: str, asset_id: str) -> str:
+def compute_relative_subdir(object_key: str, asset_id: str, relative_path: str = "") -> str:
     """The input file's folder path within its asset, with a trailing slash when non-empty.
+
+    The input's manifest ``relativePath`` names it when the definition carries one, which holds for
+    an asset created on an existing bucket folder (whose keys need not contain the asset ID) and for
+    a chained step's input alike. Without one:
 
     ``assetId`` is threaded through the pipeline definition, never derived from the key: an asset
     whose id happens to match a folder name elsewhere in the key would otherwise silently relocate
@@ -98,6 +102,9 @@ def compute_relative_subdir(object_key: str, asset_id: str) -> str:
     PRIOR step's output and so carries no assetId at all; there the path within the asset is read
     from the pipeline output convention instead (see ``_relative_within_pipeline_output``).
     """
+    relative = str(relative_path or "").strip("/")
+    if relative:
+        return relative.rsplit("/", 1)[0] + "/" if "/" in relative else ""
     if not asset_id:
         raise ExportError(
             "assetId is required to compose output keys; without it the relative path within the "
