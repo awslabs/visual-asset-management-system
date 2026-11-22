@@ -75,15 +75,6 @@ function normalize(name: string): string {
     return name.toLowerCase().replace(/[-_.]+/g, "-");
 }
 
-/** Direct dependency names in a plain requirements.txt (the GPU images, which are not uv projects yet). */
-function requirementsTxtDependencies(text: string): string[] {
-    return text
-        .split(/\r?\n/)
-        .map((l) => l.replace(/#.*/, "").trim())
-        .filter(Boolean)
-        .map((l) => normalize(/^[A-Za-z0-9][A-Za-z0-9._-]*/.exec(l)![0]));
-}
-
 /** Direct dependency names in a pyproject.toml's `[project] dependencies` list. */
 function directDependencies(text: string): string[] {
     const block = /^dependencies = \[([\s\S]*?)^\]/m.exec(text);
@@ -257,15 +248,14 @@ describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfil
         }
     });
 
-    it("locks every direct dependency of requirements.txt, with a hash on every pin", () => {
-        expect(lock).toMatch(
-            /^#\s+uv pip compile requirements\.txt (?:--constraint \S+ )?--generate-hashes /m
-        );
+    it("locks every direct dependency of pyproject.toml, with a hash on every pin", () => {
+        expect(lock).toMatch(/^#\s+uv export --frozen /m);
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
         expect(entries.length).toBeGreaterThan(0);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
         const locked = new Set(entries.map((e) => e.name));
-        const direct = requirementsTxtDependencies(
-            fs.readFileSync(path.join(root, "requirements.txt"), "utf-8")
+        const direct = directDependencies(
+            fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8")
         );
         expect(direct.length).toBeGreaterThan(0);
         expect(direct.filter((name) => !locked.has(name))).toEqual([]);
