@@ -18,6 +18,8 @@ or non-zero on failure.
 import json
 import logging
 import os
+import posixpath
+import re
 import subprocess
 import sys
 import time
@@ -172,6 +174,49 @@ def upload_to_s3(local_path: Path, s3_uri: str) -> None:
     logger.info(f"Uploaded {local_path.stat().st_size} bytes to S3")
 
 
+# The control input is a file of the run's asset, named relative to the asset root.
+MAX_CONTROL_PATH_LENGTH = 1024
+_CONTROL_PATH_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_PATH_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+CONTROL_PATH_RULE = (
+    "The control path must name a file in the asset, relative to the asset root: no URI scheme, "
+    f"backslash, control character, or '.', '..' or empty path segment, at most {MAX_CONTROL_PATH_LENGTH} "
+    "characters")
+
+
+def normalize_control_path(value) -> str:
+    """The control input path as a file path relative to the asset root (a leading ``/`` names the
+    asset root), or ``""`` when the definition names none. Any other value raises ``ValueError``."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(CONTROL_PATH_RULE)
+    path = value.strip()
+    if (len(path) > MAX_CONTROL_PATH_LENGTH or _CONTROL_PATH_CONTROL_CHARACTERS.search(path)
+            or "\\" in path or _CONTROL_PATH_SCHEME.match(path)):
+        raise ValueError(CONTROL_PATH_RULE)
+    segments = path.lstrip("/").split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError(CONTROL_PATH_RULE)
+    return "/".join(segments)
+
+
+def control_input_s3_uri(control_path: str, input_s3_path: str, asset_id: str) -> str:
+    """The ``s3://`` URI of the control input: ``control_path`` under the asset root, ``{assetId}/``
+    in the input file's bucket. A path that is not a file within that root raises ``ValueError``."""
+    relative = normalize_control_path(control_path)
+    if not relative:
+        raise ValueError(CONTROL_PATH_RULE)
+    if not asset_id:
+        raise ValueError("The control input cannot be located: the run names no asset ID")
+    bucket, _ = parse_s3_uri(input_s3_path)
+    root = f"{asset_id}/"
+    key = posixpath.normpath(root + relative)
+    if not key.startswith(root) or key == root.rstrip("/"):
+        raise ValueError(CONTROL_PATH_RULE)
+    return f"s3://{bucket}/{key}"
+
+
 def compute_relative_subdir(input_s3_path: str, asset_id: str) -> str:
     """
     Extract relative path between assetId and filename in S3 key.
@@ -322,6 +367,11 @@ def main():
         if not input_s3_asset_file_path:
             raise ValueError("inputS3AssetFilePath is required for transfer pipeline")
 
+        # A control input the run names is located, and its path checked, before any model or file
+        # is fetched.
+        control_s3_uri = (control_input_s3_uri(control_path, input_s3_asset_file_path, asset_id)
+                          if normalize_control_path(control_path) else "")
+
         # Determine prompt (cosmosPrompt takes precedence)
         prompt = cosmos_prompt if cosmos_prompt else (input_parameters_prompt or "Transform the video")
 
@@ -356,15 +406,13 @@ def main():
 
         # Step 3: Download control signal (optional)
         control_video_path = None
-        if control_path:
+        if control_s3_uri:
             logger.info("=" * 80)
             logger.info("Step 3: Downloading control signal video")
             logger.info("=" * 80)
 
-            # control_path is a relative path within the asset in the same bucket
-            # Construct full S3 URI from the input file's bucket and asset ID
-            input_bucket, _ = parse_s3_uri(input_s3_asset_file_path)
-            control_s3_uri = f"s3://{input_bucket}/{asset_id}/{control_path}"
+            # control_path names a file of the run's asset, relative to the asset root
+            # ({assetId}/ in the input file's bucket)
             control_video_path = INPUT_DIR / "control.mp4"
             download_from_s3(control_s3_uri, control_video_path)
         else:
