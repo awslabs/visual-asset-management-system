@@ -631,10 +631,33 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
             expect.arrayContaining(["records-changed", "copy-chains-deeper"])
         );
         const step = pyFunction("run_asset_location_folder_keys_step");
-        expect(step).toContain(
-            "incomplete = counts['errors'] or counts['unreadable'] or (counts['records-changed'] and not dry_run)"
+        expect(step).toMatch(
+            /incomplete = counts\['errors'\] or counts\['unreadable'\] or \(\s*not dry_run and \(counts\['records-changed'\] or /
         );
         expect(readme).toContain("edited during the move");
+    });
+
+    it("keeps a real run non-zero, so the backfills wait, until a copy of the copy is moved by hand", () => {
+        const step = pyFunction("run_asset_location_folder_keys_step");
+        expect(step).toMatch(
+            /incomplete = [^\n]*\n?[^\n]*not dry_run and \(counts\['records-changed'\] or counts\['copy-chains-deeper'\]\)\)/
+        );
+        // The README gives the hand move and the marker, its attribute, type and value form.
+        expect(readme).toContain("SET assetLocationCopyRecordsMovedAt = :t");
+        expect(readme).toContain("attribute_not_exists(assetLocationCopyRecordsMovedAt)");
+        expect(readme).toMatch(/string\s+attribute \(`S`\) holding the UTC time in ISO 8601/);
+        expect(readme).toMatch(/On\s+a real run the step then exits non-zero/);
+    });
+
+    it("looks for a copy of the copy before it marks a single-file asset that has no copy", () => {
+        const part = pyFunction("move_companion_copy_records");
+        const body = part.slice(part.indexOf("name = key.rsplit('/', 1)[-1]"));
+        const chain = body.indexOf('exact_key_versions(s3_client, bucket, f"{key}/{name}/{name}"');
+        const earlyFinish = body.search(/if not copy_versions:\s*\n\s*finish\(\)/);
+        expect(chain).toBeGreaterThan(-1);
+        expect(earlyFinish).toBeGreaterThan(chain);
+        // The read lists name that listing.
+        expect(readme).toContain("one version of `{key}/{name}/{name}` (`MaxKeys=1`)");
     });
 
     it("writes one report per run, so a later run keeps the lines an earlier one wrote", () => {
@@ -658,6 +681,9 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(body).toContain("if run_vector_backfill and not backfills_held:");
         expect(body).toContain("if run_metadata_backfill and not backfills_held:");
         expect(readme).toContain("skips `vectorBackfill` and `metadataBackfill`");
+        // A key that can never be read (an unregistered bucket) has a way on: the backfill run on its own.
+        expect(readme).toMatch(/whose bucket is not registered in the S3 asset buckets table/);
+        expect(body).toMatch(/A key that can never be read \(an "\s*\n\s*"unregistered bucket\)/);
     });
 
     it("documents what the deploy creates for Download as Zip and the copy engine", () => {

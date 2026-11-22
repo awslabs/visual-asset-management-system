@@ -614,9 +614,9 @@ def mark_copy_records_done(dynamodb_client, asset_table: str, row: Dict) -> str:
 def move_companion_copy_records(dynamodb_client, s3_client, cfg: Dict, row: Dict, bucket: str, key: str,
                                 dry_run: bool, counts: Dict[str, int], report: Callable[[Dict], None]) -> None:
     """Part (b) for one single-file location: move the records of its copy '{key}/{name}' from '/{name}' to
-    '/{name}/{name}', then, on a real run without errors or edited records, mark the asset row done (with or
-    without a copy) so no later run, from any directory, reads or moves its records again. A marked row costs
-    no part (b) read."""
+    '/{name}/{name}', then, on a real run without errors, edited records or a copy of the copy, mark the asset
+    row done (with or without a copy) so no later run, from any directory, reads or moves its records again. A
+    marked row costs no part (b) read."""
     database_id = _attr_s(row, 'databaseId')
     database_id = database_id[:-len('#deleted')] if database_id.endswith('#deleted') else database_id
     asset_id = _attr_s(row, 'assetId')
@@ -640,16 +640,20 @@ def move_companion_copy_records(dynamodb_client, s3_client, cfg: Dict, row: Dict
 
     name = key.rsplit('/', 1)[-1]
     copy_versions = exact_key_versions(s3_client, bucket, f"{key}/{name}")
-    if not copy_versions:
-        finish()
-        return
-    counts['copy-locations'] += 1
-    # A copy of the copy ('{key}/{name}/{name}') moves too in v2.7, one level down; part (b) shifts one level
-    # only, so such an asset is reported for a move by hand and nothing of it moves.
+    if copy_versions:
+        counts['copy-locations'] += 1
+    # A copy of the copy ('{key}/{name}/{name}') moves too in v2.7, one level down, whether or not the copy
+    # itself is still there; part (b) shifts one level only, so such an asset is reported for a move by hand,
+    # nothing of it moves, and its row stays unmarked.
     if exact_key_versions(s3_client, bucket, f"{key}/{name}/{name}", first_page_only=True):
         counts['copy-chains-deeper'] += 1
-        report(dict(base, table=None, action='left: the copy has a copy named like the file; move its records '
-                    'by hand (see the README)', detail=f"{key}/{name}/{name}"))
+        left = 'the copy has a copy named like the file' if copy_versions else \
+            'the copy is gone but its copy named like the file is still there'
+        report(dict(base, table=None, action=f"left: {left}; move its records by hand (see the README)",
+                    detail=f"{key}/{name}/{name}"))
+        return
+    if not copy_versions:
+        finish()
         return
     object_versions = exact_key_versions(s3_client, bucket, key)
     sources = (f"/{name}", name)
@@ -916,7 +920,7 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
     logger.info(f"  Keys that could not be read:          {counts['unreadable']}")
     logger.info(f"  Single-file keys with a copy named like the file: {counts['copy-locations']}")
     logger.info(f"  Single-file assets already done (marked on the row): {counts['copy-already-moved']}")
-    logger.info(f"  Copies with a copy of their own, left for a move by hand: {counts['copy-chains-deeper']}")
+    logger.info(f"  Copies of the copy, left for a move by hand: {counts['copy-chains-deeper']}")
     moved_label = 'that would be moved' if dry_run else 'moved'
     logger.info(f"    records {moved_label} to /{{name}}/{{name}}: {counts['records-moved']}")
     logger.info(f"    records left, a record is already at the new path: {counts['records-clash']}")
@@ -924,15 +928,24 @@ def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, p
     logger.info(f"    records removed meanwhile:            {counts['records-gone']}")
     logger.info(f"    records left, edited during the move: {counts['records-changed']}")
     logger.info(f"  Errors:                               {counts['errors']}")
+    if counts['unreadable']:
+        logger.info("  A key that could not be read is in a bucket the S3 asset buckets table does not register, or")
+        logger.info("  one the migration principal cannot read; its report line says which. Fix the access and re-run")
+        logger.info("  the step. A key that can never be read keeps the step non-zero: once you have checked the")
+        logger.info("  report, run --steps vectorBackfill (or metadataBackfill) on its own.")
     if counts['records-changed'] and not dry_run:
         logger.info("  Re-run the step to move the records that were edited during this run; their assets are not")
         logger.info("  marked done.")
+    if counts['copy-chains-deeper'] and not dry_run:
+        logger.info("  Move the records of each copy with a copy of its own by hand and mark its asset row (see the")
+        logger.info("  README), then re-run the step; until then it exits non-zero.")
     if counts['records-moved'] and not dry_run:
         logger.info("  Run the vectorBackfill step afterwards (it runs next under --steps all) so the moved copy's")
         logger.info("  search vectors are rewritten for its new path.")
     logger.info("=" * 80)
 
-    incomplete = counts['errors'] or counts['unreadable'] or (counts['records-changed'] and not dry_run)
+    incomplete = counts['errors'] or counts['unreadable'] or (
+        not dry_run and (counts['records-changed'] or counts['copy-chains-deeper']))
     return 1 if incomplete else 0
 
 
@@ -1978,7 +1991,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     exit_code = 0
     outcomes: List[Tuple[str, str]] = []
     backfills_held = False
-    held_outcome = 'skipped: assetLocationFolderKeys did not finish; re-run it until it exits 0, then this step'
+    held_outcome = ('skipped: assetLocationFolderKeys did not finish; re-run it until it exits 0, or check its '
+                    'report and run this step on its own')
 
     def _record(step: str, rc: int) -> None:
         outcomes.append((step, "completed" if rc == 0 else f"failed (exit {rc})"))
@@ -2006,8 +2020,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if backfills_held:
         logger.info("")
         logger.warning("assetLocationFolderKeys did not finish, so the vector and metadata backfills are skipped on "
-                       "this run. Re-run assetLocationFolderKeys until it exits 0, then run --steps vectorBackfill "
-                       "(or metadataBackfill).")
+                       "this run. Fix what its report lists and re-run assetLocationFolderKeys until it exits 0, "
+                       "then run --steps vectorBackfill (or metadataBackfill). A key that can never be read (an "
+                       "unregistered bucket) keeps it non-zero: once you have checked the report, run "
+                       "--steps vectorBackfill (or metadataBackfill) on its own.")
         for step, selected in (('vectorBackfill', run_vector_backfill), ('metadataBackfill', run_metadata_backfill)):
             if selected:
                 outcomes.append((step, held_outcome))
