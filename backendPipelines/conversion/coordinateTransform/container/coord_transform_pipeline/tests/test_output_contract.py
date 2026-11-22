@@ -428,6 +428,67 @@ def test_relative_subdir_is_sliced_at_the_threaded_asset_id(
     assert core._relative_subdir_from_object_key(object_key, asset_id) == expected
 
 
+# --- the subfolder comes from the input's manifest relativePath ------------------------------------
+
+CUSTOM_ROOT = "projects/site-a"
+CHAINED_PREFIX = "pipelines/convert/J/output/exec-0/files"
+
+
+def _manifest_input(relative_path, root=f"{CUSTOM_ROOT}/"):
+    return {"relativePath": relative_path, "assetRootS3Key": root, "assetRootBucket": "asset-bucket"}
+
+
+def test_an_asset_on_an_existing_bucket_folder_keeps_its_subdirectory(transform, uploads, callbacks):
+    """The key does not contain the asset ID. Positive control: without the manifest entry the output
+    collapses to the output prefix root."""
+    transform(written_names=("cloud_EPSG_27700.laz",))
+
+    core.run(_definition(f"{CUSTOM_ROOT}/scans/room1/cloud.laz"))
+    assert uploads.keys_under(FILES_PREFIX) == [f"{FILES_PREFIX}/cloud_EPSG_27700.laz"]
+    uploads.calls.clear()
+
+    core.run(_definition(f"{CUSTOM_ROOT}/scans/room1/cloud.laz"),
+             input_asset=_manifest_input("/scans/room1/cloud.laz"))
+    assert [kind for kind, _ in callbacks] == ["success", "success"]
+    assert uploads.keys_under(FILES_PREFIX) == [f"{FILES_PREFIX}/scans/room1/cloud_EPSG_27700.laz"]
+
+
+def test_a_chained_input_keeps_its_subdirectory(transform, uploads, callbacks):
+    """An earlier step's output, keyed under the run's output folder by its asset-relative path."""
+    transform(written_names=("cloud_EPSG_27700.laz",))
+
+    core.run(_definition(f"{CHAINED_PREFIX}/scans/cloud.laz"),
+             input_asset=_manifest_input("/scans/cloud.laz", f"{ASSET_ID}/"))
+
+    assert uploads.keys_under(FILES_PREFIX) == [f"{FILES_PREFIX}/scans/cloud_EPSG_27700.laz"]
+
+
+def test_same_named_custom_root_inputs_in_two_folders_do_not_collide(transform, uploads, callbacks):
+    transform(written_names=("cloud_EPSG_27700.laz",))
+
+    core.run(_definition(f"{CUSTOM_ROOT}/scanA/cloud.laz"), input_asset=_manifest_input("/scanA/cloud.laz"))
+    first = uploads.keys_under(FILES_PREFIX)
+    uploads.calls.clear()
+    core.run(_definition(f"{CUSTOM_ROOT}/scanB/cloud.laz"), input_asset=_manifest_input("/scanB/cloud.laz"))
+    second = uploads.keys_under(FILES_PREFIX)
+
+    assert first == [f"{FILES_PREFIX}/scanA/cloud_EPSG_27700.laz"]
+    assert second == [f"{FILES_PREFIX}/scanB/cloud_EPSG_27700.laz"]
+
+
+@pytest.mark.parametrize(
+    "object_key,relative_path,expected",
+    [
+        (f"{CUSTOM_ROOT}/cloud.laz", "/cloud.laz", ""),
+        (f"{CUSTOM_ROOT}/scans/room1/cloud.laz", "/scans/room1/cloud.laz", "scans/room1"),
+        (f"{CHAINED_PREFIX}/scans/cloud.laz", "/scans/cloud.laz", "scans"),
+        (f"{ASSET_ID}/scans/cloud.laz", "", "scans"),
+    ],
+)
+def test_relative_subdir_comes_from_the_manifest_relative_path(object_key, relative_path, expected):
+    assert core._relative_subdir_from_object_key(object_key, ASSET_ID, relative_path) == expected
+
+
 # --- sidecars are metadata, not asset files ---------------------------------------------------------
 
 

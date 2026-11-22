@@ -83,6 +83,9 @@ const codeOf = (file: string): string =>
 
 const relative = (file: string): string => path.relative(REPO_ROOT, file);
 
+/** A plain BatchSubmitJob, constructed or subclassed, under a one-segment namespace or none. TaggedBatchSubmitJob is the one allowed subclass. */
+const UNTAGGED_BATCH_SUBMIT = /\b(?:new|extends)\s+(?:\w+\.)?BatchSubmitJob\b/;
+
 describe("every pipeline job submit carries the pipeline job tags", () => {
     const cdkSources = sourcesUnder(PIPELINES_DIR, (name) => name.endsWith(".ts"));
     const pythonSources = sourcesUnder(BACKEND_PIPELINES_DIR, (name) => name.endsWith(".py"));
@@ -92,12 +95,34 @@ describe("every pipeline job submit carries the pipeline job tags", () => {
         expect(pythonSources.length).toBeGreaterThan(20);
     });
 
+    test("the untagged-submit detector catches a construction and a subclass, not the tagged classes", () => {
+        // Control for the regex, against literals: a tree with no offenders cannot tell a clean tree
+        // from a pattern that matches nothing.
+        for (const offending of [
+            "new tasks.BatchSubmitJob(this, 'Job', {",
+            "new BatchSubmitJob(this, 'Job', {",
+            "export class BoundedBatchSubmitJob extends tasks.BatchSubmitJob {",
+            "class Local extends sfnTasks.BatchSubmitJob {",
+        ]) {
+            expect([offending, UNTAGGED_BATCH_SUBMIT.test(offending)]).toEqual([offending, true]);
+        }
+        for (const tagged of [
+            "new TaggedBatchSubmitJob(this, 'Job', {",
+            "new StateTimeoutBatchSubmitJob(this, 'Job', {",
+            "export class StateTimeoutBatchSubmitJob extends TaggedBatchSubmitJob {",
+            "readonly props: tasks.BatchSubmitJobProps",
+        ]) {
+            expect([tagged, UNTAGGED_BATCH_SUBMIT.test(tagged)]).toEqual([tagged, false]);
+        }
+    });
+
     test("no Step Functions state submits an AWS Batch job without tags", () => {
         // TaggedBatchSubmitJob (and StateTimeoutBatchSubmitJob, which extends it) requires jobTags;
-        // a plain BatchSubmitJob carries none and grants no batch:TagResource.
+        // a plain BatchSubmitJob carries none and grants no batch:TagResource, and neither does a
+        // subclass of it that only changes how the state renders.
         const offenders = cdkSources
             .filter((file) => !file.endsWith(path.join("constructs", "pipelineJobTags.ts")))
-            .filter((file) => /new\s+tasks\.BatchSubmitJob\s*\(/.test(codeOf(file)))
+            .filter((file) => UNTAGGED_BATCH_SUBMIT.test(codeOf(file)))
             .map(relative);
         expect(offenders).toEqual([]);
     });

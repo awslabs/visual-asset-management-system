@@ -53,11 +53,13 @@ def hello():
     logger.info("Preview 3D Thumbnail Pipeline - Generates preview images from 3D files")
 
 
-def run(params: dict, results_location: dict = None) -> PipelineExecutionParams:
+def run(params: dict, results_location: dict = None, input_asset: dict = None) -> PipelineExecutionParams:
     """
     Core runner for Preview 3D Thumbnail Pipeline. ``results_location`` is the execution's results
     folder (``{"bucketName", "objectDir"}``), where an incomplete preview's result document is written;
-    None when the launching Lambda named none.
+    None when the launching Lambda named none. ``input_asset`` is where the input sits in its asset,
+    from its manifest entry (``{"relativePath", "assetRootS3Key", "assetRootBucket"}``); None when the
+    launching Lambda named none, and the subfolder and reference root are then derived from the key.
     """
     # Convert input to data type
     definition = PipelineDefinition(**params)
@@ -117,6 +119,7 @@ def run(params: dict, results_location: dict = None) -> PipelineExecutionParams:
             definition.localTest == "True",
             definition.assetId,
             results_location=results_location,
+            input_asset=input_asset,
         )
     except Exception as e:
         logger.exception(f"Unexpected error in preview pipeline: {e}")
@@ -167,6 +170,7 @@ def _run_preview_pipeline(
     localTest: bool = False,
     assetId: str = "",
     results_location: dict = None,
+    input_asset: dict = None,
 ) -> PipelineStage:
     """
     Run the preview generation pipeline for a single stage, logging the run's compute resources,
@@ -180,7 +184,7 @@ def _run_preview_pipeline(
     timer = PhaseTimer()
     try:
         return _run_preview_stage(stage, inputMetadata, inputParameters, localTest, assetId,
-                                  budgets, timer, results_location)
+                                  budgets, timer, results_location, input_asset)
     finally:
         logger.info(timer.summary())
 
@@ -194,6 +198,7 @@ def _run_preview_stage(
     budgets: "resources.Budgets",
     timer: PhaseTimer,
     results_location: dict = None,
+    input_asset: dict = None,
 ) -> PipelineStage:
     """
     1. Download input file from S3 (a line-oriented point cloud is streamed instead)
@@ -218,7 +223,7 @@ def _run_preview_stage(
     stage_input = StageInput(**stage.inputFile)
     stage_output = StageOutput(**stage.outputFiles)
 
-    relative_subdir = _relative_subdir(stage_input, stage_output, assetId)
+    relative_subdir = _relative_subdir(stage_input, stage_output, assetId, input_asset)
     logger.info(f"Input relative subdirectory: '{relative_subdir}'")
 
     # Parse overwriteExistingPreviewFiles parameter (default: True)
@@ -308,13 +313,7 @@ def _run_preview_stage(
             logger.info(f"Downloading file from S3: {stage_input.bucketName}/{stage_input.objectKey}")
             # The input lands at its path relative to its asset's root, so the files it references are
             # fetched beside it at their own relative paths and resolve locally as they do in the asset.
-            reference_root_key = dependencies.asset_root_key(
-                stage_input.objectKey,
-                assetId,
-                stage_output.objectDir or "",
-                same_bucket_output=bool(stage_output.bucketName)
-                and stage_input.bucketName == stage_output.bucketName,
-            )
+            reference_root_key = _reference_root_key(stage_input, stage_output, assetId, input_asset)
             reference_local_root = os.path.join(local_input_dir, "asset")
             input_target = dependencies.local_path_for(
                 reference_local_root,
@@ -676,8 +675,45 @@ def _resolve_output_type(inputParametersObject: dict) -> str:
     return normalized
 
 
-def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId: str) -> str:
+def _manifest_relative_path(input_asset: dict) -> str:
+    """The input's asset-relative path from its manifest entry, without leading or trailing ``/``, or
+    ``""`` when the launch named none."""
+    relative = (input_asset or {}).get("relativePath") or ""
+    return relative.strip("/") if isinstance(relative, str) else ""
+
+
+def _reference_root_key(stage_input: StageInput, stage_output: StageOutput, assetId: str,
+                        input_asset: dict = None) -> str:
+    """The prefix the input's referenced files are confined to.
+
+    With the input's manifest entry: its ``assetRootS3Key`` when that root is in the input's own bucket,
+    else the key with its asset-relative path removed (an input an earlier step rewrote sits in the
+    run's output files folder at that path) — ``dependencies.confinement_root``. Without one: the key up
+    to the asset id, the run's output files folder, or the input's own directory —
+    ``dependencies.asset_root_key``."""
+    relative = _manifest_relative_path(input_asset)
+    root_hint = (input_asset or {}).get("assetRootS3Key") or ""
+    root_bucket = (input_asset or {}).get("assetRootBucket") or ""
+    if relative or root_hint:
+        if root_bucket and root_bucket != stage_input.bucketName:
+            root_hint = ""
+        return dependencies.confinement_root(stage_input.objectKey or "", assetId, relative, root_hint)
+    return dependencies.asset_root_key(
+        stage_input.objectKey,
+        assetId,
+        stage_output.objectDir or "",
+        same_bucket_output=bool(stage_output.bucketName)
+        and stage_input.bucketName == stage_output.bucketName,
+    )
+
+
+def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId: str,
+                     input_asset: dict = None) -> str:
     """The input file's subdirectory within the asset, so its preview is written beside it.
+
+    The input's manifest entry names its asset-relative path (``relativePath``), whose folder is the
+    subdirectory for an original asset file, an asset created on an existing bucket folder, and a file
+    an earlier workflow step wrote alike. Without one (a launch that named none):
 
     A file an earlier workflow step produced or rewrote lives in the run's output FILES folder —
     the same folder this stage writes to — keyed by its asset-relative path, so the path after
@@ -685,11 +721,16 @@ def _relative_subdir(stage_input: StageInput, stage_output: StageOutput, assetId
     asset location instead, where the segments between the asset id and the filename are the
     subdirectory. The assetId is passed through the pipeline definition from the workflow state.
 
+    Example: relativePath "/test/pump.glb" → "test"
     Example: input key "pipelines/convert/job/output/exec/files/test/pump.glb" with output dir
       "pipelines/convert/job/output/exec/files/" → "test"
     Example: assetId "xd130a6d6", input key "xd130a6d6/a/b/model.glb" → "a/b"
     Example: input key "xd130a6d6/pump.e57" → ""
     """
+    relative = _manifest_relative_path(input_asset)
+    if relative:
+        return relative.rsplit("/", 1)[0] if "/" in relative else ""
+
     input_key = stage_input.objectKey or ""
     output_dir = stage_output.objectDir or ""
     if (input_key and output_dir and stage_output.bucketName

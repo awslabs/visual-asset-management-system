@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import sys
+import time
 import types
 from unittest.mock import MagicMock, patch
 
@@ -88,6 +89,12 @@ def load_handler(module_name, boto_client_factory=None):
         spec.loader.exec_module(module)
     assert os.path.abspath(module.__file__) == os.path.abspath(handler_path)
     return module
+
+
+def stub_api_check_deadline(event):
+    """``_api_check_deadline`` for a stub ``handlers.osSemanticSearch.search``: 20 s from now, as the real
+    one answers an event without a receipt time (the tests' events carry none)."""
+    return time.monotonic() + 20.0
 
 
 # A video-window segment key (`t` + a 10-digit start millisecond); the segment fixtures of the lifecycle

@@ -27,7 +27,7 @@ Train a new policy from scratch:
 {
     "trainingConfig": {
         "mode": "train",
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "numEnvs": 4096,
         "maxIterations": 1500,
         "rlLibrary": "rsl_rl"
@@ -47,7 +47,7 @@ Reference a checkpoint within the same asset using a relative path:
 {
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Cartpole-Direct-v0",
+        "task": "Isaac-Cartpole-Direct",
         "checkpointPath": "checkpoints/model_300.pt",
         "numEnvs": 100,
         "numEpisodes": 50,
@@ -66,7 +66,7 @@ naming any other bucket is rejected before the job starts:
 {
     "trainingConfig": {
         "mode": "evaluate",
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "policyS3Uri": "s3://vams-assets-bucket/asset-123/policies/ant_trained.pt",
         "numEnvs": 100,
         "numEpisodes": 50,
@@ -88,11 +88,24 @@ Place a `.pt` or `.pth` file in the asset. The pipeline will automatically disco
 
 Common environments include:
 
--   `Isaac-Cartpole-v0` - Classic cart-pole balancing
--   `Isaac-Ant-v0` - Quadruped locomotion
--   `Isaac-Humanoid-v0` - Humanoid walking
--   `Isaac-Reach-Franka-v0` - Robot arm reaching
--   `Isaac-Lift-Cube-Franka-v0` - Object manipulation
+-   `Isaac-Cartpole` and `Isaac-Cartpole-Direct` - Classic cart-pole balancing
+-   `Isaac-Ant` - Quadruped locomotion
+-   `Isaac-Humanoid` - Humanoid walking
+-   `Isaac-Reach-Franka` - Robot arm reaching
+-   `Isaac-Lift-Franka` - Object manipulation
+
+Isaac Lab 3.0 ids carry no `-v0` suffix. A few saved 2.x ids are mapped to their 3.0 ids (see the [CLI reference](ISAACLAB_CLI_REFERENCE.md#task-ids)); for any other, look the id up with `./isaaclab.sh list_envs`. Which tasks run on which physics engine is in the [CLI reference](ISAACLAB_CLI_REFERENCE.md#task-support-by-engine).
+
+### Choosing the Physics Engine
+
+The "Physics engine" field selects the engine for the run:
+
+-   **`newton_mjwarp`** (Newton, the default).
+-   **`isaacsim_physx`** (PhysX on Isaac Sim), the engine earlier VAMS releases used. Select it to reproduce a run made before the upgrade.
+
+Runs that do not name an engine run on Newton: saved configurations, edited template bodies without the field, JSON input files and Isaac Sim connector launches. Results differ from earlier PhysX runs. A policy trained before the upgrade was trained on PhysX, so evaluating it on Newton is a transfer test and not a like-for-like evaluation. When an evaluation can tell that its checkpoint was trained on the other engine, it prints a note and records it as `physicsNote` in `evaluate-config.json`, and it still runs.
+
+A task that lists presets but not the engine you chose fails at the start with a message naming the options. A task that lists no physics presets (the AutoMate tasks, and most custom or ported environments) runs on the physics it registers: the run log says so and `train-config.json` records `task-default`. Port a custom environment package to Python 3.12 (the Isaac Lab environment runs Python 3.12, and a wheel built for another Python is refused).
 
 **List all environments:**
 
@@ -186,10 +199,10 @@ gym.register(
 pip install -e .
 
 # Test training
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
+./isaaclab.sh train --rl_library rsl_rl \
     --task MyCustom-Robot-v0 \
     --num_envs 512 \
-    --headless
+    --viz none
 ```
 
 ---
@@ -317,7 +330,7 @@ To evaluate a trained policy without training:
 ```json
 {
     "trainingConfig": {
-        "task": "Isaac-Ant-v0",
+        "task": "Isaac-Ant",
         "mode": "evaluate",
         "policyPath": "s3://vams-assets-bucket/asset-123/policies/my_policy.pt",
         "numEnvs": 100
@@ -335,15 +348,16 @@ Most per-run parameters are declared as template tags on the two shipped templat
 renders a field for each and substitutes the value into the configuration body at launch. The
 **Template tag** column names that field; a `-` means the parameter is set only by editing the body.
 
-| Parameter                | Template tag | Type    | Default                    | Description                                                                                                                                            |
-| ------------------------ | ------------ | ------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mode`                   | -            | string  | `train`                    | Execution mode: `train` or `evaluate`. Fixed by the template, because it is what selects the training or the evaluation pipeline                       |
-| `task`                   | `TASK`       | string  | `Isaac-Cartpole-Direct-v0` | Environment task name                                                                                                                                  |
-| `rlLibrary`              | `RL_LIBRARY` | string  | `rsl_rl`                   | RL framework: `rsl_rl`, `skrl`, `rl_games`. Any other value fails the execution before a GPU node is provisioned, rather than falling back to `rsl_rl` |
-| `seed`                   | `SEED`       | integer | null                       | Random seed for reproducibility; a blank field leaves it unset                                                                                         |
-| `customEnvironmentPath`  | -            | string  | -                          | Path to a custom environment package relative to the asset root                                                                                        |
-| `customEnvironmentS3Uri` | -            | string  | -                          | Full S3 URI to the package; must name the executing asset's own bucket                                                                                 |
-| `stageAssetPaths`        | -            | list    | -                          | Files and folders of the executing asset downloaded into `/tmp/assets` (`VAMS_ASSET_FILES_DIR`) before the run, keeping their asset-relative paths     |
+| Parameter                | Template tag | Type    | Default                 | Description                                                                                                                                            |
+| ------------------------ | ------------ | ------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mode`                   | -            | string  | `train`                 | Execution mode: `train` or `evaluate`. Fixed by the template, because it is what selects the training or the evaluation pipeline                       |
+| `task`                   | `TASK`       | string  | `Isaac-Cartpole-Direct` | Environment task name                                                                                                                                  |
+| `rlLibrary`              | `RL_LIBRARY` | string  | `rsl_rl`                | RL framework: `rsl_rl`, `skrl`, `rl_games`. Any other value fails the execution before a GPU node is provisioned, rather than falling back to `rsl_rl` |
+| `physics`                | `PHYSICS`    | string  | `newton_mjwarp`         | Physics engine: `newton_mjwarp` or `isaacsim_physx`. A blank field means Newton                                                                        |
+| `seed`                   | `SEED`       | integer | null                    | Random seed for reproducibility; a blank field leaves it unset                                                                                         |
+| `customEnvironmentPath`  | -            | string  | -                       | Path to a custom environment package relative to the asset root                                                                                        |
+| `customEnvironmentS3Uri` | -            | string  | -                       | Full S3 URI to the package; must name the executing asset's own bucket                                                                                 |
+| `stageAssetPaths`        | -            | list    | -                       | Files and folders of the executing asset downloaded into `/tmp/assets` (`VAMS_ASSET_FILES_DIR`) before the run, keeping their asset-relative paths     |
 
 **Training Mode Parameters:**
 
@@ -354,14 +368,15 @@ renders a field for each and substitutes the value into the configuration body a
 
 **Evaluation Mode Parameters:**
 
-| Parameter         | Template tag        | Type    | Default | Description                                                                               |
-| ----------------- | ------------------- | ------- | ------- | ----------------------------------------------------------------------------------------- |
-| `checkpointPath`  | `CHECKPOINT_PATH`   | string  | -       | Relative path to checkpoint within asset (e.g., `checkpoints/<executionId>/model_300.pt`) |
-| `policyS3Uri`     | -                   | string  | -       | Full S3 URI to trained policy (`.pt` file); must name the executing asset's own bucket    |
-| `numEnvs`         | `NUM_ENVS`          | integer | 100     | Number of parallel environments                                                           |
-| `numEpisodes`     | `NUM_EPISODES`      | integer | 50      | Number of episodes to evaluate                                                            |
-| `stepsPerEpisode` | `STEPS_PER_EPISODE` | integer | 1000    | Maximum simulation steps in one episode                                                   |
-| `recordVideo`     | `RECORD_VIDEO`      | boolean | false   | Upload the evaluation video to the asset                                                  |
+| Parameter         | Template tag        | Type    | Default         | Description                                                                                 |
+| ----------------- | ------------------- | ------- | --------------- | ------------------------------------------------------------------------------------------- |
+| `checkpointPath`  | `CHECKPOINT_PATH`   | string  | -               | Relative path to checkpoint within asset (e.g., `checkpoints/<executionId>/model_300.pt`)   |
+| `policyS3Uri`     | -                   | string  | -               | Full S3 URI to trained policy (`.pt` file); must name the executing asset's own bucket      |
+| `numEnvs`         | `NUM_ENVS`          | integer | 100             | Number of parallel environments                                                             |
+| `numEpisodes`     | `NUM_EPISODES`      | integer | 50              | Number of episodes to evaluate                                                              |
+| `stepsPerEpisode` | `STEPS_PER_EPISODE` | integer | 1000            | Maximum simulation steps in one episode                                                     |
+| `recordVideo`     | `RECORD_VIDEO`      | boolean | false           | Upload the evaluation video to the asset                                                    |
+| `physics`         | `PHYSICS`           | string  | `newton_mjwarp` | Physics engine: `newton_mjwarp` or `isaacsim_physx`. Use the engine that trained the policy |
 
 > **Note:** Specify either `checkpointPath` (recommended) or `policyS3Uri`. If neither is provided, the pipeline auto-discovers `.pt` files in the config directory.
 
@@ -526,7 +541,7 @@ def _get_rewards(self):
     "workflowName": "isaac-lab-training",
     "parameters": {
         "trainingConfig": {
-            "task": "MyCartpole-v0",
+            "task": "MyCartpole",
             "numEnvs": 8192,
             "maxIterations": 3000,
             "rlLibrary": "rsl_rl",

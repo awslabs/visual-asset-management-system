@@ -90,6 +90,32 @@ class PipelineExecutionParams(JsonEncodable):
 # with no room for an unknown key, while it reads only the command's first argument.
 INPUT_VERSIONS_KEY = "inputVersions"
 
+# Where the input sits in its asset, from its manifest entry, in the same document: {"inputVersions": {...},
+# "inputAsset": {"relativePath": ..., "assetRootS3Key": ..., "assetRootBucket": ...}}. An image that reads
+# only inputVersions ignores it.
+INPUT_ASSET_KEY = "inputAsset"
+
+
+def input_asset_location(extra_args) -> dict:
+    """Where the input sits in its asset, named in the command's later arguments, as ``{"relativePath",
+    "assetRootS3Key", "assetRootBucket"}`` (each a string, ``""`` when not named), or None when none names
+    a relative path or an asset root. Never raises: without it the output subfolder is derived from the
+    input key, as before."""
+    location = None
+    for arg in extra_args or []:
+        try:
+            document = json.loads(arg)
+        except (TypeError, ValueError):
+            continue
+        named = document.get(INPUT_ASSET_KEY) if isinstance(document, dict) else None
+        if not isinstance(named, dict):
+            continue
+        fields = {name: named.get(name) if isinstance(named.get(name), str) else ""
+                  for name in ("relativePath", "assetRootS3Key", "assetRootBucket")}
+        if fields["relativePath"] or fields["assetRootS3Key"]:
+            location = fields
+    return location
+
 
 def apply_input_versions(params: dict, extra_args) -> dict:
     """Put the launch version named in the command's later arguments on the ``inputFile`` of each stage of

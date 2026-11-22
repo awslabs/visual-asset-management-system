@@ -3,8 +3,9 @@ descriptions, the requests they send through the CLI's APIClient methods, the bo
 return, error mapping, and the remote server's per-user token.
 
 The audit tools are not part of ``all``, ``consumer``, ``operator`` or ``admin``: a deployment names the
-``audit`` set. They have no feature switch and no write or destructive gate (core VAMS; the API's
-authorizer and per-log-group permission decide what a caller sees), so the set is their only gate.
+``audit`` set. Beyond the set they have only the ``AUDITLOGSEARCH`` switch (core VAMS, off in the EU
+Sovereign template) and no write or destructive gate; the API's authorizer and per-log-group permission
+decide what a caller sees.
 """
 
 import json

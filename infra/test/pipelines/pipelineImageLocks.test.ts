@@ -258,7 +258,9 @@ describe.each(PIP_LOCKED_RUNTIME_INSTALLS)("the $label image", ({ dir, dockerfil
     });
 
     it("locks every direct dependency of requirements.txt, with a hash on every pin", () => {
-        expect(lock).toMatch(/^#\s+uv pip compile requirements\.txt --generate-hashes /m);
+        expect(lock).toMatch(
+            /^#\s+uv pip compile requirements\.txt (?:--constraint \S+ )?--generate-hashes /m
+        );
         expect(entries.length).toBeGreaterThan(0);
         expect(entries.filter((e) => e.hashes === 0).map((e) => e.name)).toEqual([]);
         const locked = new Set(entries.map((e) => e.name));
@@ -295,7 +297,9 @@ describe("the Cosmos images", () => {
     it("Cosmos Transfer's NCCL upgrade comes from its hashed lock", () => {
         const root = path.join(PIPELINES_DIR, "genAi/nvidia/cosmos/transfer/container");
         const lock = fs.readFileSync(path.join(root, "requirements-nccl.lock"), "utf-8");
-        expect(lock).toMatch(/^#\s+uv pip compile requirements-nccl\.txt --generate-hashes /m);
+        // The hashed uv export of uv.lock, which the audit regenerates from this header and requires to match.
+        expect(lock).toMatch(/^#\s+uv export --frozen .*-o requirements-nccl\.lock$/m);
+        expect(lock).not.toMatch(/^#\s+uv export .*--no-hashes/m);
         const entries = lockEntries(lock);
         expect(entries.map((e) => e.name)).toEqual(["nvidia-nccl-cu12"]);
         expect(entries[0].hashes).toBeGreaterThan(0);

@@ -196,7 +196,10 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 class DualIndexSearchManager:
     """Manages OpenSearch search operations across dual indexes"""
     
-    def __init__(self):
+    def __init__(self, max_retries: int = 3, retry_on_timeout: bool = True):
+        """``max_retries`` and ``retry_on_timeout`` go to the OpenSearch client. Natural-language search's
+        OpenSearch step passes 0 and False, so a query that times out at the time its deadline leaves is not
+        started again."""
         self.client = None
         self.asset_index = None
         self.file_index = None
@@ -204,9 +207,9 @@ class DualIndexSearchManager:
             settings = opensearch_settings()
             self.asset_index = settings["asset_index"]
             self.file_index = settings["file_index"]
-            self._initialize_client(settings["endpoint"])
+            self._initialize_client(settings["endpoint"], max_retries, retry_on_timeout)
     
-    def _initialize_client(self, endpoint: str):
+    def _initialize_client(self, endpoint: str, max_retries: int = 3, retry_on_timeout: bool = True):
         """Initialize OpenSearch client; on failure the manager stays unavailable."""
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
@@ -228,8 +231,8 @@ class DualIndexSearchManager:
                 connection_class=RequestsHttpConnection,
                 pool_maxsize=20,
                 timeout=30,
-                max_retries=3,
-                retry_on_timeout=True
+                max_retries=max_retries,
+                retry_on_timeout=retry_on_timeout
             )
             
             logger.info(f"Initialized dual-index OpenSearch client - Asset: {self.asset_index}, File: {self.file_index}")

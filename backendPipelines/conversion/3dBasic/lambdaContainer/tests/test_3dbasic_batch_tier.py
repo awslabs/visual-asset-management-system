@@ -641,6 +641,16 @@ class _Len:
 
 @pytest.mark.unit
 class TestBatchEntry:
+    @pytest.fixture(autouse=True)
+    def _restore_signal_handlers(self):
+        # main() installs process-wide SIGTERM/SIGINT handlers, so save and restore them around every
+        # test in this class rather than leave the test runner's handlers replaced.
+        import signal
+        saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
+        yield
+        for sig, handler in saved.items():
+            signal.signal(sig, handler)
+
     def _env(self, **extra):
         env = {"VAMS_TASK_MEMORY_MIB": "30720", "VAMS_CONVERSION_EVENT": json.dumps({"workflowExecutionId": "e1"})}
         env.update(extra)
@@ -691,6 +701,68 @@ class TestBatchEntry:
         batch_entry.main(env, implementation)
         captured = capsys.readouterr()
         assert "SECRET-TOKEN" not in captured.out + captured.err
+
+    def test_the_process_is_made_non_dumpable_before_the_conversion_runs(self):
+        # No ECS init is enabled on the job definition, so this process is the task's PID 1: it closes
+        # its own /proc entry to a same-user reader (the worker child) before the worker starts, and
+        # reaps orphaned descendants after.
+        order = []
+        implementation = MagicMock()
+        implementation.convert.side_effect = lambda data: (order.append("convert"),
+                                                           {"statusCode": 200, "body": "Success"})[1]
+        with patch.object(batch_entry, "harden_process", lambda: order.append("harden") or True), \
+             patch.object(batch_entry, "reap_orphans", lambda: order.append("reap")):
+            assert batch_entry.main(self._env(), implementation) == 0
+        assert order == ["harden", "convert", "reap"]
+
+    def test_the_process_is_hardened_and_orphans_reaped_even_when_the_conversion_fails(self):
+        order = []
+        implementation = MagicMock()
+        implementation.convert.side_effect = ValueError("boom")
+        with patch.object(batch_entry, "harden_process", lambda: order.append("harden") or True), \
+             patch.object(batch_entry, "reap_orphans", lambda: order.append("reap")):
+            assert batch_entry.main(self._env(), implementation) == 1
+        assert order == ["harden", "reap"]
+
+    def test_a_stop_signal_ends_the_task_at_once_with_143(self):
+        # PID 1 has no default action for SIGTERM, so without a handler a stopped job waits the whole
+        # stop timeout and is then SIGKILLed (137). main() installs a handler that exits 128 + signum,
+        # so run_worker's and main()'s finally blocks still run and a SIGTERM ends the task with 143.
+        import signal
+        implementation = MagicMock()
+        implementation.convert.return_value = {"statusCode": 200, "body": "Success"}
+        with patch.object(batch_entry, "harden_process", lambda: True):
+            assert batch_entry.main(self._env(), implementation) == 0
+        term = signal.getsignal(signal.SIGTERM)
+        assert callable(term) and callable(signal.getsignal(signal.SIGINT))
+        with pytest.raises(SystemExit) as caught:
+            term(signal.SIGTERM, None)
+        assert caught.value.code == 143
+
+    def test_on_linux_a_process_that_cannot_be_hardened_refuses_to_run(self, capsys, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        implementation = MagicMock()
+        with patch.object(batch_entry, "harden_process", lambda: False):
+            assert batch_entry.main(self._env(), implementation) == 3
+        implementation.convert.assert_not_called()
+        err = capsys.readouterr().err
+        assert err.startswith(batch_entry.ERROR_PREFIX) and "non-dumpable" in err
+
+    def test_off_linux_the_run_proceeds_even_though_hardening_is_unavailable(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        implementation = MagicMock()
+        implementation.convert.return_value = {"statusCode": 200, "body": "Success"}
+        with patch.object(batch_entry, "harden_process", lambda: False):
+            assert batch_entry.main(self._env(), implementation) == 0
+        implementation.convert.assert_called_once()
+
+    def test_orphaned_descendants_are_reaped_until_none_are_left(self):
+        with patch("os.waitpid", MagicMock(side_effect=[(321, 0), (0, 0)])):
+            assert batch_entry.reap_orphans() == 1
+
+    def test_reaping_stops_cleanly_when_there_is_nothing_to_wait_for(self):
+        with patch("os.waitpid", MagicMock(side_effect=ChildProcessError())):
+            assert batch_entry.reap_orphans() == 0
 
     def test_both_tiers_reach_the_same_convert(self):
         handler = _read("lambda.py")

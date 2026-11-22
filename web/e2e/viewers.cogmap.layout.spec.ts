@@ -279,7 +279,7 @@ test.describe("GeoTIFF Map Viewer layout", () => {
         const label = (await row.getByTestId("raster-layer-label").innerText()).trim();
         // A raster leaves the list by being deselected, not from the list.
         await expect(page.getByRole("button", { name: /^Remove /i })).toHaveCount(0);
-        const hide = row.getByRole("checkbox", { name: `Show "${label}" on the map` });
+        const hide = row.getByRole("checkbox", { name: `Visible: ${label}` });
         await expect(hide).toBeChecked();
         await hide.click();
 

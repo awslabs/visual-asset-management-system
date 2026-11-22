@@ -143,6 +143,13 @@ def lambda_handler(event, context):
         # The Region of each asset bucket outside the deployment Region; the container registers it
         # before its first S3 call.
         "bucketRegions": bucket_regions(event, views),
+        # Where the primary input sits in its asset, from its manifest entry: the folder of its
+        # relativePath is the output subdirectory. Written only when the event names one, so a
+        # definition without a manifest entry stays the one written before the field.
+        **{field: value for field, value in (
+            ("inputRelativePath", event.get("inputRelativePath")),
+            ("inputAssetRootS3Key", event.get("inputAssetRootS3Key")),
+            ("inputAssetRootBucket", event.get("inputAssetRootBucket"))) if value},
     }
 
     logger.info(f"Definition: {definition}")

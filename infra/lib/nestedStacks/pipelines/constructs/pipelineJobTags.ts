@@ -73,6 +73,7 @@ export const VAMS_PIPELINE_TAG_VALUES = {
     nvidiaGr00tFinetune: "nvidiaGr00tFinetune",
     coordinateTransform: "coordinateTransform",
     cogConvert: "cogConvert",
+    conversion3dBasic: "conversion3dBasic",
     cadStepAgent: "cadStepAgent",
     isaacLabTraining: "isaacLabTraining",
     zipArchive: "zipArchive",

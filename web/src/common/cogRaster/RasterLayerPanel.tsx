@@ -152,11 +152,12 @@ const LayerRow: React.FC<{
                 {visibilityToggle && layers.setVisible && !entry.failed ? (
                     <span data-testid="raster-layer-visibility">
                         {/* A switch labelled "Visible": on means the raster is on the map. Its accessible
-                            name is the same in both states and the checked state carries the state, so a
-                            screen reader says "Show <label> on the map, switch, on / off". */}
+                            name starts with the visible word and is the same in both states, and the checked
+                            state carries the state, so a screen reader says "Visible: <label>, switch, on /
+                            off" and a speech-input user can say "click Visible". */}
                         <Toggle
                             checked={entry.visible}
-                            ariaLabel={`Show "${entry.label}" on the map`}
+                            ariaLabel={`Visible: ${entry.label}`}
                             onChange={({ detail }) => {
                                 void layers.setVisible!(entry.id, detail.checked);
                             }}

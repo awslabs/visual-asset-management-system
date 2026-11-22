@@ -153,17 +153,20 @@ _TRIMESH = SimpleNamespace(load=lambda path, resolver=None: _Mesh())
 _ABSENT = object()
 
 
-def _body(execution_id):
+def _body(execution_id, pipeline_execution_id=_ABSENT):
     body = {
         "inputManifestS3Location": f"s3://{ASSET_BUCKET}/{MANIFEST_KEY}",
         "inputConfigurationS3Location": f"s3://{ASSET_BUCKET}/{CONFIGURATION_KEY}",
     }
     if execution_id is not _ABSENT:
         body["workflowExecutionId"] = execution_id
+    if pipeline_execution_id is not _ABSENT:
+        body["pipelineExecutionId"] = pipeline_execution_id
     return body
 
 
-def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL, asset_files=None):
+def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL, asset_files=None,
+         pipeline_execution_id=_ABSENT):
     """Run the handler once; return its response, the raw lines it logged, and those lines parsed."""
     storage = _Storage(input_bytes, asset_files)
     start = len(buffer.getvalue())
@@ -172,7 +175,8 @@ def _run(mod, logger, buffer, execution_id, input_bytes=OBJ_MISSING_MTL, asset_f
     with patch.object(mod, "logger", logger), patch.object(mod, "s3_client", storage), \
             patch.object(mod, "s3", SimpleNamespace(meta=SimpleNamespace(client=storage))), \
             patch.object(mod, "run_worker", in_process_worker(_TRIMESH)):
-        response = mod.lambda_handler({"body": json.dumps(_body(execution_id))}, MagicMock())
+        response = mod.lambda_handler({"body": json.dumps(_body(execution_id, pipeline_execution_id))},
+                                      MagicMock())
     assert storage.uploaded == ["runs/r1/files/box.glb"]
     raw_lines = buffer.getvalue()[start:].splitlines()
     return response, raw_lines, [json.loads(line) for line in raw_lines]
@@ -213,6 +217,38 @@ class TestTheRunsLinesCarryItsExecutionId:
         messages = [r["message"] for r in records]
         assert "Conversion request received" in messages and "Conversion complete" in messages
         assert any(m.startswith(SKIPPED_WARNING) for m in messages)
+
+
+PIPELINE_EXECUTION_ID = "5b2e8c1f0d7a4e39b6c2a1f4e8d0c3b7"
+
+
+@pytest.mark.unit
+class TestABatchTierRunCarriesItsPipelineExecutionIdToo:
+    """On a deployment with the Batch tier, the launcher registers this function's log group as a
+    source of the pipeline execution, and VAMS reads a registered shared group for lines that carry
+    BOTH execution ids. The launcher passes the pipeline execution id in the request."""
+
+    def test_every_line_carries_both_ids(self, container_logger):
+        logger, buffer = container_logger
+        _, raw_lines, records = _run(_load_handler(), logger, buffer, EXECUTION_ID,
+                                     pipeline_execution_id=PIPELINE_EXECUTION_ID)
+        assert [r["message"] for r in records if r.get("pipelineExecutionId") != PIPELINE_EXECUTION_ID] == []
+        assert [r["message"] for r in records if r.get("workflowExecutionId") != EXECUTION_ID] == []
+        raw, _ = _the_line(raw_lines, records, SKIPPED_WARNING)
+        assert PIPELINE_EXECUTION_ID in raw and EXECUTION_ID in raw
+
+    def test_a_reused_environment_does_not_carry_the_previous_runs_pipeline_execution_id(self, container_logger):
+        logger, buffer = container_logger
+        mod = _load_handler()
+        _run(mod, logger, buffer, EXECUTION_ID, pipeline_execution_id=PIPELINE_EXECUTION_ID)
+        _, _, without = _run(mod, logger, buffer, EXECUTION_ID)
+        assert [r["message"] for r in without if "pipelineExecutionId" in r] == []
+
+    @pytest.mark.parametrize("value", ["", None, 42], ids=["empty", "null", "not-a-string"])
+    def test_an_unusable_value_is_not_logged(self, container_logger, value):
+        logger, buffer = container_logger
+        _, _, records = _run(_load_handler(), logger, buffer, EXECUTION_ID, pipeline_execution_id=value)
+        assert [r["message"] for r in records if "pipelineExecutionId" in r] == []
 
 
 @pytest.mark.unit
