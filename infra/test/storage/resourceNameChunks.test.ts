@@ -30,7 +30,10 @@ import {
     renderResourceNameChunk,
     RESOURCE_NAME_CHUNK_COUNT_LIMIT,
     RESOURCE_NAME_CHUNK_MAX_CHARS,
+    arnMaxLength,
+    EVENT_BUS_ARN_MAX_LENGTH,
     TOKEN_MAX_LENGTH_BY_CATEGORY,
+    TOKEN_MAX_LENGTH_BY_KEY,
     UNKNOWN_TOKEN_MAX_LENGTH,
     worstCaseValueChars,
 } from "../../lib/nestedStacks/resourceNames/resourceNameChunks";
@@ -74,7 +77,6 @@ describe("planResourceNameChunks", () => {
         expect(worstCaseValueChars({ key: "integration/a", value: t })).toBe(
             UNKNOWN_TOKEN_MAX_LENGTH + 2
         );
-        expect(worstCaseValueChars({ key: "integration/a", value: t, maxLength: 80 })).toBe(82);
         expect(worstCaseValueChars({ key: "integration/a", value: 'a"b' })).toBe(
             JSON.stringify('a"b').length
         );
@@ -83,6 +85,24 @@ describe("planResourceNameChunks", () => {
             s3Buckets: 63,
             cloudwatchLogGroups: 512,
         });
+    });
+
+    test("sizes an ARN-valued key by its own bound, not the 2,048 of an unknown category", () => {
+        const t = tokenValue(stack(), "Bus");
+        const busKey = RESOURCE_PARAM_KEYS.integration.orchestrationBusArn;
+        expect(TOKEN_MAX_LENGTH_BY_KEY).toEqual({ [busKey]: EVENT_BUS_ARN_MAX_LENGTH });
+        expect(worstCaseValueChars({ key: busKey, value: t })).toBe(EVENT_BUS_ARN_MAX_LENGTH + 2);
+        // arn: + partition (16) + : + events + : + Region (25) + : + account (12) + : + event-bus/ +
+        // a 256-character name.
+        expect(EVENT_BUS_ARN_MAX_LENGTH).toBe(333);
+        expect(arnMaxLength("events", "event-bus/", 256)).toBe(333);
+        // Holds the longest bus ARN any partition and Region in use today can produce.
+        const longest = `arn:aws-us-gov:events:eusc-de-east-1:123456789012:event-bus/${"b".repeat(
+            256
+        )}`;
+        expect(longest.length).toBeLessThanOrEqual(EVENT_BUS_ARN_MAX_LENGTH);
+        // A literal is still sized by its own length.
+        expect(worstCaseValueChars({ key: busKey, value: "arn:aws:events:x" })).toBe(18);
     });
 
     test("packs in order, keeps every worst case within 4,096 and numbers the chunks 0..n-1", () => {
@@ -325,7 +345,7 @@ const LATE_BOUND_KEYS = new Set<string>([
 const isLateBound = (key: string) => LATE_BOUND_KEYS.has(key) || key.startsWith("securityGroups/");
 
 function worstCaseOf(chunk: SynthChunk): number {
-    // Each token stands for its key's category bound, as the planner sized it.
+    // Each token stands for its key's bound (exact key, else category), as the planner sized it.
     let chars = chunk.flat.length;
     const pattern = /"([^"]+)":"(\$\{[^}]+\})"/g;
     let match: RegExpExecArray | null;
@@ -334,7 +354,9 @@ function worstCaseOf(chunk: SynthChunk): number {
             .split("/")
             .slice(0, -1)
             .find((segment) => segment in TOKEN_MAX_LENGTH_BY_CATEGORY);
-        const bound = category ? TOKEN_MAX_LENGTH_BY_CATEGORY[category] : UNKNOWN_TOKEN_MAX_LENGTH;
+        const bound =
+            TOKEN_MAX_LENGTH_BY_KEY[match[1]] ??
+            (category ? TOKEN_MAX_LENGTH_BY_CATEGORY[category] : UNKNOWN_TOKEN_MAX_LENGTH);
         chars += bound - match[2].length;
     }
     return chars;
@@ -373,6 +395,25 @@ describe.each([
         for (const chunk of chunks) {
             expect(worstCaseOf(chunk)).toBeLessThanOrEqual(RESOURCE_NAME_CHUNK_MAX_CHARS);
         }
+    });
+
+    test("size every deploy-time value by a bound of its own key or category", () => {
+        // A value sized as an unknown category (2,048 characters) takes half a chunk alone; an
+        // ARN-valued key needs its own bound in TOKEN_MAX_LENGTH_BY_KEY.
+        const tokenKeys = chunks.flatMap((c) =>
+            [...c.flat.matchAll(/"([^"]+)":"\$\{[^}]+\}"/g)].map((m) => m[1])
+        );
+        expect(tokenKeys.length).toBeGreaterThan(0);
+        const unbounded = tokenKeys.filter(
+            (key) =>
+                !(key in TOKEN_MAX_LENGTH_BY_KEY) &&
+                !key
+                    .split("/")
+                    .slice(0, -1)
+                    .some((segment) => segment in TOKEN_MAX_LENGTH_BY_CATEGORY)
+        );
+        expect(unbounded).toEqual([]);
+        expect(tokenKeys).toContain(RESOURCE_PARAM_KEYS.integration.orchestrationBusArn);
     });
 
     test("carry every registered and lane name exactly once, with its per-key parameter's value", () => {
@@ -443,27 +484,39 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
         return { chunks: chunksOf(s).length, names, perSource, stacks: [...stacks] };
     };
 
+    const namesPerChunk = (s: SynthResult) =>
+        chunksOf(s).map((c) => Object.keys(c.parsed.m).length);
+
     test("commercial template, add-ons off", () => {
-        expect(layout(synthFor("commercial", false))).toEqual({
-            chunks: 8,
+        const s = synthFor("commercial", false);
+        expect(layout(s)).toEqual({
+            chunks: 7,
             names: 76,
-            perSource: { core: 8 },
+            perSource: { core: 7 },
             stacks: ["root"],
         });
+        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 5]);
     });
 
     test("commercial template, every add-on on", () => {
         const s = synthFor("commercial", true);
         expect(layout(s)).toEqual({
-            chunks: 9,
+            chunks: 8,
             names: 78,
-            perSource: { core: 8, addon: 1 },
+            perSource: { core: 7, addon: 1 },
             stacks: ["root"],
         });
         // The add-on's names are packed after the core's, in a chunk of their own.
         const edhKeys = Object.values(ADDON_RESOURCE_PARAM_KEYS.dynamoTables);
         const edhChunks = chunksOf(s).filter((c) => edhKeys.some((k) => k in c.parsed.m));
-        expect(edhChunks.map((c) => c.index)).toEqual([8]);
+        expect(edhChunks.map((c) => c.index)).toEqual([7]);
+    });
+
+    test.each([
+        ["govcloud", [13, 13, 13, 13, 10, 9, 5]],
+        ["eusovereign", [13, 13, 13, 13, 10, 10, 3]],
+    ] as [TemplateName, number[]][])("%s template", (name, perChunk) => {
+        expect(namesPerChunk(synthFor(name, false))).toEqual(perChunk);
     });
 
     test("one GetParameters call reads every chunk in each shipped template", () => {

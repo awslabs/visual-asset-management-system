@@ -10,10 +10,6 @@ import { IConstruct } from "constructs";
 export interface ResourceNameDescriptor {
     paramKey: string; // canonical key from RESOURCE_PARAM_KEYS, e.g. "dynamoTables/assetStorage"
     value: string; // deploy-time token (tableName / bucketName / logGroupName)
-    // Longest the deploy-time value can be, for sizing the resource-name chunk parameters
-    // (resourceNameChunks.ts). Optional: unset, the chunk builder uses the limit of the key's
-    // category (or the literal's own length).
-    maxLength?: number;
 }
 
 /**

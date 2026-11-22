@@ -29,10 +29,10 @@
  * - Names are packed per source (the core registry, then each lane stack in the order it first
  *   published), so toggling an add-on adds or removes that source's chunks and leaves the others'
  *   contents as they were.
- * - Values are deploy-time tokens, so chunks are sized by the longest each value can be: the
- *   descriptor's `maxLength`, the literal's own length, or the limit of the key's category
- *   (TOKEN_MAX_LENGTH_BY_CATEGORY; UNKNOWN_TOKEN_MAX_LENGTH otherwise). Every chunk's worst case
- *   stays within the 4,096-character standard-tier limit.
+ * - Values are deploy-time tokens, so chunks are sized by the longest each value can be: a literal's
+ *   own length, else the bound of its exact key (TOKEN_MAX_LENGTH_BY_KEY, for ARN-valued keys), else
+ *   the limit of the key's category (TOKEN_MAX_LENGTH_BY_CATEGORY), else UNKNOWN_TOKEN_MAX_LENGTH.
+ *   Every chunk's worst case stays within the 4,096-character standard-tier limit.
  * - The layout id is a hash of n and the ordered keys of every chunk, so a reader that meets chunks
  *   of two layouts (a deployment mid-update) can tell, and reads the prefix instead.
  */
@@ -41,6 +41,7 @@ import { Annotations, Stack, Token } from "aws-cdk-lib";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { createHash } from "crypto";
 import * as Config from "../../../config/config";
+import { RESOURCE_PARAM_KEYS } from "../../../common/resourceParamKeys";
 import { ResourceNameRegistry } from "./resourceNameRegistry";
 
 /** The `v` every chunk carries; backend CHUNK_FORMAT_VERSION. */
@@ -52,15 +53,57 @@ export const RESOURCE_NAME_CHUNK_MAX_CHARS = 4096;
 /** Most chunks a deployment may publish; backend CHUNK_COUNT_LIMIT, above which a reader refuses. */
 export const RESOURCE_NAME_CHUNK_COUNT_LIMIT = 100;
 
-/** Longest a deploy-time value can be, by the key segment naming its category. */
+/** Longest a deploy-time value can be, by the key segment naming its category (AWS name limits). */
 export const TOKEN_MAX_LENGTH_BY_CATEGORY: Readonly<Record<string, number>> = {
-    dynamoTables: 255, // DynamoDB table name
-    s3Buckets: 63, // S3 bucket name
-    cloudwatchLogGroups: 512, // CloudWatch Logs log group name
+    dynamoTables: 255, // DynamoDB CreateTable TableName: 3-255 characters
+    s3Buckets: 63, // S3 bucket name: 3-63 characters
+    cloudwatchLogGroups: 512, // CloudWatch Logs CreateLogGroup logGroupName: 1-512 characters
 };
 
-/** A deploy-time value under any other category, which may be an ARN (2,048 characters at most). */
+/**
+ * A deploy-time value under any other category, which may be an ARN: 2,048 characters, the longest
+ * ARN most AWS APIs accept. A key whose value is a known kind of ARN gets its own bound in
+ * TOKEN_MAX_LENGTH_BY_KEY instead.
+ */
 export const UNKNOWN_TOKEN_MAX_LENGTH = 2048;
+
+// ARN components, for bounding `arn:<partition>:<service>:<region>:<account-id>:<resource>`. The
+// partition and Region allowances are above the longest in use today (`aws-us-gov`, 10 characters;
+// `eusc-de-east-1` and `ap-southeast-5`, 14), so a new partition or Region does not overflow a chunk.
+const ARN_PARTITION_MAX = 16;
+const ARN_REGION_MAX = 25;
+const ARN_ACCOUNT_ID_LENGTH = 12;
+
+/** Longest ARN of `service` whose resource part is `resourcePrefix` followed by a name of `nameMax`. */
+export function arnMaxLength(service: string, resourcePrefix: string, nameMax: number): number {
+    const separators = ":".length * 5; // arn:<partition>:<service>:<region>:<account>:<resource>
+    return (
+        "arn".length +
+        ARN_PARTITION_MAX +
+        service.length +
+        ARN_REGION_MAX +
+        ARN_ACCOUNT_ID_LENGTH +
+        separators +
+        resourcePrefix.length +
+        nameMax
+    );
+}
+
+/**
+ * An EventBridge event bus ARN, `arn:<partition>:events:<region>:<account>:event-bus/<name>`, with
+ * the name at its CreateEventBus limit of 256 characters: 333 characters.
+ */
+export const EVENT_BUS_ARN_MAX_LENGTH = arnMaxLength("events", "event-bus/", 256);
+
+/**
+ * Longest a deploy-time value can be, by its exact key: the registered keys whose values are ARNs,
+ * which UNKNOWN_TOKEN_MAX_LENGTH would size at 2,048. Kept here rather than on the storage
+ * registrations, so the register() calls stay as they are. A key added to the registry with an ARN
+ * value gets an entry here, its bound derived from the AWS limits.
+ */
+export const TOKEN_MAX_LENGTH_BY_KEY: Readonly<Record<string, number>> = {
+    [RESOURCE_PARAM_KEYS.integration.orchestrationBusArn]: EVENT_BUS_ARN_MAX_LENGTH,
+};
 
 /** Characters an SSM parameter name allows, which JSON carries without escaping. */
 const SSM_KEY_PATTERN = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/;
@@ -73,7 +116,6 @@ const HEADER_RESERVE = header(99999, 99999, "x".repeat(LAYOUT_ID_LENGTH)).length
 export interface ResourceNameChunkEntry {
     key: string;
     value: string;
-    maxLength?: number;
 }
 
 export interface ResourceNameChunkGroup {
@@ -110,8 +152,8 @@ export function worstCaseValueChars(entry: ResourceNameChunkEntry): number {
     if (!Token.isUnresolved(entry.value)) {
         return JSON.stringify(entry.value).length;
     }
-    if (entry.maxLength !== undefined) {
-        return entry.maxLength + 2;
+    if (entry.key in TOKEN_MAX_LENGTH_BY_KEY) {
+        return TOKEN_MAX_LENGTH_BY_KEY[entry.key] + '""'.length;
     }
     const categories = entry.key.split("/").slice(0, -1);
     const category = categories.find((segment) => segment in TOKEN_MAX_LENGTH_BY_CATEGORY);
@@ -242,11 +284,7 @@ export function buildResourceNameChunks(props: {
     const groups: ResourceNameChunkGroup[] = [
         {
             source: props.coreSource,
-            entries: props.registry.list().map((d) => ({
-                key: d.paramKey,
-                value: d.value,
-                maxLength: d.maxLength,
-            })),
+            entries: props.registry.list().map((d) => ({ key: d.paramKey, value: d.value })),
         },
     ];
     for (const lane of props.registry.laneEntries()) {
