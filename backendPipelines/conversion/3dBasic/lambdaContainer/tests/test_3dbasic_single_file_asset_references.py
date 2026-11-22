@@ -34,13 +34,14 @@ GLTF = json.dumps({"asset": {"version": "2.0"},
                    "images": [{"uri": "tex.png"}, {"uri": "sibling.png"}, {"uri": "../sibling.png"}]})
 
 
-def _run(asset_root):
-    """Convert ``LOCATION`` from an asset whose location is ``asset_root``; return the S3 client."""
+def _run(asset_root, root_bucket=BUCKET, gltf=GLTF, objects=None):
+    """Convert ``LOCATION`` from an asset whose location is ``asset_root`` (recorded in ``root_bucket``);
+    return the result and the S3 client."""
     mod = _load()
-    client = FakeS3({LOCATION: GLTF.encode(), COMPANION: b"png", SIBLING: b"other asset"})
+    client = FakeS3({LOCATION: gltf.encode(), COMPANION: b"png", SIBLING: b"other asset", **(objects or {})})
     manifest = {
         "inputFiles": [{"relativePath": "/model.gltf", "bucket": BUCKET, "key": LOCATION,
-                        "assetRootS3Key": asset_root, "assetRootBucket": BUCKET}],
+                        "assetRootS3Key": asset_root, "assetRootBucket": root_bucket}],
         "outputs": {"bucket": "obkt", "files": "pipelines/p1/JOB/output/E1/files/"},
     }
 
@@ -53,7 +54,7 @@ def _run(asset_root):
             patch.object(mod, "fetch_manifest", MagicMock(return_value=manifest)), \
             patch.object(mod, "download", MagicMock(side_effect=_download)), \
             patch.object(mod, "uploadV2", MagicMock(side_effect=lambda bucket, key, path: key)), \
-            patch.object(mod, "head_input", MagicMock(return_value=(len(GLTF), '"e"'))), \
+            patch.object(mod, "head_input", MagicMock(return_value=(len(gltf), '"e"'))), \
             patch.object(mod, "_s3_client_for_bucket", MagicMock(return_value=client)), \
             patch.object(mod, "run_worker", in_process_worker(_exporting_trimesh())):
         result = mod.convert({"inputManifestS3Location": f"s3://{BUCKET}/m.json"})
@@ -77,3 +78,19 @@ class TestASingleFileAssetsReferences:
         _, client = _run("scans/")
         assert SIBLING in [key for key, _ in client.downloads]
         assert COMPANION not in client.heads
+
+    def test_a_root_recorded_in_another_bucket_is_not_applied(self):
+        # The root applies only to an input read from the root's own bucket; any other input keeps the
+        # rule it had (the input's own directory here).
+        _, client = _run(LOCATION, root_bucket="other-bucket")
+        assert SIBLING in [key for key, _ in client.downloads]
+        assert COMPANION not in client.heads
+
+    def test_a_reference_into_a_folder_named_like_the_object_is_reported_not_fetched(self):
+        # The object sits at its file name locally, so model.gltf/x.png (the companion file the asset
+        # lists at /model.gltf/x.png) would need a folder where the object's file is. It is reported as
+        # not fetched, and the run goes on with the files that could be placed.
+        gltf = json.dumps({"asset": {"version": "2.0"}, "images": [{"uri": "tex.png"}, {"uri": "model.gltf/x.png"}]})
+        result, client = _run(LOCATION, gltf=gltf, objects={LOCATION + "/model.gltf/x.png": b"png"})
+        assert [key for key, _ in client.downloads] == [COMPANION]
+        assert result["statusCode"] == 200 and "1 referenced file" in result["body"], result["body"]

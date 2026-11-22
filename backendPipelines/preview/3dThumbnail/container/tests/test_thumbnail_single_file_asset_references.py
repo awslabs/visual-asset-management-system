@@ -13,6 +13,7 @@ The bucket is a dict: an object and a folder of the same name cannot both sit on
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -46,10 +47,10 @@ class DictBucket:
         return path
 
 
-def _fetch(tmp_path, asset_root):
+def _fetch(tmp_path, asset_root, gltf=GLTF, objects=None):
     """Stage ``LOCATION`` of an asset whose location is ``asset_root`` and fetch what it references, as
     ``core`` does; return the bucket and the report."""
-    bucket = DictBucket({LOCATION: GLTF.encode(), COMPANION: b"png", SIBLING: b"other asset"})
+    bucket = DictBucket({LOCATION: gltf.encode(), COMPANION: b"png", SIBLING: b"other asset", **(objects or {})})
     stage_input = StageInput(bucketName=BUCKET, objectKey=LOCATION, fileExtension=".gltf")
     stage_output = StageOutput(bucketName=BUCKET, objectDir="pipelines/p/j1/output/E1/files/")
     root_key = core._reference_root_key(stage_input, stage_output, "xid", {
@@ -58,7 +59,7 @@ def _fetch(tmp_path, asset_root):
     local_input = dependencies.local_path_for(local_root, dependencies.relative_to_root(LOCATION, root_key))
     os.makedirs(os.path.dirname(local_input), exist_ok=True)
     with open(local_input, "w", encoding="utf-8") as handle:
-        handle.write(GLTF)
+        handle.write(gltf)
     with patch.object(dependencies.s3, "head_object_size", bucket.head_object_size), \
             patch.object(dependencies.s3, "download", bucket.download):
         report = dependencies.fetch_referenced_files(BUCKET, LOCATION, local_input, local_root, root_key, ".gltf")
@@ -91,3 +92,59 @@ class TestASingleFileAssetsReferences:
         assert dependencies.relative_to_root(LOCATION, LOCATION + "/") == "model.gltf"
         # A file of the companion folder keeps the root it had.
         assert dependencies.confinement_root(COMPANION, "xid", "/tex.png", LOCATION) == LOCATION + "/"
+
+    def test_a_root_recorded_in_another_bucket_is_not_applied(self):
+        stage_input = StageInput(bucketName=BUCKET, objectKey=LOCATION, fileExtension=".gltf")
+        stage_output = StageOutput(bucketName=BUCKET, objectDir="pipelines/p/j1/output/E1/files/")
+        assert core._reference_root_key(stage_input, stage_output, "xid", {
+            "relativePath": "/model.gltf", "assetRootS3Key": LOCATION, "assetRootBucket": "other-bucket"}) == "scans/"
+
+    def test_a_reference_into_a_folder_named_like_the_object_is_reported_not_fetched(self, tmp_path):
+        # The object sits at its file name locally, so model.gltf/x.png (the companion file the asset
+        # lists at /model.gltf/x.png) would need a folder where the object's file is. It is reported as
+        # not fetched instead of ending the walk.
+        gltf = json.dumps({"asset": {"version": "2.0"}, "images": [{"uri": "tex.png"}, {"uri": "model.gltf/x.png"}]})
+        bucket, report, _ = _fetch(tmp_path, LOCATION, gltf, {LOCATION + "/model.gltf/x.png": b"png"})
+        assert bucket.downloads == [COMPANION]
+        assert report.rejected == ["model.gltf/x.png"]
+
+
+class _Store:
+    """The resolver's store over a dict of key -> bytes, recording every HeadObject."""
+
+    def __init__(self, objects, modified):
+        self.objects, self.modified, self.heads = dict(objects), modified, []
+
+    def head(self, key, warn_if_missing=True):
+        self.heads.append(key)
+        if key not in self.objects:
+            return None
+        return dependencies.ObjectInfo(len(self.objects[key]), "v1", self.modified)
+
+    def download(self, key, version_id, path):
+        with open(path, "wb") as handle:
+            handle.write(self.objects[key])
+        return True
+
+
+@pytest.mark.unit
+def test_the_late_arrival_check_heads_the_single_file_assets_object(tmp_path):
+    # The scene walk (RENDER3D and the Blender renderer) looks again for a required file that is not in
+    # the asset yet when the input was written moments ago, reading the input's write time. For a
+    # single-file asset's object that is LOCATION itself, not {key}/{name}.
+    now = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc)
+    gltf = json.dumps({"asset": {"version": "2.0"}, "buffers": [{"uri": "mesh.bin", "byteLength": 1}]})
+    store = _Store({LOCATION: gltf.encode()}, modified=now - timedelta(seconds=10))
+    root = dependencies.confinement_root(LOCATION, "xid", "/model.gltf", LOCATION)
+    local_root = str(tmp_path / "asset")
+    local_input = dependencies.local_path_for(local_root, dependencies.relative_to_root(LOCATION, root))
+    os.makedirs(os.path.dirname(local_input), exist_ok=True)
+    with open(local_input, "w", encoding="utf-8") as handle:
+        handle.write(gltf)
+    sleeps = []
+    report = dependencies.resolve(store, root, LOCATION, local_input, local_root, ".gltf",
+                                  late_arrival=True, sleep=sleeps.append, now=lambda: now)
+    assert LOCATION in store.heads and LOCATION + "/model.gltf" not in store.heads
+    # The required buffer is looked up in the companion folder, then once more after the wait.
+    assert store.heads.count(LOCATION + "/mesh.bin") == 2
+    assert report.late_arrival_retry is True and len(sleeps) == 1

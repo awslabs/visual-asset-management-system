@@ -238,11 +238,18 @@ def resolve_reference(reference, referrer_dir: str = "", percent_encoded: bool =
 
 
 def local_path_for(local_root: str, relative_path: str) -> Optional[str]:
-    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it."""
+    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it, or
+    if a folder on its way is already a file there (a single-file asset's object sits at its file name,
+    while ``{file name}/x`` names a file of its companion folder), so the reference is not fetched."""
     base = os.path.realpath(local_root)
     target = os.path.realpath(os.path.join(base, relative_path))
     if target == base or not target.startswith(base + os.sep):
         return None
+    parent = os.path.dirname(target)
+    while parent != base:
+        if os.path.exists(parent) and not os.path.isdir(parent):
+            return None
+        parent = os.path.dirname(parent)
     return target
 
 
