@@ -182,6 +182,9 @@ uv export --frozen --no-emit-project --only-group step --no-annotate -o requirem
 # Five pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
 # coordinate transform, Potree): the same hashed export, written to that name
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
+
+# Cosmos Transfer installs the same hashed export of its NCCL wheel as `requirements-nccl.lock`
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements-nccl.lock
 ```
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
