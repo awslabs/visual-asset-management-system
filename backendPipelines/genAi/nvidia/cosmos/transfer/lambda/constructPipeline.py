@@ -50,6 +50,7 @@ def lambda_handler(event, context):
         "inputOutputS3AssetAuxiliaryFilesPath": inputOutput_s3_assetAuxiliary_files_path,
         "assetId": asset_id,
         "databaseId": database_id,
+        "inputAssetRootS3Key": event.get("inputAssetRootS3Key") or "",
         "inputMetadataS3Location": input_metadata_s3_location,
         "inputConfigurationS3Location": input_configuration_s3_location,
         "externalSfnTaskToken": external_sfn_task_token
