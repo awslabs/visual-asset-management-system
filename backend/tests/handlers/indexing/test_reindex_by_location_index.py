@@ -134,3 +134,78 @@ class TestOpenSearchReindex:
         assert files == EXPECTED_LIVE | {("db3", "old", "/z.glb")}
         assert not s3.head_object.called
         assert results["skipped_no_asset"] >= 2  # the neighbour of the single file and the loose key
+
+
+# An archived asset nested in a live one (D10): the deepest stored location that holds a key owns it,
+# live or archived, so the containing asset never gets the archived asset's files.
+NESTED_ROWS = [
+    asset_row("db1", "outer", "b1", "outer/", BUCKET_NAME),
+    asset_row("db2", "annex", "b1", "outer/annex/", BUCKET_NAME, archived=True),
+    asset_row("db1", "wing", "b1", "outer/wing/", BUCKET_NAME, archived=True),
+    asset_row("db1", "twin-a", "b1", "outer/twin/", BUCKET_NAME, archived=True),
+    asset_row("db2", "twin-b", "b1", "outer/twin/", BUCKET_NAME, archived=True),
+    asset_row("db1", "site", "b1", "projects/site-b/", BUCKET_NAME),
+    asset_row("db2", "phase1", "b1", "projects/site-b/phase1/", BUCKET_NAME, archived=True),
+    asset_row("db3", "vault", "b1", "vault/", BUCKET_NAME, archived=True),
+    asset_row("db3", "kept", "b1", "vault/kept/", BUCKET_NAME),
+]
+NESTED_KEYS = [
+    "outer/a.glb", "outer/annex/b.glb", "outer/wing/c.glb", "outer/twin/f.glb",
+    "projects/site-b/g.glb", "projects/site-b/phase1/h.glb", "vault/e.glb", "vault/kept/d.glb",
+]
+NESTED_EXPECTED_LIVE = {("db1", "outer", "/a.glb"), ("db1", "site", "/g.glb"), ("db3", "kept", "/d.glb")}
+# The OpenSearch walk also reaches archived owners, under their live database id; the two archived rows
+# on one location (`outer/twin/`) are ambiguous and attribute nothing.
+NESTED_EXPECTED_ANY_STATE = NESTED_EXPECTED_LIVE | {
+    ("db2", "annex", "/b.glb"), ("db1", "wing", "/c.glb"), ("db2", "phase1", "/h.glb"), ("db3", "vault", "/e.glb"),
+}
+
+
+def _nested_vector_walk(fe, monkeypatch, **kwargs):
+    monkeypatch.setattr(fe, "index_ready", lambda name: True)
+    refs, token = fe.enumerate_latest_live_files(
+        s3_client=FakeS3(NESTED_KEYS), buckets_table=_buckets_table(),
+        asset_table=AttributionAssetTable(NESTED_ROWS, page_size=3), **kwargs)
+    assert token is None
+    return {(r.database_id, r.asset_id, r.relative_file_key) for r in refs}
+
+
+@pytest.mark.unit
+class TestArchivedNestedOwner:
+    def test_a_file_of_an_archived_asset_nested_in_a_live_one_is_enumerated_for_nobody(self, fe, monkeypatch):
+        refs = _nested_vector_walk(fe, monkeypatch)
+        assert refs == NESTED_EXPECTED_LIVE
+        assert not {r for r in refs if r[2] in ("/annex/b.glb", "/wing/c.glb", "/twin/f.glb", "/phase1/h.glb")}
+
+    def test_the_database_filter_does_not_reach_an_archived_nested_assets_files(self, fe, monkeypatch):
+        # The containing assets are in db1; the archived nested ones in db1 and db2.
+        assert _nested_vector_walk(fe, monkeypatch, database_id="db1") == {
+            ("db1", "outer", "/a.glb"), ("db1", "site", "/g.glb")}
+
+    def test_control_the_containing_asset_keeps_its_own_files(self, fe, monkeypatch):
+        refs = _nested_vector_walk(fe, monkeypatch)
+        assert {("db1", "outer", "/a.glb"), ("db1", "site", "/g.glb")} <= refs
+
+    def test_control_a_live_asset_nested_in_an_archived_one_keeps_its_files(self, fe, monkeypatch):
+        refs = _nested_vector_walk(fe, monkeypatch)
+        assert ("db3", "kept", "/d.glb") in refs
+        assert not {r for r in refs if r[1] == "vault"}
+
+    def test_the_vector_walk_keeps_exactly_the_live_owners_the_opensearch_walk_names(self, fe, cr, monkeypatch):
+        monkeypatch.setattr(cr, "index_ready", lambda name: True)
+        captured = []
+
+        def capture(files, timestamp):
+            captured.extend(files)
+            return {"success": len(files), "failed": 0, "errors": []}
+
+        utility = cr.ReindexUtility("test-asset-table", "test-buckets-table", "test-file-metadata-table")
+        table = AttributionAssetTable(NESTED_ROWS, page_size=3)
+        with patch.object(cr, "s3_client", FakeS3(NESTED_KEYS)), \
+                patch.object(cr.dynamodb_resource, "Table", return_value=table), \
+                patch.object(utility, "_update_files_in_metadata_table", side_effect=capture):
+            utility._process_bucket(BUCKET_NAME, "/", dry_run=False, bucket_id="b1")
+        any_state = {(f["databaseId"], f["assetId"], f["relative_path"]) for f in captured}
+        assert any_state == NESTED_EXPECTED_ANY_STATE
+        live_assets = {(row["databaseId"], row["assetId"]) for row in NESTED_ROWS if row.get("status") != "archived"}
+        assert _nested_vector_walk(fe, monkeypatch) == {f for f in any_state if f[:2] in live_assets}

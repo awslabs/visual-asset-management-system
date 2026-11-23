@@ -10,8 +10,9 @@ version it syncs. Objects synced before the upgrade carry the old ``databaseid``
 metadata instead and no tags. This walk tags the current version of each such object with the same
 values, encoding and skip rules bucket sync uses (``common/vamsObjectTags.py`` in the backend source):
 
-- the asset is the one whose stored location holds the key, read from the asset location index
-  (``AssetLocationGSI``), one query per bucket; the object's metadata is not read;
+- the asset is the one whose stored location is the deepest that holds the key, read from the asset
+  location index (``AssetLocationGSI``), one query per bucket; the object's metadata is not read; a key
+  whose deepest owner is archived is not tagged (``notAttributed``), also inside a live asset's location;
 - customer tags are kept and only the two ``VAMS:`` keys change; a value S3 tag values do not accept is
   written as ``b64:`` plus its base64url form; a value over 256 characters is left off;
 - an object whose own tags leave no room (more than 10 with the VAMS tags) is skipped (``tagLimit``);
@@ -165,11 +166,14 @@ def tag_synced_objects(session, resource_names_prefix: str, asset_table_name: st
                     if key.endswith("/") or path_patterns.key_has_reserved_segment(key, prefix, reserved):
                         record(bucket, key, {"status": OUTCOME_SYSTEM})
                         continue
-                    owner = locations.owner(key)
-                    if owner.status == asset_locations.RESOLVED_AMBIGUOUS:
+                    # The deepest owner decides, live or archived (a live row wins at one location), so an
+                    # archived asset's key is never tagged for a live asset whose location contains it.
+                    owner = locations.owner(key, include_archived=True)
+                    if owner.status == asset_locations.RESOLVED_AMBIGUOUS and \
+                            not all(candidate.archived for candidate in owner.candidates):
                         record(bucket, key, {"status": OUTCOME_AMBIGUOUS})
                         continue
-                    if owner.status != asset_locations.RESOLVED_FOUND:
+                    if owner.status != asset_locations.RESOLVED_FOUND or owner.entry.archived:
                         record(bucket, key, {"status": OUTCOME_NOT_ATTRIBUTED})
                         continue
                     batch.append((key, owner.entry.database_id, owner.entry.asset_id))

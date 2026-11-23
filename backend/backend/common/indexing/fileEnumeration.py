@@ -7,10 +7,12 @@ Walks every row of the S3 asset buckets table with ``list_objects_v2`` (current 
 file behind a delete marker is never listed), skips folder markers, reserved system folders and
 ``.previewFile.`` objects, and attributes each key to the live asset whose stored location contains it.
 Once the location index is ready (``assetLocations.index_ready``), each bucket's index partition is read
-once and every key is matched in memory (longest match), so files in any stored location are found.
-Before that, the asset id is the first key segment beneath the bucket's base prefix and the live database
-id comes from the asset table's ``BucketIdGSI``. Either way a row in a ``{databaseId}#deleted`` partition
-does not count, so files of archived assets are excluded.
+once and every key is matched in memory (longest match), so files in any stored location are found. The
+deepest stored location that holds a key owns it, live or archived, and the key is kept only when that
+owner is live: a file of an archived asset nested in a live asset's location is enumerated for nobody,
+never for the containing asset. Before that, the asset id is the first key segment beneath the bucket's
+base prefix and the live database id comes from the asset table's ``BucketIdGSI``. Either way a row in a
+``{databaseId}#deleted`` partition does not count, so files of archived assets are excluded.
 
 The OpenSearch reindexer and the vector reindexer both walk the buckets this way; these helpers are
 the single definition of "what is an asset file" for both.
@@ -222,8 +224,10 @@ def enumerate_latest_live_files(
                 if by_index:
                     if bucket_name not in locations_by_bucket:
                         locations_by_bucket[bucket_name] = load_bucket_locations(asset_table, bucket_name)
-                    resolution = locations_by_bucket[bucket_name].owner(s3_key)
-                    if resolution.status != RESOLVED_FOUND:
+                    # The deepest owner decides, live or archived; an archived one keeps the key from
+                    # every asset, so it is not handed to a live asset whose location contains it.
+                    resolution = locations_by_bucket[bucket_name].owner(s3_key, include_archived=True)
+                    if resolution.status != RESOLVED_FOUND or resolution.entry.archived:
                         continue
                     entry = resolution.entry
                     if database_id is not None and entry.database_id != database_id:

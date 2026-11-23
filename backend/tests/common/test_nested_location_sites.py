@@ -24,8 +24,9 @@ NESTED_AWARE = re.compile(r"nested_locations|NestedLocations")
 # file -> why it needs no nested locations
 REVIEWED = {
     "common/indexing/fileEnumeration.py":
-        "the reindex walk attributes each listed key to its deepest owner through the location index once it is "
-        "ready (BucketLocations.owner), and by its first folder before, as before",
+        "the reindex walk attributes each listed key to its deepest owner, live or archived, through the location "
+        "index once it is ready (BucketLocations.owner) and keeps it only when that owner is live; by its first "
+        "folder before, as before",
     "common/s3PathPatterns.py": "pure path joining; callers decide ownership",
     "handlers/addon/garnetFramework/garnetDataIndexFile.py":
         "attributes each file event with fileAttribution.attribute_object (the deepest owner)",
