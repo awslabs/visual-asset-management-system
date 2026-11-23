@@ -9272,7 +9272,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace` or `workspaces`) as any path segment under the bucket's base prefix is refused with 400."
+                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews; the file routes list and address that object at `/{file name}` unless the companion folder holds a file of that name. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace` or `workspaces`) as any path segment under the bucket's base prefix is refused with 400."
             required:
                 - databaseId
                 - assetName

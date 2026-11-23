@@ -74,6 +74,8 @@ Returns a list of all files in the specified asset, including file metadata, siz
 
 `key` is the full Amazon S3 object key, which starts with the asset's base key. `relativePath` is the file's path under that base key, which is also what File Info returns.
 
+An asset created from one Amazon S3 object (a `bucketExistingKey` without a trailing `/`) lists that object at `/{file name}` and its previews at `/{file name}.previewFile.{ext}`, and every file route takes that path or the object's `key`. Its other files are in its companion folder `{key}/` and keep the path after `{key}`. While the companion folder holds a file of the object's own name (`{key}/{file name}`), that file keeps the path `/{file name}`, and the object keeps the path `/` that no file route reaches.
+
 `changeSource` and `changeUserId` describe how the current version of each file was created. When `changeSource` is `workflowExecution`, `changeWorkflowId` and `changeWorkflowExecutionId` name the workflow and execution that wrote it; they are `null` for every other change source, and in `basic` mode, which performs no per-object read.
 
 **Error Responses:**
@@ -185,11 +187,11 @@ Moves or renames a file within the asset. This copies the file to the new locati
 
 **Error Responses:**
 
-| Status | Description                                                                                                                  |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to modify files in this asset.                                                                                |
-| `500`  | Internal server error.                                                                                                       |
+| Status | Description                                                                                                                                                                                                                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, destination already exists, or the destination file name has a blocked extension. The file of an asset created from one Amazon S3 object cannot be moved or renamed: `The file of a single-file asset cannot be moved or renamed. Copy it to another path instead.` |
+| `403`  | Not authorized to modify files in this asset.                                                                                                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                         |
 
 ---
 
