@@ -17,8 +17,10 @@ type ShowMessageFunction = (props: {
 }) => void;
 
 interface CommentType {
+    databaseId: string;
     assetId: string;
-    "assetVersionId:commentId": string;
+    commentId: string;
+    assetVersionId: string;
     commentBody: string;
     commentOwnerID: string;
     commentOwnerUsername: string;

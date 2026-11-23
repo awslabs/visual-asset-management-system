@@ -73,7 +73,9 @@ describe("requests that got no response", () => {
 
     it("the asset page's comments, relationships and versions reads carry the network message", async () => {
         (apiClient.get as jest.Mock).mockRejectedValue(offline());
-        expect(await fetchAllComments({ assetId: "a1" })).toBe(NETWORK_FAILURE_MESSAGE);
+        expect(await fetchAllComments({ databaseId: "db1", assetId: "a1" })).toBe(
+            NETWORK_FAILURE_MESSAGE
+        );
         expect(await fetchAssetLinks({ databaseId: "db1", assetId: "a1" })).toEqual([
             false,
             NETWORK_FAILURE_MESSAGE,
