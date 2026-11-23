@@ -890,6 +890,23 @@ function pinDirectUrls(text: string): { text?: string; error?: string } {
             `flash-attn @ https://example.com/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl`,
         ],
         [
+            "a dot-segment path",
+            `flash-attn @ ${wheel.replace(
+                "/v2.8.3/",
+                "/../../../evil/repo/releases/download/v1/"
+            )}`,
+        ],
+        [
+            "a percent-encoded dot-segment path",
+            `flash-attn @ ${wheel.replace("/v2.8.3/", "/%2e%2e/%2e%2e/evil/")}`,
+        ],
+        [
+            "a percent-encoded slash in the tag",
+            `flash-attn @ ${wheel.replace("/v2.8.3/", "/v2.8.3%2F..%2F..%2F")}`,
+        ],
+        ["a query after the file name", `flash-attn @ ${wheel}?token=x`],
+        ["a fragment after the file name", `flash-attn @ ${wheel}#sha256=${"a".repeat(64)}`],
+        [
             "a wheel of another repository on the allowed host",
             `flash-attn @ ${wheel.replace("Dao-AILab/flash-attention", "someone/flash-attention")}`,
         ],

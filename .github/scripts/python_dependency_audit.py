@@ -399,6 +399,9 @@ def check_ranged_inputs(root, tracked, lock_dirs):
 # flash-attn wheel of the GR00T image). Add a prefix, with a test, when another image needs a prebuilt wheel.
 ALLOWED_DIRECT_URL_PREFIXES = ("https://github.com/Dao-AILab/flash-attention/releases/download/",)
 DIRECT_URL_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[^\]]*\])?\s+@\s+(?P<url>\S+)(?P<rest>.*)$")
+# What may follow an allowed prefix: one release tag directory and one wheel file, with no dot segment,
+# percent-encoding, query or fragment (uv and pip would resolve those to another path than the file name shows).
+DIRECT_URL_REMAINDER = re.compile(r"^v[0-9][^/%?#]*/[^/%?#]+\.whl$")
 WHEEL_URL_FILE = re.compile(r"^(?P<dist>[A-Za-z0-9_.]+)-(?P<version>[0-9][A-Za-z0-9_.!+]*)-[^/]+\.whl$")
 
 
@@ -410,7 +413,8 @@ def pin_direct_urls(text, source):
     the package unaudited. The version is read from the wheel file's own name (`name-version-tags.whl`,
     a local version such as `+cu12torch2.8` dropped, since advisories name the public release) after
     checking the file's distribution name is the requirement's, and pip-audit then checks that
-    name and version like any other pin. The URL must start with one of ALLOWED_DIRECT_URL_PREFIXES.
+    name and version like any other pin. The URL must start with one of ALLOWED_DIRECT_URL_PREFIXES and continue with one `v<tag>/<file>.whl`
+    (no dot segment, percent-encoding, query or fragment).
     Anything else behind an `@` (a git source, an archive, a file that is not a wheel, a wheel elsewhere)
     fails the run: its version cannot be read, so it must not pass unaudited.
     Hash and continuation lines are kept as they are."""
@@ -421,8 +425,12 @@ def pin_direct_urls(text, source):
             lines.append(line)
             continue
         name, url = match.group("name"), match.group("url")
-        wheel = WHEEL_URL_FILE.match(url.split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1])
-        if not url.startswith(ALLOWED_DIRECT_URL_PREFIXES) or not wheel or canonical_name(wheel.group("dist")) != canonical_name(name):
+        prefix = next((p for p in ALLOWED_DIRECT_URL_PREFIXES if url.startswith(p)), None)
+        remainder = url[len(prefix):] if prefix else ""
+        wheel = (
+            WHEEL_URL_FILE.match(remainder.rsplit("/", 1)[-1]) if DIRECT_URL_REMAINDER.match(remainder) else None
+        )
+        if not wheel or ".." in remainder.split("/") or canonical_name(wheel.group("dist")) != canonical_name(name):
             raise AuditError(
                 f"{source}: `{name} @ {url}` is a direct URL requirement the audit cannot read a version "
                 f"from (only a wheel URL named for the package, under an allowed prefix, is supported); pip-audit would "
