@@ -81,6 +81,22 @@ class TestCallEngineThrottle:
                                remaining_ms=clock.remaining, rng=_rng,
                                workflowExecutionId="E1") == {"jobs": {}}
 
+    @pytest.mark.parametrize("operation,fields", [
+        (loc.OUTPUT_STEP_RECORD_BATCH, {"batchId": "E1", "jobIds": ["E1#a"], "context": {}}),
+        (loc.OUTPUT_STEP_REGISTER_TOKEN, {"batchId": "E1", "taskToken": "t"}),
+    ])
+    def test_an_engine_error_of_a_transaction_conflict_is_retried(self, operation, fields):
+        """The batch row write met a job's count transaction on the same row and wrote nothing; the
+        operation is safe to repeat, so the run waits instead of failing."""
+        client = MagicMock()
+        client.invoke.side_effect = [
+            _answer({"errorType": "TransactionConflictException"}, "Unhandled"),
+            _answer({"ok": True})]
+        clock = _Clock(10 * 60 * 1000)
+        assert loc.call_engine(client, "fn", operation, sleep=clock.sleep, remaining_ms=clock.remaining,
+                               rng=_rng, **fields) == {"ok": True}
+        assert client.invoke.call_count == 2 and len(clock.slept) == 1
+
     def test_a_throttle_until_the_time_budget_ends_raises_the_retriable_error(self):
         client = MagicMock(**{"invoke.side_effect": _client_error("TooManyRequestsException", 429)})
         clock = _Clock(3 * 60 * 1000)

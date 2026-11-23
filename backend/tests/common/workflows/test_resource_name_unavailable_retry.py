@@ -112,6 +112,72 @@ class TestEveryScaffoldingStateWaitsOutARefusal:
         assert ResourceNameUnavailableError.__name__ == asl.RESOURCE_NAME_UNAVAILABLE_ERROR == ERROR
 
 
+def _resolver_error_for(monkeypatch, error_code):
+    """The class name of the error a cold resource-name lookup raises when every Parameter Store
+    call answers ``error_code``. That name is the errorType Step Functions sees for a scaffolding
+    Lambda whose import-time lookup raised it."""
+    from botocore.exceptions import ClientError
+    import common.resourceNames as rn
+
+    monkeypatch.setenv("VAMS_RESOURCE_PARAM_PREFIX", "/vams-test/resourceNames")
+    for env_name in rn.ResourceKeys.ASSET_STORAGE_TABLE.env_var_names:
+        monkeypatch.delenv(env_name, raising=False)
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_missing_keys", {}), ("_failed_sweeps", 0),
+                        ("_sweep_retry_after", 0.0), ("_window_logged_for", None)):
+        monkeypatch.setattr(rn, name, value)
+    now = [1000.0]
+    monkeypatch.setattr(rn, "_monotonic", lambda: now[0])
+    monkeypatch.setattr(rn, "_sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    monkeypatch.setattr(rn, "_uniform", lambda low, high: high)
+
+    class _RefusingSsm:
+        def get_parameters_by_path(self, **_):
+            raise ClientError({"Error": {"Code": error_code, "Message": "refused"},
+                               "ResponseMetadata": {"HTTPStatusCode": 400}}, "GetParametersByPath")
+
+    monkeypatch.setattr(rn, "_get_ssm_client", lambda: _RefusingSsm())
+    with pytest.raises(Exception) as raised:
+        rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+    return type(raised.value).__name__
+
+
+def _longest_wait_seconds(retrier):
+    """The most a retrier can wait in all, before any jitter: its delays summed over its attempts."""
+    interval = retrier.get("IntervalSeconds", 1)
+    rate = retrier.get("BackoffRate", 2.0)
+    cap = retrier.get("MaxDelaySeconds")
+    delays = [interval * rate ** n for n in range(retrier.get("MaxAttempts", 3))]
+    return sum(min(delay, cap) if cap else delay for delay in delays)
+
+
+@pytest.mark.unit
+class TestARefusalARetryCannotFixFailsTheRun:
+    """A role that may not call ssm:GetParametersByPath (its policy, a permissions boundary or a service
+    control policy) meets the same AccessDeniedException on every attempt. The resolver raises that
+    under its own error name, so no scaffolding state waits it out with the 12-attempt resource-name
+    retrier: the output states send it to their Catch at once, and the interim and error-handler
+    states retry it only as their own short States.ALL retrier retries any error."""
+
+    def test_access_denied_is_not_reported_under_the_retried_name(self, monkeypatch):
+        assert _resolver_error_for(monkeypatch, "ThrottlingException") == ERROR, "control: throttling"
+        assert _resolver_error_for(monkeypatch, "AccessDeniedException") != ERROR
+
+    @pytest.mark.parametrize("exec_type,n", _CASES, ids=_IDS)
+    def test_no_scaffolding_state_waits_it_out(self, monkeypatch, exec_type, n):
+        error = _resolver_error_for(monkeypatch, "AccessDeniedException")
+        kinds = _scaffolding_states(_definition(exec_type, n))
+        for kind, states in kinds.items():
+            for state in states:
+                retrier = _matching_retrier(state["Retry"], error)
+                assert retrier != asl.RESOURCE_NAME_UNAVAILABLE_RETRIER, kind
+                if kind in ("process-output", asl.AWAIT_INGESTION_STATE_ID, asl.FINALIZE_OUTPUTS_STATE_ID):
+                    assert retrier is None, f"{kind} retries {error}: {retrier}"
+                else:
+                    assert retrier["ErrorEquals"] == ["States.ALL"], kind
+                    assert _longest_wait_seconds(retrier) <= 60, kind
+                assert _matching_retrier(state["Catch"], error) is not None, f"{kind} does not catch {error}"
+
+
 @pytest.mark.unit
 class TestPositionAndTheExistingRetriers:
     def test_output_states_keep_throttling_first_and_then_their_own_retriers(self):

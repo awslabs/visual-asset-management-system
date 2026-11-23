@@ -10,6 +10,12 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# The Pillow decoders an input image is opened with, passed as ``formats=`` to every ``Image.open`` of an
+# input so that Pillow tries no other decoder, whatever the file is named. The JPEG decoder also opens the
+# multi-picture JPEGs (MPO) that cameras write. The adapters' driver scripts run in the upstream
+# interpreters and cannot import this module, so they spell the same tuple out;
+# tests/test_input_image_formats.py holds every copy to this one.
+INPUT_IMAGE_FORMATS = ("PNG", "JPEG")
 # Formats Pillow must report for the file to be accepted
 ALLOWED_PILLOW_FORMATS = ("PNG", "JPEG", "MPO")
 # Reconstruction quality collapses below this; the models downsample to 518-1024 px internally
@@ -105,10 +111,12 @@ class PreprocessError(RuntimeError):
 def validate_image(image_path: str) -> dict:
     """Verify the file is a decodable PNG/JPEG of usable resolution.
 
-    Pillow's ``verify()`` reads the signature and structure without decoding pixel data, so a file
-    renamed to ``.png`` is caught here. Returns the image's ``{format, mode, width, height}``.
+    The file is opened with the PNG and JPEG decoders only (``INPUT_IMAGE_FORMATS``), so a file of another
+    format is refused here whatever its name, before any other decoder reads it. Pillow's ``verify()``
+    then reads the structure without decoding pixel data. Returns the image's
+    ``{format, mode, width, height}``.
     """
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 
     if not os.path.isfile(image_path):
         raise PreprocessError(f"Input image not found: {image_path}")
@@ -116,13 +124,17 @@ def validate_image(image_path: str) -> dict:
         raise PreprocessError(f"Input image is empty: {image_path}")
 
     try:
-        with Image.open(image_path) as probe:
+        with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as probe:
             probe.verify()
+    except UnidentifiedImageError as e:
+        raise PreprocessError(
+            f"Input file is not a PNG or JPEG image: {image_path}. Input images are decoded as PNG or "
+            f"JPEG only, whatever the file is named.") from e
     except Exception as e:
         raise PreprocessError(f"Input file is not a readable image: {image_path} ({e})") from e
 
     # verify() leaves the handle unusable, so reopen to read the header fields
-    with Image.open(image_path) as img:
+    with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as img:
         image_format = (img.format or "").upper()
         info = {"format": image_format, "mode": img.mode,
                 "width": img.width, "height": img.height}
@@ -164,7 +176,7 @@ def _remove_background_rembg(image_path: str, output_path: str, params: dict) ->
     from PIL import Image
     from rembg import new_session, remove
 
-    with Image.open(image_path) as img:
+    with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as img:
         session = new_session(BACKGROUND_REMOVAL_SESSIONS["rembg"][0], **_session_options())
         cut = remove(img.convert("RGBA"), session=session)
     cut.save(output_path)
@@ -186,7 +198,7 @@ def _remove_background_birefnet(image_path: str, output_path: str, params: dict)
             f"Background removal backend 'birefnet' could not load the birefnet-general "
             f"session: {e}") from e
 
-    with Image.open(image_path) as img:
+    with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as img:
         cut = remove(img.convert("RGBA"), session=session)
     cut.save(output_path)
 
@@ -275,7 +287,7 @@ def _remove_background_sam(image_path: str, output_path: str, params: dict) -> N
             "model image carries its own transformers, and TripoSR's is older than SamModel needs -- see "
             "the note in requirements.txt for why one cannot simply be added to the shared layer") from e
 
-    with Image.open(image_path) as img:
+    with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as img:
         source = img.convert("RGB")
     prompt, described = resolve_sam_prompt(params.get("SAM_PROMPT"), source.size)
     repo = str(params.get("SAM_MODEL_REPO") or SAM_MODEL_REPO).strip() or SAM_MODEL_REPO
@@ -367,7 +379,7 @@ def _remove_background_rmbg2(image_path: str, output_path: str, params: dict) ->
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
-    with Image.open(image_path) as img:
+    with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as img:
         source = img.convert("RGB")
         tensor = transform(source).unsqueeze(0).to(device)
         with torch.no_grad():

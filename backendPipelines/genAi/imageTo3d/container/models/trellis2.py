@@ -97,7 +97,7 @@ if not settings["preprocess_image"]:
 pipeline = Trellis2ImageTo3DPipeline.from_pretrained(settings["hf_repo"])
 pipeline.cuda()
 
-image = Image.open(image_path)
+image = Image.open(image_path, formats=("PNG", "JPEG"))
 if image.mode != "RGBA":
     image = image.convert("RGBA")
 

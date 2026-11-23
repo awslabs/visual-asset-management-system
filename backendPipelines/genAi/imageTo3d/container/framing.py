@@ -126,7 +126,9 @@ def frame_image(image_path: str, work_dir: str, ratio: float, background: str) -
     stem = os.path.splitext(os.path.basename(image_path))[0]
     output_path = os.path.join(work_dir, f"{stem}_framed.png")
 
-    with Image.open(image_path) as source:
+    from preprocess import INPUT_IMAGE_FORMATS
+
+    with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as source:
         cutout = source.convert("RGBA")
         framed = resize_foreground(cutout, value)
         if key != "none":
