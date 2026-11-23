@@ -169,7 +169,7 @@ Follow these recommendations to maintain the security of your VAMS API keys:
 | Rotate keys regularly               | Create new keys and decommission old ones on a regular schedule.                                |
 | Never commit keys to source control | Store API keys in secrets managers (such as AWS Secrets Manager) or CI/CD secret variables.     |
 | Monitor key usage                   | Review the API Key Management page periodically to identify unused or expired keys.             |
-| Deactivate compromised keys         | Set a compromised key to **Inactive** (takes up to 45 seconds) and create a replacement.        |
+| Deactivate compromised keys         | Set a compromised key to **Inactive** right away (takes up to about 45 seconds) and replace it. |
 
 :::warning[Audit logging]
 All API key operations (creation, update, deletion) are recorded in the VAMS audit log. Administrators can review these logs in Amazon CloudWatch to track who created, modified, or deleted API keys.
