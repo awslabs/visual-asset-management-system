@@ -38,7 +38,7 @@ EARLIER_JOIN = re.compile(r"(file_path|relative_path|rel)\.startswith\((asset_ba
 EXCEPTIONS = {"assets/createAsset.py"}
 
 # The earlier per-site key-to-path slicing: "the key after the location key"
-EARLIER_SLICE = re.compile(r"\[len\((base_key|asset_base_key)\):\]")
+EARLIER_SLICE = re.compile(r"\[len\((base_key|asset_base_key|key)\):\]")
 
 
 def _source(relative):

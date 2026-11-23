@@ -38,7 +38,7 @@ from common.s3MetadataKeys import (
     UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
-from common.assetLocations import contains, own_aux_scope
+from common.assetLocations import AssetFilePaths, contains, own_aux_scope
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, asset_file_paths
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
@@ -3537,6 +3537,15 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
     versioned_files = asset_file_versions.get('files', [])
     logger.info(f"Found {len(versioned_files)} files in version snapshot")
 
+    # A snapshot relativeKey is a path under the location folder (a single file's companion folder)
+    snapshot_paths = AssetFilePaths(key)
+
+    def _snapshot_key(relative_key: str) -> str:
+        return snapshot_paths.key_for(relative_key) or key + relative_key.lstrip('/')
+
+    def _snapshot_relative(full_key: str) -> str:
+        return (snapshot_paths.path_for(full_key) or full_key).lstrip('/')
+
     if request_model.basic:
         # BASIC MODE: Construct file list directly from DynamoDB snapshot - NO S3 calls
         # First pass: separate base files from preview files
@@ -3545,15 +3554,12 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
         for file_info in versioned_files:
             relative_key = file_info.get('relativeKey', '')
-            full_file_key = key + relative_key.lstrip('/')
+            full_file_key = _snapshot_key(relative_key)
 
             # Skip preview files — group them under their base file
             if is_preview_file(full_file_key):
                 base_file_key = get_base_file_for_preview(full_file_key)
-                if base_file_key.startswith(key):
-                    base_relative = base_file_key[len(key):].lstrip('/')
-                else:
-                    base_relative = base_file_key
+                base_relative = _snapshot_relative(base_file_key)
                 if is_allowed_preview_extension(full_file_key):
                     preview_file_map[base_relative] = '/' + relative_key.lstrip('/')
                 continue
@@ -3580,7 +3586,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
         # Second pass: attach preview files to their base files
         for file_item in base_file_items:
-            item_relative_key = file_item.key[len(key):].lstrip('/') if file_item.key.startswith(key) else file_item.key
+            item_relative_key = _snapshot_relative(file_item.key)
             if item_relative_key in preview_file_map:
                 file_item.previewFile = preview_file_map[item_relative_key]
 
@@ -3630,10 +3636,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
         for s3_item in all_s3_items:
             # Extract relative key from full S3 key
-            if s3_item['key'].startswith(key):
-                relative_key = s3_item['key'][len(key):].lstrip('/')
-            else:
-                relative_key = s3_item['key']
+            relative_key = _snapshot_relative(s3_item['key'])
 
             # Skip all preview files — they'll be grouped from the version snapshot below
             if is_preview_file(s3_item['key']):
@@ -3670,7 +3673,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
 
             def _check_permanently_deleted(relative_key_to_check: str) -> Tuple[str, bool]:
                 """Check if a single file has been permanently deleted from S3."""
-                full_key = key + relative_key_to_check.lstrip('/')
+                full_key = _snapshot_key(relative_key_to_check)
                 try:
                     versions_response = s3_client.list_object_versions(
                         Bucket=bucket,
@@ -3701,7 +3704,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
                         version_info = versioned_file_lookup[relative_key]
                         file_name = relative_key.rsplit('/', 1)[-1] if '/' in relative_key else relative_key
                         relative_path = '/' + relative_key.lstrip('/')
-                        full_s3_key = key + relative_key.lstrip('/')
+                        full_s3_key = _snapshot_key(relative_key)
 
                         item = {
                             'fileName': file_name,
@@ -3725,7 +3728,7 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         # Group preview files from the version snapshot under their base files
         # Only preview files that are part of this version snapshot are considered
         for relative_key in versioned_file_lookup:
-            full_file_key = key + relative_key.lstrip('/')
+            full_file_key = _snapshot_key(relative_key)
             if is_preview_file(full_file_key) and is_allowed_preview_extension(full_file_key):
                 base_key_for_preview = get_base_file_for_preview(full_file_key)
                 if base_key_for_preview in base_files:

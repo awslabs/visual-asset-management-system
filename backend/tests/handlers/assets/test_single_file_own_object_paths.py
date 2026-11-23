@@ -362,3 +362,32 @@ class TestCompanionFolderDeleteAuxData:
         assert _live(af.test_client, LOCATION) and not _live(af.test_client, COMPANION)
         assert _live(af.test_client, "db1/p1/model.glb/preview/PotreeViewer/m.json", AUX_BUCKET)
         assert _versions(af.test_client, "db1/p1/model.glb/sub/x.obj/preview/PotreeViewer/m.json", AUX_BUCKET) == []
+
+
+@pytest.mark.unit
+class TestVersionListingKeys:
+    """Issue #1851: a version listing of a single-file asset names each file by its key under the companion folder."""
+
+    def _list(self, af, monkeypatch, basic):
+        af.test_client.put_object(Bucket=BUCKET, Key="p1/model.glb/sub/x.obj.previewFile.png", Body=b"p")
+        companion_version = _versions(af.test_client, COMPANION)[0]["VersionId"]
+        monkeypatch.setattr(af, "validate_asset_version_exists", MagicMock())
+        monkeypatch.setattr(af, "get_asset_file_versions", MagicMock(return_value={"files": [
+            {"relativeKey": "sub/x.obj", "versionId": companion_version, "size": 1, "lastModified": "x"},
+            {"relativeKey": "sub/x.obj.previewFile.png", "versionId": "v-preview", "size": 1, "lastModified": "x"},
+            {"relativeKey": "sub/gone.obj", "versionId": "v-gone", "size": 1, "lastModified": "x"},
+        ]}))
+        request = af.ListAssetFilesRequestModel(assetVersionId="1", basic=basic)
+        response = af.list_asset_files_from_version("db1", "a1", af.test_holder["asset"], BUCKET, LOCATION, request)
+        return {item.relativePath: item for item in response.items}
+
+    @pytest.mark.parametrize("basic", [True, False], ids=["basic", "detailed"])
+    def test_each_file_has_its_key_and_its_preview(self, af, monkeypatch, basic):
+        items = self._list(af, monkeypatch, basic)
+        assert items["/sub/x.obj"].key == COMPANION
+        assert items["/sub/x.obj"].previewFile == "/sub/x.obj.previewFile.png"
+
+    def test_a_permanently_deleted_file_is_named_by_its_key(self, af, monkeypatch):
+        items = self._list(af, monkeypatch, False)
+        assert items["/sub/gone.obj"].key == "p1/model.glb/sub/gone.obj"
+        assert items["/sub/gone.obj"].isPermanentlyDeleted
