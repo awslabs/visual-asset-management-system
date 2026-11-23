@@ -1,6 +1,7 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import random
 import threading
@@ -31,6 +32,18 @@ SWEEP_BUDGET_SECONDS = 4.0
 
 # GetParametersByPath returns at most 10 parameters per call.
 SWEEP_PAGE_SIZE = 10
+
+# The deployment also publishes every registered name as JSON in numbered chunk parameters beside
+# the prefix, <prefix>Chunks/0 .. <prefix>Chunks/<n - 1> (infra resourceNameChunks.ts), each
+# {"v": 1, "n": n, "i": i, "l": "<layout id>", "m": {"<key>": "<name>", ...}}. A refresh reads them
+# with one GetParameters call per CHUNK_BATCH_SIZE chunks, and reads the whole prefix page by page
+# only when the chunks cannot be used.
+CHUNK_FORMAT_VERSION = 1
+# GetParameters takes at most 10 names.
+CHUNK_BATCH_SIZE = 10
+# A chunk count above this is treated as unreadable, which bounds the calls one refresh makes. The
+# CDK side refuses to synthesize more chunks than this.
+CHUNK_COUNT_LIMIT = 100
 
 # Sleep before retrying a page: uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS,
 # SWEEP_RETRY_BASE_SECONDS * 2 ** k)) for the k-th retry in a row of the same page.
@@ -181,6 +194,10 @@ _ssm_client = None
 _cache = {}
 _cache_fetched_at = 0.0
 _missing_keys = {}
+# Whether _cache holds every parameter under the prefix (it came from a sweep) or only the names the
+# chunk parameters carry. Only a complete cache shows that a key is unpublished; a key missing from
+# a chunk-loaded cache is read on its own.
+_cache_complete = True
 
 # Failed sweeps in a row, and the _monotonic() time before which no sweep starts.
 _failed_sweeps = 0
@@ -222,14 +239,15 @@ def _is_retryable(error: Exception) -> bool:
 
 
 def _is_transient_sweep_failure(error: Exception) -> bool:
-    """A sweep that ran out of its budget on retryable errors (or on none, TimeoutError), as
+    """A read that ran out of its budget on retryable errors (or on none, TimeoutError), as
     opposed to one a non-retryable error ended at once."""
     return isinstance(error, TimeoutError) or _is_retryable(error)
 
 
-def _sweep_parameters(prefix: str) -> dict:
+def _sweep_parameters(prefix: str, deadline: float = None) -> dict:
     """Read every parameter under the prefix with GetParametersByPath, page by page, inside
-    SWEEP_BUDGET_SECONDS, and return them keyed by their path below the prefix.
+    SWEEP_BUDGET_SECONDS (or until ``deadline``, the _monotonic() time a refresh that already spent
+    part of its budget passes in), and return them keyed by their path below the prefix.
 
     A page that fails with a retryable error is requested again with its own NextToken after a
     jittered sleep, so the pages already read are kept. Any other error ends the sweep at once.
@@ -238,7 +256,8 @@ def _sweep_parameters(prefix: str) -> dict:
     timings, never a parameter name or value."""
     client = _get_ssm_client()
     started = _monotonic()
-    deadline = started + SWEEP_BUDGET_SECONDS
+    if deadline is None:
+        deadline = started + SWEEP_BUDGET_SECONDS
     parameters = {}
     pages = calls = retries_in_a_row = 0
     next_token = None
@@ -283,18 +302,166 @@ def _sweep_parameters(prefix: str) -> dict:
             return parameters
 
 
+class _ChunksUnusable(Exception):
+    """The chunk parameters cannot answer this refresh (none published, one missing, a mismatch,
+    unreadable JSON, or a non-retryable error); the refresh reads the prefix instead."""
+
+
+def _call_within_budget(call, deadline: float, counter: list):
+    """Run one SSM call, retrying a retryable error after the sweep's jittered sleep until
+    ``deadline``. Counts every call in ``counter[0]``. Raises a non-retryable error at once, and
+    the last retryable error (or TimeoutError) when no further call or sleep fits the budget."""
+    retries = 0
+    last_error = None
+    while True:
+        if _monotonic() >= deadline:
+            raise last_error or TimeoutError(
+                f"Resource name read did not finish within {SWEEP_BUDGET_SECONDS}s")
+        counter[0] += 1
+        try:
+            return call()
+        except Exception as e:
+            if not _is_retryable(e):
+                raise
+            last_error = e
+            pause = _uniform(0, min(SWEEP_RETRY_MAX_SLEEP_SECONDS, SWEEP_RETRY_BASE_SECONDS * 2 ** retries))
+            retries += 1
+            if _monotonic() + pause >= deadline:
+                raise
+            _sleep(pause)
+
+
+def _parse_chunk(index: int, raw: str) -> dict:
+    """The header and name map of chunk ``index``, or _ChunksUnusable when it is not a chunk of the
+    format this module reads."""
+    try:
+        chunk = json.loads(raw)
+    except (TypeError, ValueError):
+        raise _ChunksUnusable(f"chunk {index} is not valid JSON")
+    if not isinstance(chunk, dict):
+        raise _ChunksUnusable(f"chunk {index} is not a JSON object")
+    if chunk.get("v") != CHUNK_FORMAT_VERSION:
+        raise _ChunksUnusable(f"chunk {index} has format version {chunk.get('v')!r}")
+    count, names = chunk.get("n"), chunk.get("m")
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= CHUNK_COUNT_LIMIT:
+        raise _ChunksUnusable(f"chunk {index} has chunk count {count!r}")
+    if chunk.get("i") != index or not isinstance(chunk.get("l"), str):
+        raise _ChunksUnusable(f"chunk {index} carries index {chunk.get('i')!r}")
+    if not isinstance(names, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in names.items()):
+        raise _ChunksUnusable(f"chunk {index} has no name map")
+    return chunk
+
+
+def _read_chunks(prefix: str, deadline: float) -> dict:
+    """Read the chunk parameters <prefix>Chunks/<i> and return the names they carry.
+
+    The first GetParameters call asks for chunks 0-9; chunk 0's count ``n`` decides whether any
+    more are read, in further calls of CHUNK_BATCH_SIZE names (ceil(n / 10) calls in all; nothing
+    is requested to find where the chunks end). Every chunk below n must be present and carry the
+    same version, count and layout id; a chunk numbered n or above is ignored, since one is left
+    over while a deployment that shrinks the layout updates.
+
+    Raises _ChunksUnusable when the chunks cannot answer, and the SSM error when a call is still
+    throttled (or failing) when the budget runs out. Logs one line per completed read."""
+    client = _get_ssm_client()
+    chunk_prefix = f"{prefix}Chunks"
+    started = _monotonic()
+    calls = [0]
+
+    def fetch(indices) -> dict:
+        names = [f"{chunk_prefix}/{i}" for i in indices]
+        try:
+            response = _call_within_budget(lambda: client.get_parameters(Names=names), deadline, calls)
+        except Exception as e:
+            if _is_transient_sweep_failure(e):
+                logger.error(
+                    f"Resource name chunk read failed ({_error_code(e)}) after {calls[0]} calls, "
+                    f"{_monotonic() - started:.2f}s")
+                raise
+            raise _ChunksUnusable(f"GetParameters failed ({_error_code(e)})") from e
+        found = {}
+        for param in response.get("Parameters") or []:
+            suffix = str(param.get("Name", ""))[len(chunk_prefix) + 1:]
+            if suffix.isdigit():
+                found[int(suffix)] = param.get("Value")
+        return found
+
+    raw = fetch(range(CHUNK_BATCH_SIZE))
+    if 0 not in raw:
+        raise _ChunksUnusable("chunk 0 is not published")
+    head = _parse_chunk(0, raw[0])
+    count, layout = head["n"], head["l"]
+    for start in range(CHUNK_BATCH_SIZE, count, CHUNK_BATCH_SIZE):
+        raw.update(fetch(range(start, min(start + CHUNK_BATCH_SIZE, count))))
+
+    names = {}
+    for index in range(count):
+        if index not in raw:
+            raise _ChunksUnusable(f"chunk {index} of {count} is not published")
+        chunk = head if index == 0 else _parse_chunk(index, raw[index])
+        if chunk["n"] != count or chunk["l"] != layout:
+            raise _ChunksUnusable(f"chunk {index} belongs to another layout")
+        names.update(chunk["m"])
+    logger.info(
+        f"Loaded {len(names)} resource names from {count} SSM chunk parameters in {calls[0]} calls, "
+        f"{_monotonic() - started:.2f}s")
+    return names
+
+
 def _refresh_cache():
-    """Fetch every resource-name parameter under the deployment prefix in one bounded
-    GetParametersByPath sweep (_sweep_parameters) and replace the module cache. A sweep that
-    fails raises and leaves the cache as it was."""
-    global _cache, _cache_fetched_at, _missing_keys
+    """Load every resource name the chunk parameters carry (_read_chunks) or, when they cannot be
+    used, every parameter under the deployment prefix in one bounded GetParametersByPath sweep
+    (_sweep_parameters), and replace the module cache. Both share one SWEEP_BUDGET_SECONDS budget.
+    A refresh that fails raises and leaves the cache as it was; a chunk read still throttled when
+    the budget runs out is such a failure, and does not fall back to the sweep."""
+    global _cache, _cache_fetched_at, _missing_keys, _cache_complete
     prefix = os.environ["VAMS_RESOURCE_PARAM_PREFIX"].rstrip("/")
-    new_cache = _sweep_parameters(prefix)
+    deadline = _monotonic() + SWEEP_BUDGET_SECONDS
+    try:
+        new_cache = _read_chunks(prefix, deadline)
+        complete = False
+    except _ChunksUnusable as reason:
+        logger.warning(f"Resource name chunk parameters not used ({reason}), reading every parameter under the prefix")
+        new_cache = _sweep_parameters(prefix, deadline)
+        complete = True
     _cache = new_cache
+    _cache_complete = complete
     _cache_fetched_at = time.time()
-    # The sweep covers the whole prefix, so it is authoritative for absence too: keys it
-    # now carries are no longer missing, and the rest are re-confirmed at this timestamp.
-    _missing_keys = {k: _cache_fetched_at for k in _missing_keys if k not in _cache}
+    if complete:
+        # The sweep covers the whole prefix, so it is authoritative for absence too: keys it
+        # now carries are no longer missing, and the rest are re-confirmed at this timestamp.
+        _missing_keys = {k: _cache_fetched_at for k in _missing_keys if k not in _cache}
+    else:
+        # The chunks carry only the registered names, so they confirm no absence.
+        _missing_keys = {k: at for k, at in _missing_keys.items() if k not in _cache}
+
+
+def _read_one(key: ResourceParamKey):
+    """One GetParameter for a key the chunk-loaded cache does not carry (a parameter created under
+    the prefix outside the registry, for example). The name is added to the cache, which keeps the
+    cache's timestamp; ParameterNotFound goes into the negative record and raises KeyError. Any other
+    failure counts as a failed sweep for the back-off window and raises ResourceNameUnavailableError.
+    Called with _sweep_lock held."""
+    global _cache
+    prefix = os.environ["VAMS_RESOURCE_PARAM_PREFIX"].rstrip("/")
+    client = _get_ssm_client()
+    calls = [0]
+    try:
+        response = _call_within_budget(
+            lambda: client.get_parameter(Name=f"{prefix}/{key.param_key}"),
+            _monotonic() + SWEEP_BUDGET_SECONDS, calls)
+    except Exception as e:
+        if _error_code(e) == "ParameterNotFound":
+            _missing_keys[key.param_key] = time.time()
+            logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
+            raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
+        logger.error(f"Resource name read failed ({_error_code(e)}) after {calls[0]} calls: {key.param_key}")
+        _record_failed_sweep()
+        raise ResourceNameUnavailableError(
+            f"Resource name parameters could not be read from SSM: {key.param_key}") from e
+    value = response["Parameter"]["Value"]
+    _cache = {**_cache, key.param_key: value}
+    return value
 
 
 def _record_failed_sweep():
@@ -353,16 +520,21 @@ def _answer_without_sweep(key: ResourceParamKey):
 
 def get_resource_name(key: ResourceParamKey) -> str:
     """Resolve a resource name: env var override first, then the cached SSM map
-    (refreshed at most once per CACHE_TTL_SECONDS per container). A key a completed
-    sweep did not carry is remembered as missing for MISSING_KEY_TTL_SECONDS, so an
-    unpublished parameter costs one sweep per window rather than one per call.
+    (refreshed at most once per CACHE_TTL_SECONDS per container). A refresh reads the chunk
+    parameters, one GetParameters call per 10 chunks, and falls back to the sweep of the whole
+    prefix when they cannot be used. A key the chunks do not carry costs one GetParameter, and
+    is cached. A key that is not published (a sweep did not carry it, or GetParameter returned
+    ParameterNotFound) is remembered as missing for MISSING_KEY_TTL_SECONDS, so it costs one
+    read per window rather than one per call.
 
-    A sweep is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A sweep that
-    fails on throttling, a service fault or a timeout opens a back-off window in which no sweep
-    starts: a lookup inside it is answered from the cache, stale or not, or refused with
-    ResourceNameUnavailableError, as is the failed sweep for a name the cache does not hold. A sweep
-    a non-retryable error ends (access denied, for one) opens no window and, for a name the cache
-    does not hold, raises ResourceNameAccessError. A cache hit takes no lock and reads no SSM."""
+    A refresh is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A refresh
+    that fails on throttling, a service fault, a timeout or a connection failure opens a back-off
+    window in which no refresh starts: a lookup inside it is answered from the cache, stale or not,
+    or refused with ResourceNameUnavailableError, as is the failed refresh for a name the cache
+    does not hold. A refresh a non-retryable error ends (access denied on the sweep, for one) opens
+    no window and, for a name the cache does not hold, raises ResourceNameAccessError. A failed
+    single-key GetParameter opens the window and raises ResourceNameUnavailableError. A cache hit
+    takes no lock and reads no SSM."""
     for env_name in key.env_var_names:
         value = os.environ.get(env_name)
         if value:
@@ -377,6 +549,10 @@ def get_resource_name(key: ResourceParamKey) -> str:
         answer = _answer_without_sweep(key)
         if answer is not _NEEDS_SWEEP:
             return answer
+
+        if not _cache_complete and (time.time() - _cache_fetched_at) < CACHE_TTL_SECONDS:
+            # The chunk-loaded cache is current and does not carry this key.
+            return _read_one(key)
 
         try:
             _refresh_cache()
@@ -411,11 +587,14 @@ def get_resource_name(key: ResourceParamKey) -> str:
                 f"Resource name parameters could not be read from SSM: {key.param_key}") from e
         _record_completed_sweep()
 
-        if key.param_key not in _cache:
-            _missing_keys[key.param_key] = _cache_fetched_at
-            logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
-            raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
-        return _cache[key.param_key]
+        cache = _cache
+        if key.param_key in cache:
+            return cache[key.param_key]
+        if not _cache_complete:
+            return _read_one(key)
+        _missing_keys[key.param_key] = _cache_fetched_at
+        logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
+        raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
 
 
 # Readable aliases for call sites

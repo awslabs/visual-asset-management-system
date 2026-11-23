@@ -186,8 +186,8 @@ Any Isaac Lab feature that reaches the NVIDIA Omniverse content server needs out
 
 `trainingConfig.physics` selects the physics engine for both training and evaluation: `newton_mjwarp` (Newton with the MuJoCo-Warp solver, the default) or `isaacsim_physx` (PhysX on Isaac Sim). The built-in templates show it as the "Physics engine" drop-down.
 
-:::warning[Behaviour change: the default engine is Newton]
-Runs that do not name an engine now run on Newton: saved configurations, built-in templates, edited template bodies without the field, JSON input files and Isaac Sim connector launches. Results differ from earlier PhysX runs, and a checkpoint trained before the upgrade was trained on PhysX. Set `physics` to `isaacsim_physx` to reproduce an earlier run. A task that lists no physics presets, such as a custom environment ported from Isaac Lab 2.x, runs on the physics it registers and ignores the setting. The Isaac Lab environment runs Python 3.12, and a custom environment wheel built for another Python is refused.
+:::warning[A run that names no engine uses Newton]
+A run whose configuration names no engine uses Newton. That covers saved configurations, the built-in templates, template bodies without the field, JSON input files and Isaac Sim connector launches. Results on Newton differ from results on PhysX: set `physics` to `isaacsim_physx` to reproduce a PhysX run, such as one made on Isaac Lab 2.x. A task that lists no physics presets runs on the physics it registers and ignores the setting. The Isaac Lab environment runs Python 3.12, and a custom environment wheel built for another Python is refused. Moving a deployment from Isaac Lab 2.x is covered in [Isaac Lab 3.0 training and evaluation](../deployment/update-the-solution.md#isaac-lab-30-training-and-evaluation).
 :::
 
 -   **Task support is per task.** `isaaclab list_envs --show_presets` lists what each task offers. A task that does not offer the chosen engine fails 11 to 17 seconds after Isaac Lab starts, before Isaac Sim starts, with the options for that task. The tables of tested tasks and the Isaac Lab 2.x to 3.0 task id mapping are in the [Isaac Lab CLI reference](https://github.com/awslabs/visual-asset-management-system/blob/main/backendPipelines/simulation/isaacLabTraining/ISAACLAB_CLI_REFERENCE.md). A listed preset is not proof that training works.
@@ -247,7 +247,7 @@ Training results are added to the asset the run executed against. Both Isaac Lab
 | `checkpoints/<executionId>/*`     | PyTorch | Model checkpoint files saved during training, named by the RL library (below) |
 | `<executionId>/metrics.csv`       | CSV     | Training metrics exported from TensorBoard event files                        |
 | `<executionId>/*_git_diff.txt`    | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility)      |
-| `<executionId>/train-config.json` | JSON    | Input configuration saved for reference                                       |
+| `<executionId>/train-config.json` | JSON    | The run's settings, Isaac Lab version and GPU driver, saved for reference     |
 
 For example, a run whose execution id is `3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a` writes its last rsl_rl checkpoint to `checkpoints/3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a/model_99.pt`.
 
@@ -305,11 +305,11 @@ The **Template tag** column names the execute-form field that supplies each para
 
 Evaluation outputs use the same per-execution folders as training:
 
-| Output                               | Format | Description                                                          |
-| ------------------------------------ | ------ | -------------------------------------------------------------------- |
-| `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                  |
-| `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true` |
-| `<executionId>/evaluate-config.json` | JSON   | Input configuration saved for reference                              |
+| Output                               | Format | Description                                                               |
+| ------------------------------------ | ------ | ------------------------------------------------------------------------- |
+| `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                       |
+| `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true`      |
+| `<executionId>/evaluate-config.json` | JSON   | The run's settings, Isaac Lab version and GPU driver, saved for reference |
 
 ## Custom environments
 

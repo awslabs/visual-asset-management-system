@@ -1,7 +1,0 @@
-# The build tools the source-only packages of requirements.lock (and Isaac-GR00T itself) build with, installed
-# first so the main install can build without fetching unhashed build tools. Compiled against
-# requirements.lock as a constraint, so the versions are the same; its header holds the command.
-pip
-setuptools>=64.0.0
-wheel
-setuptools_scm[toml]>=6.2

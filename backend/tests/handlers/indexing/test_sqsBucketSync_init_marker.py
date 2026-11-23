@@ -232,7 +232,7 @@ class TestMarkerImportOnCreatedPath:
 
         result = m.process_s3_record(_created_record(key))
 
-        m.restore_archived_asset.assert_called_once_with("bucket-1", "a1", archived)
+        m.restore_archived_asset.assert_called_once_with("bucket-1", "a1", archived, bucket_name=_BUCKET)
         m.create_new_asset.assert_not_called()
         self._assert_marker_only_deleted(m, key, result)
 

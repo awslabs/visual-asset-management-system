@@ -77,6 +77,8 @@ RUN uv sync --locked --extra=cu128 --python 3.10
 COPY requirements-nccl.lock /tmp/requirements-nccl.lock
 # --no-config: the project's [tool.uv] override-dependencies (numpy>=2.0.0) are for its own sync; under
 # --require-hashes uv would refuse them as unpinned requirements of this install.
+# This is the last step that changes the venv, and entrypoint.sh does not sync it again: a later
+# `uv sync` would put upstream's locked NCCL back.
 RUN uv pip install --no-config --python .venv/bin/python --require-hashes --only-binary :all: \
     -r /tmp/requirements-nccl.lock
 
@@ -121,7 +123,7 @@ ENV PATH="/opt/cosmos-transfer2.5/.venv/bin:$PATH"
 # Point the caches uid 10000 writes to at home-owned dirs (HF cache is redirected to EFS at
 # runtime by the entrypoint; these are the fallbacks and Triton's JIT cache) and pre-create them,
 # then hand the runtime user ownership of everything it writes: the venv/framework tree (the
-# entrypoint re-runs `uv sync` and patches checkpoint_db.py under it), the code dir, and $HOME.
+# entrypoint patches checkpoint_db.py under it), the code dir, and $HOME.
 ENV HF_HOME=/home/vams/.cache/huggingface \
     UV_CACHE_DIR=/home/vams/.cache/uv \
     TRITON_CACHE_DIR=/home/vams/.triton

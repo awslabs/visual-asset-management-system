@@ -604,6 +604,8 @@ export function buildCustomResources(
 
 `globalLambdaEnvironmentsAndPermissions` already grants read access to every parameter under the resource-name prefix, so the handler can resolve the published widget table name with no further IAM statement. A new Amazon DynamoDB table or Amazon S3 bucket keeps the retention, encryption and naming rules of `infra/CLAUDE.md` and belongs in the fork's own record of the resources it creates.
 
+A name published with `publishCustomResourceName()` also reaches the resource-name chunk parameters that Lambda functions load at cold start, with no change on the fork's side.
+
 ### 4. Permissions
 
 A custom route is served behind the VAMS custom authorizer like every core route, and the handler enforces both tiers. Tier 1 is the `api` and `web` object types: the `admin` role's default constraints match every route, so administrators reach the API and the page as soon as they deploy, and every other role, including the default read-only role, is denied them until a constraint allows it. Tier 2 is the `widget` type, which no seeded constraint covers. **Until a `widget` constraint exists, no role can read or create a widget, the admin role included**: the listing returns no widgets, and the single-widget read and the create return 403.
