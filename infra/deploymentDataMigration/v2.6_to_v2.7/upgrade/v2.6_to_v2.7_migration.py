@@ -2516,11 +2516,18 @@ class CommentSubscriptionCopy:
         created = str(comment.get('dateCreated') or '')
 
         def evidence(database_id: str) -> bool:
+            # The comment's version counts only when some candidate has it: a comment made in the web app
+            # before v2.7 may carry another value (the S3 version or the asset id) in place of the asset
+            # version id. The asset must also have existed when the comment was made.
             versions = self._asset_versions(database_id, asset_id)
             if versions is None:
                 return False
             version_ids, first_created = versions
-            return version_id in version_ids and (not created or not first_created or first_created <= created)
+            known = any(version_id in (self._asset_versions(db, asset_id) or (set(), ''))[0]
+                        for db in self.candidate_databases(asset_id))
+            if known and version_id not in version_ids:
+                return False
+            return not created or not first_created or first_created <= created
 
         database_id, result, candidates = self.resolve(asset_id, evidence, 'resolvedByVersions')
         record.update(assetId=asset_id, deleted=deleted, commentId=comment_id, candidates=candidates)
