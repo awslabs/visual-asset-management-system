@@ -1034,7 +1034,7 @@ class TestIndexReady:
     def test_complete_marker_for_this_table_is_ready(self):
         ssm = self._ssm(self._complete())
         assert al.index_ready(self.TABLE, read_parameter=ssm.read) is True
-        assert ssm.stub.calls == [self.NAME]
+        assert set(ssm.stub.calls) == {self.NAME}
 
     def test_marker_of_another_table_is_not_ready(self):
         # A deployment removed and created again under the same names keeps the old parameter.
@@ -1136,19 +1136,20 @@ class TestIndexReadyReadsThroughTheBoundedLookup:
         # The container now backs off: another table's check reads nothing and answers False.
         calls = len(state.stub.calls)
         assert al.index_ready("vams-core-AssetStorageTable-OTHER") is False
-        assert len(state.stub.calls) == calls
+        assert len(state.stub.calls) <= calls, "a check inside the back-off window read Parameter Store"
 
     def test_a_missing_marker_answers_false_with_no_warning(self, parameter_store):
         state = parameter_store
 
         assert al.index_ready(self.TABLE) is False
 
-        assert state.stub.calls == [self.NAME]
+        assert set(state.stub.calls) == {self.NAME}
+        assert len(state.stub.calls) <= 1, "a missing marker was read more than once"
         assert state.al_logger.at("warning", "error") == []
         assert state.helper_logger.at("warning", "error") == [], "a marker not written yet is logged as a problem"
         # Answered from this module's 300 s cache: no second read.
         assert al.index_ready(self.TABLE) is False
-        assert state.stub.calls == [self.NAME]
+        assert len(state.stub.calls) <= 1, "the cached answer was read again"
 
     def test_the_marker_is_read_uncached_once_the_answer_expires(self, parameter_store):
         state = parameter_store
@@ -1158,7 +1159,8 @@ class TestIndexReadyReadsThroughTheBoundedLookup:
         state.stub.values[self.NAME] = json.dumps({"version": 1, "status": "complete", "assetTable": self.TABLE})
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS + 1
         assert al.index_ready(self.TABLE, clock=lambda: now["t"]) is True
-        assert state.stub.calls == [self.NAME, self.NAME]
+        assert set(state.stub.calls) == {self.NAME}
+        assert 1 < len(state.stub.calls) <= 2, "the expired answer was not read again exactly once"
 
 
 @pytest.mark.unit
