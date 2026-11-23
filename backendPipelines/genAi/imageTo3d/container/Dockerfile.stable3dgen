@@ -224,6 +224,24 @@ RUN chgrp vams /opt/stable3dgen && chmod 1775 /opt/stable3dgen && chown -R vams:
 # at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
 # on its first run.
 RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
+# The modules a Stable3DGen job runs import with the locked set alone. The lock leaves gradio out (only the
+# upstream demo apps import it), so this loads the pipeline's entry module without running it, the modules its
+# code imports inside functions, the Stable3DGen pipeline, the StableNormal predictor the driver loads through
+# torch.hub and the DINOv2 hub the predictor loads in turn (by file, because StableNormal's is already `hubconf`),
+# and fails the build on a module that needs a package the lock does not hold. The entry module creates its S3
+# client at import; with the instance metadata lookup off, that reaches no network during the build.
+RUN cd /opt/ml/code && AWS_EC2_METADATA_DISABLED=true python -c "import importlib, importlib.util, sys; \
+assert importlib.util.find_spec('gradio') is None, 'gradio is installed, but the lock leaves it out'; \
+spec = importlib.util.spec_from_file_location('job_entry', '__main__.py'); \
+spec.loader.exec_module(importlib.util.module_from_spec(spec)); \
+[importlib.import_module(m) for m in ('framing', 'models.stable3dgen', 'rembg', 'onnxruntime', 'manifold3d', \
+'xatlas', 'scipy', 'torchvision', 'transformers', 'huggingface_hub')]; \
+from hi3dgen.pipelines import Hi3DGenPipeline; \
+sys.path.insert(0, '/opt/torchhome/hub/hugoycj_StableNormal_main'); import hubconf; \
+sys.path.insert(0, '/opt/torchhome/hub/facebookresearch_dinov2_main'); \
+dino = importlib.util.spec_from_file_location('dinov2_hubconf', '/opt/torchhome/hub/facebookresearch_dinov2_main/hubconf.py'); \
+dino.loader.exec_module(importlib.util.module_from_spec(dino)); \
+print('Stable3DGen job modules import')"
 
 WORKDIR /opt/ml/code
 USER 10000:10000

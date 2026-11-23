@@ -53,6 +53,25 @@ const CONVERTED: ConvertedImage[] = [
         upstreamFiles: ["requirements.txt"],
         upstreamLinesNotLocked: [/^git\+https:\/\/github\.com\/tatsy\/torchmcubes\.git$/],
     },
+    {
+        // nvdiffrast and pytorch3d are built from pinned commits (out-of-lock.json); pymeshlab is the GPL group's.
+        model: "step1x3d",
+        dockerfile: "Dockerfile.step1x3d",
+        upstreamFiles: ["requirements.txt"],
+        upstreamLinesNotLocked: [
+            /^git\+https:\/\/github\.com\/NVlabs\/nvdiffrast\.git$/,
+            /^git\+https:\/\/github\.com\/facebookresearch\/pytorch3d\.git@stable$/,
+            /^pymeshlab==/,
+        ],
+    },
+    {
+        // The Dockerfile has always filtered these out of upstream's list: torch and torchvision (the CUDA build),
+        // pymeshlab (GPL group) and the demo-only gradio, fastapi and uvicorn.
+        model: "hunyuan3d",
+        dockerfile: "Dockerfile.hunyuan3d",
+        upstreamFiles: ["requirements.txt"],
+        upstreamLinesNotLocked: [/^(torch|torchvision|pymeshlab|gradio|fastapi|uvicorn)$/],
+    },
 ];
 
 /** Logical Dockerfile instructions: backslash continuations joined, comments dropped. */
@@ -143,12 +162,19 @@ describe.each(CONVERTED)(
                 );
             }
             // What is left is a build from a pinned clone of the recorded out-of-lock packages: no resolver, no index.
-            for (const step of unlocked) {
-                expect(step).toMatch(/--no-deps/);
-                expect(step).toMatch(/--no-build-isolation/);
-                expect(step).toMatch(/\s\/opt\/[a-z0-9]+\s*$/);
+            // One RUN can build several packages, so every `pip install` in it is checked on its own.
+            const builds = unlocked.flatMap((step) =>
+                step
+                    .split(/\bpip3?\s+install\b/)
+                    .slice(1)
+                    .map((segment) => segment.split(/;|&&/)[0].trim())
+            );
+            for (const build of builds) {
+                expect(build).toMatch(/--no-deps/);
+                expect(build).toMatch(/--no-build-isolation/);
+                expect(build).toMatch(/\s\/(opt|tmp)\/[a-z0-9_]+(\/[a-z0-9_]+)*$/);
             }
-            expect(unlocked.length).toBe(outOfLock.length);
+            expect(builds.length).toBe(outOfLock.length);
             // The upgrade of pip, setuptools and wheel that resolved on build day is gone.
             expect(steps.filter((s) => /--upgrade/.test(s) && /\bpip\b/.test(s))).toEqual([]);
             // And no install reads the shared requirements file or an upstream one.
@@ -312,6 +338,56 @@ describe.each(CONVERTED)(
         });
     }
 );
+
+describe("the Stable3DGen image's pillow and gradio", () => {
+    const dir = path.join(CONTAINER_DIR, "locks", "stable3dgen");
+    const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf-8");
+    const locked = new Map(
+        ["requirements-build.lock", "requirements.lock", "requirements-gpl.lock"].flatMap((file) =>
+            exportPins(read(file)).map((p) => [p.name, p.version] as [string, string])
+        )
+    );
+
+    it("installs pillow 13 or later, with no pillow entry for the image in the audit allowlist", () => {
+        expect(Number((locked.get("pillow") ?? "0").split(".")[0])).toBeGreaterThanOrEqual(13);
+        const entries: { package: string; projects: string[] }[] = JSON.parse(
+            fs.readFileSync(
+                path.join(__dirname, "..", "..", "..", ".github", "python-audit-allowlist.json"),
+                "utf-8"
+            )
+        ).entries;
+        const project = "backendPipelines/genAi/imageTo3d/container/locks/stable3dgen";
+        expect(
+            entries.filter((e) => normalize(e.package) === "pillow" && e.projects.includes(project))
+        ).toEqual([]);
+    });
+
+    it("leaves gradio out of the lock through an override, and the build imports the job's modules without it", () => {
+        expect(locked.has("gradio")).toBe(false);
+        expect(
+            tomlArray(read("pyproject.toml"), "override-dependencies").filter((o) =>
+                o.startsWith("gradio")
+            )
+        ).toEqual(["gradio ; sys_platform == 'never'"]);
+        const dockerText = fs.readFileSync(
+            path.join(CONTAINER_DIR, "Dockerfile.stable3dgen"),
+            "utf-8"
+        );
+        const check = instructions(dockerText).find((s) =>
+            s.includes("Stable3DGen job modules import")
+        );
+        expect(check).toBeDefined();
+        expect(check).toContain("find_spec('gradio') is None");
+        expect(check).toContain("'__main__.py'");
+        expect(check).toContain("from hi3dgen.pipelines import Hi3DGenPipeline");
+        expect(check).toContain("import hubconf");
+        expect(check).toContain("/opt/torchhome/hub/facebookresearch_dinov2_main/hubconf.py");
+        // After the code is copied into the image, so the entry module it loads is the one that ships.
+        const codeCopy = dockerText.indexOf("COPY __init__.py __main__.py");
+        expect(codeCopy).toBeGreaterThan(0);
+        expect(dockerText.indexOf("Stable3DGen job modules import")).toBeGreaterThan(codeCopy);
+    });
+});
 
 describe("the images not yet converted", () => {
     it("still install the shared requirements.txt, and its exemption stays", () => {
