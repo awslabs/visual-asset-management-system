@@ -75,6 +75,9 @@ def test_primary_download_passes_the_version_id_only_when_given(tmp_path):
     ({"assetId": "xid", "relativePath": "/scenes/main.usda"}, "site/a/scenes/main.usda", "site/a/",
      "scenes/main.usda"),
     ({"assetRootS3Key": "site/a/", "assetId": "xid"}, "site/a/scenes/main.usda", "site/a/", "scenes/main.usda"),
+    # A single-file asset: its object is confined to its companion folder, not to the object's directory.
+    ({"assetRootS3Key": "site/a/pump.glb", "relativePath": "/pump.glb", "assetId": "xid"}, "site/a/pump.glb",
+     "site/a/pump.glb/", "pump.glb"),
     ({}, "xid/test/pump.glb", "xid/test/", "pump.glb"),
 ])
 def test_the_input_is_mirrored_at_its_asset_relative_path(tmp_path, event, key, root, relative):

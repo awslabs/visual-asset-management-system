@@ -278,11 +278,18 @@ def confinement_root(input_key: str, asset_id: str = "", relative_path: str = ""
     manifest's ``relativePath``) removed from the end, which is the root of an asset created on an
     existing bucket folder, whose keys need not contain the asset id; else the input's own directory.
     A root is never the empty bucket-wide prefix unless the key has no directory at all.
+
+    An ``assetRootS3Key`` without a trailing ``/`` is a single-file asset: it names the input object
+    itself, and what the asset holds besides it is its companion folder ``{key}/``. The input object
+    of such an asset is confined to that folder, never to the object's parent directory, which holds
+    keys the asset does not hold.
     """
     input_key = input_key or ""
     own_directory = input_key.rsplit("/", 1)[0] + "/" if "/" in input_key else ""
     hint = asset_root_hint or ""
     if hint and not hint.endswith("/"):
+        if input_key == hint:
+            return hint + "/"
         hint += "/"
     if hint and hint != "/" and input_key.startswith(hint) and len(input_key) > len(hint):
         return hint
@@ -296,18 +303,29 @@ def confinement_root(input_key: str, asset_id: str = "", relative_path: str = ""
 
 
 def relative_to_root(key: str, root: str) -> str:
-    """``key`` relative to the confinement root (the input file's asset-relative path)."""
+    """``key`` relative to the confinement root (the input file's asset-relative path). A single-file
+    asset's object, confined to its companion folder ``{key}/``, sits at its file name: its references
+    resolve within that folder, as the asset presents the object and the folder's files side by side."""
+    if root and key + "/" == root:
+        return key.rsplit("/", 1)[-1]
     if root and not key.startswith(root):
         raise ValueError(f"key {key!r} is not under {root!r}")
     return key[len(root):]
 
 
 def local_path_for(local_root: str, relative_path: str) -> Optional[str]:
-    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it."""
+    """The local path mirroring ``relative_path`` under ``local_root``, or None if it would leave it, or
+    if a folder on its way is already a file there (a single-file asset's object sits at its file name,
+    while ``{file name}/x`` names a file of its companion folder), so the reference is not fetched."""
     base = os.path.realpath(local_root)
     target = os.path.realpath(os.path.join(base, relative_path))
     if target == base or not target.startswith(base + os.sep):
         return None
+    parent = os.path.dirname(target)
+    while parent != base:
+        if os.path.exists(parent) and not os.path.isdir(parent):
+            return None
+        parent = os.path.dirname(parent)
     return target
 
 
@@ -1005,6 +1023,7 @@ class DependencyResolver:
         self.log = log or logger
 
         self.input_rel = ""
+        self.input_key = ""
         self.nodes: Dict[str, _Node] = {}
         self.order: List[str] = []
         self.visited = set()
@@ -1080,10 +1099,12 @@ class DependencyResolver:
 
     # -- discovery --------------------------------------------------------------------------------
 
-    def discover(self, input_rel: str, local_input_path: str, ext: str):
+    def discover(self, input_rel: str, local_input_path: str, ext: str, input_key: Optional[str] = None):
         """Read the references of the input (already downloaded at ``input_rel`` under the local root)
-        and, breadth first, of every document they name; size every other file."""
+        and, breadth first, of every document they name; size every other file. ``input_key`` is the
+        input's own S3 key, which is not the root plus ``input_rel`` for a single-file asset's object."""
         self.input_rel = input_rel
+        self.input_key = input_key or self.root_key + input_rel
         self.visited.add(input_rel)
         self.graph.setdefault(input_rel, [])
         queue = deque([(input_rel, local_input_path, ext.lower(), 0, None)])
@@ -1104,7 +1125,7 @@ class DependencyResolver:
                 self._drain(queue)
 
     def _recently_uploaded(self) -> bool:
-        info = self.store.head(self.root_key + self.input_rel)
+        info = self.store.head(self.input_key)
         modified = info.last_modified if info is not None else None
         if not isinstance(modified, datetime):
             return False
@@ -1393,7 +1414,7 @@ def resolve(store, root_key: str, input_key: str, local_input_path: str, local_r
     resolver = DependencyResolver(store, root_key, local_root, limits, deadline=deadline, clock=clock,
                                   sleep=sleep, now=now, max_splats=max_splats, late_arrival=late_arrival,
                                   log=log)
-    resolver.discover(relative_to_root(input_key, root_key), local_input_path, ext)
+    resolver.discover(relative_to_root(input_key, root_key), local_input_path, ext, input_key)
     resolver.fetch()
     return resolver.report()
 
@@ -1421,7 +1442,7 @@ def fetch_referenced_files(bucket: str, input_key: str, local_input_path: str, l
                                   max_splats=max_splats, collectors=collectors, child_collectors=children,
                                   late_arrival=False)
     try:
-        resolver.discover(relative_to_root(input_key, root_key), local_input_path, ext)
+        resolver.discover(relative_to_root(input_key, root_key), local_input_path, ext, input_key)
         resolver.fetch()
     finally:
         resolver.fill_thumbnail_report(report)
