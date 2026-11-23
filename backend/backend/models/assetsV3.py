@@ -266,7 +266,8 @@ class CreateAssetRequestModel(BaseModel, extra='ignore'):
     description: str = Field(min_length=4, max_length=256)
     isDistributable: bool
     tags: Optional[list[str]] = []
-    # Optional existing key in the database default S3 bucket.
+    # Optional existing folder in the database default S3 bucket. Whether the key names a folder or a file is
+    # decided against S3 by createAsset, which refuses a file.
     bucketExistingKey: Optional[str] = Field(None, min_length=1, max_length=1024, regex=bucket_existing_key_pattern)
 
     _trim_names = validator('databaseId', 'assetId', 'assetName', pre=True, allow_reuse=True)(trim_name)

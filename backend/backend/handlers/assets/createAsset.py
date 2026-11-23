@@ -394,6 +394,8 @@ def normalize_location_key(key):
 RESERVED_EXISTING_KEY_FOLDERS = RESERVED_S3_PREFIX_FOLDERS | {AUXILIARY_PREPARED_DOWNLOADS_PREFIX.strip('/')}
 RESERVED_EXISTING_KEY_MESSAGE = ("The specified bucketExistingKey is inside a folder VAMS reserves for system "
                                  "use. Choose another location.")
+FILE_EXISTING_KEY_MESSAGE = ("The specified bucketExistingKey names a file. It must name a folder (a key ending "
+                             "in /) that holds the asset's files.")
 RESERVED_ASSET_ID_MESSAGE = ("The specified assetId is the name of a folder VAMS reserves for system use. "
                              "Choose another asset ID.")
 
@@ -928,11 +930,15 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
             logger.error(f"bucketExistingKey {s3_key} is inside a reserved VAMS system folder")
             raise VAMSGeneralErrorResponse(RESERVED_EXISTING_KEY_MESSAGE)
 
-        # The key names an object (a single-file location, even when objects also sit under
-        # `{key}/`, its companion folder), or a folder. A folder written by `aws s3 sync` or
-        # another tool has no folder-marker object, so a missed HeadObject falls back to whether
-        # anything is stored under `{key}/`; then the location is that folder.
-        if not check_s3_key_exists(s3_bucket, s3_key):
+        # An asset is created on a folder. A key without a trailing `/` that names an object is a
+        # file and is refused, even when objects also sit under `{key}/`. A folder written by
+        # `aws s3 sync` or another tool has no folder-marker object, so a missed HeadObject falls
+        # back to whether anything is stored under `{key}/`; then the location is that folder.
+        key_names_object = check_s3_key_exists(s3_bucket, s3_key)
+        if key_names_object and not normalize_location_key(s3_key).endswith('/'):
+            logger.warning(f"bucketExistingKey {s3_key} names an object, not a folder")
+            raise VAMSGeneralErrorResponse(FILE_EXISTING_KEY_MESSAGE)
+        if not key_names_object:
             folder_key = normalize_location_key(s3_key).rstrip('/') + '/'
             if not check_s3_folder_has_objects(s3_bucket, folder_key):
                 error_msg = "The specified bucketExistingKey does not exist in the asset's database default S3 bucket"

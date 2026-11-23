@@ -324,11 +324,15 @@ class TestCreateAssetSetsTheAttributes:
     @pytest.mark.parametrize("existing_key,expected_key", [
         ("projects/alpha/", "projects/alpha/"),
         ("/projects/alpha/", "projects/alpha/"),
-        ("projects/model.glb", "projects/model.glb"),
+        # A folder given without its '/' (nothing stored at the key, objects under it)
+        ("projects/beta", "projects/beta/"),
     ])
     def test_existing_key_location(self, existing_key, expected_key):
         m = _load_create_asset(fresh=True)
         self._wire(m, "")
+        if not existing_key.endswith("/"):
+            m.check_s3_key_exists = MagicMock(return_value=False)
+            m.check_s3_folder_has_objects = MagicMock(return_value=True)
         m.create_asset(self._request(m, bucketExistingKey=existing_key), {"tokens": ["user1"]})
         row = _put_item(m.asset_table)
         assert row["assetLocation"] == {"Key": expected_key}

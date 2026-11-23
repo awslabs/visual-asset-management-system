@@ -235,7 +235,8 @@ def assets():
 @click.option('--description', help='[REQUIRED unless using --json-input] Asset description')
 @click.option('--distributable/--no-distributable', default=None, help='[REQUIRED unless using --json-input] Whether the asset is distributable')
 @click.option('--tags', multiple=True, help='[OPTIONAL] Asset tags (can be used multiple times)')
-@click.option('--bucket-key', help='[OPTIONAL] Existing S3 bucket key to use')
+@click.option('--bucket-key', help="[OPTIONAL] Existing S3 folder key (ending in '/') to create the asset on; "
+                                   "a key that names a file is refused")
 @click.option('--json-input', help='[OPTIONAL] JSON input file path or JSON string with all asset data')
 @click.option('--json-output', is_flag=True, help='[OPTIONAL] Output raw JSON response')
 @click.pass_context

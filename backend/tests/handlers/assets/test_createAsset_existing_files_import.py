@@ -55,10 +55,13 @@ def _requests(m):
 @pytest.mark.unit
 class TestTheFilesAlreadyThereAreImported:
     @pytest.mark.parametrize("key,location", [("projects/synced/", "projects/synced/"),
-                                              ("projects/model.glb", "projects/model.glb")])
+                                              ("projects/unmarked", "projects/unmarked/")])
     def test_one_import_request_to_the_registrations_queue(self, key, location):
         m = _load_create_asset(fresh=True)
         _wire(m)
+        if not key.endswith("/"):
+            # A folder given without its '/': nothing is stored at the key, objects are under it
+            m.check_s3_key_exists = MagicMock(return_value=False)
         _create(m, key)
         assert _requests(m) == [(QUEUE, {"vamsImportRequest": {
             "bucket": "vams-assets", "location": location, "start": True,

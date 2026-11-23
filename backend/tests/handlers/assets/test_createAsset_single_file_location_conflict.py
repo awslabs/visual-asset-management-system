@@ -80,10 +80,16 @@ class TestBucketExistingKeyOwnership:
         assert "already in use by another asset" in str(e.value)
 
 
+FILE_KEY = ("The specified bucketExistingKey names a file. It must name a folder (a key ending in /) that "
+            "holds the asset's files.")
+
+
 @pytest.mark.unit
 class TestASecondCreateOverMeetingPreviews:
     """An asset at ``a/x`` and one at ``a/x.previewFile`` would both hold ``a/x.previewFile.previewFile.z``
-    (a preview of each), so the second create is refused whichever comes first."""
+    (a preview of each). A bucketExistingKey must name a folder, so the second single-file asset is never
+    created: its file key is refused before the ownership check. A folder over the keys an existing
+    single-file asset holds is refused by the conflict check, and a neighbour folder is created."""
 
     @pytest.mark.parametrize("existing,supplied", [
         ("a/x", "a/x.previewFile"),
@@ -91,7 +97,21 @@ class TestASecondCreateOverMeetingPreviews:
         ("a/x", "a/x.previewFile."),
         ("a/x.previewFile.", "a/x"),
     ])
-    def test_the_second_create_is_refused(self, existing, supplied):
+    def test_the_second_single_file_create_is_refused(self, existing, supplied):
+        m = _load(fresh=True)
+        _wire(m, owned_records=[_asset_record(_OTHER_DB, "first-asset", _BASE_PREFIX + existing)])
+
+        with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
+            m.create_asset(_request_model(m, bucket_existing_key=supplied), {"tokens": ["user1"]})
+
+        assert str(caught.value).endswith(FILE_KEY)
+        _assert_nothing_persisted(m)
+
+    @pytest.mark.parametrize("existing,supplied", [
+        ("a/x", "a/x/"),
+        ("a/x.previewFile", "a/x.previewFile/"),
+    ])
+    def test_a_folder_over_a_single_file_assets_keys_is_refused(self, existing, supplied):
         m = _load(fresh=True)
         _wire(m, owned_records=[_asset_record(_OTHER_DB, "first-asset", _BASE_PREFIX + existing)])
 
@@ -103,7 +123,7 @@ class TestASecondCreateOverMeetingPreviews:
 
     @pytest.mark.parametrize("existing,supplied", [
         ("a/x", "a/x.previewFile/"),
-        ("a/x.previewFile", "a/x.bak"),
+        ("a/x.previewFile", "a/x.bak/"),
     ])
     def test_a_neighbour_whose_keys_never_meet_is_created(self, existing, supplied):
         m = _load(fresh=True)
