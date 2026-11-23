@@ -213,6 +213,121 @@ def test_a_job_is_counted_once_however_often_it_notifies(table):
     assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
 
 
+def _cancelled(codes):
+    """The TransactionCanceledException DynamoDB raises: one CancellationReasons entry per action, in
+    order (job row, then batch row), ``None`` for an action that did not cause the cancellation."""
+    return ClientError({
+        "Error": {"Code": "TransactionCanceledException", "Message": "Transaction cancelled"},
+        "CancellationReasons": [{"Code": code or "None"} for code in codes],
+    }, "TransactWriteItems")
+
+
+class _CancellingClient:
+    """moto's DynamoDB client whose first transact_write_items calls are cancelled with the given
+    reasons (writing nothing, as DynamoDB does); later calls run on moto."""
+
+    def __init__(self, client, cancellations):
+        self._client = client
+        self._cancellations = list(cancellations)
+        self.calls = 0
+
+    def transact_write_items(self, **kwargs):
+        self.calls += 1
+        if self._cancellations:
+            raise _cancelled(self._cancellations.pop(0))
+        return self._client.transact_write_items(**kwargs)
+
+
+@pytest.fixture
+def waits(monkeypatch):
+    delays = []
+    monkeypatch.setattr(loc, "_sleep", delays.append)
+    return delays
+
+
+def _counted_batch(tbl, client, count=2):
+    jobs = _seed_jobs(tbl, count)
+    loc.record_batch(tbl, "exec-1", [j["jobId"] for j in jobs], {"workflowExecutionId": "exec-1", "legacy": False})
+    return jobs
+
+
+@pytest.mark.parametrize("reasons", [
+    [None, "TransactionConflict"],   # another job of the batch counted at the same moment
+    ["TransactionConflict", None],   # a second notify of this job at the same moment
+])
+def test_a_count_cancelled_for_a_conflict_is_tried_again_and_counts_the_job(table, waits, reasons):
+    tbl, client = table
+    jobs = _counted_batch(tbl, client)
+    racing = _CancellingClient(client, [reasons])
+    assert loc.count_job_terminal(racing, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED) is True
+    assert racing.calls == 2 and len(waits) == 1
+    assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
+    assert loc.get_job_row(tbl, jobs[0]["jobId"])["counted"] is True
+
+
+@pytest.mark.parametrize("reasons", [
+    ["ConditionalCheckFailed", None],
+    ["ConditionalCheckFailed", "TransactionConflict"],
+])
+def test_a_count_cancelled_by_the_job_s_own_condition_is_already_counted(table, waits, reasons):
+    """Control: the job row's condition failed, so it was counted before. Nothing is retried or
+    added (this passed before the conflict fix too)."""
+    tbl, client = table
+    jobs = _counted_batch(tbl, client)
+    racing = _CancellingClient(client, [reasons])
+    assert loc.count_job_terminal(racing, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED) is False
+    assert racing.calls == 1 and waits == []
+    assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 0
+
+
+def test_a_conflict_on_every_attempt_is_raised_after_the_bound_and_a_rerun_counts_once(table, waits):
+    tbl, client = table
+    jobs = _counted_batch(tbl, client)
+    attempts = loc.COUNT_TRANSACTION_ATTEMPTS
+    racing = _CancellingClient(client, [[None, "TransactionConflict"]] * attempts)
+    with pytest.raises(ClientError) as raised:
+        loc.count_job_terminal(racing, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
+    assert loc.error_code(raised.value) == "TransactionCanceledException"
+    assert racing.calls == attempts and len(waits) == attempts - 1
+    assert all(0 <= delay <= loc.COUNT_CONFLICT_BASE_DELAY_SECONDS * 2 ** i for i, delay in enumerate(waits))
+    assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 0
+    assert "counted" not in loc.get_job_row(tbl, jobs[0]["jobId"])
+    # The state machine retries the notify task: the re-run counts the job, and a later one adds nothing.
+    assert loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED) is True
+    assert loc.count_job_terminal(client, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED) is False
+    assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 1
+
+
+@pytest.mark.parametrize("error", [
+    _cancelled([None, "ThrottlingError"]),
+    _cancelled([None, "ProvisionedThroughputExceeded"]),
+    _cancelled(["ValidationError", None]),
+    ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "x"}}, "TransactWriteItems"),
+])
+def test_any_other_cancellation_is_raised_at_once_and_counts_nothing(table, waits, error):
+    """A throughput or validation reason, or a cancellation with no reasons, is raised for the state
+    machine's retry: it is neither read as already counted nor retried here."""
+    tbl, client = table
+    jobs = _counted_batch(tbl, client)
+    failing = MagicMock()
+    failing.transact_write_items.side_effect = error
+    with pytest.raises(ClientError):
+        loc.count_job_terminal(failing, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
+    assert failing.transact_write_items.call_count == 1 and waits == []
+    assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 0
+
+
+def test_a_job_with_no_batch_retries_a_conflict_on_its_own_row(table, waits):
+    """An API upload's job has no batch: the transaction holds the job row only."""
+    tbl, client = table
+    job_id = loc.job_id_for("upload-1", "big.bin")
+    racing = _CancellingClient(client, [["TransactionConflict"]])
+    assert loc.count_job_terminal(racing, TABLE, job_id, "", loc.STATUS_SUCCEEDED) is True
+    assert racing.calls == 2
+    assert loc.get_job_row(tbl, job_id)["counted"] is True
+    assert loc.count_job_terminal(client, TABLE, job_id, "", loc.STATUS_SUCCEEDED) is False
+
+
 def test_notification_waits_for_every_job_and_the_token(table):
     tbl, client = table
     jobs = _seed_jobs(tbl, 2)
