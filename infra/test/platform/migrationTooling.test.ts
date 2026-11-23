@@ -226,6 +226,89 @@ describe(`${CURRENT.dir} run_migration.sh footer follows the run mode`, () => {
     });
 });
 
+// A migration script reads its config with Python's json.load, which keeps the LAST value of a key
+// that appears twice. A template that lists a key in two sections (one per step) therefore drops the
+// value an operator fills in under the first one, with no error. Every committed config template is
+// read the way the scripts read it, with an object_pairs_hook that records each repeated key.
+const MIGRATION_CONFIG_NAME = /^v\d+\.\d+_to_v\d+\.\d+_migration(_[a-z]+)?_config\.json$/;
+
+function committedMigrationConfigs(): string[] {
+    return fs
+        .readdirSync(MIGRATIONS_ROOT, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .flatMap((entry) => {
+            const upgrade = path.join(MIGRATIONS_ROOT, entry.name, "upgrade");
+            return fs.existsSync(upgrade)
+                ? fs
+                      .readdirSync(upgrade)
+                      .filter((name) => MIGRATION_CONFIG_NAME.test(name))
+                      .map((name) => path.join(upgrade, name))
+                : [];
+        })
+        .sort();
+}
+
+const DUPLICATE_KEYS_PY = [
+    "import json, sys",
+    "found = {}",
+    "for path in sys.argv[1:]:",
+    "    repeated = []",
+    "    def hook(pairs, repeated=repeated):",
+    "        seen = set()",
+    "        for key, _ in pairs:",
+    "            if key in seen:",
+    "                repeated.append(key)",
+    "            seen.add(key)",
+    "        return dict(pairs)",
+    "    with open(path, encoding='utf-8') as f:",
+    "        json.load(f, object_pairs_hook=hook)",
+    "    found[path] = repeated",
+    "print(json.dumps(found))",
+].join("\n");
+
+/** Each file's repeated keys (in any object of the file), read by Python's json.load. */
+function repeatedConfigKeys(files: string[]): Record<string, string[]> {
+    const run = spawnSync("python3", ["-c", DUPLICATE_KEYS_PY, ...files], { encoding: "utf8" });
+    if (run.status !== 0) {
+        throw new Error(`python3 could not read the migration configs: ${run.stderr}`);
+    }
+    return JSON.parse(run.stdout);
+}
+
+describe("migration config templates name each key once", () => {
+    it("finds every release's config template", () => {
+        const names = committedMigrationConfigs().map((file) => path.basename(file));
+        expect(names).toEqual(expect.arrayContaining(MIGRATIONS.map((m) => m.configFile)));
+    });
+
+    it("reports a key that appears twice (control)", () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vams-migration-config-"));
+        try {
+            const planted = path.join(scratch, "planted_config.json");
+            fs.writeFileSync(
+                planted,
+                '{"asset_storage_table_name": "mine", "other": {"a": 1, "a": 2},' +
+                    ' "asset_storage_table_name": null}'
+            );
+            const clean = path.join(scratch, "clean_config.json");
+            fs.writeFileSync(clean, '{"a": 1, "b": {"a": 2}}');
+            expect(repeatedConfigKeys([planted, clean])).toEqual({
+                [planted]: ["a", "asset_storage_table_name"],
+                [clean]: [],
+            });
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+
+    it("lists no key twice in any committed template", () => {
+        const repeated = Object.entries(repeatedConfigKeys(committedMigrationConfigs()))
+            .filter(([, keys]) => keys.length > 0)
+            .map(([file, keys]) => `${path.relative(MIGRATIONS_ROOT, file)}: ${keys.join(", ")}`);
+        expect(repeated).toEqual([]);
+    });
+});
+
 describe("ssm_resource_lookup.py mirrors resourceParamKeys.ts", () => {
     const lookupSource = fs.readFileSync(SSM_RESOURCE_LOOKUP_PY, "utf8");
 
@@ -314,6 +397,8 @@ const CALL_TO_ACTION: ReadonlyArray<[RegExp, string]> = [
     [/\.scan\b/, "dynamodb:Scan"],
     [/\.invoke\(/, "lambda:InvokeFunction"],
     [/\.delete_object\(/, "s3:DeleteObject"],
+    [/\.transact_write_items\(/, "dynamodb:PutItem"],
+    [/\.list_object_versions\(/, "s3:ListBucketVersions"],
 ];
 
 describe.each(MIGRATIONS)("$dir migration README IAM policy", (migration) => {
@@ -493,8 +578,70 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
     });
 
     it("walks no Amazon S3 bucket itself; the backfills hand the walk to the reindexer", () => {
-        expect(script).not.toMatch(/list_objects|list_object_versions|\.client\(\s*['"]s3['"]/);
+        // Only assetLocationFolderKeys reads Amazon S3: one HeadObject, the versions of one exact key at a
+        // time, and one single-key listing under '{key}/'.
+        const start = script.indexOf("# STEP: assetLocationFolderKeys\n");
+        const end = script.indexOf("# STEP: orphanedTriggers\n");
+        expect(start).toBeGreaterThan(-1);
+        expect(end).toBeGreaterThan(start);
+        const locationStep = script.slice(start, end);
+        const rest = script.slice(0, start) + script.slice(end);
+        expect(rest).not.toMatch(
+            /list_objects|list_object_versions|head_object|\.client\(\s*['"]s3['"]/
+        );
+        expect(script).not.toMatch(/get_paginator\(\s*['"]list_object/);
+        const listings = locationStep.match(/list_objects_v2\([^)]*\)/g) ?? [];
+        expect(listings).toHaveLength(1);
+        expect(listings[0]).toContain("MaxKeys=1");
+        const versionListings = locationStep.match(/\.list_object_versions\(/g) ?? [];
+        expect(versionListings).toHaveLength(1);
+        const exact = locationStep.slice(locationStep.indexOf("def exact_key_versions("));
+        expect(exact.slice(0, 900)).toContain("if entry['Key'] == key");
         expect(script).not.toMatch(/auxiliary/i);
+    });
+
+    it("moves the copy's records without overwriting, and leaves vectors and execution history", () => {
+        const move = script.slice(script.indexOf("def move_record("));
+        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_not_exists(#k)'");
+        expect(move.slice(0, 2000)).toContain("'ConditionExpression': 'attribute_exists(#k)'");
+        const block = script.slice(script.indexOf("COPY_TABLE_KEYS = ("));
+        const tables = Array.from(
+            block.slice(0, block.indexOf("\n)\n")).matchAll(/'([A-Z0-9_]+)'/g)
+        ).map((m) => m[1]);
+        for (const name of [
+            "ASSET_FILE_METADATA_STORAGE_TABLE",
+            "FILE_ATTRIBUTE_STORAGE_TABLE",
+            "ASSET_FILE_VERSIONS_STORAGE_TABLE",
+            "ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE",
+            "ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE",
+        ]) {
+            expect(tables).toContain(name);
+        }
+        expect(tables.join(" ")).not.toMatch(/VECTOR|EXECUTION/);
+        expect(readme).toContain("#### Part (b): the copy named like the file");
+        // Idempotent without local state: a conditional marker on the asset row, read by the scan.
+        expect(script).toMatch(/^COPY_DONE_ATTRIBUTE = 'assetLocationCopyRecordsMovedAt'$/m);
+        const mark = script.slice(script.indexOf("def mark_copy_records_done("));
+        expect(mark.slice(0, 1200)).toContain("attribute_not_exists(#m)");
+        expect(script).toMatch(/assetLocation, '\s*\n\s*f'\{COPY_DONE_ATTRIBUTE\}'/);
+        expect(script).not.toMatch(/moved-copies/);
+        expect(readme).toContain("assetLocationCopyRecordsMovedAt");
+        expect(readme).toContain("Run the step before users edit metadata on single-file assets.");
+        expect(readme).toMatch(/run `vectorBackfill` after this step/);
+    });
+
+    it("runs assetLocationFolderKeys first, gated, with a report and a checkpoint", () => {
+        expect(tuple(script, "STEP_CHOICES")[0]).toBe("assetLocationFolderKeys");
+        const body = script.slice(script.indexOf("def main("));
+        expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeGreaterThan(-1);
+        expect(body.indexOf("run_asset_location_folder_keys_step(")).toBeLessThan(
+            body.indexOf("run_orphaned_triggers_step(")
+        );
+        expect(body).toMatch(/gated=run_location_keys or /);
+        expect(script).toContain("ConditionExpression='#loc.#key = :old'");
+        expect(script).toMatch(/parser\.add_argument\('--resume'/);
+        expect(readme).toContain("assetLocationFolderKeys-dry-run-report.jsonl");
+        expect(readme).toContain("--resume");
     });
 
     it("documents what the deploy creates for Download as Zip and the copy engine", () => {
@@ -553,5 +700,157 @@ describe("the v2.6 to v2.7 migration leaves Download as Zip and large outputs al
         expect(lookup).toMatch(
             /LARGE_OBJECT_COPY_JOBS_STORAGE_TABLE = "dynamoTables\/largeObjectCopyJobsStorage"/
         );
+    });
+});
+
+describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads", () => {
+    // backend/backend/common/assetLocations.py decides index_ready() from the marker this step writes,
+    // and AssetLocationGSI indexes the two attributes the step sets. A renamed constant on either side
+    // leaves the index empty or the marker unread, and nothing else fails.
+    const release = MIGRATIONS.find((m) => m.dir === "v2.6_to_v2.7");
+    if (!release) throw new Error("the v2.6_to_v2.7 migration is not listed");
+    const script = readMigrationFile(release, release.script);
+    const backend = fs.readFileSync(
+        path.join(__dirname, "..", "../../backend/backend/common/assetLocations.py"),
+        "utf8"
+    );
+
+    /** The string or integer value assigned to `name` at module level in a Python source. */
+    function pyConstant(source: string, name: string): string {
+        const match = new RegExp(`^${name}\\s*=\\s*(?:'([^']*)'|"([^"]*)"|(\\d+))\\s*$`, "m").exec(
+            source
+        );
+        if (!match) throw new Error(`${name} is not assigned a literal`);
+        return match[1] ?? match[2] ?? match[3];
+    }
+
+    const PAIRS: ReadonlyArray<[string, string]> = [
+        ["ASSET_LOCATION_BUCKET_ATTRIBUTE", "LOCATION_BUCKET_ATTRIBUTE"],
+        ["ASSET_LOCATION_KEY_ATTRIBUTE", "LOCATION_KEY_ATTRIBUTE"],
+        ["ASSET_LOCATION_INDEX_MARKER_SUFFIX", "INDEX_READY_PARAMETER_SUFFIX"],
+        ["ASSET_LOCATION_INDEX_MARKER_VERSION", "INDEX_READY_MARKER_VERSION"],
+        ["ASSET_LOCATION_INDEX_STATUS_COMPLETE", "INDEX_READY_STATUS_COMPLETE"],
+    ];
+
+    it("names the same preview pattern as the backend's single-file rule", () => {
+        const patterns = fs.readFileSync(
+            path.join(__dirname, "..", "../../backend/backend/common/s3PathPatterns.py"),
+            "utf8"
+        );
+        expect(pyConstant(script, "ASSET_LOCATION_PREVIEW_FILE_PATTERN")).toBe(
+            pyConstant(patterns, "PREVIEW_FILE_PATTERN")
+        );
+        expect(backend).toContain("from common.s3PathPatterns import PREVIEW_FILE_PATTERN");
+    });
+
+    it.each(PAIRS)("%s equals the backend's %s", (migrationName, backendName) => {
+        expect(pyConstant(script, migrationName)).toBe(pyConstant(backend, backendName));
+    });
+
+    it("runs after assetLocationFolderKeys, whose fixed keys it indexes, and not after it failed", () => {
+        const body = script.slice(script.indexOf("def main("));
+        const folderKeys = body.indexOf("run_asset_location_folder_keys_step(");
+        const index = body.indexOf("run_asset_location_index_step(");
+        expect(folderKeys).toBeGreaterThan(-1);
+        expect(index).toBeGreaterThan(folderKeys);
+        const steps = Array.from(
+            (/^STEP_CHOICES\s*=\s*\(([^)]*)\)/m.exec(script)?.[1] ?? "").matchAll(/'([A-Za-z]+)'/g)
+        ).map((m) => m[1]);
+        expect(steps.indexOf("assetLocationIndex")).toBe(steps.indexOf("all") - 1);
+        expect(steps[0]).toBe("assetLocationFolderKeys");
+        expect(body).toMatch(
+            /if run_asset_location_index and location_keys_failed and not dry_run:/
+        );
+        // A key the folder-keys step fixes after the index ran keeps its indexed key in step.
+        const append = script.slice(script.indexOf("def append_location_slash("));
+        expect(append.slice(0, append.indexOf("\ndef "))).toContain("ASSET_LOCATION_KEY_ATTRIBUTE");
+    });
+
+    it("writes the table name into the marker, which the backend requires", () => {
+        expect(script).toMatch(/'assetTable': self\.asset_table/);
+        expect(backend).toMatch(/marker\.get\('assetTable'\) == asset_table_name/);
+    });
+
+    it("the GSI keys on the same attribute names", () => {
+        const storage = fs.readFileSync(
+            path.join(__dirname, "..", "../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
+            "utf8"
+        );
+        const at = storage.indexOf("indexName: ASSET_LOCATION_INDEX,");
+        expect(at).toBeGreaterThan(-1);
+        const block = storage.slice(at);
+        expect(storage).toContain(
+            `export const ASSET_LOCATION_INDEX = "${pyConstant(backend, "LOCATION_INDEX_NAME")}";`
+        );
+        expect(block.slice(0, 400)).toContain(
+            `name: "${pyConstant(backend, "LOCATION_BUCKET_ATTRIBUTE")}"`
+        );
+        expect(block.slice(0, 400)).toContain(
+            `name: "${pyConstant(backend, "LOCATION_KEY_ATTRIBUTE")}"`
+        );
+    });
+
+    it("[control] the constant reader rejects a name that is not assigned", () => {
+        expect(() => pyConstant(script, "NO_SUCH_CONSTANT")).toThrow();
+    });
+});
+
+describe("reindex_utility.py --tag-synced reaches its readiness check with the backend it loads", () => {
+    // tag_synced_objects() imports the backend's common/assetLocations.py at run time and calls
+    // index_ready() before it reads anything else. A signature change there does not show in a text merge
+    // and fails only when an operator runs the tool, so the real tool and the real backend module are run
+    // to and past that check by a standard-library harness with a fake boto3 session.
+    const HARNESS = path.join(__dirname, "fixtures", "tagSyncedReadinessHarness.py");
+    const TOOL = path.join(MIGRATIONS_ROOT, "tools", "tag_synced_objects.py");
+    const BACKEND = path.join(__dirname, "..", "../../backend/backend");
+    const MARKER = "/vams-test/resourceNames/dataMigrations/assetLocationIndex";
+    const NOT_READY = "The asset location index is not ready";
+
+    interface Outcome {
+        exception: string | null;
+        result: { error?: string; objectsSeen?: number } | null;
+        markerReads: string[];
+        sessionClients: string[];
+        sessionResources: string[];
+        scans: string[];
+        defaultReaderLoaded: boolean;
+    }
+
+    let results: Record<string, Outcome>;
+    beforeAll(() => {
+        const run = spawnSync("python3", [HARNESS, TOOL, BACKEND], { encoding: "utf8" });
+        if (run.status !== 0) {
+            throw new Error(`the harness failed (${run.status}): ${run.stderr}`);
+        }
+        results = JSON.parse(run.stdout);
+    });
+
+    it.each(["missing", "throttled", "otherTable", "complete"])(
+        "%s marker: the readiness check runs and reads the marker once with the tool's session",
+        (scenario) => {
+            const outcome = results[scenario];
+            expect(outcome.exception).toBeNull();
+            expect(outcome.markerReads).toEqual([MARKER]);
+            expect(outcome.sessionClients).toEqual(["ssm"]);
+            expect(outcome.defaultReaderLoaded).toBe(false);
+        }
+    );
+
+    it.each(["missing", "throttled", "otherTable"])(
+        "%s marker: the run stops before any table is read",
+        (scenario) => {
+            const outcome = results[scenario];
+            expect(outcome.result?.error).toContain(NOT_READY);
+            expect(outcome.sessionResources).toEqual([]);
+            expect(outcome.scans).toEqual([]);
+        }
+    );
+
+    it("a completed marker for the table lets the run go on to the bucket registrations", () => {
+        const outcome = results.complete;
+        expect(outcome.result?.error).toBeUndefined();
+        expect(outcome.result?.objectsSeen).toBe(0);
+        expect(outcome.sessionResources).toEqual(["dynamodb"]);
+        expect(outcome.scans).toEqual(["vams-test-s3AssetBucketsStorageTable"]);
     });
 });

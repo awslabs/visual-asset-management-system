@@ -57,8 +57,9 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 GUIDE = REPO_ROOT / "documentation" / "docusaurus-site" / "docs" / "pipelines" / "custom-pipelines.md"
 
 # The full self-locating shape a pipeline may index.
-ENTRY_KEYS = {"relativePath", "databaseId", "assetId", "assetRootS3Key", "auxPreviewPrefix",
-              "bucket", "bucketId", "key", "versionId", "bucketRegion", "bucketAccountId"}
+ENTRY_KEYS = {"relativePath", "databaseId", "assetId", "assetRootS3Key", "assetRootBucket",
+              "auxPreviewPrefix", "bucket", "bucketId", "key", "versionId", "bucketRegion",
+              "bucketAccountId"}
 
 
 def _entry(**overrides):

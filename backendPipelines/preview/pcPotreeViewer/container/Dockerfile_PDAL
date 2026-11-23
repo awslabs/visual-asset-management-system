@@ -101,8 +101,8 @@ ENV OAMS_TRADITIONAL_GIS_ORDER=TRUE
 COPY ./ ./pc_pipeline
 
 # Install requirements (boto3, botocore) into the interpreter the entrypoint runs: every package at the
-# version and hash in the lock (generated from requirements.txt for the base image's Python; its header
-# holds the command that regenerates it), as wheels only.
+# version and hash in the lock (the `uv export` of uv.lock; its header holds the command that regenerates
+# it), as wheels only.
 RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary :all: -r ./pc_pipeline/requirements.lock
 
 # Create the runtime user. This stage needs its own: a user created in the `build` stage above is

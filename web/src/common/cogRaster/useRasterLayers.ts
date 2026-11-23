@@ -46,6 +46,10 @@ export interface UseRasterLayers {
 /** Rounds of identity lookups for one file, in case files of the same name are listed meanwhile. */
 const MAX_IDENTITY_ROUNDS = 3;
 
+/** Said when a file opened at a version has a converted COG made from another version of it. */
+export const STALE_COG_PINNED_TEXT =
+    "COG is from another version of the source; this version is drawn from the source file";
+
 export interface UseRasterLayersOptions {
     /** Id of the first layer rasters must sit below; evaluated each time layers are placed. */
     beforeLayerId?: () => string | undefined;
@@ -143,11 +147,13 @@ export function useRasterLayers(
                     notice({ id, label, text: result.message, kind: "warning" });
                     return false;
                 }
-                if (ready.usedCog && ready.staleCog) {
+                if (ready.staleCog) {
                     notice({
                         id: `${ready.id}#stale`,
                         label: ready.label,
-                        text: "COG is from an earlier version of the source",
+                        text: ready.usedCog
+                            ? "COG is from an earlier version of the source"
+                            : STALE_COG_PINNED_TEXT,
                         kind: "warning",
                     });
                 }

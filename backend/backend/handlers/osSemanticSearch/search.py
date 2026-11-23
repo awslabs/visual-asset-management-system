@@ -9,6 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 import os
 import boto3
 import json
+import math
 import re
 import time
 from datetime import datetime
@@ -19,6 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
+from common.ssmParameters import get_parameter_value
 from common.databaseAccess import DatabaseAccessManager  # noqa: F401 -- the search routes' pre-filter, also addressed as handlers.osSemanticSearch.search.DatabaseAccessManager
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
@@ -68,21 +70,52 @@ OPENSEARCH_MAX_RESULT_WINDOW = 10000
 # window is at least twice the last and none exceeds OPENSEARCH_MAX_RESULT_WINDOW, so the loop ends
 # after a few fetches anyway. The next window is sized so its fetch and its new checks, predicted from
 # the time each has taken so far, end inside the bound; the checks stop at the bound, and the answer is
-# then the hits checked so far, in order. A search stopped by a bound reports its total as a minimum,
-# and one whose checks the time bound cut short also carries SEARCH_TIME_BOUND_WARNING_CODE.
+# then the hits checked so far, in order. The hits an earlier window checked count as checked in every
+# larger window, so a larger window whose fetch ends past the bound still answers them (#1773). A search
+# stopped by a bound reports its total as a minimum, and one whose checks the time bound cut short also
+# carries SEARCH_TIME_BOUND_WARNING_CODE.
 #
-# The fill bound runs from the start of the search, but a first fetch that ends late (a cold index after
-# idle hours: 10.4 s seen live, #1590) still gets SEARCH_FIRST_WINDOW_CHECK_SHARE of the bound after it
-# answers, so the hits it fetched for the requested page are checked rather than dropped unchecked; no
-# check runs past SEARCH_REQUEST_MAX_SECONDS from the start (_fill_deadline). That cap keeps the whole
-# request inside the API's 29 s integration timeout (API_GATEWAY_DEFAULT_TIMEOUT_SECONDS, the smallest
-# the deployment configuration allows) with 9 s left for the work after the bound: the response
-# processing, the batched refused-hit audit writes and the answer itself. One fetch started inside the
-# bound can still run past it.
+# The checks stop at one of two deadlines (_check_deadlines). The fill deadline, SEARCH_FILL_MAX_SECONDS
+# after the search started, bounds every larger window's fetch and checks, and the first window's checks
+# past the requested page. The first window's checks until the requested page is full stop at the page
+# deadline instead: the fill deadline, or SEARCH_FIRST_WINDOW_CHECK_SHARE of the bound after the first
+# fetch answered when that is later. So a first fetch that ends late (a cold index after idle time:
+# 10-28 s seen live, #1590, #1763) still has the hits it fetched for the requested page checked rather
+# than dropped unchecked, and a warm search, whose first fetch ends inside the first half of the bound,
+# keeps the fill deadline throughout. Neither deadline passes the API deadline (_api_check_deadline).
+# One fetch started inside the bound can still run past it.
 SEARCH_FILL_GROWTH_FACTOR = 4
 SEARCH_FILL_MAX_SECONDS = 10.0
 SEARCH_FIRST_WINDOW_CHECK_SHARE = 0.5
+
+# The API deadline (#1763): when the checks stop so that the answer still reaches API Gateway before its
+# integration timeout ends the request with a 504. getConfig() enforces API_GATEWAY_TIMEOUT_FLOOR_SECONDS
+# as the FLOOR of app.api.apiGatewayRest.apiGatewayTimeoutTime (API_GATEWAY_DEFAULT_TIMEOUT_SECONDS in
+# infra/config/config.ts), so the arithmetic holds for every deployment. It runs from
+# requestContext.requestTimeEpoch, when API Gateway received the request, so this function's cold start
+# and the authorizer count against it; the integration timeout starts after the authorizer, so the
+# deadline is never later than the API's. This Lambda's own timeout is not the API's, so
+# context.get_remaining_time_in_millis() is deliberately not used.
+#
+#   after the checks stop : ~0.1 s one decision past the deadline (a SEARCH_DECISION_CHUNK parent-row read)
+#                           + ~0.5 s response processing, the batched refused-hit audit writes and
+#                           serialisation (0.5-0.7 s measured from the bound to the end of the function on
+#                           cold first searches, 2026-11) + ~0.2 s the request's audit flush (at most
+#                           AUDIT_FLUSH_DEADLINE_SECONDS, 1.5 s, when CloudWatch Logs is slow) + ~0.2 s API
+#                           Gateway overhead and the transfer = ~1.0 s, ~2.3 s with a slow audit flush
+#   reserve               : SEARCH_RESPONSE_RESERVE_SECONDS = 2.5 s, so the checks stop 26.5 s after API
+#                           Gateway received the request
+#
+# Without a usable receipt time (a direct invoke, a test) the time spent before the handler is unknown, and
+# the checks stop SEARCH_REQUEST_MAX_SECONDS after the handler started, as they stopped after the search
+# started before #1763: that leaves 9 s of the floor for an unmeasured cold start (~2 s measured, ~4 s
+# worst) and the reserve.
+API_GATEWAY_TIMEOUT_FLOOR_SECONDS = 29
+SEARCH_RESPONSE_RESERVE_SECONDS = 2.5
 SEARCH_REQUEST_MAX_SECONDS = 20.0
+# A receipt time up to this far ahead of this function's clock is read as now (clock skew); one further
+# ahead, or older than API_GATEWAY_TIMEOUT_FLOOR_SECONDS, is not a live request's and is not used.
+REQUEST_TIME_SKEW_TOLERANCE_SECONDS = 1.0
 # File hits' parent rows are read in groups of this many while the hits are checked, so the bound is
 # checked between reads rather than after one read of a whole window
 SEARCH_DECISION_CHUNK = 100
@@ -113,31 +146,20 @@ class SearchServiceUnavailable(Exception):
     could not be created. Answered 503 with SEARCH_UNAVAILABLE_MESSAGE; the cause stays in the log."""
 
 
-# Get SSM parameter values
-def get_ssm_parameter_value(parameter_name: str) -> str:
-    """Get SSM parameter value. A failed read raises SearchServiceUnavailable; the parameter name is
-    logged, never returned to the caller."""
-    try:
-        ssm_client = boto3.client('ssm', config=retry_config)
-        response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
-    except Exception as e:
-        logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
-        raise SearchServiceUnavailable() from e
-
-# The three aos/* SSM values, read on first OpenSearch use so a deployment without OpenSearch imports.
-_opensearch_settings: Optional[Dict[str, str]] = None
-
-
 def opensearch_settings() -> Dict[str, str]:
-    global _opensearch_settings
-    if _opensearch_settings is None:
-        _opensearch_settings = {
-            "asset_index": get_ssm_parameter_value(opensearch_asset_index_ssm_param),
-            "file_index": get_ssm_parameter_value(opensearch_file_index_ssm_param),
-            "endpoint": get_ssm_parameter_value(opensearch_endpoint_ssm_param),
+    """The three aos/* Parameter Store values, read on first OpenSearch use (so a deployment without
+    OpenSearch imports, and init makes no read) through common.ssmParameters, which bounds each read,
+    caches the value per container and backs off after a throttled read. A value that cannot be read
+    raises SearchServiceUnavailable; the parameter name is logged, never returned to the caller."""
+    try:
+        return {
+            "asset_index": get_parameter_value(opensearch_asset_index_ssm_param),
+            "file_index": get_parameter_value(opensearch_file_index_ssm_param),
+            "endpoint": get_parameter_value(opensearch_endpoint_ssm_param),
         }
-    return _opensearch_settings
+    except Exception as e:
+        logger.warning(f"OpenSearch settings could not be read from Parameter Store: {type(e).__name__}")
+        raise SearchServiceUnavailable() from e
 
 
 SEARCH_NOT_AVAILABLE_MESSAGE = "Search is not available when OpenSearch feature is not enabled"
@@ -164,7 +186,10 @@ asset_storage_table = dynamodb.Table(asset_storage_table_name)
 class DualIndexSearchManager:
     """Manages OpenSearch search operations across dual indexes"""
     
-    def __init__(self):
+    def __init__(self, max_retries: int = 3, retry_on_timeout: bool = True):
+        """``max_retries`` and ``retry_on_timeout`` go to the OpenSearch client. Natural-language search's
+        OpenSearch step passes 0 and False, so a query that times out at the time its deadline leaves is not
+        started again."""
         self.client = None
         self.asset_index = None
         self.file_index = None
@@ -172,9 +197,9 @@ class DualIndexSearchManager:
             settings = opensearch_settings()
             self.asset_index = settings["asset_index"]
             self.file_index = settings["file_index"]
-            self._initialize_client(settings["endpoint"])
+            self._initialize_client(settings["endpoint"], max_retries, retry_on_timeout)
     
-    def _initialize_client(self, endpoint: str):
+    def _initialize_client(self, endpoint: str, max_retries: int = 3, retry_on_timeout: bool = True):
         """Initialize OpenSearch client; on failure the manager stays unavailable."""
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
@@ -196,8 +221,8 @@ class DualIndexSearchManager:
                 connection_class=RequestsHttpConnection,
                 pool_maxsize=20,
                 timeout=30,
-                max_retries=3,
-                retry_on_timeout=True
+                max_retries=max_retries,
+                retry_on_timeout=retry_on_timeout
             )
             
             logger.info(f"Initialized dual-index OpenSearch client - Asset: {self.asset_index}, File: {self.file_index}")
@@ -2164,12 +2189,18 @@ class DualIndexResponseProcessor:
         # in a larger window is not decided twice
         self._decisions: Dict[Tuple[str, str], Tuple[bool, bool]] = {}
 
-    def _decide(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
-        """``_hit_decision`` for ``hit``, remembered for the rest of the request."""
+    def _decision_key(self, hit: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        """The key ``hit``'s decision is remembered under, or None for a hit without a document id."""
         doc_id = hit.get("_id")
         if not doc_id:
+            return None
+        return ("file" if self._is_file_hit(hit) else "asset", doc_id)
+
+    def _decide(self, hit: Dict[str, Any], claims_and_roles: Dict[str, Any]) -> Tuple[bool, bool]:
+        """``_hit_decision`` for ``hit``, remembered for the rest of the request."""
+        key = self._decision_key(hit)
+        if key is None:
             return self._hit_decision(hit, claims_and_roles)
-        key = ("file" if self._is_file_hit(hit) else "asset", doc_id)
         if key not in self._decisions:
             self._decisions[key] = self._hit_decision(hit, claims_and_roles)
         return self._decisions[key]
@@ -2180,22 +2211,43 @@ class DualIndexResponseProcessor:
         return len(self._decisions)
 
     def decide_in_order(self, hits: List[Dict[str, Any]], claims_and_roles: Dict[str, Any],
-                        deadline: float) -> Tuple[int, int]:
-        """Decide ``hits`` in order until all are decided or ``time.monotonic()`` reaches ``deadline``.
+                        deadline: float, page_deadline: Optional[float] = None,
+                        page_readable: int = 0) -> Tuple[int, int]:
+        """Decide ``hits`` in order until all are decided or ``time.monotonic()`` reaches the deadline:
+        ``page_deadline`` while fewer than ``page_readable`` of them have passed (the requested page is
+        not full yet), ``deadline`` once that many have, and ``deadline`` throughout without a page
+        deadline.
 
         Returns ``(decided, readable)``: how many leading hits were decided and how many of those
         passed. File hits' parent rows are read SEARCH_DECISION_CHUNK hits at a time, so the deadline
         is checked between reads as well as between decisions.
+
+        A hit already decided in this request (in a smaller window) is counted from its remembered
+        decision without a deadline check, because it costs neither a read nor a check: a larger window
+        whose fetch ended past the deadline still keeps, in order, the hits the earlier windows checked
+        (#1773). The first hit not yet decided is where a late window stops, so no hit is counted
+        without its decision.
         """
         decided = readable = 0
+
+        def out_of_time() -> bool:
+            page_open = page_deadline is not None and readable < page_readable
+            return time.monotonic() >= (page_deadline if page_open else deadline)
+
         for start in range(0, len(hits), SEARCH_DECISION_CHUNK):
-            if time.monotonic() >= deadline:
-                break
             chunk = hits[start:start + SEARCH_DECISION_CHUNK]
-            self._load_parent_assets(chunk)
-            for hit in chunk:
-                if time.monotonic() >= deadline:
-                    return decided, readable
+            parents_loaded = False
+            for position, hit in enumerate(chunk):
+                key = self._decision_key(hit)
+                if key is None or key not in self._decisions:
+                    if out_of_time():
+                        return decided, readable
+                    if not parents_loaded:
+                        # The rest of the chunk's parent rows, read once the first undecided hit needs them
+                        self._load_parent_assets(chunk[position:])
+                        parents_loaded = True
+                        if out_of_time():
+                            return decided, readable
                 if self._decide(hit, claims_and_roles)[0]:
                     readable += 1
                 decided += 1
@@ -2725,22 +2777,61 @@ def _search_with_authz_fallback(search_manager: "DualIndexSearchManager", query_
         return response, None, (fallback[0], fallback[1])
 
 
-def _fill_deadline(started: float, first_fetch_done: float) -> float:
-    """When the fill loop's fetches and checks stop (``time.monotonic()`` seconds): SEARCH_FILL_MAX_SECONDS
-    after the search started, but at least SEARCH_FIRST_WINDOW_CHECK_SHARE of that bound after the first
-    fetch answered, and never more than SEARCH_REQUEST_MAX_SECONDS after the start (#1590)."""
-    first_window = min(first_fetch_done + SEARCH_FILL_MAX_SECONDS * SEARCH_FIRST_WINDOW_CHECK_SHARE,
-                       started + SEARCH_REQUEST_MAX_SECONDS)
-    return max(started + SEARCH_FILL_MAX_SECONDS, first_window)
+def _seconds_since_api_received(event: Any) -> Optional[float]:
+    """How long ago API Gateway received the request, read from ``requestContext.requestTimeEpoch`` (epoch
+    milliseconds), or None when the event carries no such time or one no live request can carry: not a
+    finite number, an integer too large for a float, more than REQUEST_TIME_SKEW_TOLERANCE_SECONDS ahead of
+    this function's clock, or older than API_GATEWAY_TIMEOUT_FLOOR_SECONDS."""
+    request_context = event.get("requestContext") if isinstance(event, dict) else None
+    received_ms = request_context.get("requestTimeEpoch") if isinstance(request_context, dict) else None
+    if isinstance(received_ms, bool) or not isinstance(received_ms, (int, float)):
+        return None
+    try:
+        received_seconds = float(received_ms) / 1000.0
+    except OverflowError:
+        # JSON integers have no length limit, so a direct invoke can send one no float can hold.
+        return None
+    if not math.isfinite(received_seconds):
+        return None
+    waited = time.time() - received_seconds
+    if waited < -REQUEST_TIME_SKEW_TOLERANCE_SECONDS or waited > API_GATEWAY_TIMEOUT_FLOOR_SECONDS:
+        return None
+    return max(waited, 0.0)
+
+
+def _api_check_deadline(event: Any) -> float:
+    """The ``time.monotonic()`` by which a search's per-hit checks stop so the API can still answer (#1763):
+    API_GATEWAY_TIMEOUT_FLOOR_SECONDS after API Gateway received the request, less
+    SEARCH_RESPONSE_RESERVE_SECONDS. Without a usable receipt time it is SEARCH_REQUEST_MAX_SECONDS from
+    now, so call it when the handler starts."""
+    now = time.monotonic()
+    waited = _seconds_since_api_received(event)
+    if waited is None:
+        return now + SEARCH_REQUEST_MAX_SECONDS
+    return now - waited + API_GATEWAY_TIMEOUT_FLOOR_SECONDS - SEARCH_RESPONSE_RESERVE_SECONDS
+
+
+def _check_deadlines(started: float, first_fetch_done: float, api_deadline: float) -> Tuple[float, float]:
+    """``(page, fill)``: when the fill loop's checks stop, in ``time.monotonic()`` seconds.
+
+    The fill deadline, SEARCH_FILL_MAX_SECONDS after the search started, bounds every larger window and
+    the first window's checks past the requested page. The page deadline bounds the first window's
+    checks until the requested page is full: the fill deadline, or SEARCH_FIRST_WINDOW_CHECK_SHARE of
+    the bound after the first fetch answered when that is later (#1590). Neither passes ``api_deadline``
+    (_api_check_deadline, #1763)."""
+    fill = started + SEARCH_FILL_MAX_SECONDS
+    page = max(fill, first_fetch_done + SEARCH_FILL_MAX_SECONDS * SEARCH_FIRST_WINDOW_CHECK_SHARE)
+    return min(page, api_deadline), min(fill, api_deadline)
 
 
 def _search_until_page_full(search_manager: "DualIndexSearchManager", query_builder: Any,
                             response_processor: "DualIndexResponseProcessor", asset_query: Dict[str, Any],
                             file_query: Dict[str, Any], entity_types: List[str], requested: int,
-                            claims_and_roles: Dict[str, Any]
+                            claims_and_roles: Dict[str, Any], api_deadline: float
                             ) -> Tuple[Dict[str, Any], Optional[Dict[str, SearchAuthzFilter]], bool]:
     """Search, then fetch larger windows while fewer than ``requested`` (from + size) hits pass the
-    per-hit check and the indexes hold more candidates, within the SEARCH_FILL_* bounds.
+    per-hit check and the indexes hold more candidates, within the SEARCH_FILL_* bounds and before
+    ``api_deadline`` (_check_deadlines).
 
     The answer is the last window's hits with the first window's aggregations, which do not depend on
     the window size; later windows request none. Its hits are only those in their true order (see
@@ -2758,7 +2849,9 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
     )
     first_fetch_done = time.monotonic()
     fetch_seconds = first_fetch_done - started
-    deadline = _fill_deadline(started, first_fetch_done)
+    page_deadline, fill_deadline = _check_deadlines(started, first_fetch_done, api_deadline)
+    logger.info(f"The first search window answered in {fetch_seconds:.1f} s; the checks of its requested page "
+                f"may run {max(page_deadline - first_fetch_done, 0.0):.1f} s more")
     checks_cut_short = False
     fetch_hits = len(response.get("hits", {}).get("hits", []))
     decide_seconds = 0.0
@@ -2777,7 +2870,11 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
 
         decide_started = time.monotonic()
         decided_before = response_processor.decision_count
-        checked, readable = response_processor.decide_in_order(raw_hits[:ordered], claims_and_roles, deadline)
+        # Only the first window's checks of the requested page may run to the page deadline
+        checked, readable = response_processor.decide_in_order(
+            raw_hits[:ordered], claims_and_roles, fill_deadline,
+            page_deadline=page_deadline if windows == 1 else None, page_readable=requested,
+        )
         decide_seconds += time.monotonic() - decide_started
         decisions += response_processor.decision_count - decided_before
         if checked < ordered:
@@ -2786,7 +2883,8 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
             # decided; a stop past them leaves the page whole, and its total as the filters give it.
             checks_cut_short = readable < requested
             logger.info(f"Search stopped at the time bound after {windows} window(s), with {checked} of "
-                        f"{fetched} hits checked and {readable} of {requested} readable; the total is "
+                        f"{fetched} hits checked and {readable} of {requested} readable, "
+                        f"{time.monotonic() - started:.1f} s after the search started; the total is "
                         "reported as a minimum")
             break
         if ordered < fetched:
@@ -2798,7 +2896,7 @@ def _search_until_page_full(search_manager: "DualIndexSearchManager", query_buil
         larger_window = None
         if window < OPENSEARCH_MAX_RESULT_WINDOW:
             larger_window = _affordable_window(
-                window, searched, deadline - time.monotonic(),
+                window, searched, fill_deadline - time.monotonic(),
                 fetch_seconds / max(fetch_hits, 1), decide_seconds / max(decisions, 1),
             )
         if larger_window is None:
@@ -2933,8 +3031,12 @@ def _log_search(event: Dict[str, Any], request_model: Any, processed_response: A
 
 def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                        query_builder: DualIndexQueryBuilder, response_processor: DualIndexResponseProcessor,
-                       claims_and_roles: Dict[str, Any]) -> APIGatewayProxyResponseV2:
-    """Handle POST request for search operations"""
+                       claims_and_roles: Dict[str, Any],
+                       api_deadline: Optional[float] = None) -> APIGatewayProxyResponseV2:
+    """Handle POST request for search operations. ``api_deadline`` is lambda_handler's
+    _api_check_deadline; without one it is taken now."""
+    if api_deadline is None:
+        api_deadline = _api_check_deadline(event)
     try:
         if not search_manager.is_available():
             # lambda_handler answers a deployment without OpenSearch before this; here the client failed.
@@ -2971,7 +3073,7 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
             opensearch_response, authz_filters, checks_cut_short = _search_until_page_full(
                 search_manager, query_builder, response_processor, asset_query, file_query,
                 request_model.entityTypes or ["asset", "file"],
-                (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
+                (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles, api_deadline
             )
 
             # Process response with authorization filtering
@@ -2997,8 +3099,11 @@ def handle_post_request(event: Dict[str, Any], search_manager: DualIndexSearchMa
 
 def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexSearchManager, 
                               simple_query_builder: SimpleSearchQueryBuilder, response_processor: DualIndexResponseProcessor,
-                              claims_and_roles: Dict[str, Any]) -> APIGatewayProxyResponseV2:
-    """Handle POST request for simple search operations"""
+                              claims_and_roles: Dict[str, Any],
+                              api_deadline: Optional[float] = None) -> APIGatewayProxyResponseV2:
+    """Handle POST request for simple search operations. ``api_deadline`` as for handle_post_request."""
+    if api_deadline is None:
+        api_deadline = _api_check_deadline(event)
     try:
         if not search_manager.is_available():
             # lambda_handler answers a deployment without OpenSearch before this; here the client failed.
@@ -3034,7 +3139,7 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
             opensearch_response, authz_filters, checks_cut_short = _search_until_page_full(
                 search_manager, simple_query_builder, response_processor, asset_query, file_query,
                 request_model.entityTypes or ["asset", "file"],
-                (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles
+                (request_model.from_ or 0) + (request_model.size or 100), claims_and_roles, api_deadline
             )
 
             # Create a compatible SearchRequestModel for response processing
@@ -3079,6 +3184,8 @@ def handle_simple_post_request(event: Dict[str, Any], search_manager: DualIndexS
 @audited_handler
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Lambda handler for dual-index search API"""
+    # First, so that the fallback without a receipt time runs from the handler's start
+    api_deadline = _api_check_deadline(event)
     global claims_and_roles
     claims_and_roles = request_to_claims(event)
     
@@ -3119,12 +3226,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if API_SEARCH.matches(path):
                 # Regular complex search
                 query_builder = DualIndexQueryBuilder(database_access_manager)
-                return handle_post_request(event, search_manager, query_builder, response_processor, claims_and_roles)
+                return handle_post_request(event, search_manager, query_builder, response_processor, claims_and_roles,
+                                           api_deadline=api_deadline)
 
             elif API_SEARCH_SIMPLE.matches(path):
                 # Simple search
                 simple_query_builder = SimpleSearchQueryBuilder(database_access_manager)
-                return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor, claims_and_roles)
+                return handle_simple_post_request(event, search_manager, simple_query_builder, response_processor,
+                                                  claims_and_roles, api_deadline=api_deadline)
 
             else:
                 return validation_error(body={'message': "POST method not supported on this path"}, event=event)

@@ -6,12 +6,13 @@
 Seen live: the first keyword search after idle hours took 10,452 ms for its first window. The fill bound was
 SEARCH_FILL_MAX_SECONDS from the start of the search, so no time was left for the per-hit checks: the page
 was cut to zero hits while the total still came from OpenSearch with relation ``eq`` (exact permission
-filters), with no warning. Now the first window gets SEARCH_FIRST_WINDOW_CHECK_SHARE of the bound after it
-answers (never past SEARCH_REQUEST_MAX_SECONDS from the start), and an answer whose checks the bound stopped
-before the requested page was full reports ``gte`` and carries the ``truncated:time`` warning. Driven end to
-end through both keyword handlers against the in-memory OpenSearch of ``opensearch_dsl_oracle``, every test
-on the harness's fake clock (the autouse ``fake_clock`` fixture), so no case depends on the runner's speed
-(#1633).
+filters), with no warning. Now the first window's checks of the requested page get SEARCH_FIRST_WINDOW_CHECK_SHARE
+of the bound after it answers, and an answer whose checks the bound stopped before the requested page was full
+reports ``gte`` and carries the ``truncated:time`` warning. These events carry no ``requestTimeEpoch``, so no
+check runs past SEARCH_REQUEST_MAX_SECONDS after the handler started; the API deadline measured from that time
+is covered in ``test_search_time_bound_api_budget.py`` (#1763). Driven end to end through both keyword
+handlers against the in-memory OpenSearch of ``opensearch_dsl_oracle``, every test on the harness's fake clock
+(the autouse ``fake_clock`` fixture), so no case depends on the runner's speed (#1633).
 """
 
 import pytest
@@ -68,13 +69,14 @@ class TestASlowFirstFetchStillAnswersItsPage:
     def test_the_first_window_gets_half_the_bound_after_it_answers(self, search_module):
         started = 1000.0
         bound = search_module.SEARCH_FILL_MAX_SECONDS
-        # A fast first fetch keeps the bound from the start.
-        assert search_module._fill_deadline(started, started + 0.2) == started + bound
-        # A first fetch past the bound gets half the bound after it.
-        assert search_module._fill_deadline(started, started + 10.452) == pytest.approx(started + 10.452 + bound / 2)
-        # Never past the request cap, which leaves 9 s of the API's 29 s for the rest of the request.
-        cap = started + search_module.SEARCH_REQUEST_MAX_SECONDS
-        assert search_module._fill_deadline(started, started + 18.0) == cap
+        api = started + 60.0  # far off: only the fill bound and the share decide here
+        # A fast first fetch keeps the bound from the start for its page.
+        assert search_module._check_deadlines(started, started + 0.2, api)[0] == started + bound
+        # A first fetch past the bound gets half the bound after it for its page.
+        page, _fill = search_module._check_deadlines(started, started + 10.452, api)
+        assert page == pytest.approx(started + 10.452 + bound / 2)
+        # Without a receipt time, no check runs later than the request cap after the handler started,
+        # which leaves 9 s of the API's 29 s for an unmeasured cold start and the rest of the request.
         assert search_module.SEARCH_REQUEST_MAX_SECONDS <= 29 - 9
 
 
@@ -83,8 +85,8 @@ class TestAPageCutShortIsNeverAnExactTotal:
     @pytest.mark.parametrize("simple", [False, True])
     def test_a_check_cut_short_reports_a_minimum_and_the_warning(self, search_module, monkeypatch, fake_clock,
                                                                  simple):
-        """The first window answers at 18 s; the checks may run to the 20 s cap, 4 of them at 0.5 s each:
-        a page of 50 holds 4 hits, so its total is a minimum and the answer says why."""
+        """The first window answers at 18 s; without a receipt time the checks may run to the 20 s cap, 4
+        of them at 0.5 s each: a page of 50 holds 4 hits, so its total is a minimum and the answer says why."""
         result, elapsed, _fake = _search(search_module, monkeypatch, fake_clock, _readable_assets(60), 18.0, 0.5,
                                          50, simple=simple)
 

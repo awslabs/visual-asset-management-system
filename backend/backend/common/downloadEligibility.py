@@ -38,6 +38,7 @@ from typing import Callable, Optional, Tuple
 
 from botocore.exceptions import ClientError
 
+from common.assetLocations import contains, is_folder_location, object_key_for, relative_path_in
 from common.s3 import list_all_objects, validateUnallowedFileExtensionAndContentType
 from common.s3MetadataKeys import (
     VAMS_STATUS_METADATA_KEY,
@@ -180,7 +181,10 @@ def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
 
     Accepted shapes: a leading-slash asset-relative path (CLI), the full S3 key under the asset
     prefix (web viewers pass listFiles keys), ``/`` (whole-asset prefix), or no key (the base key
-    verbatim, whatever its shape).
+    verbatim, whatever its shape). A base key that names one object (no trailing ``/``) is a
+    single-file asset (``common.assetLocations``): ``/`` and no key resolve to its object, an
+    asset-relative path or a key it holds resolves per ``object_key_for``, and a bucket-root key that
+    only shares its characters is outside the asset.
 
     Raises:
         VAMSGeneralErrorResponse: the key is a bucket-root key outside the asset's prefix, or the
@@ -189,7 +193,19 @@ def resolve_asset_file_key(asset_base_key: str, raw_key: Optional[str]) -> str:
     asset_base_prefix = asset_base_key.rstrip('/')
     prefix = asset_base_prefix + '/'
 
-    if raw_key:
+    if asset_base_key and not is_folder_location(asset_base_key):
+        # A single-file asset: no key and '/' name its object; a bucket-root key that only shares
+        # its characters belongs to something else
+        if raw_key in (None, '', '/'):
+            final_key = asset_base_key
+        elif (not raw_key.startswith('/') and raw_key.startswith(asset_base_key)
+              and not contains(asset_base_key, raw_key)):
+            raise VAMSGeneralErrorResponse(MSG_KEY_OUTSIDE_ASSET)
+        else:
+            final_key = object_key_for(asset_base_key, raw_key)
+        if final_key is None:
+            raise VAMSGeneralErrorResponse(MSG_KEY_OUTSIDE_ASSET)
+    elif raw_key:
         if raw_key == asset_base_key or raw_key.startswith(prefix):
             # The asset's own base key, or already carries the base path: use it as-is
             final_key = raw_key
@@ -217,6 +233,8 @@ def asset_relative_key(final_key: str, asset_base_key: str) -> str:
 
     This is how ``fileKey`` / ``relativeKey`` is matched in asset-version snapshot records.
     """
+    if asset_base_key and not is_folder_location(asset_base_key):
+        return (relative_path_in(asset_base_key, final_key) or final_key).lstrip('/')
     prefix = asset_prefix(asset_base_key)
     relative = final_key
     if relative.startswith(prefix):
@@ -344,8 +362,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
                            list_objects: Callable = None,
                            is_allowed: Callable[[str, str], bool] = None,
                            object_exists: Callable[[str, str], bool] = None,
-                           check_key_quarantine: Optional[Callable[[str, bool], None]] = None
-                           ) -> Tuple[str, Optional[str]]:
+                           check_key_quarantine: Optional[Callable[[str, bool], None]] = None,
+                           nested=None) -> Tuple[str, Optional[str]]:
     """Run every per-file check for one requested key and return what to sign.
 
     Order (each step refuses before the next runs): key containment and length, the per-key
@@ -368,6 +386,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
             version or an asset-version pin was requested. It raises ``QuarantineBlockedResponse``
             for a refused key and runs before any S3 call. A caller that passes it has not applied the
             block in ``get_distributable_asset_context``.
+        nested: ``assetLocations.NestedLocations`` of the asset's location; a key a nested asset's
+            location holds is that asset's file and answers as a missing file, before any S3 call.
 
     Returns:
         ``(final_key, version_id)`` - the S3 key and version to sign
@@ -382,6 +402,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
             return s3_object_exists(s3_client, bucket, key)
 
     final_key = resolve_asset_file_key(asset_base_key, raw_key)
+    if nested is not None and nested.holder(final_key) is not None:
+        raise VAMSGeneralErrorResponse(MSG_FILE_NOT_FOUND)
 
     if check_key_quarantine is not None:
         check_key_quarantine(final_key, bool(version_id or asset_version_id or asset_version_alias))

@@ -100,6 +100,14 @@ A raster whose extent straddles longitude 180 (for example 178.75 E to 178.95 W)
 
 A refused file (over a limit, no room, crossing the antimeridian) or a failed conversion ends the VAMS execution as failed, with the reason as the error text. The failure name is short (`CogConvertRefused` for a refusal, `CogConvertFailed` otherwise) and the text travels as the failure cause, because AWS Step Functions rejects a failure whose name is over 256 characters and the run would otherwise stay in progress. A rejected failure call is logged and retried once with a minimal message, never dropped.
 
+## Execution Logs
+
+The execution's log view reads these sources for a run:
+
+-   The pipeline's state machine log group. It records errors only, without execution input or output, because the input carries the workflow's task token. The run's states and their input and output are in the AWS Step Functions execution history.
+-   The log groups of the three AWS Lambda functions the state machine runs: `constructPipeline` (`ConstructPipelineTask`), `executeBatchJob` (`CogConvertBatchJob`) and `pipelineEnd` (`PipelineEndTask`). Every run shares these groups, so the view shows only the lines that carry the run's workflow and pipeline execution ids, and each function puts both ids on every line it logs.
+-   The conversion container's log (`CogConvertBatchJob`), registered when the AWS Batch job is submitted.
+
 ## Configuration
 
 Enable this pipeline in `infra/config/config.json`:
@@ -123,7 +131,7 @@ Enable this pipeline in `infra/config/config.json`:
 | Option                                | Default | Description                                                                                                                                     |
 | :------------------------------------ | :------ | :---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled`                             | `false` | Deploy the COG conversion pipeline. Requires `app.useGlobalVpc.enabled`; `getConfig()` fails with a message naming the key when the VPC is off. |
-| `useCodeBuild`                        | `false` | Build the container image with AWS CodeBuild instead of local Docker.                                                                           |
+| `useCodeBuild`                        | `false` | Build the container image with AWS CodeBuild instead of local Docker. Supported in the commercial and AWS GovCloud (US) partitions.             |
 | `autoRegisterWithVAMS`                | `true`  | Register the pipeline, workflow and template in the global VAMS database during deployment.                                                     |
 | `autoRegisterAutoTriggerOnFileUpload` | `false` | Run the pipeline when a `.tif` or `.tiff` is uploaded. The trigger ships disabled; turn it on only when you want every upload converted.        |
 

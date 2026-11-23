@@ -97,7 +97,7 @@ const GR00T_DEFAULT = {
         gr00tN1_5_3B: {
             enabled: false,
             autoRegisterWithVAMS: true,
-            instanceTypes: ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+            instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
             maxVCpus: 192,
         },
     },
@@ -191,6 +191,7 @@ const COMMERCIAL: ConfigShape = {
                 allowedVpceIds: [],
             },
             useS3TransferAcceleration: false,
+            tagSyncedObjects: true,
             externalAssetBuckets: null,
         },
         adminUserId: "administrator",
@@ -280,6 +281,10 @@ const COMMERCIAL: ConfigShape = {
                 enabled: true,
                 autoRegisterWithVAMS: true,
                 enableStepInput: false,
+                batchTier: {
+                    enabled: false,
+                    maxMemoryGiB: 120,
+                },
             },
             usePreview3dThumbnail: {
                 enabled: false,

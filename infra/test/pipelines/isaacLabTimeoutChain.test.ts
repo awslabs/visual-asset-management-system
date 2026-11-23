@@ -4,19 +4,21 @@
  */
 
 /**
- * The Isaac Lab timeout chain (issue #1324). Four bounds apply to one training run, each enforced by
- * a different clock:
+ * The Isaac Lab timeout chain (issues #1324, #1669). Each mode's run is bounded by four clocks:
  *
- *   training bundle taskTimeout "28800"           (the parent workflow's callback wait, from the step's start)
- *   ExecuteBatchJobState TimeoutSeconds 28800      (internal state machine, from entering the task)
- *   job definition AttemptDurationSeconds 28800    (AWS Batch, from the attempt's start)
- *   internal state machine TimeoutSeconds 32400    (envelopes the task, so its Catch stays reachable)
+ *   bundle taskTimeout                       (the parent workflow's callback wait, from the step's start)
+ *   ExecuteBatchJobState TimeoutSecondsPath  (internal state machine, from entering the task)
+ *   Batch attempt duration                   (AWS Batch, from the attempt's start; per-run `timeout`)
+ *   internal state machine TimeoutSeconds    (envelopes the task, so its Catch stays reachable)
  *
- * The workflow promises 8 hours, and the two workflow clocks start before the attempt (they include the
- * RUNNABLE wait and the image pull), so the job definition's bound must be at least the training
- * taskTimeout: lower, and AWS Batch stops a run the workflow still allows. It was 21600 (6 hours), so a
- * long run was stopped and then reported, 45 minutes later, as a heartbeat timeout. Evaluation shares
- * the job definition and has the shorter bundle taskTimeout "7200".
+ *   training   28800 / 28800 / 28800  (8 hours)
+ *   evaluation 32400 / 32400 / 32400  (9 hours)
+ *   state machine 36000 (10 hours), job definition 32400 (the largest mode's value)
+ *
+ * The workflow clocks start before the attempt (they include the RUNNABLE wait and the image pull), so
+ * the bound Batch applies must be at least the mode's taskTimeout: lower, and AWS Batch stops a run
+ * the workflow still allows (it was 21600 once, reported 45 minutes later as a heartbeat timeout).
+ * openPipeline emits each mode's seconds; the state machine and the submit call read them.
  */
 
 import * as fs from "fs";
@@ -137,29 +139,52 @@ const attemptSeconds = (): number => {
     return jobDefinitions[0].Properties.Timeout.AttemptDurationSeconds;
 };
 
+const MODES = { training: 28800, evaluation: 32400 } as const;
+
 describe("Isaac Lab timeout chain", () => {
-    test("the bundles allow 8 hours for training and 2 for evaluation", () => {
-        expect(bundleTaskTimeout("training")).toBe(28800);
-        expect(bundleTaskTimeout("evaluation")).toBe(7200);
+    test("the bundles allow 8 hours for training and 9 for evaluation", () => {
+        expect(bundleTaskTimeout("training")).toBe(MODES.training);
+        expect(bundleTaskTimeout("evaluation")).toBe(MODES.evaluation);
     });
 
-    test("the job definition bounds one attempt at 8 hours", () => {
-        expect(attemptSeconds()).toBe(28800);
+    test("the batch task takes its limit from the run's own mode", () => {
+        const task = definition.States.ExecuteBatchJobState;
+        expect(task).toBeDefined();
+        expect(task.TimeoutSecondsPath).toBe("$.taskTimeoutSeconds");
+        expect(task.TimeoutSeconds).toBeUndefined();
+        // The value reaches the task through the Pass state and the Lambda payload.
+        const pass = definition.States.PrepareExecutionState;
+        expect(pass.Parameters["taskTimeoutSeconds.$"]).toBe(
+            "$.openResult.Payload.taskTimeoutSeconds"
+        );
+        expect(task.Parameters["Payload"]["taskTimeoutSeconds.$"]).toBe("$.taskTimeoutSeconds");
+    });
+
+    test("openPipeline's per-mode seconds equal each bundle's taskTimeout", () => {
+        const source = fs.readFileSync(
+            path.join(SCHEMA_ROOT, "..", "lambda", "openPipeline.py"),
+            "utf-8"
+        );
+        const match = source.match(/TASK_TIMEOUT_SECONDS = \{"train": (\d+), "evaluate": (\d+)\}/);
+        expect(match).not.toBeNull();
+        expect(Number(match![1])).toBe(bundleTaskTimeout("training"));
+        expect(Number(match![2])).toBe(bundleTaskTimeout("evaluation"));
+    });
+
+    test("the job definition bounds one attempt at the largest mode's 9 hours", () => {
+        expect(attemptSeconds()).toBe(MODES.evaluation);
     });
 
     test("AWS Batch never stops a run the workflow still allows", () => {
         // The guard for #1324: a bound below either workflow clock cuts the run short.
-        expect(attemptSeconds()).toBeGreaterThanOrEqual(bundleTaskTimeout("training"));
-        expect(attemptSeconds()).toBeGreaterThanOrEqual(bundleTaskTimeout("evaluation"));
-        const task = definition.States.ExecuteBatchJobState;
-        expect(task).toBeDefined();
-        expect(task.TimeoutSeconds).toBe(28800);
-        expect(attemptSeconds()).toBeGreaterThanOrEqual(task.TimeoutSeconds);
+        for (const mode of ["training", "evaluation"] as const) {
+            expect(attemptSeconds()).toBeGreaterThanOrEqual(bundleTaskTimeout(mode));
+        }
     });
 
-    test("the state machine envelopes the Batch task so its Catch stays reachable", () => {
-        const task = definition.States.ExecuteBatchJobState;
-        expect(definition.TimeoutSeconds).toBe(32400);
-        expect(definition.TimeoutSeconds).toBeGreaterThan(task.TimeoutSeconds);
+    test("the state machine envelopes the longest task so its Catch stays reachable", () => {
+        expect(definition.TimeoutSeconds).toBe(36000);
+        expect(definition.TimeoutSeconds).toBeGreaterThan(MODES.evaluation);
+        expect(definition.TimeoutSeconds).toBeGreaterThan(MODES.training);
     });
 });

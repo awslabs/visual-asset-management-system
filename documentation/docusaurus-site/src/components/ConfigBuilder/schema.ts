@@ -364,6 +364,14 @@ const CORE_FIELDS: FieldMeta[] = [
             getByPath(c, "app.assetBuckets.useS3TransferAcceleration") === true,
     },
     {
+        path: "app.assetBuckets.tagSyncedObjects",
+        label: "Tag synced objects",
+        input: "boolean",
+        section: "essentials",
+        advanced: true,
+        help: "Bucket sync writes the VAMS:databaseId and VAMS:assetId object tags on every file version it syncs from the VAMS-created bucket, keeping the object's own tags. The tags are a marker for your own tools; VAMS never reads them. Imported buckets set the same key on their entry. Default on.",
+    },
+    {
         path: "app.assetBuckets.presignedUrlNetworkRestrictions",
         label: "Presigned URL network restrictions",
         input: "presigned-url-restrictions",
@@ -1148,6 +1156,27 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Read STEP (.step, .stp) files. Adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the conversion image; off, a STEP run is refused before download.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.batchTier.enabled",
+        label: "3D basic conversion — AWS Batch tier",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Continue a model the Lambda function cannot convert (too large, or out of memory or time) on an AWS Batch Fargate job of 4 vCPU / 30 GiB, 8 / 60 or 16 / 120, instead of refusing it. Requires the global VPC (app.useGlobalVpc.enabled). Off by default; the tier costs nothing while no model needs it.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB",
+        label: "3D basic conversion — largest Batch job (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 30,
+        help: "Memory of the largest job the tier may start: 30, 60 or 120 GiB (default 120). A model above that size's limit fails before any job starts. Fargate bills the job's vCPU and memory by the second.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled") &&
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.batchTier.enabled"),
     },
     {
         path: "app.pipelines.useConversionCoordinateTransform.enabled",

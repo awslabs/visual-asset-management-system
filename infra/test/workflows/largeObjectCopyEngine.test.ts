@@ -634,12 +634,20 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(param.Properties.Value).toEqual({ Ref: engineFunctionId });
         const roleId = roleIdOf(fn);
         // The read is covered by the resource-name grant every VAMS function holds: the role gains
-        // no statement for it.
+        // no statement for it. Its other SSM statement is the GetParameters-only grant on the
+        // resource-name chunk parameters, which every VAMS function holds too.
         const ssmStatements = roleDocsOf(roleId)
             .flatMap((d: any) => d.Statement as any[])
             .filter((st) => JSON.stringify(st.Action).includes("ssm:"));
-        expect(ssmStatements).toHaveLength(1);
-        expect(JSON.stringify(ssmStatements[0].Resource)).toContain("/resourceNames/*");
+        expect(ssmStatements).toHaveLength(2);
+        const onChunks = (st: any) =>
+            JSON.stringify(st.Resource).includes("/resourceNamesChunks/*");
+        const prefixGrant = ssmStatements.filter((st) => !onChunks(st));
+        const chunkGrant = ssmStatements.filter(onChunks);
+        expect(prefixGrant).toHaveLength(1);
+        expect(JSON.stringify(prefixGrant[0].Resource)).toContain("/resourceNames/*");
+        expect(chunkGrant).toHaveLength(1);
+        expect(chunkGrant[0].Action).toBe("ssm:GetParameters");
         expect(enginePermitsRole(roleId)).toBe(true);
         // No hand-written managed policy; CDK's overflow of the role may hold its statements.
         expect(handWrittenManagedPoliciesOf(roleId)).toEqual([]);
@@ -657,6 +665,24 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(text).not.toContain("states:StartExecution");
         expect(text).not.toContain("/index/" + S3_ASSET_BUCKETS_NAME_INDEX);
         expect(invokesEngine({ Statement: statements })).toBe(false);
+    });
+
+    // #1207: the asset type set after a file lands leaves out the keys of assets nested in the asset's
+    // location, which the engine reads from the location index; without the grant the read is denied
+    // and the type is classified from every key.
+    test("the engine may query the asset table's location index and no other asset table index", () => {
+        const statements = roleDocsOf(roleIdOf(engineFunction)).flatMap(
+            (d: any) => d.Statement as any[]
+        );
+        const indexQueries = statements.filter(
+            (s) =>
+                [s.Action].flat().includes("dynamodb:Query") &&
+                JSON.stringify(s.Resource).includes("AssetStorageTable")
+        );
+        expect(indexQueries).toHaveLength(1);
+        const resource = JSON.stringify(indexQueries[0].Resource);
+        expect(resource).toContain("/index/AssetLocationGSI");
+        expect(resource).not.toContain("/index/*");
     });
 
     test("the engine can stop its own executions and reconcile them (the output step's cancel)", () => {

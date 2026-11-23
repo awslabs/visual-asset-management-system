@@ -393,6 +393,16 @@ export const ZIP_DOWNLOADS_DEFAULTS = {
 // it and the authorizer environment reads it.
 export const EXTERNAL_OAUTH_DEFAULT_JWT_AUDIENCE_CLAIMS = ["aud"];
 
+/** The jobs of the 3D Basic Conversion Batch tier: 4 vCPU / 30 GiB, 8 / 60, 16 / 120 (Fargate-valid pairs). */
+export const CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES: ReadonlyArray<{
+    vcpu: number;
+    memoryGiB: number;
+}> = [
+    { vcpu: 4, memoryGiB: 30 },
+    { vcpu: 8, memoryGiB: 60 },
+    { vcpu: 16, memoryGiB: 120 },
+];
+
 // ============================================================================================
 // Constants used only to check configuration
 //
@@ -658,6 +668,21 @@ const ISAAC_LAB_UNSUPPORTED_FAMILIES: Record<string, string> = {
     p5: "its NVIDIA H100 GPU has no RT cores, which Isaac Sim needs",
     p5e: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
     p5en: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
+};
+
+// The instance families in GPU_COUNT_BY_INSTANCE_TYPE whose GPU has 24 GB of memory or less, with that
+// GPU. A family outside that table (for example the fractional-GPU g6f and gr6f) is not checked.
+// A GR00T-N1.5-3B fine-tune job reserves one GPU, and the default fine-tune (loraRank 0, projector and
+// diffusion model tuned, AdamW) runs out of memory at step 0 on a 24 GB A10G even at batch size 2:
+// PyTorch had 21.29 GiB allocated of the 22.06 GiB usable. It runs on a 48 GB L40S (g6e). VAMS has not
+// measured a GPU between those sizes (V100 32 GB in p3dn, A100 40 GB in p4d), so those families are
+// not listed.
+export const GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES: Record<string, string> = {
+    g4dn: "NVIDIA T4, 16 GB",
+    g5: "NVIDIA A10G, 24 GB",
+    g6: "NVIDIA L4, 24 GB",
+    gr6: "NVIDIA L4, 24 GB",
+    p3: "NVIDIA V100, 16 GB",
 };
 
 /** Strings a CDK context value or environment variable may use to mean true. */
@@ -1373,6 +1398,46 @@ export function resolveConversion3dBasicStepInput(config: { app: any }): void {
     if (typeof value !== "boolean") {
         throw new Error(
             "Configuration Error: app.pipelines.useConversion3dBasic.enableStepInput must be true or false (a JSON boolean). Leave it out to keep STEP input off."
+        );
+    }
+}
+
+/**
+ * app.pipelines.useConversion3dBasic.batchTier: absent or null is `{ enabled: false, maxMemoryGiB: 120 }`,
+ * so a config.json written before the key deploys exactly what it did. `enabled` must be a JSON boolean and
+ * `maxMemoryGiB` one of the job sizes (30, 60, 120); no vCPU/memory pair is user-supplied. The VPC
+ * requirement is checked with the other VPC-requiring features.
+ */
+export function resolveConversion3dBasicBatchTier(config: { app: any }): void {
+    const block = config.app.pipelines.useConversion3dBasic;
+    if (block.batchTier === undefined || block.batchTier === null) {
+        block.batchTier = { enabled: false, maxMemoryGiB: 120 };
+        return;
+    }
+    const tier = block.batchTier;
+    if (typeof tier !== "object" || Array.isArray(tier)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier must be an object with enabled and maxMemoryGiB."
+        );
+    }
+    if (tier.enabled === undefined || tier.enabled === null) {
+        tier.enabled = false;
+    } else if (typeof tier.enabled !== "boolean") {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier.enabled must be true or false (a JSON boolean). Leave it out to keep the Batch tier off."
+        );
+    }
+    if (tier.maxMemoryGiB === undefined || tier.maxMemoryGiB === null) {
+        tier.maxMemoryGiB = 120;
+    }
+    const sizes = CONVERSION_3D_BASIC_BATCH_TIER_JOB_SIZES.map((size) => size.memoryGiB);
+    if (!sizes.includes(tier.maxMemoryGiB)) {
+        throw new Error(
+            "Configuration Error: app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB must be one of " +
+                sizes.join(", ") +
+                " (the memory in GiB of the largest job the tier may start); got " +
+                JSON.stringify(tier.maxMemoryGiB) +
+                "."
         );
     }
 }
@@ -2444,7 +2509,7 @@ export function getConfig(app: cdk.App): Config {
                 gr00tN1_5_3B: {
                     enabled: false,
                     autoRegisterWithVAMS: true,
-                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
                     maxVCpus: 192,
                 },
             },
@@ -2611,6 +2676,7 @@ export function getConfig(app: cdk.App): Config {
         config.app.pipelines.useConversion3dBasic.autoRegisterWithVAMS = true;
     }
     resolveConversion3dBasicStepInput(config);
+    resolveConversion3dBasicBatchTier(config);
 
     if (config.app.pipelines.useConversionCoordinateTransform == undefined) {
         config.app.pipelines.useConversionCoordinateTransform = {
@@ -2810,6 +2876,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.assetBuckets.createNewBucket == undefined) {
         config.app.assetBuckets.createNewBucket = true;
+    }
+
+    if (config.app.assetBuckets.tagSyncedObjects == undefined) {
+        config.app.assetBuckets.tagSyncedObjects = true;
     }
 
     // Null/omitted restriction lists mean no restrictions (no bucket policy statement).
@@ -3366,6 +3436,13 @@ export function getConfig(app: cdk.App): Config {
         vpcRequiringFeatures.push("pipelines.usePreview3dThumbnail");
     if (config.app.pipelines.useMediaPreviews.enabled)
         vpcRequiringFeatures.push("pipelines.useMediaPreviews");
+    //The Batch tier runs in the isolated pipeline subnets and exists only in an enabled pipeline (the VPC
+    //builder keys its endpoints the same way), so the sub-flag on a disabled pipeline demands nothing.
+    if (
+        config.app.pipelines.useConversion3dBasic.enabled &&
+        config.app.pipelines.useConversion3dBasic.batchTier.enabled
+    )
+        vpcRequiringFeatures.push("pipelines.useConversion3dBasic.batchTier");
     //The Fargate render branch exists only in an enabled pipeline (the VPC builder keys its endpoints
     //the same way), so the sub-flag on a disabled pipeline demands nothing.
     if (
@@ -3650,11 +3727,35 @@ export function getConfig(app: cdk.App): Config {
 
         if (
             gr00tModels.gr00tN1_5_3B.enabled &&
-            (!gr00tModels.gr00tN1_5_3B.instanceTypes ||
+            (!Array.isArray(gr00tModels.gr00tN1_5_3B.instanceTypes) ||
                 gr00tModels.gr00tN1_5_3B.instanceTypes.length === 0)
         ) {
             throw new Error(
                 "Configuration Error: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes must be a non-empty array."
+            );
+        }
+
+        // A warning, not an error: a run with LoRA or a smaller set of tuned components may fit a
+        // 24 GB GPU, and a configuration that names one on purpose must keep deploying.
+        const undersized = gr00tModels.gr00tN1_5_3B.enabled
+            ? gr00tModels.gr00tN1_5_3B.instanceTypes.filter(
+                  (t) =>
+                      typeof t === "string" &&
+                      GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES[t.split(".")[0]] !== undefined
+              )
+            : [];
+        if (undersized.length > 0) {
+            const named = undersized
+                .map((t) => `${t} (${GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES[t.split(".")[0]]})`)
+                .join(", ");
+            console.warn(
+                `Configuration Warning: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes ` +
+                    `includes ${named}. Each fine-tune job uses one GPU, and the default fine-tune ` +
+                    `(loraRank 0, projector and diffusion model tuned) runs out of GPU memory at step 0 ` +
+                    `on a 24 GB GPU, even at batch size 2. AWS Batch (BEST_FIT_PROGRESSIVE) can place ` +
+                    `a job on any listed type, and it prefers the type with the lowest cost per vCPU, ` +
+                    `which can be one of these. Remove them and use GPUs with 48 GB (for example ` +
+                    `g6e.4xlarge), unless you have checked that your fine-tune settings fit.`
             );
         }
     }
@@ -4270,6 +4371,7 @@ export function getConfig(app: cdk.App): Config {
 
     //Validate S3 Transfer Acceleration (#1610)
     validateS3TransferAcceleration(config.app.assetBuckets, config.env.partition);
+    validateTagSyncedObjects(config.app.assetBuckets);
 
     if (
         config.app.useGlobalVpc.enabled &&
@@ -6278,6 +6380,39 @@ export function validateS3TransferAcceleration(
     }
 }
 
+/**
+ * Validates app.assetBuckets.tagSyncedObjects and the same key on each external bucket: each is a
+ * real boolean when set. A string such as "false" would otherwise read as true.
+ */
+export function validateTagSyncedObjects(assetBuckets: {
+    tagSyncedObjects?: boolean;
+    externalAssetBuckets?: ConfigPublicAssetS3Buckets[] | null;
+}): void {
+    const problems: string[] = [];
+    if (
+        assetBuckets.tagSyncedObjects !== undefined &&
+        typeof assetBuckets.tagSyncedObjects !== "boolean"
+    ) {
+        problems.push("app.assetBuckets.tagSyncedObjects");
+    }
+    (assetBuckets.externalAssetBuckets || []).forEach((bucketConfig, index) => {
+        if (
+            bucketConfig &&
+            bucketConfig.tagSyncedObjects !== undefined &&
+            typeof bucketConfig.tagSyncedObjects !== "boolean"
+        ) {
+            problems.push(`app.assetBuckets.externalAssetBuckets[${index}].tagSyncedObjects`);
+        }
+    });
+    if (problems.length > 0) {
+        throw new Error(
+            `Configuration Error: ${problems.join(
+                ", "
+            )} must be a boolean (true or false, not a string).`
+        );
+    }
+}
+
 export interface ConfigPresignedUrlNetworkRestrictions {
     allowedIpRanges: string[];
     allowedVpceIds: string[];
@@ -6306,6 +6441,9 @@ export interface ConfigPublicAssetS3Buckets {
     // before deployment and the deployment fails, naming the bucket, when it is not enabled.
     // Commercial partition only; missing means false. Entries for one bucket ARN must agree.
     useS3TransferAcceleration?: boolean;
+    // Bucket sync writes the VAMS:databaseId and VAMS:assetId object tags on every file version it
+    // syncs from this registration. Missing means true.
+    tagSyncedObjects?: boolean;
 }
 
 /**
@@ -6422,6 +6560,9 @@ export interface ConfigPublic {
             // S3 Transfer Acceleration for the VAMS-created default asset bucket and, together
             // with it, the auxiliary bucket (#1610). Commercial partition only. Default false.
             useS3TransferAcceleration: boolean;
+            // Bucket sync tags every file version it syncs from the VAMS-created bucket with
+            // VAMS:databaseId and VAMS:assetId. Default true.
+            tagSyncedObjects: boolean;
             externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;
@@ -6514,6 +6655,13 @@ export interface ConfigPublic {
                  *  CASCADE, LGPL-2.1 with the OCCT exception); without it a STEP run is refused before
                  *  download. Absent = false. */
                 enableStepInput: boolean;
+                /** AWS Batch Fargate tier for models the Lambda function cannot convert (off by default;
+                 *  needs app.useGlobalVpc.enabled). Absent = off, largest job 120 GiB. */
+                batchTier: {
+                    enabled: boolean;
+                    /** Memory in GiB of the largest job the tier may start: 30, 60 or 120. */
+                    maxMemoryGiB: number;
+                };
             };
             useConversionCoordinateTransform: {
                 enabled: boolean;

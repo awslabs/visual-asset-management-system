@@ -254,7 +254,7 @@ def _load_fbx(job, trimesh, resolver):
     ``resolver``, so only the files fetched with the input can reach the model."""
     path = job["input_file"]
     name = os.path.basename(path)
-    check_fbx_scene(path, name)
+    check_fbx_scene(path, name, job.get("max_triangles"))
     if not os.path.isfile(ASSIMP_BIN):
         raise RuntimeError("The Assimp tool is not in this image, so FBX cannot be read.")
     intermediate = os.path.join(tempfile.mkdtemp(prefix="fbx_", dir=os.path.dirname(job["input_dir"].rstrip("/"))),
@@ -301,7 +301,7 @@ def _load_step(job, trimesh):
     except ImportError:
         raise ValueError(f"{name} is a STEP file, and this deployment does not read STEP: set "
                          f"app.pipelines.useConversion3dBasic.enableStepInput to true and deploy again.")
-    limit = scene_limits.SceneLimit("STEP assembly")
+    limit = scene_limits.SceneLimit("STEP assembly", job.get("max_triangles"))
     if not limit.expect(step_limits.assembly_occurrences(path, limit.max_nodes)):
         raise ValueError(f"{name}: the STEP assembly places more than {limit.max_nodes:,} components, more "
                          f"than this function converts.")
@@ -326,15 +326,19 @@ def load_model(job, trimesh):
     path = job["input_file"]
     extension = os.path.splitext(job["input_name"])[1].lower()
     if extension in USD_EXTENSIONS:
+        # The triangle budget follows the task's memory on the AWS Batch tier (job["max_triangles"]; None
+        # keeps the constant budget the Lambda tier has always used), and so does the node bound
+        # (job["max_scene_nodes"], from the same memory).
         budget = float(job.get("tool_timeout_seconds") or 600) * USD_READ_TIME_SHARE
-        limit = scene_limits.SceneLimit(os.path.basename(path), max_nodes=job_max_scene_nodes(job))
+        limit = scene_limits.SceneLimit(os.path.basename(path), job.get("max_triangles"),
+                                        max_nodes=job_max_scene_nodes(job))
         scene, meters, up = usd_io.read_usd(path, job["input_dir"], limit=limit,
                                             deadline=time.monotonic() + budget)
         return scene, meters, up
     declared_meters = declared_up = None
     if extension == '.dae':
         declared_meters, declared_up = _check_dae(path)
-        check_collada_scene(path, os.path.basename(path), max_nodes=job_max_scene_nodes(job))
+        check_collada_scene(path, os.path.basename(path), job.get("max_triangles"), max_nodes=job_max_scene_nodes(job))
     elif extension == '.3mf':
         _check_3mf(path, os.path.dirname(path))
     resolver = referenced_files.ConfinedResolver(

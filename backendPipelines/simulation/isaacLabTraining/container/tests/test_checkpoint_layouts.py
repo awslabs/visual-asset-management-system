@@ -5,7 +5,8 @@
 
 The container uploaded only ``model_*.pt`` (rsl_rl), so a rl_games run (``nn/*.pth``) or a skrl run
 (``checkpoints/agent_*.pt``, ``best_agent.pt``) finished green with an empty checkpoints folder. Each
-test builds the log tree one library writes under Isaac Lab 2.3.0 and checks what is uploaded.
+test builds the log tree one library writes under Isaac Lab 3.0.0 (read from a three-iteration Cartpole
+run of the stock image, issue #1669) and checks what is uploaded.
 Layouts: ``utils/training/checkpoints.py``."""
 
 import importlib.util
@@ -29,17 +30,17 @@ LAYOUTS = {
                    "rsl_rl/cartpole/2026-01-01_00-00-00/events.out.tfevents.1"],
     },
     "rl_games": {
-        "checkpoints": ["rl_games/cartpole_direct/2026-01-01_00-00-00/nn/cartpole_direct.pth",
-                        "rl_games/cartpole_direct/2026-01-01_00-00-00/nn/last_cartpole_direct_ep_150_rew__12.5_.pth"],
-        "others": ["rl_games/cartpole_direct/2026-01-01_00-00-00/params/agent.yaml",
-                   "rl_games/cartpole_direct/2026-01-01_00-00-00/summaries/events.out.tfevents.1"],
+        "checkpoints": ["rl_games/cartpole/2026-01-01_00-00-00/nn/cartpole_direct.pth",
+                        "rl_games/cartpole/2026-01-01_00-00-00/nn/last_cartpole_ep_150_rew__12.5_.pth"],
+        "others": ["rl_games/cartpole/2026-01-01_00-00-00/params/agent.yaml",
+                   "rl_games/cartpole/2026-01-01_00-00-00/summaries/events.out.tfevents.1"],
     },
     "skrl": {
-        "checkpoints": ["skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_1000.pt",
-                        "skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_30000.pt",
-                        "skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/checkpoints/best_agent.pt"],
-        "others": ["skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/params/agent.yaml",
-                   "skrl/cartpole_direct/2026-01-01_00-00-00_ppo_torch/events.out.tfevents.1"],
+        "checkpoints": ["skrl/cartpole/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_1000.pt",
+                        "skrl/cartpole/2026-01-01_00-00-00_ppo_torch/checkpoints/agent_30000.pt",
+                        "skrl/cartpole/2026-01-01_00-00-00_ppo_torch/checkpoints/best_agent.pt"],
+        "others": ["skrl/cartpole/2026-01-01_00-00-00_ppo_torch/params/agent.yaml",
+                   "skrl/cartpole/2026-01-01_00-00-00_ppo_torch/events.out.tfevents.1"],
     },
 }
 
@@ -63,7 +64,7 @@ def main_module():
 
 
 def _config(library):
-    return PipelineConfig(job_name="job1", mode="train", task="Isaac-Cartpole-Direct-v0",
+    return PipelineConfig(job_name="job1", mode="train", task="Isaac-Cartpole-Direct",
                           rl_library=library, input_s3_path="", output_s3_path=_OUTPUT_PREFIX)
 
 
@@ -175,10 +176,57 @@ class TestFindCheckpoints:
 @pytest.mark.unit
 class TestEvaluationPolicyPath:
     """play.py of rl_games and skrl takes the run folder from the checkpoint's parent's parent
-    (Isaac Lab 2.3.0 ``log_dir = dirname(dirname(resume_path))``), so the downloaded policy must sit
+    (Isaac Lab ``log_dir = dirname(dirname(resume_path))``), so the downloaded policy must sit
     two folders below a folder the runtime user owns, whatever the checkpoint's own extension."""
 
     def test_policy_lands_two_folders_below_the_owned_log_root(self, main_module):
         policy = main_module.EVALUATION_POLICY_PATH
         run_folder = os.path.dirname(os.path.dirname(policy))
         assert os.path.dirname(run_folder) == main_module.LOCAL_LOG_PATH
+
+
+class TestOldRslRlCheckpoint:
+    """An rsl_rl checkpoint of Isaac Lab 2.x fails play with ``KeyError: 'actor_state_dict'``
+    (defect D4 of PR #1736); it is named before Isaac Sim starts."""
+
+    def test_the_2x_format_is_named(self):
+        from utils.training.checkpoints import old_rsl_rl_checkpoint_message
+        message = old_rsl_rl_checkpoint_message(
+            "/p.pt", loader=lambda p: {"model_state_dict": {}, "optimizer_state_dict": {}, "iter": 3})
+        assert "Isaac Lab 2.x" in message and "Retrain" in message and "rl_games and skrl" in message
+
+    @pytest.mark.parametrize("content", [
+        {"actor_state_dict": {}, "critic_state_dict": {}, "iter": 3},
+        {"model_state_dict": {}, "actor_state_dict": {}},
+        {"something": 1}, [], None])
+    def test_a_3_0_checkpoint_or_anything_else_passes(self, content):
+        from utils.training.checkpoints import old_rsl_rl_checkpoint_message
+        assert old_rsl_rl_checkpoint_message("/p.pt", loader=lambda p: content) is None
+
+    def test_an_unreadable_file_is_left_to_play(self):
+        from utils.training.checkpoints import old_rsl_rl_checkpoint_message
+
+        def broken(path):
+            raise RuntimeError("not a zip file")
+
+        assert old_rsl_rl_checkpoint_message("/p.pt", loader=broken) is None
+        assert old_rsl_rl_checkpoint_message("/does/not/exist.pt") is None
+
+    def test_evaluation_stops_before_play_with_the_message(self, monkeypatch):
+        import importlib.util
+        import os
+        spec = importlib.util.spec_from_file_location(
+            "isaaclab_main_oldck", os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "__main__.py"))
+        main = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(main)
+        monkeypatch.setattr(main, "download_policy", lambda s3, config: "/p.pt")
+        monkeypatch.setattr(main, "old_rsl_rl_checkpoint_message", lambda path: "Isaac Lab 2.x checkpoint")
+        monkeypatch.setattr(main, "upload_logs", lambda s3, config: None)
+        monkeypatch.setattr(main, "run_isaac_lab",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("play started")))
+        from utils.training.config import PipelineConfig
+        config = PipelineConfig(job_name="j", mode="evaluate", task="Isaac-Cartpole",
+                                rl_library="rsl_rl", input_s3_path="", output_s3_path="s3://b/o/")
+        with pytest.raises(RuntimeError, match="Isaac Lab 2.x checkpoint"):
+            main.run_evaluation(config, None, {})

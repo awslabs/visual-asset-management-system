@@ -220,6 +220,15 @@ export function globalLambdaEnvironmentsAndPermissions(
             ],
         })
     );
+    // The resource-name chunk parameters (<prefix>Chunks/<i>, resourceNameChunks.ts), a sibling
+    // path the statement above does not cover: read with GetParameters only.
+    lambdaFunction.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["ssm:GetParameters"],
+            resources: [IAMArn(`${resourceParamPathNoSlash}Chunks/*`).ssm],
+        })
+    );
 
     // Apply stack-level CDK Nag suppression for the SSM parameter grant. Stack suppressions
     // are evaluated at check time against every finding in the stack, so they cover synthesis-
@@ -232,10 +241,10 @@ export function globalLambdaEnvironmentsAndPermissions(
         NagSuppressions.addStackSuppressions(lambdaStack, [
             {
                 id: "AwsSolutions-IAM5",
-                reason: "Wildcard is scoped to the deployment-specific SSM resource-name parameter prefix (/{name}-{baseStackName}/resourceNames/*) that Lambda functions read at cold start to resolve DynamoDB table, S3 bucket, and CloudWatch log group names.",
+                reason: "Wildcard is scoped to the deployment-specific SSM resource-name parameter prefix (/{name}-{baseStackName}/resourceNames/*) and its chunk parameters (/{name}-{baseStackName}/resourceNamesChunks/*), which Lambda functions read at cold start to resolve DynamoDB table, S3 bucket, and CloudWatch log group names.",
                 appliesTo: [
                     {
-                        regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*\\/resourceNames(\\/\\*)?$/g",
+                        regex: "/^Resource::arn:.*:ssm:.*:parameter\\/.*\\/resourceNames(\\/\\*|Chunks\\/\\*)?$/g",
                     },
                 ],
             },

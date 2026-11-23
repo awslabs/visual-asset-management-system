@@ -45,8 +45,8 @@ _HANDLERS = sorted(
 
 # The number in the tree today, and the number that use the accumulate-then-scan shape. The remaining
 # eleven return their failure response directly and have no loop to get wrong.
-_EXPECTED_HANDLERS = 20
-_EXPECTED_WITH_SCAN = 9
+_EXPECTED_HANDLERS = 21
+_EXPECTED_WITH_SCAN = 10
 
 
 def _rel(path):

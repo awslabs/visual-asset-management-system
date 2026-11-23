@@ -249,6 +249,8 @@ def lambda_handler(event, context):
             asset_id = event.get('assetId', '')
             # The S3 version the run reads its input at; "" reads the current object.
             input_version_id = event.get('inputVersionId', '')
+            # The input's asset-relative path (manifest relativePath); "" from an older Lambda.
+            input_relative_path = event.get('inputRelativePath', '')
             external_sfn_task_token = event.get('sfnExternalTaskToken', '')
 
             # Get required parameters
@@ -411,6 +413,7 @@ def lambda_handler(event, context):
                 "inputConfigurationS3Location": input_configuration_s3_location,
                 "assetId": asset_id,
                 "inputVersionId": input_version_id,
+                "inputRelativePath": input_relative_path,
                 "externalSfnTaskToken": external_sfn_task_token,
                 "outputFileType": output_file_type
             }

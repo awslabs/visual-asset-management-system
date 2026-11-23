@@ -31,10 +31,10 @@ def rn(monkeypatch):
     for _attribute, _param_key, env_var in EDH_KEYS:
         monkeypatch.delenv(env_var, raising=False)
     import common.resourceNames as resourceNames
-    resourceNames._cache = {}
-    resourceNames._cache_fetched_at = 0.0
-    resourceNames._ssm_client = None
-    resourceNames._missing_keys = {}
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                        ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                        ("_window_logged_for", None)):
+        monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 
 

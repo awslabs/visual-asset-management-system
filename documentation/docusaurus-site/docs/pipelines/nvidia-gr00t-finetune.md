@@ -29,11 +29,11 @@ VAMS supports the **GR00T-N1.5-3B** model from NVIDIA's Isaac GR00T project. Thi
 | Dataset download from S3     | 1-10 min                       | 1-10 min                        | Depends on dataset size                                |
 | Training (6000 steps)        | 60-120 min                     | 20-40 min                       | Varies with batch size, LoRA vs full, dataset size     |
 | Checkpoint upload to S3      | 1-5 min                        | 1-5 min                         | Depends on checkpoint size                             |
-| **Total (cached, LoRA)**     | **~80-150 min**                | **~35-70 min**                  | LoRA fine-tuning (default)                             |
+| **Total (cached, LoRA)**     | **~80-150 min**                | **~35-70 min**                  | LoRA fine-tuning (`loraRank` above 0)                  |
 | **Total (cached, full)**     | **~120-200 min**               | **~50-90 min**                  | Full fine-tuning (all components)                      |
 
 :::tip[GPU Selection]
-For LoRA fine-tuning (default), a single GPU instance like `g6e.4xlarge` is sufficient. For full model fine-tuning with all components enabled (`tuneLlm`, `tuneVisual`), use multi-GPU instances like `g6e.12xlarge` (4 GPUs) for significantly faster training. The `numGpus` parameter is configurable at runtime.
+The default fine-tune template does not use LoRA (`loraRank` 0): it trains the projector and the diffusion model (`tuneProjector`, `tuneDiffusionModel`) and needs a GPU with more than 24 GB of memory. Each AWS Batch job reserves one GPU. VAMS has run the default fine-tune on the 48 GB NVIDIA L40S of `g6e.4xlarge` at batch size 4. On the 24 GB NVIDIA A10G of `g5.12xlarge` it runs out of GPU memory at step 0, even at batch size 2. If a run on a 48 GB GPU runs out of memory, lower `batchSize`. Deployment configuration validation warns when `instanceTypes` names a type whose GPU has 24 GB or less (the `g4dn`, `g5`, `g6`, `gr6` and `p3` families).
 :::
 
 ## Container Build Options
@@ -297,12 +297,12 @@ You must accept the NVIDIA GR00T model license on HuggingFace before using this 
     | [nvidia/GR00T-N1.5-3B](https://huggingface.co/nvidia/GR00T-N1.5-3B) | Base model for fine-tuning | NVIDIA Open Model License | [Link](https://huggingface.co/nvidia/GR00T-N1.5-3B) |
 
 -   **HuggingFace Token** -- Generate a Read access token from your HuggingFace account settings. Store the token value directly in the `huggingFaceToken` field of the CDK configuration -- it will be securely stored in AWS Secrets Manager during deployment.
--   **GPU Instance Availability** -- The pipeline uses `BEST_FIT_PROGRESSIVE` allocation with multiple fallback instance types (default: `g6e.4xlarge`, `g6e.12xlarge`, `g5.12xlarge`). Ensure your AWS Region has capacity for at least one of these types. Multiple instance types are listed for regional capacity flexibility.
+-   **GPU Instance Availability** -- The pipeline uses `BEST_FIT_PROGRESSIVE` allocation with multiple instance types (default: `g6e.4xlarge`, `g6e.12xlarge`, both with 48 GB NVIDIA L40S GPUs). Ensure your AWS Region has capacity for at least one of these types. AWS Batch can place a job on any listed type, and it prefers the type with the lowest cost per vCPU, so a listed type is not only a fallback for when the others lack capacity. List a type only if its GPU has more than 24 GB of memory: the default fine-tune runs out of GPU memory on the 24 GB GPUs of `g5`, `g6` and `gr6` instances (see the GPU Selection tip under [Approximate Run Times](#approximate-run-times)).
 -   **VPC Configuration** -- The pipeline deploys into private subnets with NAT Gateway for internet access (required for HuggingFace model downloads on first run). Ensure VPC endpoints are configured for Amazon S3, Amazon EFS, Amazon ECR, and Amazon Batch.
 -   **Amazon EFS** -- The pipeline creates a shared Amazon EFS file system for model caching across AWS Batch instances.
 
 :::warning[Availability outside the commercial partition]
-The shipped `instanceTypes` values target commercial AWS Regions. Deployment configuration validation checks only that an enabled model variant names a non-empty `instanceTypes` array -- it does not check that those GPU instance families are offered in the deployment Region, or that the HuggingFace model download path is reachable from the partition. For AWS GovCloud and the AWS European Sovereign Cloud, compare the configured instance types against the GPU instances the target Region offers, adjust them where they differ, and evaluate the pipeline in a non-production deployment before enabling it.
+The shipped `instanceTypes` values target commercial AWS Regions. Deployment configuration validation checks that an enabled model variant names a non-empty `instanceTypes` array, and warns without failing when it names a type whose GPU has 24 GB of memory or less -- it does not check that those GPU instance families are offered in the deployment Region, or that the HuggingFace model download path is reachable from the partition. For AWS GovCloud and the AWS European Sovereign Cloud, compare the configured instance types against the GPU instances the target Region offers, adjust them where they differ, and evaluate the pipeline in a non-production deployment before enabling it. The GovCloud and European Sovereign Cloud templates ship the commercial `g6e` types, which those Regions do not offer. Pick types the Region offers whose GPU has more than 24 GB of memory. The European Sovereign Cloud offers no such GPU, so only a LoRA or reduced fine-tune can run there.
 :::
 
 ## Configuration
@@ -323,7 +323,7 @@ Add the following to your `config.json` under `app.pipelines`:
                     "gr00tN1_5_3B": {
                         "enabled": true,
                         "autoRegisterWithVAMS": true,
-                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+                        "instanceTypes": ["g6e.4xlarge", "g6e.12xlarge"],
                         "maxVCpus": 192
                     }
                 }
@@ -333,17 +333,17 @@ Add the following to your `config.json` under `app.pipelines`:
 }
 ```
 
-| Option                                             | Default                                          | Description                                                                                                                                                                                     |
-| -------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                                          | `false`                                          | Enable or disable the Gr00t fine-tuning pipeline deployment.                                                                                                                                    |
-| `huggingFaceToken`                                 | `""`                                             | HuggingFace Read access token value (e.g., `hf_xxxx`). CDK stores this in AWS Secrets Manager during deployment. **Required when enabled.**                                                     |
-| `useCodeBuild`                                     | `false`                                          | Build container image via AWS CodeBuild + ECR instead of local Docker. Recommended for large GPU images.                                                                                        |
-| `useWarmInstances`                                 | `false`                                          | Keeps GPU instances running when idle for faster pipeline starts. **Warning:** Warm instances incur continuous compute costs.                                                                   |
-| `warmInstanceCount`                                | `0`                                              | Number of warm GPU instances to keep running when `useWarmInstances` is `true`.                                                                                                                 |
-| `modelsFinetune.gr00tN1_5_3B.enabled`              | `false`                                          | Enable GR00T-N1.5-3B fine-tuning.                                                                                                                                                               |
-| `modelsFinetune.gr00tN1_5_3B.autoRegisterWithVAMS` | `true`                                           | Automatically register the pipeline and workflow with VAMS at deploy time.                                                                                                                      |
-| `modelsFinetune.gr00tN1_5_3B.instanceTypes`        | `["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Multiple types for regional capacity flexibility. g6e.4xlarge (1 GPU) for LoRA, g6e.12xlarge (4 GPU) for full fine-tuning. |
-| `modelsFinetune.gr00tN1_5_3B.maxVCpus`             | `192`                                            | Maximum vCPUs for the AWS Batch compute environment. Controls concurrent job scaling ceiling.                                                                                                   |
+| Option                                             | Default                           | Description                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                                          | `false`                           | Enable or disable the Gr00t fine-tuning pipeline deployment.                                                                                                                                                                                                                                                                                              |
+| `huggingFaceToken`                                 | `""`                              | HuggingFace Read access token value (e.g., `hf_xxxx`). CDK stores this in AWS Secrets Manager during deployment. **Required when enabled.**                                                                                                                                                                                                               |
+| `useCodeBuild`                                     | `false`                           | Build container image via AWS CodeBuild + ECR instead of local Docker. Recommended for large GPU images.                                                                                                                                                                                                                                                  |
+| `useWarmInstances`                                 | `false`                           | Keeps GPU instances running when idle for faster pipeline starts. **Warning:** Warm instances incur continuous compute costs.                                                                                                                                                                                                                             |
+| `warmInstanceCount`                                | `0`                               | Number of warm GPU instances to keep running when `useWarmInstances` is `true`.                                                                                                                                                                                                                                                                           |
+| `modelsFinetune.gr00tN1_5_3B.enabled`              | `false`                           | Enable GR00T-N1.5-3B fine-tuning.                                                                                                                                                                                                                                                                                                                         |
+| `modelsFinetune.gr00tN1_5_3B.autoRegisterWithVAMS` | `true`                            | Automatically register the pipeline and workflow with VAMS at deploy time.                                                                                                                                                                                                                                                                                |
+| `modelsFinetune.gr00tN1_5_3B.instanceTypes`        | `["g6e.4xlarge", "g6e.12xlarge"]` | EC2 GPU instance types for AWS Batch compute (BEST_FIT_PROGRESSIVE). Multiple types for regional capacity flexibility. Each job reserves one GPU, and the default fine-tune needs a GPU with more than 24 GB of memory (both defaults have a 48 GB L40S). Validation warns about `g4dn`, `g5`, `g6`, `gr6` and `p3` types, whose GPUs have 24 GB or less. |
+| `modelsFinetune.gr00tN1_5_3B.maxVCpus`             | `192`                             | Maximum vCPUs for the AWS Batch compute environment. Controls concurrent job scaling ceiling.                                                                                                                                                                                                                                                             |
 
 ## Asset Structure
 
@@ -440,9 +440,9 @@ To force re-download of the base model from HuggingFace (clearing both EFS and S
 
 ## Fine-Tuning Modes
 
-### LoRA Fine-Tuning (Default)
+### LoRA Fine-Tuning
 
-LoRA (Low-Rank Adaptation) fine-tunes a small number of additional parameters while keeping the base model frozen. This is faster, uses less memory, and works well on single-GPU instances.
+LoRA (Low-Rank Adaptation) fine-tunes a small number of additional parameters while keeping the base model frozen. This is faster, uses less memory, and works well on single-GPU instances. The default fine-tune template does not use LoRA (`loraRank` 0); set `loraRank` above 0 to turn it on. VAMS has not measured whether a LoRA run fits a 24 GB GPU.
 
 **Recommended settings:**
 

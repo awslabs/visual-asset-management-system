@@ -161,7 +161,7 @@ web/
       viewers/              # Individual viewer plugins
         manifest.ts
 
-    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.5
+    searchPlugin/           # Search page provider host (title row + view switch); see WEB_FRONTEND.md 8.11
       index.ts
       config/searchProviderConfig.json  # Provider catalog (searchProviderConfig.test.ts guards it)
       core/                 # SearchProviderRegistry.ts, providerAvailability.ts,
@@ -170,9 +170,11 @@ web/
       providers/            # manifest.ts + AssetListProvider/, UnifiedSearchProvider/
 
     common/                 # Shared utilities, helpers, and feature-switch constants
+      cogRaster/            # Shared GeoTIFF/COG raster code of the GeoTIFF Map Viewer and the Search map's Show raster
     constants/uploadLimits.ts
     hooks/                  # usePageTitle.ts, useThemeSettings.ts,
-                            #   useAssetPageAccess.ts (may the caller open an assets/asset page)
+                            #   useAssetPageAccess.ts (may the caller open an assets/asset page),
+                            #   useWebRouteAllowed.ts (does the POST /auth/routes decision allow a path)
     layout/
       navigationRegistry.ts # The one navigation registry: core + add-on + custom, side/profile placement
       Navigation.tsx        # Left sidebar navigation (side entries)
@@ -980,7 +982,9 @@ against any sandbox. The core spec for a page outside the orchestration module i
     dismissible **Search notice** above the results (`searchNotice(page)`), never a toast. Count toasts
     as a snapshot right after the answer (a toast hides after 5 s); poll the notice.
 -   **A failed search is a toast, not a missing feature.** A `503` shows a **Search failed** toast with
-    the API's message, and the switches and the query band stay.
+    the API's message, and the switches and the query band stay. With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
 -   **The count's explanation is a named button**, `getByRole("button", { name: "About this count" })`,
     opened by click, Enter or Space; an exact count has none.
 -   **A database route locks the Database filter and names it**: the disabled multiselect reads the
@@ -1039,6 +1043,14 @@ deployment took by matching the served main-bundle hash to the local one
     assert the list rendered rows **or** its empty state (`expectTableRendered`).
 -   A spec that needs a file of a particular type finds one with `findAssetFiles` and skips when there is
     none, never a fixed database and asset id.
+-   `viewers.preview-toggle.spec.ts` follows the same rule for the file page's Preview toggle: it scans for a
+    distributable asset whose file has a generated preview and skips when there is none;
+    `E2E_PREVIEW_ASSET="<databaseId>/<assetId>"` (optional) confines the scan to one asset. A second case
+    opens a file at an older file version and expects the notice that its preview belongs to the latest
+    version; it skips when the scan finds no file with a preview and an older version. A third case holds the
+    asset details request back for six seconds (`page.route`) so the file read answers first, and expects the
+    Preview toggle all the same; the toggle follows the file the page holds, so no case reloads the page to
+    find it.
 -   A skip with a reason is the honest outcome when a precondition is absent; a test that passes because its
     assertion never ran is not. Card lists are server-paginated (pageSize 50), so a spec that waits for one
     seeded id fails once newer items push it off page 1.
@@ -1137,6 +1149,27 @@ cases to `renderCases` there; never start another spec or harness.
     in a separate `chromium-webgpu` project and takes them out of `chromium`; without an adapter they skip,
     and `E2E_REQUIRE_WEBGPU=1` makes that a failure. Run them where a GPU is available: Chromium's software
     adapter loses the device while the editor loads a file.
+
+### **Map viewer layout spec**
+
+`viewers.cogmap.layout.spec.ts` lives in the `chromium` project, counts the frame's stripe pixels through
+`support/rasterViewerFixtures.ts`, and skips with a reason when location services are off. It opens a raster in
+the GeoTIFF Map Viewer on the View File page and in the File Viewer modal (the File Manager's Visualize File
+eye) and checks it fills its frame at 390, 820 and 1280 px, and in fullscreen on the page: canvas equal to its
+column, map, list and the viewer's own map controls inside the frame, and none of the frame backdrop's stripe
+colours visible. A third case hides and shows a raster with its **Visible** switch (one name,
+`Show "<label>" on the map`, the checked state, Space, the status line, Zoom disabled while hidden). It waits on
+the picker's options and on the layout settling (two equal reads of the boxes, canvas equal to its column)
+rather than on fixed sleeps. It finds a `.tif` through the API and skips, with the reason, when the file is not a
+raster the viewer draws.
+
+| Helper (`support/rasterViewerFixtures.ts`) | Use for                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `stripePixels(page, png)`                  | Count of the visualizer frame backdrop's stripe colours in a screenshot |
+
+| Variable                              | Effect                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `E2E_COG_MAP_FILE=<db>/<asset>/<key>` | Names the georeferenced raster the layout spec opens, instead of the first `.tif` found |
 
 ### **Running the suite**
 

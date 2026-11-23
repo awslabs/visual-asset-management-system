@@ -17,6 +17,7 @@ import { AuthBuilderNestedStack } from "./nestedStacks/auth/authBuilder-nestedSt
 import { RouteRegistry } from "./nestedStacks/apiLambda/apiRouteRegistry";
 import { ResourceNameRegistry } from "./nestedStacks/resourceNames/resourceNameRegistry";
 import { ResourceNamesBuilderNestedStack } from "./nestedStacks/resourceNames/resourceNamesBuilder-nestedStack";
+import { buildResourceNameChunks } from "./nestedStacks/resourceNames/resourceNameChunks";
 import { ApiNestedStack } from "./nestedStacks/apiLambda/api-nestedStack";
 import { RestApiGatewayConstruct } from "./nestedStacks/apiLambda/constructs/rest-api-gateway-construct";
 import { configureApiCloudWatchRoleReuse } from "./nestedStacks/apiLambda/constructs/api-cloudwatch-role-reuse";
@@ -140,8 +141,11 @@ export class CoreVAMSStack extends cdk.Stack {
         const lambdaLayers = new LambdaLayersBuilderNestedStack(this, "LambdaLayers", {});
 
         // Cross-stack resource-name registry — storage builder registers resource names,
-        // the ResourceNames builder materializes them as SSM parameters.
+        // the ResourceNames builder materializes them as SSM parameters. Attached to this stack so
+        // publishAddonResourceName() / publishCustomResourceName() record their names in it too,
+        // for the resource-name chunk parameters built at the end of this constructor.
         const resourceNameRegistry = new ResourceNameRegistry();
+        ResourceNameRegistry.attach(this, resourceNameRegistry);
 
         //Deploy Storage Resources (nested stack)
         const storageResourcesNestedStack = new StorageResourcesBuilderNestedStack(
@@ -656,6 +660,18 @@ export class CoreVAMSStack extends cdk.Stack {
                 kmsKey: storageResourcesNestedStack.storageResources.encryption.kmsKey,
             }
         );
+
+        //Resource-name chunk parameters: every registered name again, as JSON in a few numbered
+        //parameters, so a Lambda cold start reads them all in one GetParameters call per 10 chunks.
+        //Built last, once every stack that publishes resource names (core, add-on, custom) exists.
+        //Every chunk is a resource of this root stack, so a layout change (an add-on turned on or
+        //off, more core names) only updates a chunk in place and never moves one between stacks.
+        buildResourceNameChunks({
+            config: props.config,
+            registry: resourceNameRegistry,
+            scope: this,
+            coreSource: resourceNamesNestedStack,
+        });
 
         const resourceNamesSSMParamPrefixOutput = new cdk.CfnOutput(
             this,

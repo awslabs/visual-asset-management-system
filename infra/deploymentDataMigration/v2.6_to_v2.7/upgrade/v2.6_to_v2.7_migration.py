@@ -3,10 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Data Migration Script for VAMS v2.6 to v2.7 - orphaned workflow-trigger cleanup, vector index
-backfill, and the system-pipeline retirement report.
+Data Migration Script for VAMS v2.6 to v2.7 - asset location folder keys, orphaned workflow-trigger
+cleanup, vector index backfill, the system-pipeline retirement report, and the asset location index
+backfill.
 
 The v2.7 release introduces:
+  0. One meaning for an asset location key: a key ending in '/' is a folder, any other key names one
+     Amazon S3 object (a single-file asset). Before v2.7 a folder key written without the '/' still
+     listed its files. The ``assetLocationFolderKeys`` step finds asset rows whose key has no trailing
+     '/', no object at the key and objects under ``{key}/``, reports them, and on a real run appends the
+     '/'. It runs first, before the backfills that walk every asset's location; it saves its scan
+     position after every page (``--resume``) and writes one report line per finding.
   1. A consolidated SYSTEM GenAI metadata pipeline (``system-genai-metadata``) that replaces the
      GenAI 3D Metadata Labeling and CAD/Mesh Metadata Extraction built-ins. The v2.7 deploy removes
      the two retired nested stacks, and the schema importer archives their pipeline and workflow
@@ -36,6 +43,13 @@ The v2.7 release introduces:
      for CAD/Mesh extraction), then turn FAILED. User workflows that reference a retired pipeline id
      fail at execute because the pipeline is archived. The ``systemPipelineRetirement`` step reports
      both sets and prints guidance. It writes nothing.
+  4. A location index on the asset table (``AssetLocationGSI``: bucket name and stored location to
+     database and asset). The ``assetLocationIndex`` step writes the two indexed attributes,
+     ``locationBucket`` and ``locationKey``, on every asset row that lacks them (one conditional
+     ``UpdateItem`` each, paced, resumable from a checkpoint file), verifies every row with strongly
+     consistent passes, writes a report of the rows it could not index, and writes the completion
+     marker (an SSM parameter under the resource-name prefix) last. Nothing reads the index before the
+     marker exists. No S3 call is made.
 
 Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack output
 ``ResourceNamesSSMParamPrefixOutput``); every table and function name is then resolved from SSM
@@ -43,7 +57,8 @@ Parameter Store. Explicit ``*_table_name`` / ``vector_reindexer_function_name`` 
 supported as optional overrides.
 
 Safety: every run is a DRY RUN unless ``--execute`` is given and the config's ``dry_run`` is false (the
-shipped config sets it true). A real run that deletes trigger rows, deletes vectors, or launches
+shipped config sets it true). A real run that changes asset location keys, deletes trigger rows, deletes vectors,
+or launches
 Bedrock-billed executions is confirmed against the resolved AWS account id - typed at a prompt or
 passed as ``--confirm-account`` - and refused when the identity cannot be resolved or confirmed.
 
@@ -82,6 +97,7 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 import boto3
+from boto3.dynamodb.types import TypeDeserializer
 from botocore.config import Config
 from botocore.exceptions import ClientError, ReadTimeoutError
 
@@ -130,6 +146,9 @@ _PLACEHOLDER_PREFIXES = ('<', 'YOUR-')
 
 _STS_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 _DYNAMODB_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+_S3_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+_SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
+_ASSET_LOCATION_DESERIALIZER = TypeDeserializer()
 # One attempt: a synchronous invoke that outlives the read timeout is reported as "continues in the
 # background" and never re-issued (a retry would start a second clear or a second enqueue pass).
 _LAMBDA_CLIENT_CONFIG = Config(connect_timeout=10, read_timeout=900,
@@ -348,6 +367,545 @@ def _paginate(read: Callable[..., Dict], **kwargs) -> Iterator[Dict]:
         if 'LastEvaluatedKey' not in response:
             return
         kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+
+
+#######################
+# STEP: assetLocationFolderKeys
+#######################
+
+# An asset location key ending in '/' is a folder; any other key names one Amazon S3 object (a
+# single-file asset). Before v2.7 a folder key written without the trailing '/' still listed its files,
+# and v2.7 reads such a key as a single object. This step finds the asset rows whose key has no
+# trailing '/', no object at the key and objects under '{key}/', reports them and, on a real run,
+# appends the '/' (part a). It reads one object (HeadObject) and, when there is none, the newest version
+# of the key and at most one listed key under '{key}/' (MaxKeys=1) per such row; it never walks a bucket.
+#
+# Part (b): before v2.7 the companion copy '{key}/{name}' of a single-file location had the asset-relative
+# path '/{name}', and the records that describe a file are keyed by that path. v2.7 lists the object at
+# '/{name}' and the copy at '/{name}/{name}', so for each single-file location whose copy exists the copy's
+# file metadata, file attributes, version snapshot entries, metadata version snapshots and file version
+# history move to '/{name}/{name}'. A version snapshot entry moves only when its S3 version id is one of
+# the copy's; a history record stays when its version id is one of the object's. Vectors (a reindex rewrites
+# them) and execution history (what past runs read) stay as recorded. A record already at the new path is
+# never overwritten: the clash is reported and the old record stays.
+LOCATION_STEP = 'assetLocationFolderKeys'
+LOCATION_CLASSES = ('folder', 'single-file', 'folder-without-slash', 'no-objects', 'unreadable')
+LOCATION_PAGE_SIZE = 100
+LOCATION_PACE_SECONDS = 0.05
+_NOT_FOUND_CODES = ('404', 'NoSuchKey', 'NotFound')
+COPY_COUNTERS = ('copy-locations', 'copy-already-moved', 'records-moved', 'records-clash',
+                 'records-left-object', 'records-left-unknown-version', 'records-gone')
+# (config key, ResourceParamKeys name) of the tables part (b) moves records in; the legacy V1 file
+# versions table is optional and skipped when the deployment does not publish it.
+COPY_TABLE_KEYS = (
+    ('asset_file_metadata_storage_table_name', 'ASSET_FILE_METADATA_STORAGE_TABLE'),
+    ('file_attribute_storage_table_name', 'FILE_ATTRIBUTE_STORAGE_TABLE'),
+    ('asset_versions_storage_table_name', 'ASSET_VERSIONS_STORAGE_TABLE'),
+    ('asset_file_versions_storage_table_name', 'ASSET_FILE_VERSIONS_STORAGE_TABLE'),
+    ('asset_file_metadata_versions_storage_table_name', 'ASSET_FILE_METADATA_VERSIONS_STORAGE_TABLE'),
+    ('asset_file_version_history_storage_table_name', 'ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE'),
+)
+LEGACY_COPY_TABLE_KEY = ('legacy_asset_file_versions_storage_table_name', 'LEGACY_ASSET_FILE_VERSIONS_STORAGE_TABLE_V1')
+_FILE_PATH_INDEX = 'DatabaseIdAssetIdFilePathIndex'
+# Set on an asset row once part (b) finished for it; a row carrying it is skipped by every later run.
+COPY_DONE_ATTRIBUTE = 'assetLocationCopyRecordsMovedAt'
+_VERSIONS_BY_ASSET_INDEX = 'databaseIdAssetIdIndex'
+_HISTORY_VERSION_ID_PREFIXES = ('unarchive:',)
+
+
+class LocationFinding(NamedTuple):
+    database_id: str
+    asset_id: str
+    bucket: str
+    key: str
+    location_class: str
+    detail: str
+
+
+def _location_key(row: Dict) -> str:
+    """The wire-format row's assetLocation.Key, or ''."""
+    return ((row.get('assetLocation') or {}).get('M') or {}).get('Key', {}).get('S', '') or ''
+
+
+def classify_asset_location(s3_client, bucket: str, key: str) -> Tuple[str, str]:
+    """Return (class, detail) for one asset location key. Reads nothing for a key ending in '/'."""
+    if not key or key.endswith('/'):
+        return 'folder', ''
+    if not bucket:
+        return 'unreadable', 'the asset bucket is not registered in the S3 asset buckets table'
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+        return 'single-file', ''
+    except ClientError as e:
+        code = str(e.response.get('Error', {}).get('Code', ''))
+        if code not in _NOT_FOUND_CODES:
+            return 'unreadable', f"HeadObject: {code or e}"
+    # An archived object answers HeadObject with 404 (its newest version is a delete marker) and is still
+    # the asset's file, so a key with any version of its own is a single file, never a folder.
+    try:
+        if exact_key_versions(s3_client, bucket, key, first_page_only=True):
+            return 'single-file', 'archived'
+    except ClientError as e:
+        return 'unreadable', f"ListObjectVersions: {e.response.get('Error', {}).get('Code', '') or e}"
+    try:
+        listed = s3_client.list_objects_v2(Bucket=bucket, Prefix=f"{key}/", MaxKeys=1)
+    except ClientError as e:
+        return 'unreadable', f"ListObjectsV2: {e.response.get('Error', {}).get('Code', '') or e}"
+    if listed.get('KeyCount', 0) > 0 or listed.get('Contents'):
+        return 'folder-without-slash', ''
+    return 'no-objects', ''
+
+
+def exact_key_versions(s3_client, bucket: str, key: str, first_page_only: bool = False) -> set:
+    """The version ids, delete markers included, of exactly ``key``. The listing names ``key`` as its prefix,
+    so it starts at ``key`` (the shortest key under it) and stops at the first other key."""
+    ids = set()
+    kwargs = {'Bucket': bucket, 'Prefix': key, 'MaxKeys': 1 if first_page_only else 1000}
+    while True:
+        page = s3_client.list_object_versions(**kwargs)
+        entries = page.get('Versions', []) + page.get('DeleteMarkers', [])
+        ids.update(entry['VersionId'] for entry in entries if entry['Key'] == key)
+        if first_page_only or any(entry['Key'] != key for entry in entries) or not page.get('IsTruncated'):
+            return ids
+        kwargs['KeyMarker'] = page.get('NextKeyMarker')
+        kwargs['VersionIdMarker'] = page.get('NextVersionIdMarker')
+
+
+def append_location_slash(dynamodb_client, asset_table: str, row: Dict, key: str) -> str:
+    """Append '/' to the row's assetLocation.Key. The write is conditional on the key still being
+    ``key``, so a repeat or a concurrent edit changes nothing. Returns 'appended' or 'changed'."""
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': row['databaseId'], 'assetId': row['assetId']},
+            UpdateExpression='SET #loc.#key = :new',
+            ConditionExpression='#loc.#key = :old',
+            ExpressionAttributeNames={'#loc': 'assetLocation', '#key': 'Key'},
+            ExpressionAttributeValues={':new': {'S': f"{key}/"}, ':old': {'S': key}},
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            return 'changed'
+        raise
+    # A row the assetLocationIndex step already indexed keeps its locationKey in step with the key.
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': row['databaseId'], 'assetId': row['assetId']},
+            UpdateExpression='SET #lk = :lk',
+            ConditionExpression='attribute_exists(#lk) AND #loc.#key = :new',
+            ExpressionAttributeNames={'#lk': ASSET_LOCATION_KEY_ATTRIBUTE, '#loc': 'assetLocation', '#key': 'Key'},
+            ExpressionAttributeValues={':lk': {'S': f"{key.lstrip('/')}/"}, ':new': {'S': f"{key}/"}},
+        )
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'ConditionalCheckFailedException':
+            raise
+    return 'appended'
+
+
+def _location_files(output_dir: str, dry_run: bool) -> Tuple[str, str]:
+    """The report (JSON Lines) and checkpoint paths. A dry run and a real run keep separate files."""
+    mode = 'dry-run' if dry_run else 'execute'
+    return (os.path.join(output_dir, f"{LOCATION_STEP}-{mode}-report.jsonl"),
+            os.path.join(output_dir, f"{LOCATION_STEP}-{mode}-checkpoint.json"))
+
+
+def _read_checkpoint(path: str, asset_table: str) -> Optional[Dict]:
+    """The saved scan position, or None. A checkpoint of another table is refused."""
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as f:
+        checkpoint = json.load(f)
+    if checkpoint.get('assetTable') != asset_table:
+        raise ValueError(f"The checkpoint {path} belongs to table '{checkpoint.get('assetTable')}', not "
+                         f"'{asset_table}'. Remove it or point the step at its table.")
+    return checkpoint
+
+
+def _write_checkpoint(path: str, asset_table: str, start_key: Optional[Dict], counts: Dict[str, int]) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump({'assetTable': asset_table, 'exclusiveStartKey': start_key, 'counts': counts}, f)
+    os.replace(tmp, path)
+
+
+def _query_all(dynamodb_client, table: str, key_name: str, value: str, index: Optional[str] = None) -> List[Dict]:
+    kwargs = {'TableName': table, 'KeyConditionExpression': '#p = :v',
+              'ExpressionAttributeNames': {'#p': key_name}, 'ExpressionAttributeValues': {':v': {'S': value}}}
+    if index:
+        kwargs['IndexName'] = index
+    return list(_paginate(dynamodb_client.query, **kwargs))
+
+
+def _version_owner(version_id: str, copy_versions: set, object_versions: set) -> str:
+    """'copy' or 'object' when the S3 version id belongs to exactly one of the two keys, else 'unknown'."""
+    for prefix in _HISTORY_VERSION_ID_PREFIXES:
+        if version_id.startswith(prefix):
+            version_id = version_id[len(prefix):]
+    in_copy, in_object = version_id in copy_versions, version_id in object_versions
+    if in_copy and not in_object:
+        return 'copy'
+    if in_object and not in_copy:
+        return 'object'
+    return 'unknown'
+
+
+def move_record(dynamodb_client, table: str, item: Dict, key_names: Tuple[str, ...], new_item: Dict,
+                dry_run: bool) -> str:
+    """Move one record to its new key: the put is conditional on no record at the new key and the delete on
+    the old record still being there, in one transaction. Returns 'moved' (or 'would move' on a dry run),
+    'clash' when a record is already at the new key (nothing changes), or 'gone' when the old record was
+    removed meanwhile."""
+    target_key = {name: new_item[name] for name in key_names}
+    names = {'#k': key_names[0]}
+    if dry_run:
+        found = dynamodb_client.get_item(TableName=table, Key=target_key)
+        return 'clash' if 'Item' in found else 'would move'
+    try:
+        dynamodb_client.transact_write_items(TransactItems=[
+            {'Put': {'TableName': table, 'Item': new_item, 'ConditionExpression': 'attribute_not_exists(#k)',
+                     'ExpressionAttributeNames': names}},
+            {'Delete': {'TableName': table, 'Key': {name: item[name] for name in key_names},
+                        'ConditionExpression': 'attribute_exists(#k)', 'ExpressionAttributeNames': names}},
+        ])
+        return 'moved'
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') != 'TransactionCanceledException':
+            raise
+    return 'clash' if 'Item' in dynamodb_client.get_item(TableName=table, Key=target_key) else 'gone'
+
+
+def mark_copy_records_done(dynamodb_client, asset_table: str, row: Dict) -> str:
+    """Record on the asset row that part (b) finished for it. Conditional on the row existing and not being
+    marked yet; returns 'marked' or 'already marked'. The marker travels with the row (asset archive and
+    unarchive write the whole row back) and is not part of any API response model."""
+    try:
+        dynamodb_client.update_item(
+            TableName=asset_table,
+            Key={'databaseId': row['databaseId'], 'assetId': row['assetId']},
+            UpdateExpression='SET #m = :now',
+            ConditionExpression='attribute_exists(assetId) AND attribute_not_exists(#m)',
+            ExpressionAttributeNames={'#m': COPY_DONE_ATTRIBUTE},
+            ExpressionAttributeValues={':now': {'S': datetime.now(timezone.utc).isoformat()}},
+        )
+        return 'marked'
+    except ClientError as e:
+        if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
+            return 'already marked'
+        raise
+
+
+def move_companion_copy_records(dynamodb_client, s3_client, cfg: Dict, row: Dict, bucket: str, key: str,
+                                dry_run: bool, counts: Dict[str, int], report: Callable[[Dict], None]) -> None:
+    """Part (b) for one single-file location: move the records of its copy '{key}/{name}' from '/{name}' to
+    '/{name}/{name}', then, on a real run without errors, mark the asset row done (with or without a copy) so
+    no later run, from any directory, reads or moves its records again. A marked row costs no read."""
+    database_id = _attr_s(row, 'databaseId')
+    database_id = database_id[:-len('#deleted')] if database_id.endswith('#deleted') else database_id
+    asset_id = _attr_s(row, 'assetId')
+    asset = f"{database_id}:{asset_id}"
+    base = {'part': 'companion-copy', 'database_id': database_id, 'asset_id': asset_id, 'bucket': bucket,
+            'key': key}
+    if _attr_s(row, COPY_DONE_ATTRIBUTE):
+        counts['copy-already-moved'] += 1
+        return
+    errors_before = counts['errors']
+
+    def finish() -> None:
+        if dry_run or counts['errors'] != errors_before:
+            return
+        try:
+            mark_copy_records_done(dynamodb_client, cfg['asset_storage_table_name'], row)
+        except ClientError as e:
+            counts['errors'] += 1
+            report(dict(base, table=None, action='failed to mark the asset done', detail=str(e)))
+
+    name = key.rsplit('/', 1)[-1]
+    copy_versions = exact_key_versions(s3_client, bucket, f"{key}/{name}")
+    if not copy_versions:
+        finish()
+        return
+    counts['copy-locations'] += 1
+    object_versions = exact_key_versions(s3_client, bucket, key)
+    sources = (f"/{name}", name)
+
+    def target(path: str) -> str:
+        return f"{path}/{name}"
+
+    def move(label: str, table: str, item: Dict, key_names: Tuple[str, ...], changes: Dict[str, str],
+             source: str) -> None:
+        new_item = dict(item)
+        new_item.update({attr: {'S': value} for attr, value in changes.items()})
+        try:
+            outcome = move_record(dynamodb_client, table, item, key_names, new_item, dry_run)
+        except ClientError as e:
+            counts['errors'] += 1
+            report(dict(base, table=label, **{'from': source, 'to': target(source)}, action='failed', detail=str(e)))
+            return
+        counts[{'moved': 'records-moved', 'would move': 'records-moved', 'clash': 'records-clash',
+                'gone': 'records-gone'}[outcome]] += 1
+        report(dict(base, table=label, **{'from': source, 'to': target(source)}, action=outcome))
+
+    def leave(label: str, source: str, owner: str) -> None:
+        counts['records-left-object' if owner == 'object' else 'records-left-unknown-version'] += 1
+        report(dict(base, table=label, **{'from': source}, action=f"left: the version is the {owner}'s"
+                    if owner == 'object' else 'left: the version id matches neither file'))
+
+    def path_changes(item: Dict, composite_name: str, source: str) -> Dict[str, str]:
+        changes = {composite_name: f"{asset}:{target(source)}"}
+        if _attr_s(item, 'filePath') == source:
+            changes['filePath'] = target(source)
+        return changes
+
+    for label, table_key, item_key in (('file metadata', 'asset_file_metadata_storage_table_name', 'metadataKey'),
+                                       ('file attributes', 'file_attribute_storage_table_name', 'attributeKey')):
+        table = cfg.get(table_key)
+        if not table:
+            continue
+        for source in sources:
+            for item in _query_all(dynamodb_client, table, 'databaseId:assetId:filePath', f"{asset}:{source}",
+                                   _FILE_PATH_INDEX):
+                move(label, table, item, (item_key, 'databaseId:assetId:filePath'),
+                     path_changes(item, 'databaseId:assetId:filePath', source), source)
+
+    # Version snapshot entries move when their S3 version is the copy's; the decision per asset version
+    # also decides that version's metadata snapshot rows.
+    decisions: Dict[str, str] = {}
+    table = cfg.get('asset_file_versions_storage_table_name')
+    if table:
+        for item in _query_all(dynamodb_client, table, 'databaseId:assetId', asset, _VERSIONS_BY_ASSET_INDEX):
+            file_key = _attr_s(item, 'fileKey')
+            if file_key not in sources:
+                continue
+            version = _attr_s(item, 'databaseId:assetId:assetVersionId')[len(asset) + 1:]
+            owner = _version_owner(_attr_s(item, 'versionId'), copy_versions, object_versions)
+            decisions[version] = owner
+            if owner == 'copy':
+                move('asset version files', table, item, ('databaseId:assetId:assetVersionId', 'fileKey'),
+                     {'fileKey': target(file_key)}, file_key)
+            else:
+                leave('asset version files', file_key, owner)
+    legacy = cfg.get('legacy_asset_file_versions_storage_table_name')
+    versions_table = cfg.get('asset_versions_storage_table_name')
+    if legacy and versions_table:
+        for version_row in _query_all(dynamodb_client, versions_table, 'databaseId:assetId', asset):
+            version = _attr_s(version_row, 'assetVersionId')
+            for file_key in sources:
+                item = dynamodb_client.get_item(TableName=legacy, Key={
+                    'assetId:assetVersionId': {'S': f"{asset_id}:{version}"}, 'fileKey': {'S': file_key}}).get('Item')
+                if not item:
+                    continue
+                owner = _version_owner(_attr_s(item, 'versionId'), copy_versions, object_versions)
+                decisions.setdefault(version, owner)
+                if owner == 'copy':
+                    move('asset version files (legacy)', legacy, item, ('assetId:assetVersionId', 'fileKey'),
+                         {'fileKey': target(file_key)}, file_key)
+                else:
+                    leave('asset version files (legacy)', file_key, owner)
+    table = cfg.get('asset_file_metadata_versions_storage_table_name')
+    if table:
+        sort_name = 'type:filePath:metadataKey'
+        for item in _query_all(dynamodb_client, table, 'databaseId:assetId', asset, _VERSIONS_BY_ASSET_INDEX):
+            kind, _, rest = _attr_s(item, sort_name).partition(':')
+            source = next((path for path in sources if rest.startswith(path + ':')), None)
+            if source is None:
+                continue
+            metadata_key = rest[len(source) + 1:]
+            owner = decisions.get(_attr_s(item, 'databaseId:assetId:assetVersionId')[len(asset) + 1:], 'copy')
+            if owner == 'copy':
+                move('metadata versions', table, item, ('databaseId:assetId:assetVersionId', sort_name),
+                     {sort_name: f"{kind}:{target(source)}:{metadata_key}"}, source)
+            else:
+                leave('metadata versions', source, owner)
+    # History records describe the copy unless their version is the object's (written after the upgrade).
+    table = cfg.get('asset_file_version_history_storage_table_name')
+    if table:
+        for source in sources:
+            for item in _query_all(dynamodb_client, table, 'databaseId:assetId:filePath', f"{asset}:{source}"):
+                owner = _version_owner(_attr_s(item, 'versionId'), copy_versions, object_versions)
+                if owner == 'object':
+                    leave('file version history', source, owner)
+                    continue
+                move('file version history', table, item, ('databaseId:assetId:filePath', 'versionId'),
+                     path_changes(item, 'databaseId:assetId:filePath', source), source)
+
+    finish()
+
+
+def fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg: Dict, dry_run: bool,
+                                   limit: Optional[int] = None, resume: bool = False,
+                                   pace_seconds: float = LOCATION_PACE_SECONDS,
+                                   page_size: int = LOCATION_PAGE_SIZE) -> Dict[str, int]:
+    """Scan every asset row (archived rows included), classify each key without a trailing '/', and
+    append the '/' to each 'folder-without-slash' key on a real run. Each finding is appended to the
+    report; after every page the scan position is saved, so ``resume`` continues where a stopped run
+    ended. A finished run removes its checkpoint. A dry run counts what a real run would change."""
+    asset_table = cfg['asset_storage_table_name']
+    report_path, checkpoint_path = _location_files(cfg['output_dir'], dry_run)
+    os.makedirs(cfg['output_dir'], exist_ok=True)
+    counts = {'scanned': 0, 'appended': 0, 'changed': 0, 'errors': 0}
+    counts.update({c: 0 for c in LOCATION_CLASSES})
+    counts.update({c: 0 for c in COPY_COUNTERS})
+
+    start_key = None
+    checkpoint = _read_checkpoint(checkpoint_path, asset_table) if resume else None
+    if checkpoint:
+        start_key = checkpoint.get('exclusiveStartKey')
+        counts.update(checkpoint.get('counts') or {})
+        logger.info(f"Resuming from {checkpoint_path} after {counts['scanned']} row(s).")
+    elif resume:
+        logger.info(f"No checkpoint at {checkpoint_path}; starting from the first row.")
+    report_mode = 'a' if checkpoint else 'w'
+
+    buckets = {}
+    for item in _paginate(dynamodb_client.scan, TableName=cfg['s3_asset_buckets_storage_table_name'],
+                          ProjectionExpression='bucketId, bucketName'):
+        if _attr_s(item, 'bucketId') and _attr_s(item, 'bucketName'):
+            buckets[_attr_s(item, 'bucketId')] = _attr_s(item, 'bucketName')
+
+    with open(report_path, report_mode, encoding='utf-8') as report:
+        def write_report(record: Dict) -> None:
+            report.write(json.dumps(record) + '\n')
+            report.flush()
+            if record.get('table'):
+                logger.info(f"  {'[DRY RUN] ' if dry_run else ''}{record['database_id']} / {record['asset_id']}: "
+                            f"{record['table']} {record.get('from')} -> {record.get('to', '')} ({record['action']})")
+
+        while True:
+            scan_kwargs = {'TableName': asset_table, 'Limit': page_size,
+                           'ProjectionExpression': ('databaseId, assetId, bucketId, assetLocation, '
+                                                    f'{COPY_DONE_ATTRIBUTE}')}
+            if start_key:
+                scan_kwargs['ExclusiveStartKey'] = start_key
+            response = dynamodb_client.scan(**scan_kwargs)
+            for row in response.get('Items', []):
+                if limit is not None and counts['scanned'] >= limit:
+                    logger.info(f"Limit of {limit} asset row(s) reached; stopping the scan.")
+                    return counts
+                counts['scanned'] += 1
+                key = _location_key(row)
+                bucket = buckets.get(_attr_s(row, 'bucketId'), '')
+                location_class, detail = classify_asset_location(s3_client, bucket, key)
+                counts[location_class] += 1
+                if location_class == 'folder':
+                    continue
+                if pace_seconds:
+                    time.sleep(pace_seconds)
+                if location_class == 'single-file':
+                    try:
+                        move_companion_copy_records(dynamodb_client, s3_client, cfg, row, bucket, key, dry_run,
+                                                    counts, write_report)
+                    except ClientError as e:
+                        counts['errors'] += 1
+                        write_report({'part': 'companion-copy', 'database_id': _attr_s(row, 'databaseId'),
+                                      'asset_id': _attr_s(row, 'assetId'), 'bucket': bucket, 'key': key,
+                                      'table': None, 'action': 'failed', 'detail': str(e)})
+                    continue
+                action = 'report only'
+                if location_class == 'folder-without-slash':
+                    if dry_run:
+                        action = 'would append /'
+                        counts['appended'] += 1
+                    else:
+                        try:
+                            outcome = append_location_slash(dynamodb_client, asset_table, row, key)
+                            counts[outcome] += 1
+                            action = 'appended /' if outcome == 'appended' else 'skipped: the key changed'
+                        except ClientError as e:
+                            counts['errors'] += 1
+                            action = 'failed'
+                            detail = str(e)
+                finding = LocationFinding(_attr_s(row, 'databaseId'), _attr_s(row, 'assetId'), bucket, key,
+                                          location_class, detail)
+                record = dict(finding._asdict(), action=action)
+                report.write(json.dumps(record) + '\n')
+                report.flush()
+                logger.info(f"  {'[DRY RUN] ' if dry_run else ''}{record['database_id']} / {record['asset_id']}: "
+                            f"'{key}' is {location_class} ({action}){f' - {detail}' if detail else ''}")
+            start_key = response.get('LastEvaluatedKey')
+            if not start_key:
+                break
+            _write_checkpoint(checkpoint_path, asset_table, start_key, counts)
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+    return counts
+
+
+def run_asset_location_folder_keys_step(config: dict, args, base_param_prefix, profile, region,
+                                        dry_run) -> int:
+    """Append the trailing '/' to asset location keys that name a folder. Returns 0 on success."""
+    try:
+        resolve = make_resolver(config, base_param_prefix, profile, region)
+        cfg = {
+            'asset_storage_table_name': resolve(
+                'asset_storage_table_name', ResourceParamKeys.ASSET_STORAGE_TABLE),
+            's3_asset_buckets_storage_table_name': resolve(
+                's3_asset_buckets_storage_table_name', ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE),
+            'output_dir': config.get('asset_location_output_dir') or os.getcwd(),
+        }
+        for cfg_key, param_name in COPY_TABLE_KEYS:
+            cfg[cfg_key] = resolve(cfg_key, getattr(ResourceParamKeys, param_name))
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the {LOCATION_STEP} step: {e}")
+        return 1
+    try:
+        cfg[LEGACY_COPY_TABLE_KEY[0]] = resolve(LEGACY_COPY_TABLE_KEY[0],
+                                                getattr(ResourceParamKeys, LEGACY_COPY_TABLE_KEY[1]))
+    except Exception:
+        cfg[LEGACY_COPY_TABLE_KEY[0]] = None
+        logger.info("No legacy asset file versions table is published for this deployment; part (b) skips it.")
+
+    limit = args.limit if args.limit is not None else config.get('limit')
+    pace = config.get('asset_location_pace_seconds')
+    pace = LOCATION_PACE_SECONDS if pace is None else float(pace)
+    session = _session(profile, region)
+    dynamodb_client = session.client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG)
+    s3_client = session.client('s3', config=_S3_CLIENT_CONFIG)
+    report_path, _ = _location_files(cfg['output_dir'], dry_run)
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 ASSET LOCATION FOLDER KEYS")
+    logger.info(f"Asset table:  {cfg['asset_storage_table_name']}")
+    logger.info(f"Report:       {report_path}")
+    logger.info(f"Dry Run: {dry_run}   Limit: {limit}   Resume: {args.resume}   Pace: {pace}s")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        counts = fix_asset_location_folder_keys(dynamodb_client, s3_client, cfg, dry_run, limit,
+                                                resume=args.resume, pace_seconds=pace)
+    except Exception as e:
+        logger.error(f"{LOCATION_STEP} step failed: {e}. Re-run with --resume to continue from the last "
+                     "saved page.")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    logger.info("=" * 80)
+    logger.info("ASSET LOCATION FOLDER KEYS SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Asset rows examined:                  {counts['scanned']}")
+    logger.info(f"  Folder keys (end in '/'):             {counts['folder']}")
+    logger.info(f"  Single-file keys (an object):         {counts['single-file']}")
+    logger.info(f"  Folder keys without the '/':          {counts['folder-without-slash']}")
+    logger.info(f"    '/' {'that would be ' if dry_run else ''}appended:            {counts['appended']}")
+    logger.info(f"    skipped, the key changed meanwhile: {counts['changed']}")
+    logger.info(f"  Keys with no objects (reported):      {counts['no-objects']}")
+    logger.info(f"  Keys that could not be read:          {counts['unreadable']}")
+    logger.info(f"  Single-file keys with a copy named like the file: {counts['copy-locations']}")
+    logger.info(f"  Single-file assets already done (marked on the row): {counts['copy-already-moved']}")
+    moved_label = 'that would be moved' if dry_run else 'moved'
+    logger.info(f"    records {moved_label} to /{{name}}/{{name}}: {counts['records-moved']}")
+    logger.info(f"    records left, a record is already at the new path: {counts['records-clash']}")
+    logger.info(f"    records left, their version is the file's own:     {counts['records-left-object']}")
+    logger.info(f"    records left, their version matches neither file:  {counts['records-left-unknown-version']}")
+    logger.info(f"    records removed meanwhile:            {counts['records-gone']}")
+    logger.info(f"  Errors:                               {counts['errors']}")
+    if counts['records-moved'] and not dry_run:
+        logger.info("  Run the vectorBackfill step afterwards (it runs next under --steps all) so the moved copy's")
+        logger.info("  search vectors are rewritten for its new path.")
+    logger.info("=" * 80)
+
+    return 0 if counts['errors'] == 0 and counts['unreadable'] == 0 else 1
 
 
 #######################
@@ -1144,16 +1702,639 @@ def run_system_pipeline_retirement_step(config: dict, args, base_param_prefix, p
 
 
 #######################
+# STEP: assetLocationIndex
+#######################
+
+# Mirrors backend/backend/common/assetLocations.py: the two index attributes on every asset row, and
+# the completion marker the backend's index_ready() reads (pinned by
+# infra/test/platform/migrationTooling.test.ts).
+ASSET_LOCATION_BUCKET_ATTRIBUTE = 'locationBucket'
+ASSET_LOCATION_KEY_ATTRIBUTE = 'locationKey'
+ASSET_LOCATION_INDEX_MARKER_SUFFIX = 'dataMigrations/assetLocationIndex'
+ASSET_LOCATION_INDEX_MARKER_VERSION = 1
+ASSET_LOCATION_INDEX_STATUS_COMPLETE = 'complete'
+# common.s3PathPatterns.PREVIEW_FILE_PATTERN: a single-file location also holds `{key}.previewFile.{ext}`.
+ASSET_LOCATION_PREVIEW_FILE_PATTERN = '.previewFile.'
+ARCHIVED_ASSET_DATABASE_SUFFIX = '#deleted'
+
+ASSET_LOCATION_CHECKPOINT_VERSION = 1
+ASSET_LOCATION_INDEX_SKIPPED_AFTER_FOLDER_KEYS = 'skipped: assetLocationFolderKeys failed in this run'
+ASSET_LOCATION_DEFAULT_CHECKPOINT_FILE = 'asset_location_index_checkpoint.json'
+ASSET_LOCATION_DEFAULT_REPORT_FILE = 'asset_location_index_report.json'
+ASSET_LOCATION_DEFAULT_WRITES_PER_SECOND = 25
+ASSET_LOCATION_SCAN_PAGE_SIZE = 500
+# Strongly consistent verification passes before the marker is written; each pass after the first
+# repairs only rows that changed under the previous one.
+ASSET_LOCATION_MAX_VERIFY_PASSES = 3
+ASSET_LOCATION_WRITE_ATTEMPTS = 5
+_THROTTLING_ERRORS = ('ProvisionedThroughputExceededException', 'ThrottlingException',
+                      'RequestLimitExceeded', 'InternalServerError')
+
+# Rows the step leaves out of the index, by reason. Their locations hold no key the index could
+# attribute: no bucket, no registration to name the bucket, or no location (the bucket root `/` is
+# stored as an empty location, which holds no key, as in common.assetLocations.contains).
+NOT_INDEXED_NO_BUCKET_ID = 'noBucketId'
+NOT_INDEXED_REGISTRATION_MISSING = 'registrationMissing'
+NOT_INDEXED_NO_LOCATION = 'noLocation'
+NOT_INDEXED_BUCKET_ROOT = 'bucketRoot'
+NOT_INDEXED_REASONS = (NOT_INDEXED_NO_BUCKET_ID, NOT_INDEXED_REGISTRATION_MISSING, NOT_INDEXED_NO_LOCATION,
+                       NOT_INDEXED_BUCKET_ROOT)
+# Rows the step indexes and reports for review.
+REVIEW_SHARED_LOCATION = 'sharedLocation'
+REVIEW_NESTED_LOCATION = 'nestedLocation'
+REVIEW_SINGLE_OBJECT_LOCATION = 'singleObjectLocation'
+REVIEW_OUTSIDE_REGISTRATION_PREFIX = 'outsideRegistrationPrefix'
+# The location is the registration's own prefix, which create refuses since v2.6.1. Such a row holds
+# every key under the prefix, so it is indexed: an ownership check must still see it.
+REVIEW_REGISTRATION_ROOT = 'registrationRoot'
+REVIEW_REASONS = (REVIEW_SHARED_LOCATION, REVIEW_NESTED_LOCATION, REVIEW_SINGLE_OBJECT_LOCATION,
+                  REVIEW_OUTSIDE_REGISTRATION_PREFIX, REVIEW_REGISTRATION_ROOT)
+
+_ASSET_LOCATION_PROJECTION = '#db, #a, #bid, #al, #lb, #lk'
+_ASSET_LOCATION_NAMES = {'#db': 'databaseId', '#a': 'assetId', '#bid': 'bucketId', '#al': 'assetLocation',
+                         '#lb': ASSET_LOCATION_BUCKET_ATTRIBUTE, '#lk': ASSET_LOCATION_KEY_ATTRIBUTE}
+
+
+def asset_location_marker_name(base_param_prefix: Optional[str]) -> Optional[str]:
+    """The completion marker's SSM name: under the resource-name prefix, where the backend reads it."""
+    if not base_param_prefix:
+        return None
+    return f"{base_param_prefix.rstrip('/')}/{ASSET_LOCATION_INDEX_MARKER_SUFFIX}"
+
+
+def normalize_location(key: Optional[str]) -> str:
+    """A location as the index stores it: no leading `/` (common.assetLocations.normalize_location)."""
+    return key.lstrip('/') if key else ''
+
+
+def normalize_base_prefix(base_assets_prefix: Optional[str]) -> str:
+    """A registration prefix with a trailing `/` and no leading `/` ('' is the bucket root), as
+    common.assetLocations.normalize_base_prefix."""
+    if not base_assets_prefix:
+        return ''
+    if not base_assets_prefix.endswith('/'):
+        base_assets_prefix += '/'
+    if base_assets_prefix.startswith('/'):
+        base_assets_prefix = base_assets_prefix[1:]
+    return base_assets_prefix
+
+
+def _is_preview_of(base_key: str, object_key: str) -> bool:
+    """`object_key` is `{base_key}.previewFile.{ext}` with no `/` in the extension
+    (common.assetLocations._is_preview_of)."""
+    stem = base_key + ASSET_LOCATION_PREVIEW_FILE_PATTERN
+    if not object_key.startswith(stem):
+        return False
+    extension = object_key[len(stem):]
+    return bool(extension) and '/' not in extension
+
+
+def _location_key_sets(location: str) -> List[Tuple[str, str]]:
+    """The key sets a non-empty location holds (common.assetLocations._held_sets): a folder is one prefix;
+    a single file is its key, its companion folder `{key}/` and its preview stem `{key}.previewFile.`."""
+    if location.endswith('/'):
+        return [('prefix', location)]
+    return [('key', location), ('prefix', location + '/'), ('previews', location + ASSET_LOCATION_PREVIEW_FILE_PATTERN)]
+
+
+def _key_set_holds(held: Tuple[str, str], key: str) -> bool:
+    kind, text = held
+    if kind == 'key':
+        return key == text
+    if not key.startswith(text):
+        return False
+    rest = key[len(text):]
+    return kind == 'prefix' or (bool(rest) and '/' not in rest)
+
+
+def _key_sets_meet(first: Tuple[str, str], second: Tuple[str, str]) -> bool:
+    if first[0] == 'key':
+        return _key_set_holds(second, first[1])
+    if second[0] == 'key':
+        return _key_set_holds(first, second[1])
+    (shorter_kind, shorter), (_, longer) = sorted((first, second), key=lambda held: len(held[1]))
+    if not longer.startswith(shorter):
+        return False
+    return shorter_kind == 'prefix' or '/' not in longer[len(shorter):]
+
+
+def locations_share_key(first: Optional[str], second: Optional[str]) -> bool:
+    """Whether two locations hold a key in common (common.assetLocations.locations_share_key). This is more
+    than one containing the other: `a/x` and `a/x.previewFile` both hold `a/x.previewFile.previewFile.z`."""
+    a, b = normalize_location(first), normalize_location(second)
+    if not a or not b:
+        return False
+    return any(_key_sets_meet(x, y) for x in _location_key_sets(a) for y in _location_key_sets(b))
+
+
+def _preview_partner_below(location: str) -> List[str]:
+    """For a single file named `{S}.previewFile` or `{S}.previewFile.`, the single file `S` it shares preview
+    keys with though neither contains the other (common.assetLocations._preview_partner_locations)."""
+    if not location or location.endswith('/'):
+        return []
+    stem = ASSET_LOCATION_PREVIEW_FILE_PATTERN[:-1]
+    return [location[:-len(suffix)] for suffix in (stem, ASSET_LOCATION_PREVIEW_FILE_PATTERN)
+            if location.endswith(suffix) and len(location) > len(suffix)]
+
+
+def candidate_locations(object_key: str) -> List[str]:
+    """The stored locations that could hold a key, deepest first (common.assetLocations.candidate_locations):
+    the key, the single file whose companion marker a `.../` key is, an own preview's base, and each
+    ancestor folder `X/` with the single file `X`."""
+    key = normalize_location(object_key)
+    if not key:
+        return []
+    candidates = {key}
+    if key.endswith('/'):
+        candidates.add(key[:-1])
+    last_segment_start = key.rfind('/', 0, len(key) - 1) + 1
+    position = key.find(ASSET_LOCATION_PREVIEW_FILE_PATTERN, last_segment_start)
+    while position > 0:
+        if _is_preview_of(key[:position], key):
+            candidates.add(key[:position])
+        position = key.find(ASSET_LOCATION_PREVIEW_FILE_PATTERN, position + 1)
+    position = len(key) - 1 if key.endswith('/') else len(key)
+    while True:
+        position = key.rfind('/', 0, position)
+        if position <= 0:
+            break
+        candidates.add(key[:position + 1])
+        candidates.add(key[:position])
+    candidates.discard('')
+    return sorted(candidates, key=lambda c: (-len(c), c))
+
+
+def _plain_attr(item: Dict, name: str):
+    value = (item or {}).get(name)
+    if value is None:
+        return None
+    return _ASSET_LOCATION_DESERIALIZER.deserialize(value)
+
+
+def plan_asset_location(row: Dict, registration: Optional[Dict]) -> Tuple[Optional[Dict[str, str]], Optional[str], List[str]]:
+    """What the step writes for one asset row (wire format): (attributes or None, the reason a row
+    is not indexed or None, review notes for an indexed row).
+
+    `registration` is the row's bucket registration (plain attributes) or None when it is gone."""
+    location_map = _plain_attr(row, 'assetLocation')
+    stored_key = location_map.get('Key') if isinstance(location_map, dict) else None
+    if not _plain_attr(row, 'bucketId'):
+        return None, NOT_INDEXED_NO_BUCKET_ID, []
+    if registration is None or not registration.get('bucketName'):
+        return None, NOT_INDEXED_REGISTRATION_MISSING, []
+    if not isinstance(stored_key, str) or stored_key == '':
+        return None, NOT_INDEXED_NO_LOCATION, []
+    location = normalize_location(stored_key)
+    if not location:
+        return None, NOT_INDEXED_BUCKET_ROOT, []
+    prefix = normalize_base_prefix(registration.get('baseAssetsPrefix'))
+    folder_form = location if location.endswith('/') else location + '/'
+    notes = []
+    if prefix and folder_form == prefix:
+        notes.append(REVIEW_REGISTRATION_ROOT)
+    if not location.endswith('/'):
+        notes.append(REVIEW_SINGLE_OBJECT_LOCATION)
+    if prefix and not location.startswith(prefix):
+        notes.append(REVIEW_OUTSIDE_REGISTRATION_PREFIX)
+    return ({ASSET_LOCATION_BUCKET_ATTRIBUTE: registration['bucketName'],
+             ASSET_LOCATION_KEY_ATTRIBUTE: location}, None, notes)
+
+
+def find_location_overlaps(entries: List[Dict]) -> Dict[str, List[Dict]]:
+    """Shared and nested locations among the indexed rows, per bucket.
+
+    `sharedLocation`: one location held by two or more assets (`ambiguous` when two of them are live:
+    the resolver attributes nothing there). `nestedLocation`: a row whose location shares a key with a
+    shorter location of another asset (`locations_share_key`): under its folder, in a single file's
+    companion folder `{key}/` or among its own previews `{key}.previewFile.{ext}` (so `x` and `x/` are a
+    nested pair too), or a single file `{key}.previewFile` or `{key}.previewFile.`, which shares preview
+    keys with `{key}` without either holding the other. Each such pair is listed once, under the longer
+    location. Live and archived rows both count, as for an ownership check; the live and archived copies
+    of one asset are one asset."""
+    by_location: Dict[Tuple[str, str], List[Dict]] = {}
+    for entry in entries:
+        by_location.setdefault((entry['bucket'], entry['location']), []).append(entry)
+    shared = []
+    for (bucket, location), rows in sorted(by_location.items()):
+        if len({_asset_of(r) for r in rows}) > 1:
+            shared.append({'bucket': bucket, 'location': location,
+                           'ambiguous': len([r for r in rows if not r['archived']]) > 1,
+                           'assets': [dict(_entry_identity(r), archived=r['archived']) for r in rows]})
+    nested = []
+    for entry in entries:
+        location = entry['location']
+        shorter = candidate_locations(location) + _preview_partner_below(location)
+        owners = [r for candidate in dict.fromkeys(shorter) if candidate != location
+                  for r in by_location.get((entry['bucket'], candidate), [])
+                  if _asset_of(r) != _asset_of(entry) and locations_share_key(r['location'], location)]
+        if owners:
+            nested.append({'bucket': entry['bucket'], 'location': location,
+                           'asset': dict(_entry_identity(entry), archived=entry['archived']),
+                           'within': [dict(_entry_identity(o), archived=o['archived'], location=o['location'])
+                                      for o in owners]})
+    return {REVIEW_SHARED_LOCATION: shared, REVIEW_NESTED_LOCATION: nested}
+
+
+def _asset_of(entry: Dict) -> Tuple[str, str]:
+    """An asset's identity across its live and archived rows."""
+    return entry['databaseId'].removesuffix(ARCHIVED_ASSET_DATABASE_SUFFIX), entry['assetId']
+
+
+def _entry_identity(entry: Dict) -> Dict:
+    return {'databaseId': entry['databaseId'], 'assetId': entry['assetId'], 'bucketId': entry['bucketId']}
+
+
+class AssetLocationBackfill:
+    """Writes `locationBucket` and `locationKey` on every asset row, then the completion marker.
+
+    Pass 1 scans the asset table and writes the rows whose attributes are missing or wrong, paced to
+    `writes_per_second`, checkpointing after every page so an interrupted run resumes where it
+    stopped. The verification passes then scan strongly consistent, repair any row that changed
+    meanwhile, and stop at the first pass that writes nothing; only then are the report and the
+    marker written. A row already carrying the right values is never written, so a second run makes
+    no write and raises no stream record. No S3 call is made."""
+
+    def __init__(self, dynamodb_client, ssm_client, asset_table: str, buckets_table: str,
+                 marker_name: str, checkpoint_path: str, report_path: str, dry_run: bool,
+                 writes_per_second: float = ASSET_LOCATION_DEFAULT_WRITES_PER_SECOND,
+                 page_size: int = ASSET_LOCATION_SCAN_PAGE_SIZE, limit: Optional[int] = None,
+                 max_verify_passes: int = ASSET_LOCATION_MAX_VERIFY_PASSES,
+                 sleep: Callable[[float], None] = time.sleep,
+                 clock: Callable[[], float] = time.monotonic,
+                 now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
+        self.dynamodb = dynamodb_client
+        self.ssm = ssm_client
+        self.asset_table = asset_table
+        self.buckets_table = buckets_table
+        self.marker_name = marker_name
+        self.checkpoint_path = checkpoint_path
+        self.report_path = report_path
+        self.dry_run = dry_run
+        self.write_interval = 1.0 / writes_per_second if writes_per_second and writes_per_second > 0 else 0.0
+        self.page_size = page_size
+        self.limit = limit
+        self.max_verify_passes = max_verify_passes
+        self.sleep = sleep
+        self.clock = clock
+        self.now = now
+        self._next_write_at = 0.0
+        self._registrations: Dict[str, Optional[Dict]] = {}
+        self.counts = self._zero_counts()
+
+    @staticmethod
+    def _zero_counts() -> Dict[str, int]:
+        counts = {'scanned': 0, 'written': 0, 'alreadyIndexed': 0, 'goneDuringRun': 0, 'failed': 0}
+        counts.update({reason: 0 for reason in NOT_INDEXED_REASONS})
+        return counts
+
+    # ---- checkpoint ---------------------------------------------------------------------------
+
+    def _load_checkpoint(self) -> Optional[Dict]:
+        if self.dry_run or not os.path.exists(self.checkpoint_path):
+            return None
+        with open(self.checkpoint_path, 'r') as f:
+            checkpoint = json.load(f)
+        if checkpoint.get('version') != ASSET_LOCATION_CHECKPOINT_VERSION:
+            raise ValueError(f"Checkpoint {self.checkpoint_path} has an unknown version; delete it to start over")
+        if checkpoint.get('assetTable') != self.asset_table:
+            raise ValueError(f"Checkpoint {self.checkpoint_path} belongs to table "
+                             f"{checkpoint.get('assetTable')}, not {self.asset_table}; delete it or point "
+                             "asset_location_checkpoint_file elsewhere")
+        return checkpoint
+
+    def _save_checkpoint(self, phase: str, start_key: Optional[Dict]) -> None:
+        if self.dry_run:
+            return
+        checkpoint = {'version': ASSET_LOCATION_CHECKPOINT_VERSION, 'assetTable': self.asset_table,
+                      'phase': phase, 'exclusiveStartKey': start_key, 'counts': self.counts,
+                      'savedAt': self.now().isoformat()}
+        temporary = self.checkpoint_path + '.tmp'
+        with open(temporary, 'w') as f:
+            json.dump(checkpoint, f)
+        os.replace(temporary, self.checkpoint_path)
+
+    def _clear_checkpoint(self) -> None:
+        if not self.dry_run and os.path.exists(self.checkpoint_path):
+            os.remove(self.checkpoint_path)
+
+    # ---- reads --------------------------------------------------------------------------------
+
+    def _registration(self, bucket_id: str) -> Optional[Dict]:
+        if bucket_id not in self._registrations:
+            items = list(_paginate(
+                self.dynamodb.query, TableName=self.buckets_table,
+                KeyConditionExpression='bucketId = :id',
+                ExpressionAttributeValues={':id': {'S': bucket_id}}))
+            if len(items) > 1:
+                logger.warning(f"Bucket registration {bucket_id} has {len(items)} rows; using the first")
+            self._registrations[bucket_id] = (
+                {name: _ASSET_LOCATION_DESERIALIZER.deserialize(value) for name, value in items[0].items()}
+                if items else None)
+        return self._registrations[bucket_id]
+
+    def _scan_pages(self, start_key: Optional[Dict], consistent: bool) -> Iterator[Tuple[List[Dict], Optional[Dict]]]:
+        kwargs = {'TableName': self.asset_table, 'ProjectionExpression': _ASSET_LOCATION_PROJECTION,
+                  'ExpressionAttributeNames': _ASSET_LOCATION_NAMES, 'Limit': self.page_size,
+                  'ConsistentRead': consistent}
+        if start_key:
+            kwargs['ExclusiveStartKey'] = start_key
+        while True:
+            response = self.dynamodb.scan(**kwargs)
+            next_key = response.get('LastEvaluatedKey') if 'LastEvaluatedKey' in response else None
+            yield response.get('Items', []), next_key
+            if next_key is None:
+                return
+            kwargs['ExclusiveStartKey'] = next_key
+
+    # ---- writes -------------------------------------------------------------------------------
+
+    def _pace(self) -> None:
+        if not self.write_interval:
+            return
+        now = self.clock()
+        if now < self._next_write_at:
+            self.sleep(self._next_write_at - now)
+            now = self._next_write_at
+        self._next_write_at = now + self.write_interval
+
+    def _write(self, row: Dict, attributes: Dict[str, str]) -> str:
+        """Write the attributes, conditional on the row still existing at the location it was read
+        with. Returns 'written', 'gone' or 'failed'."""
+        stored_key = _plain_attr(row, 'assetLocation')['Key']
+        request = {
+            'TableName': self.asset_table,
+            'Key': {'databaseId': row['databaseId'], 'assetId': row['assetId']},
+            'UpdateExpression': 'SET #lb = :lb, #lk = :lk',
+            'ConditionExpression': 'attribute_exists(#db) AND #al.#k = :key',
+            'ExpressionAttributeNames': {'#lb': ASSET_LOCATION_BUCKET_ATTRIBUTE,
+                                         '#lk': ASSET_LOCATION_KEY_ATTRIBUTE,
+                                         '#db': 'databaseId', '#al': 'assetLocation', '#k': 'Key'},
+            'ExpressionAttributeValues': {
+                ':lb': {'S': attributes[ASSET_LOCATION_BUCKET_ATTRIBUTE]},
+                ':lk': {'S': attributes[ASSET_LOCATION_KEY_ATTRIBUTE]},
+                ':key': {'S': stored_key}},
+        }
+        for attempt in range(1, ASSET_LOCATION_WRITE_ATTEMPTS + 1):
+            self._pace()
+            try:
+                self.dynamodb.update_item(**request)
+                return 'written'
+            except ClientError as e:
+                code = e.response.get('Error', {}).get('Code', '')
+                if code == 'ConditionalCheckFailedException':
+                    return 'gone'
+                if code in _THROTTLING_ERRORS and attempt < ASSET_LOCATION_WRITE_ATTEMPTS:
+                    self.sleep(min(2 ** attempt, 30))
+                    continue
+                logger.error(f"  failed writing the location of {_attr_s(row, 'databaseId')}/"
+                             f"{_attr_s(row, 'assetId')}: {code or e}")
+                return 'failed'
+        return 'failed'
+
+    def _process_row(self, row: Dict, entries: Optional[List[Dict]], notes: Optional[Dict[str, List[Dict]]],
+                     not_indexed: Optional[Dict[str, List[Dict]]]) -> int:
+        """Plan and, unless a dry run, write one row. Returns 1 when it wrote (or would write)."""
+        self.counts['scanned'] += 1
+        database_id = _attr_s(row, 'databaseId')
+        asset_id = _attr_s(row, 'assetId')
+        bucket_id = _attr_s(row, 'bucketId')
+        registration = self._registration(bucket_id) if bucket_id else None
+        attributes, reason, review = plan_asset_location(row, registration)
+        identity = {'databaseId': database_id, 'assetId': asset_id, 'bucketId': bucket_id,
+                    'location': (_plain_attr(row, 'assetLocation') or {}).get('Key')}
+        if reason:
+            self.counts[reason] += 1
+            if not_indexed is not None:
+                not_indexed[reason].append(identity)
+            return 0
+        if entries is not None:
+            entries.append({'bucket': attributes[ASSET_LOCATION_BUCKET_ATTRIBUTE],
+                            'location': attributes[ASSET_LOCATION_KEY_ATTRIBUTE],
+                            'databaseId': database_id, 'assetId': asset_id, 'bucketId': bucket_id,
+                            'archived': database_id.endswith(ARCHIVED_ASSET_DATABASE_SUFFIX)})
+        if notes is not None:
+            for note in review:
+                notes[note].append(identity)
+        current = {name: _attr_s(row, name) for name in attributes}
+        if current == attributes:
+            self.counts['alreadyIndexed'] += 1
+            return 0
+        if self.dry_run:
+            self.counts['written'] += 1
+            logger.debug(f"  [DRY RUN] would index {database_id}/{asset_id} at "
+                         f"{attributes[ASSET_LOCATION_KEY_ATTRIBUTE]}")
+            return 1
+        outcome = self._write(row, attributes)
+        if outcome == 'written':
+            self.counts['written'] += 1
+            return 1
+        if outcome == 'gone':
+            self.counts['goneDuringRun'] += 1
+            return 0
+        self.counts['failed'] += 1
+        return 1
+
+    # ---- passes -------------------------------------------------------------------------------
+
+    def _write_pass(self, start_key: Optional[Dict], collect: bool) -> Tuple[bool, Optional[Dict]]:
+        """Pass 1. Returns (finished, collected report parts when `collect`)."""
+        entries: List[Dict] = []
+        notes = {reason: [] for reason in REVIEW_REASONS if reason not in (REVIEW_SHARED_LOCATION, REVIEW_NESTED_LOCATION)}
+        not_indexed = {reason: [] for reason in NOT_INDEXED_REASONS}
+        for items, next_key in self._scan_pages(start_key, consistent=False):
+            for row in items:
+                if self.limit is not None and self.counts['scanned'] >= self.limit:
+                    logger.info(f"Limit of {self.limit} asset row(s) reached; stopping. The marker is not written.")
+                    return False, None
+                self._process_row(row, entries if collect else None, notes if collect else None,
+                                  not_indexed if collect else None)
+            self._save_checkpoint('write', next_key)
+        parts = {'entries': entries, 'notes': notes, 'notIndexed': not_indexed} if collect else None
+        return True, parts
+
+    def _verify_pass(self) -> Tuple[int, Dict]:
+        """One strongly consistent pass over every row; returns (rows written, report parts)."""
+        entries: List[Dict] = []
+        notes = {reason: [] for reason in REVIEW_REASONS if reason not in (REVIEW_SHARED_LOCATION, REVIEW_NESTED_LOCATION)}
+        not_indexed = {reason: [] for reason in NOT_INDEXED_REASONS}
+        writes = 0
+        saved = self.counts
+        self.counts = self._zero_counts()
+        for items, _ in self._scan_pages(None, consistent=True):
+            for row in items:
+                writes += self._process_row(row, entries, notes, not_indexed)
+        pass_counts, self.counts = self.counts, saved
+        for name in ('written', 'goneDuringRun', 'failed'):
+            self.counts[name] += pass_counts[name]
+        return writes, {'entries': entries, 'notes': notes, 'notIndexed': not_indexed, 'counts': pass_counts}
+
+    def _report(self, parts: Dict, complete: bool, passes: int) -> Dict:
+        overlaps = find_location_overlaps(parts['entries'])
+        counts = parts.get('counts') or self.counts
+        report = {
+            'generatedAt': self.now().isoformat(),
+            'assetTable': self.asset_table,
+            'dryRun': self.dry_run,
+            'complete': complete,
+            'verificationPasses': passes,
+            'counts': {**counts, 'indexed': len(parts['entries']),
+                       **{reason: len(items) for reason, items in parts['notes'].items()},
+                       REVIEW_SHARED_LOCATION: len(overlaps[REVIEW_SHARED_LOCATION]),
+                       REVIEW_NESTED_LOCATION: len(overlaps[REVIEW_NESTED_LOCATION])},
+            'notIndexed': parts['notIndexed'],
+            'review': {**parts['notes'], **overlaps},
+        }
+        with open(self.report_path, 'w') as f:
+            json.dump(report, f, indent=2, sort_keys=True, default=str)
+        return report
+
+    def _write_marker(self, report: Dict) -> None:
+        marker = {'version': ASSET_LOCATION_INDEX_MARKER_VERSION, 'status': ASSET_LOCATION_INDEX_STATUS_COMPLETE,
+                  'assetTable': self.asset_table,
+                  'completedAt': self.now().isoformat(), 'assetRows': report['counts']['scanned'],
+                  'indexed': report['counts']['indexed'],
+                  'notIndexed': sum(report['counts'][reason] for reason in NOT_INDEXED_REASONS)}
+        self.ssm.put_parameter(Name=self.marker_name, Value=json.dumps(marker, sort_keys=True), Type='String',
+                               Overwrite=True,
+                               Description='VAMS asset location index backfill completed (v2.6 to v2.7 migration)')
+
+    def run(self) -> Dict:
+        """Run the step. Returns {'complete', 'markerWritten', 'counts', 'report'}."""
+        checkpoint = self._load_checkpoint()
+        phase, start_key = 'write', None
+        if checkpoint:
+            phase, start_key = checkpoint.get('phase', 'write'), checkpoint.get('exclusiveStartKey')
+            self.counts.update(checkpoint.get('counts') or {})
+            logger.info(f"Resuming from {self.checkpoint_path} (phase {phase}, "
+                        f"{self.counts['scanned']} row(s) already examined)")
+
+        if phase == 'write':
+            finished, parts = self._write_pass(start_key, collect=self.dry_run)
+            if not finished:
+                return {'complete': False, 'limited': True, 'markerWritten': False, 'counts': self.counts,
+                        'report': None}
+            if self.dry_run:
+                report = self._report(parts, complete=False, passes=0)
+                return {'complete': False, 'limited': False, 'markerWritten': False, 'counts': self.counts,
+                        'report': report}
+            self._save_checkpoint('verify', None)
+
+        for verify_pass in range(1, self.max_verify_passes + 1):
+            writes, parts = self._verify_pass()
+            logger.info(f"Verification pass {verify_pass}: {parts['counts']['scanned']} row(s), {writes} written")
+            if writes == 0 and parts['counts']['failed'] == 0:
+                report = self._report(parts, complete=True, passes=verify_pass)
+                self._write_marker(report)
+                self._clear_checkpoint()
+                return {'complete': True, 'limited': False, 'markerWritten': True, 'counts': self.counts,
+                        'report': report}
+        report = self._report(parts, complete=False, passes=self.max_verify_passes)
+        logger.error(f"Rows still changed or failed after {self.max_verify_passes} verification passes; "
+                     "the marker is not written. Run the step again.")
+        return {'complete': False, 'limited': False, 'markerWritten': False, 'counts': self.counts,
+                'report': report}
+
+
+def run_asset_location_index_step(config: dict, args, base_param_prefix, profile, region, dry_run) -> int:
+    """Backfill the asset location index and write its completion marker. Returns 0 on success."""
+    try:
+        resolve = make_resolver(config, base_param_prefix, profile, region)
+        asset_table = resolve('asset_storage_table_name', ResourceParamKeys.ASSET_STORAGE_TABLE)
+        buckets_table = resolve('s3_asset_buckets_storage_table_name',
+                                ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    except Exception as e:
+        logger.error(f"Failed resolving table names for the assetLocationIndex step: {e}")
+        return 1
+    marker_name = config.get('asset_location_index_marker_parameter')
+    if _is_unset(marker_name):
+        marker_name = asset_location_marker_name(base_param_prefix)
+    if not marker_name:
+        logger.error("The assetLocationIndex step needs resource_names_ssm_param_prefix (or "
+                     "asset_location_index_marker_parameter) to name its completion marker.")
+        return 1
+    checkpoint_path = config.get('asset_location_checkpoint_file')
+    if _is_unset(checkpoint_path):
+        checkpoint_path = ASSET_LOCATION_DEFAULT_CHECKPOINT_FILE
+    report_path = config.get('asset_location_report_file')
+    if _is_unset(report_path):
+        report_path = ASSET_LOCATION_DEFAULT_REPORT_FILE
+    writes_per_second = config.get('asset_location_writes_per_second')
+    if writes_per_second is None:
+        writes_per_second = ASSET_LOCATION_DEFAULT_WRITES_PER_SECOND
+    limit = args.limit if args.limit is not None else config.get('limit')
+
+    session = _session(profile, region)
+    backfill = AssetLocationBackfill(
+        session.client('dynamodb', config=_DYNAMODB_CLIENT_CONFIG),
+        session.client('ssm', config=_SSM_CLIENT_CONFIG),
+        asset_table, buckets_table, marker_name, checkpoint_path, report_path, dry_run,
+        writes_per_second=float(writes_per_second), limit=limit)
+
+    logger.info("=" * 80)
+    logger.info("VAMS v2.6 -> v2.7 ASSET LOCATION INDEX BACKFILL")
+    logger.info(f"Asset table: {asset_table}")
+    logger.info(f"Bucket registrations table: {buckets_table}")
+    logger.info(f"Completion marker: {marker_name}")
+    logger.info(f"Checkpoint: {checkpoint_path}   Report: {report_path}")
+    logger.info(f"Dry Run: {dry_run}   Limit: {limit}   Writes per second: {writes_per_second}")
+    logger.info("=" * 80)
+
+    start = datetime.now(timezone.utc)
+    try:
+        result = backfill.run()
+    except Exception as e:
+        logger.error(f"assetLocationIndex step failed: {e}. Run it again to resume from {checkpoint_path}.")
+        return 1
+    duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+    counts = result['counts']
+    report_counts = (result['report'] or {}).get('counts', {})
+    logger.info("=" * 80)
+    logger.info("ASSET LOCATION INDEX SUMMARY")
+    logger.info(f"  Duration: {duration:.1f}s   Dry Run: {dry_run}")
+    logger.info(f"  Asset rows examined:                {counts['scanned']}")
+    logger.info(f"  Rows {'that would be ' if dry_run else ''}written:   {counts['written']}")
+    logger.info(f"  Rows already indexed:               {counts['alreadyIndexed']}")
+    logger.info(f"  Rows gone during the run:           {counts['goneDuringRun']}")
+    logger.info(f"  Rows not indexed:                   "
+                f"{sum(report_counts.get(r, counts.get(r, 0)) for r in NOT_INDEXED_REASONS)}")
+    for reason in NOT_INDEXED_REASONS:
+        logger.info(f"    {reason}: {report_counts.get(reason, counts.get(reason, 0))}")
+    for reason in REVIEW_REASONS:
+        if reason in report_counts:
+            logger.info(f"  Indexed, to review - {reason}: {report_counts[reason]}")
+    logger.info(f"  Write failures:                     {counts['failed']}")
+    if result['report'] is not None:
+        logger.info(f"  Report written to {report_path}")
+    if result['markerWritten']:
+        logger.info(f"  Completion marker written: {marker_name}")
+    elif result.get('limited'):
+        logger.info("  Stopped at the row limit: the completion marker is NOT written")
+    elif not dry_run:
+        logger.info("  Completion marker NOT written; run the step again")
+    logger.info("=" * 80)
+
+    if dry_run or result.get('limited'):
+        return 0
+    return 0 if result['complete'] else 1
+
+
+#######################
 # CLI
 #######################
 
-STEP_CHOICES = ('orphanedTriggers', 'vectorBackfill', 'metadataBackfill', 'systemPipelineRetirement', 'all')
+STEP_CHOICES = ('assetLocationFolderKeys', 'orphanedTriggers', 'vectorBackfill', 'metadataBackfill',
+                'systemPipelineRetirement', 'assetLocationIndex', 'all')
 
 
 def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vectors: bool,
-                   backfills_metadata: bool = False) -> str:
-    """What a real run deletes or bills, phrased to follow "This run will"."""
+                   backfills_metadata: bool = False, fixes_locations: bool = False,
+                   indexes_locations: bool = False) -> str:
+    """What a real run changes, deletes, bills or rewrites, phrased to follow "This run will"."""
     parts = []
+    if fixes_locations:
+        parts.append("append '/' to asset location keys that name a folder and move the records of a "
+                     "single-file asset's copy named like its file (assetLocationFolderKeys)")
     if deletes_triggers:
         parts.append('delete orphaned workflow-trigger rows (orphanedTriggers)')
     if clears_vectors:
@@ -1162,6 +2343,9 @@ def _gated_summary(deletes_triggers: bool, backfills_vectors: bool, clears_vecto
         parts.append('launch one Amazon Bedrock-billed execution per file (vectorBackfill)')
     if backfills_metadata:
         parts.append('launch one Amazon Bedrock-billed execution per file (metadataBackfill)')
+    if indexes_locations:
+        parts.append('write the location index attributes on every asset row and its completion marker '
+                     '(assetLocationIndex)')
     if not parts:
         return 'nothing'
     if len(parts) == 1:
@@ -1188,8 +2372,9 @@ def _account_id(value: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description='VAMS v2.6 to v2.7 data migration (orphaned trigger cleanup, vector index '
-                    'backfill, system-pipeline retirement report). Dry run by default.',
+        description='VAMS v2.6 to v2.7 data migration (asset location folder keys, orphaned trigger cleanup, '
+                    'vector index backfill, system-pipeline retirement report, asset location index backfill). '
+                    'Dry run by default.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1201,6 +2386,9 @@ Examples:
 
   # Real run without a prompt (automation): the resolved account must equal the id given
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --confirm-account <account-id>
+
+  # Append the trailing '/' to asset location keys that name a folder (run before the backfills)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps assetLocationFolderKeys
 
   # Delete orphaned trigger rows only
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps orphanedTriggers
@@ -1215,10 +2403,14 @@ Examples:
   # Report in-flight retired executions and workflows that still reference a retired pipeline (reads only)
   python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --steps systemPipelineRetirement
 
+  # Backfill the asset location index (writes two attributes on every asset row, then the completion marker)
+  python v2.6_to_v2.7_migration.py --config v2.6_to_v2.7_migration_config.json --execute --steps assetLocationIndex
+
 Notes:
   - Every run is a DRY RUN unless --execute is given AND the config's dry_run is false. The shipped
     config sets "dry_run": true; set it to false once the dry run's counts look right.
-  - A real run that deletes rows (orphanedTriggers), deletes vectors (--clear-vectors), or launches
+  - A real run that changes asset rows (assetLocationFolderKeys), deletes rows (orphanedTriggers),
+    deletes vectors (--clear-vectors), or launches
     Bedrock-billed executions (vectorBackfill, with or without --clear-vectors) is confirmed against
     the resolved AWS account id: type it at the prompt, or pass --confirm-account <account-id>. No
     flag skips the check; an unresolved identity or a non-interactive run without --confirm-account
@@ -1236,8 +2428,20 @@ Notes:
     afterwards. The summary prints how to watch them.
   - --clear-vectors defaults to FALSE: the default re-embeds every latest file in place. Pass it only
     when the stored vectors must go first (a model change, or a rebuild from scratch).
-  - --limit caps trigger rows examined (orphanedTriggers), is forwarded as the reindexer's limit
-    (vectorBackfill), and caps rows listed per section (systemPipelineRetirement).
+  - assetLocationFolderKeys reads one object, the versions of that one key and at most one key under it per
+    asset row whose location key has no trailing '/', writes each finding to
+    assetLocationFolderKeys-<mode>-report.jsonl, and saves its scan position after every page (--resume
+    continues from it). Part (b) moves the records of a single-file asset's copy '{key}/{name}' to
+    '/{name}/{name}' and marks the asset row done, so no later run moves them again. Run it before users
+    edit metadata on single-file assets. It runs first under --steps all.
+  - assetLocationIndex is required after the v2.7 deploy and runs after assetLocationFolderKeys (last under
+    --steps all, and skipped in a real run when assetLocationFolderKeys failed): it writes locationBucket and
+    locationKey on every asset row (one UpdateItem per row that lacks them, paced), verifies them with
+    strongly consistent passes, writes a report of the rows it could not index, and writes the completion
+    marker last. It resumes from its checkpoint file after an interruption, and a second run writes no row.
+  - --limit caps asset rows examined (assetLocationFolderKeys, assetLocationIndex; a limited index run never
+    writes the completion marker), trigger rows examined (orphanedTriggers), is forwarded as the reindexer's
+    limit (vectorBackfill), and caps rows listed per section (systemPipelineRetirement).
         """
     )
 
@@ -1251,6 +2455,9 @@ Notes:
                              'must also be false (the shipped config sets it true).')
     parser.add_argument('--limit', type=int,
                         help='Cap on rows examined / files enqueued (testing)')
+    parser.add_argument('--resume', action='store_true',
+                        help='assetLocationFolderKeys: continue the asset scan from the checkpoint a '
+                             'stopped run of the same mode (dry run or real) saved. Default: start over.')
     parser.add_argument('--clear-vectors', dest='clear_vectors', action='store_true',
                         help='vectorBackfill: delete every stored vector before re-embedding '
                              '(reindexer operation "both" instead of "enqueue"). Default: false.')
@@ -1283,10 +2490,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config = load_config_from_file(args.config)
 
+    run_location_keys = args.steps in ('assetLocationFolderKeys', 'all')
     run_orphaned_triggers = args.steps in ('orphanedTriggers', 'all')
     run_vector_backfill = args.steps in ('vectorBackfill', 'all')
     run_metadata_backfill = args.steps in ('metadataBackfill', 'all')
     run_retirement_report = args.steps in ('systemPipelineRetirement', 'all')
+    run_asset_location_index = args.steps in ('assetLocationIndex', 'all')
 
     # Dry run unless --execute was given (args.dry_run is False only then) AND the config does not
     # pin dry_run: true. Either source can force a dry run; neither can force a real one alone.
@@ -1323,6 +2532,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     backfills_metadata = run_metadata_backfill and metadata_plan.action == 'run'
 
     step_plan = []
+    if run_location_keys:
+        step_plan.append('assetLocationFolderKeys')
     if run_orphaned_triggers:
         step_plan.append('orphanedTriggers')
     if run_vector_backfill:
@@ -1341,6 +2552,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             step_plan.append('metadataBackfill')
     if run_retirement_report:
         step_plan.append('systemPipelineRetirement')
+    if run_asset_location_index:
+        step_plan.append('assetLocationIndex')
 
     # Echo the resolved target before anything is deleted or billed. The shipped config template leaves
     # aws_profile and aws_region null, so boto3 falls back to the ambient environment, and the SSM
@@ -1349,9 +2562,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # resolve identical parameter paths, and nothing else in this script would reveal which account
     # it had reached.
     #
-    # The gate covers every step that deletes or bills: orphanedTriggers deletes rows, and a real
-    # vectorBackfill launches one Bedrock-billed execution per file whether or not it clears the
-    # stored vectors first. systemPipelineRetirement only reads.
+    # The gate covers every step that deletes, bills or rewrites rows: orphanedTriggers deletes rows,
+    # a real vectorBackfill launches one Bedrock-billed execution per file whether or not it clears the
+    # stored vectors first, and assetLocationIndex writes every asset row. systemPipelineRetirement only
+    # reads.
     clears_vectors = backfills_vectors and clear_vectors
     if not confirm_migration_target(
         profile=profile,
@@ -1359,9 +2573,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_param_prefix=base_param_prefix,
         dry_run=dry_run,
         args_dry_run=args.dry_run,
-        gated=run_orphaned_triggers or backfills_vectors or backfills_metadata,
+        gated=run_location_keys or run_orphaned_triggers or backfills_vectors or backfills_metadata or run_asset_location_index,
         gated_summary=_gated_summary(run_orphaned_triggers, backfills_vectors, clears_vectors,
-                                     backfills_metadata),
+                                     backfills_metadata, fixes_locations=run_location_keys,
+                                     indexes_locations=run_asset_location_index),
         confirm_account=args.confirm_account,
         step_plan=step_plan,
     ):
@@ -1372,6 +2587,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def _record(step: str, rc: int) -> None:
         outcomes.append((step, "completed" if rc == 0 else f"failed (exit {rc})"))
+
+    # First: the backfills below walk every asset's location, so a folder key gets its '/' before them.
+    location_keys_failed = False
+    if run_location_keys:
+        logger.info("")
+        logger.info("##### STEP: Asset location folder keys #####")
+        rc = run_asset_location_folder_keys_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('assetLocationFolderKeys', rc)
+        if rc != 0:
+            exit_code = rc
+            location_keys_failed = True
 
     if run_orphaned_triggers:
         logger.info("")
@@ -1406,6 +2632,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         rc = run_system_pipeline_retirement_step(config, args, base_param_prefix, profile, region,
                                                  dry_run)
         _record('systemPipelineRetirement', rc)
+        if rc != 0:
+            exit_code = rc
+
+    if run_asset_location_index and location_keys_failed and not dry_run:
+        logger.info("")
+        logger.error("assetLocationIndex skipped: assetLocationFolderKeys failed in this run, and the index "
+                     "is built from the location keys that step fixes. Fix its errors, run it again, then "
+                     "run --steps assetLocationIndex.")
+        outcomes.append(('assetLocationIndex', ASSET_LOCATION_INDEX_SKIPPED_AFTER_FOLDER_KEYS))
+        exit_code = exit_code or 1
+    elif run_asset_location_index:
+        logger.info("")
+        logger.info("##### STEP: Asset location index backfill #####")
+        rc = run_asset_location_index_step(config, args, base_param_prefix, profile, region, dry_run)
+        _record('assetLocationIndex', rc)
         if rc != 0:
             exit_code = rc
 

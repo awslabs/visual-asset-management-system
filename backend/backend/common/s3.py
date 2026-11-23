@@ -171,6 +171,37 @@ def list_all_object_versions(bucket: str, prefix: str, client=None, max_keys: in
     return {'Versions': versions, 'DeleteMarkers': delete_markers}
 
 
+def list_key_versions_to_newest_version(bucket: str, key: str, client=None) -> dict:
+    """One key's delete markers and versions, newest first, up to and including its newest version.
+
+    A listing with ``Prefix=key`` returns the key's own entries first, newest first, then the entries
+    of longer keys that share its characters. This pages (``S3_VERSIONS_PAGE_SIZE`` entries a call)
+    until a page holds a version of the key, an entry of another key, or the listing ends, so a key
+    whose newest version sits behind a page or more of newer delete markers still shows it: an
+    archived file is never read as permanently deleted. Only entries of ``key`` itself are returned.
+
+    Returns:
+        Dict with the key's 'Versions' (at most up to its newest) and 'DeleteMarkers' lists.
+    """
+    s3 = client or s3_asset_client
+    versions = []
+    delete_markers = []
+    list_kwargs = {'Bucket': bucket, 'Prefix': key, 'MaxKeys': S3_VERSIONS_PAGE_SIZE}
+    while True:
+        response = s3.list_object_versions(**list_kwargs)
+        page_versions = response.get('Versions', []) or []
+        page_markers = response.get('DeleteMarkers', []) or []
+        own_versions = [v for v in page_versions if v.get('Key') == key]
+        versions.extend(own_versions)
+        delete_markers.extend(m for m in page_markers if m.get('Key') == key)
+        other_key_seen = any(entry.get('Key') != key for entry in list(page_versions) + list(page_markers))
+        # S3 always answers IsTruncated; only an explicit True continues the walk.
+        if own_versions or other_key_seen or response.get('IsTruncated') is not True:
+            return {'Versions': versions, 'DeleteMarkers': delete_markers}
+        list_kwargs['KeyMarker'] = response.get('NextKeyMarker')
+        list_kwargs['VersionIdMarker'] = response.get('NextVersionIdMarker')
+
+
 def list_all_objects(bucket: str, prefix: str, client=None, max_objects: int = None) -> list:
     """List objects under a prefix, paging to exhaustion (or up to max_objects).
 

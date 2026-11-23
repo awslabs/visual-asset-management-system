@@ -51,7 +51,8 @@ import base64
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import quote
@@ -71,8 +72,11 @@ from common.apiRoutes import (
     API_ZIP_DOWNLOADS_ASSET_REQUEST_URL,
     API_ZIP_DOWNLOADS_GLOBAL,
 )
+from common.assetLocations import is_folder_location
+from common.fileAttribution import nested_locations_of_asset
 from common.constants import UNALLOWED_FILE_EXTENSION_LIST, UNALLOWED_MIME_LIST
 from common.downloadEligibility import (
+    ARCHIVED_STORAGE_CLASSES,
     MSG_FILE_NOT_FOUND,
     MSG_FILE_TYPE_NOT_ALLOWED,
     MSG_VERSION_ARCHIVED,
@@ -194,11 +198,20 @@ register_bucket_region(aux_bucket_name, deployment_region())
 
 USER_ASSET_INDEX = "UserAssetIndex"
 ASSET_INDEX = "AssetIndex"
-# The member recheck of a finished archive (_recheck_members): at most this many members are
-# head-checked; a larger archive is checked from one listing of the asset's prefix, within the time
-# bound. Either bound exceeded refuses the link (fails closed).
+# The member recheck of a finished archive (_recheck_members): an archive of at most this many members
+# has each member head-checked; a larger one is checked from listings of its sorted member keys, in runs
+# of SHARED_RECHECK_LIST_RUN members, current objects only, so the number of listing calls follows the
+# member count, not the folder count or the version history. Both run on the head-check pool within the
+# time bound; a check that does not finish in time signs nothing and answers 503 (try again), never the
+# archived-or-deleted refusal.
 SHARED_RECHECK_HEAD_MAX_FILES = HEAD_CHECK_MAX_FILES
+# One ListObjectsV2 page holds up to 1,000 keys.
+SHARED_RECHECK_LIST_RUN = 1000
 SHARED_RECHECK_MAX_SECONDS = float(os.environ.get("ZIP_DOWNLOAD_SHARED_RECHECK_MAX_SECONDS", "15"))
+
+
+class MemberCheckIncomplete(Exception):
+    """The member recheck's time bound ran out before every member was confirmed."""
 
 
 class ZipRefusal(VAMSGeneralErrorResponse):
@@ -484,7 +497,7 @@ def _check_members(bucket, members):
     return sizes
 
 
-def _prescan_prefix(bucket, prefix, deadline, budget):
+def _prescan_prefix(bucket, prefix, deadline, budget, nested=None):
     """List the current (latest, not deleted) objects under a prefix within a budget.
 
     Returns (count, bytes, complete). Refuses on an archive storage class or a blocked extension.
@@ -497,6 +510,8 @@ def _prescan_prefix(bucket, prefix, deadline, budget):
         for version in response.get("Versions", []) or []:
             key = version.get("Key", "")
             if not version.get("IsLatest") or key.endswith("/") or not _archived_key(key):
+                continue
+            if nested and not nested.keep(key):
                 continue
             if version.get("StorageClass") in ("GLACIER", "DEEP_ARCHIVE"):
                 raise ZipRefusal("The selection includes a file in an archive storage class; "
@@ -519,9 +534,10 @@ def _enforce_limits(files, size):
         raise ZipRefusal(f"The selection is larger than {MAX_TOTAL_BYTES_PER_REQUEST} bytes")
 
 
-def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
+def _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested=None):
     """Resolve the selection against an asset version snapshot: every selected file, folder or the
-    whole asset becomes the file versions recorded in that version."""
+    whole asset becomes the file versions recorded in that version. A recorded file a nested asset's
+    location holds is that asset's and is left out."""
     # Imported here: the asset-version helpers are a handler module with its own module-level setup.
     from handlers.assets.assetVersions import (
         get_asset_file_versions,
@@ -538,7 +554,7 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
     recorded = {}
     for f in snapshot.get("files") or []:
         rel = (f.get("relativeKey") or "").lstrip("/")
-        if rel and f.get("versionId") and _archived_key(rel):
+        if rel and f.get("versionId") and _archived_key(rel) and (not nested or nested.keep(base_key + rel)):
             recorded[rel] = f
     chosen = {}
     for entry in request.selection:
@@ -573,12 +589,17 @@ def _resolve_pinned(database_id, asset_id, bucket, base_key, request):
     return asset_version_id, pinned
 
 
-def _resolve_current(bucket, base_key, request):
+def _resolve_current(bucket, base_key, request, nested=None):
     """Resolve a current-files selection. Explicit files are fully checked; folders and the whole
-    asset are pre-scanned within a budget. Returns (entries, files, bytes, complete)."""
+    asset are pre-scanned within a budget. Returns (entries, files, bytes, complete). A selected path a
+    nested asset's location holds answers as a missing file or folder, and a folder's or the whole
+    asset's nested files are left out."""
     entries, explicit = [], []
     for entry in request.selection:
         key = resolve_asset_file_key(base_key, entry.relativePath)
+        if nested and nested.holder(key):
+            raise ZipRefusal(MSG_FILE_NOT_FOUND if entry.type == "file"
+                             else "A selected folder is empty or does not exist")
         if entry.type == "file" and not _archived_key(key):
             # A preview companion is left out like in a folder or the whole asset, not refused.
             continue
@@ -600,7 +621,7 @@ def _resolve_current(bucket, base_key, request):
     for record in entries:
         if record["type"] == "file":
             continue
-        count, size, done = _prescan_prefix(bucket, record["key"], deadline, budget)
+        count, size, done = _prescan_prefix(bucket, record["key"], deadline, budget, nested)
         if done and count == 0:
             raise ZipRefusal("A selected folder is empty or does not exist")
         files, total = files + count, total + size
@@ -970,14 +991,21 @@ def create_job(event, database_id, asset_id):
                                                      database_id=database_id, asset_id=asset_id)
         bucket = _bucket_details(asset.get("bucketId"))["bucketName"]
         base_key = asset_location.get("Key")
+        if not is_folder_location(base_key):
+            # A single-file asset: the archive job derives every member's path from a folder location
+            raise ZipRefusal("A single-file asset cannot be downloaded as a zip. "
+                             "Download its files directly instead.")
         if _cap_reached(user_id):
             return general_error(status_code=429, body={"message": zd.MSG_CAP_REACHED}, event=event)
+        # The files of an asset nested in this asset's location are that asset's
+        nested = nested_locations_of_asset(asset_table, buckets_table, asset, bucket, base_key,
+                                           asset_table_name=asset_table_name)
         pinned, asset_version_id = [], None
         if request.assetVersionId or request.assetVersionIdAlias:
-            asset_version_id, pinned = _resolve_pinned(database_id, asset_id, bucket, base_key, request)
+            asset_version_id, pinned = _resolve_pinned(database_id, asset_id, bucket, base_key, request, nested)
             entries, files, total, complete = [], len(pinned), sum(p["size"] for p in pinned), True
         else:
-            entries, files, total, complete = _resolve_current(bucket, base_key, request)
+            entries, files, total, complete = _resolve_current(bucket, base_key, request, nested)
     except QuarantineBlockedResponse as refusal:
         return quarantine_refusal(refusal, event)
     except VAMSGeneralErrorResponse as e:
@@ -1039,6 +1067,8 @@ def create_job(event, database_id, asset_id):
         "archiveFileName": archive_file_name,
         "entries": [{k: v for k, v in e.items() if v is not None} for e in entries],
         "pinnedFiles": pinned,
+        # Locations of other assets nested in this asset's: the archive job leaves their keys out
+        "excludeLocations": sorted(nested.locations),
         "estimatedTotalBytes": total,
         "limits": {"maxFiles": MAX_FILES_PER_REQUEST, "maxTotalBytes": MAX_TOTAL_BYTES_PER_REQUEST},
         "blockedExtensions": sorted(UNALLOWED_FILE_EXTENSION_LIST),
@@ -1293,11 +1323,79 @@ def _current_member_ok(bucket, key):
     return bool(validateUnallowedFileExtensionAndContentType(key, head.get("ContentType", "")))
 
 
+def _member_run_ok(bucket, members, deadline) -> bool:
+    """Whether every member in one run of sorted member keys is still downloadable, from a listing of
+    current objects (ListObjectsV2 without a delimiter, so old versions are not read) under the run's
+    longest common prefix. Python orders keys by code point, which is the UTF-8 byte order S3 lists in.
+
+    The listing starts just below the run's first member (StartAfter = the key without its last
+    character). At a page boundary, when the page ended before the next unconfirmed member, it restarts
+    just below that member instead of continuing, so a run of unselected files between members costs at
+    most one page. Each member must be listed (an archived or deleted file's current version is a delete
+    marker, which is not), not in an archive storage class and not a blocked type; a listed key that
+    sorts past an unconfirmed member means that member is missing. Raises MemberCheckIncomplete when the
+    deadline passes between pages."""
+    position = 0  # the next member still to confirm
+    kwargs = {"Bucket": bucket, "Prefix": os.path.commonprefix([members[0], members[-1]]), "MaxKeys": 1000,
+              "StartAfter": members[0][:-1]}
+    while True:
+        if time.monotonic() > deadline:
+            raise MemberCheckIncomplete()
+        response = s3.list_objects_v2(**kwargs)
+        contents = response.get("Contents", []) or []
+        for obj in contents:
+            key = obj.get("Key", "")
+            if key < members[position]:
+                continue
+            if key > members[position]:
+                return False
+            if obj.get("StorageClass") in ARCHIVED_STORAGE_CLASSES:
+                return False
+            if not validateUnallowedFileExtensionAndContentType(key, ""):
+                return False
+            position += 1
+            if position == len(members):
+                return True
+        if not response.get("IsTruncated"):
+            return False
+        below_next = members[position][:-1]
+        if contents and contents[-1].get("Key", "") < below_next:
+            kwargs.pop("ContinuationToken", None)
+            kwargs["StartAfter"] = below_next
+        else:
+            kwargs.pop("StartAfter", None)
+            kwargs["ContinuationToken"] = response.get("NextContinuationToken", "")
+
+
+def _all_true_within(check, items, deadline) -> bool:
+    """``check`` over ``items`` on the head-check pool: True when every call answers True, False at
+    the first False. Raises MemberCheckIncomplete when the deadline passes first; calls not started
+    are cancelled and the ones running are not waited for."""
+    pool = ThreadPoolExecutor(max_workers=max(1, HEAD_CHECK_WORKERS))
+    try:
+        futures = [pool.submit(check, item) for item in items]
+        try:
+            for future in as_completed(futures, timeout=max(0.0, deadline - time.monotonic())):
+                if not future.result():
+                    return False
+        except FuturesTimeoutError:
+            raise MemberCheckIncomplete() from None
+        return True
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def _recheck_members(asset, row) -> bool:
     """Download eligibility of a finished archive at request time, the requester's own or another
-    user's: every member file must still be present, not archived and not a blocked type in the asset
-    (#1124's rules, as a file download applies them). Fails closed on anything it cannot confirm,
-    including the time bound."""
+    user's: every member file must still be present, not archived and not a blocked type in the asset,
+    as a file download applies them. False when a member fails, or when the archive's member record
+    or the asset's location cannot be read. Raises MemberCheckIncomplete when the time bound runs out
+    before every member is confirmed.
+
+    Up to SHARED_RECHECK_HEAD_MAX_FILES members are head-checked (which also reads ``vams-status``
+    and the content type). A larger archive is checked from listings of its sorted member keys in runs
+    of SHARED_RECHECK_LIST_RUN (_member_run_ok), which confirm presence, storage class and file
+    extension: about one call per run whatever the folders or versions."""
     members = _read_resolved_members(row)
     if not members:
         return False
@@ -1312,34 +1410,14 @@ def _recheck_members(asset, row) -> bool:
                 for rel in members]
     except VAMSGeneralErrorResponse:
         return False
-    if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
-        with ThreadPoolExecutor(max_workers=max(1, HEAD_CHECK_WORKERS)) as pool:
-            return all(pool.map(lambda k: _current_member_ok(bucket, k), keys))
-    # A large archive: one listing of the asset's prefix, latest state per key.
-    wanted, ok = set(keys), set()
     deadline = time.monotonic() + SHARED_RECHECK_MAX_SECONDS
-    kwargs = {"Bucket": bucket, "Prefix": base_key, "MaxKeys": 1000}
-    while True:
-        if time.monotonic() > deadline:
-            return False
-        response = s3.list_object_versions(**kwargs)
-        for marker in response.get("DeleteMarkers", []) or []:
-            if marker.get("IsLatest") and marker.get("Key") in wanted:
-                return False
-        for version in response.get("Versions", []) or []:
-            key = version.get("Key", "")
-            if not version.get("IsLatest") or key not in wanted:
-                continue
-            if version.get("StorageClass") in ("GLACIER", "DEEP_ARCHIVE"):
-                return False
-            if not validateUnallowedFileExtensionAndContentType(key, ""):
-                return False
-            ok.add(key)
-        if not response.get("IsTruncated"):
-            break
-        kwargs["KeyMarker"] = response.get("NextKeyMarker", "")
-        kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker", "")
-    return ok == wanted
+    if len(keys) <= SHARED_RECHECK_HEAD_MAX_FILES:
+        return _all_true_within(lambda key: _current_member_ok(bucket, key), keys, deadline)
+    ordered = sorted(set(keys))
+    # A run skips the unselected files that sort between its members a page at a time (_member_run_ok),
+    # so a gap costs at most one page per gap, not one per 1,000 files in it.
+    runs = [ordered[i:i + SHARED_RECHECK_LIST_RUN] for i in range(0, len(ordered), SHARED_RECHECK_LIST_RUN)]
+    return _all_true_within(lambda run: _member_run_ok(bucket, run, deadline), runs, deadline)
 
 
 def get_job(event, database_id, asset_id, request_id):
@@ -1381,7 +1459,17 @@ def job_url(event, database_id, asset_id, request_id):
     row = _reconcile(row)
     if row.get("status") != zd.STATUS_SUCCEEDED:
         return general_error(status_code=409, body={"message": zd.MSG_NOT_READY}, event=event)
-    if not _recheck_members(asset, row):
+    try:
+        members_ok = _recheck_members(asset, row)
+    except MemberCheckIncomplete:
+        logger.warning(f"Zip download {request_id}: member check did not finish within "
+                       f"{SHARED_RECHECK_MAX_SECONDS} s; nothing signed")
+        # AUDIT LOG: the members could not all be confirmed in time; the caller may try again.
+        log_action(event, "zipDownloadUrl", outcome="failed", reason="internal",
+                   database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)
+        return general_error(status_code=503, body={"message": zd.MSG_ARCHIVE_CHECK_INCOMPLETE},
+                             event=event)
+    if not members_ok:
         # AUDIT LOG: the archive refused because a member is no longer downloadable.
         log_action(event, "zipDownloadUrl", outcome="failed", reason="validation",
                    database_id=database_id, asset_id=asset_id, entity_id=request_id, details=users)

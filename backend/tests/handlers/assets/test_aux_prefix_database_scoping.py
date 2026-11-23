@@ -100,4 +100,5 @@ class TestAssetServiceAuxPrefix:
 
         m.delete_asset_permanent("db1#deleted", "a1", request, {"tokens": ["u1"]})
 
-        m.delete_assetAuxiliary_files.assert_called_once_with("db1", {"Key": "a1/"})
+        m.delete_assetAuxiliary_files.assert_called_once()
+        assert m.delete_assetAuxiliary_files.call_args.args == ("db1", {"Key": "a1/"})

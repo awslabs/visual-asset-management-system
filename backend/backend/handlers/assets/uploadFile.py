@@ -45,6 +45,11 @@ from common import largeObjectCopy as loc
 from common import uploadStatus
 from common.dynamodb import to_update_expr
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import (
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, contains, held_objects,
+    is_folder_location, names_own_object, normalize_base_prefix, object_key_for,
+)
+from common.fileAttribution import nested_locations_for_asset_type, nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -246,13 +251,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -605,8 +604,8 @@ def is_file_archived(bucket: str, key: str, version_id: str = None) -> bool:
     """
     return is_object_version_archived(bucket, key, version_id, client=s3)
 
-def determine_asset_type(assetId, bucket, prefix):
-    """Determine the asset type based on S3 contents"""
+def determine_asset_type(assetId, bucket, prefix, nested=None):
+    """Determine the asset type based on S3 contents: the keys the asset owns (a nested asset's keys left out)"""
     try:
         
         logger.info(f"Determining asset type from bucket: {bucket}, prefix: {prefix}")
@@ -615,14 +614,16 @@ def determine_asset_type(assetId, bucket, prefix):
         # file / folder). Capped at ASSET_TYPE_DETECTION_SAMPLE_SIZE — this is a
         # best-effort visibility classification, so a sample is sufficient and
         # avoids adding upload latency by scanning a very large asset in full.
-        contents = list_all_objects(bucket, prefix, client=s3, max_objects=ASSET_TYPE_DETECTION_SAMPLE_SIZE)
+        contents = list(held_objects(prefix, lambda list_prefix, cap: list_all_objects(
+            bucket, list_prefix, client=s3,
+            max_objects=min(cap or ASSET_TYPE_DETECTION_SAMPLE_SIZE, ASSET_TYPE_DETECTION_SAMPLE_SIZE))))
         
         # Filter out archived files
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/'):
-                # Skip folder markers
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']) or (nested and not nested.keep(item['Key'])):
+                # Skip folder markers, keys the location does not hold and keys a nested asset's location holds
                 continue
                 
             try:
@@ -822,6 +823,23 @@ def build_workflow_change_metadata(change_user_id, workflow_id, execution_id):
         VAMS_CHANGE_WORKFLOW_EXECUTION_ID_METADATA_KEY: execution_id or "",
     }
 
+# A single-file asset's own object is the key its location names. A user upload at its path writes a new
+# version of it, as for any other file; a workflow output never replaces it.
+OWN_FILE_PATH_MESSAGE = OWN_FILE_OUTPUT_REFUSAL
+
+
+def upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key) -> Optional[str]:
+    """Why neither a user upload nor a workflow output may write `final_s3_key` through this asset, or None.
+    A key in the location of another asset nested in this asset's is that asset's (NESTED_PATH_REFUSAL); a key
+    of a location another live asset also holds belongs to neither for bucket sync, which sends its record to
+    the rejected-record queue (SHARED_LOCATION_WRITE_REFUSAL). Read from the location index once it is ready."""
+    nested = nested_locations_of_asset(asset_table, buckets_table, asset, bucket_name, asset_base_key,
+                                       include_shared=True, asset_table_name=asset_storage_table_name)
+    if nested.holder(final_s3_key) is None:
+        return None
+    return SHARED_LOCATION_WRITE_REFUSAL if nested.is_shared_key(final_s3_key) else NESTED_PATH_REFUSAL
+
+
 def normalize_s3_path(asset_base_key, file_path):
     """
     Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
@@ -833,6 +851,14 @@ def normalize_s3_path(asset_base_key, file_path):
     Returns:
         The properly resolved S3 key without duplication
     """
+    # A single-file location (common.assetLocations): its file name names the object, its preview
+    # name its own preview, and any other path lands in its companion folder
+    if asset_base_key and not is_folder_location(asset_base_key):
+        resolved = object_key_for(asset_base_key, file_path)
+        if resolved is None:
+            raise VAMSGeneralErrorResponse("Invalid file path")
+        return resolved
+
     # Normalize the asset base key to ensure it ends with '/'
     if asset_base_key and not asset_base_key.endswith('/'):
         asset_base_key = asset_base_key + '/'
@@ -1413,6 +1439,9 @@ def initialize_upload(request_model: InitializeUploadRequestModel, claims_and_ro
             # Get the asset's base key from assetLocation
             asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
             final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+            refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+            if refusal:
+                raise VAMSGeneralErrorResponse(refusal)
         else:  # assetPreview
             #We only want the filename and none of the path if there is a path
             filename = os.path.basename(file.relativeKey)
@@ -1711,7 +1740,26 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
             if uploadType == "assetFile":
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
+                if names_own_object(asset_base_key, file.relativeKey):
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",  # External uploads don't have S3 upload IDs
+                        success=False,
+                        error=OWN_FILE_PATH_MESSAGE
+                    ))
+                    has_failures = True
+                    continue
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+                if refusal:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3="external",  # External uploads don't have S3 upload IDs
+                        success=False,
+                        error=refusal
+                    ))
+                    has_failures = True
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -2077,7 +2125,9 @@ def _complete_claimed_external_upload(uploadId: str, request_model: CompleteExte
     # asynchronously updates the asset type and notifies subscribers once it lands.
     if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
         
         
@@ -2298,6 +2348,24 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
                 # Get the asset's base key from assetLocation
                 asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
                 final_s3_key = normalize_s3_path(asset_base_key, file.relativeKey)
+                refusal = upload_path_refusal(asset, bucket_name, asset_base_key, final_s3_key)
+                if refusal:
+                    file_results.append(FileCompletionResult(
+                        relativeKey=file.relativeKey,
+                        uploadIdS3=file.uploadIdS3,
+                        success=False,
+                        error=refusal
+                    ))
+                    has_failures = True
+                    if file.uploadIdS3 != "zero-byte":
+                        try:
+                            s3.abort_multipart_upload(
+                                Bucket=bucket_name,
+                                Key=f"{baseAssetsPrefix}{TEMPORARY_UPLOAD_PREFIX}{final_s3_key}",
+                                UploadId=file.uploadIdS3)
+                        except Exception as abort_error:
+                            logger.warning(f"Error aborting multipart upload for a refused path: {abort_error}")
+                    continue
             else:  # assetPreview
                 #We only want the filename and none of the path if there is a path
                 filename = os.path.basename(file.relativeKey)
@@ -2866,7 +2934,9 @@ def complete_upload(uploadId: str, request_model: CompleteUploadRequestModel, ev
     # subscribers once it lands (the large-file consumer does both).
     if uploadType == "assetFile" and landed_synchronously(file_results):
         # Determine asset type using the asset's bucket and key location
-        assetType = determine_asset_type(assetId, bucket_name, asset_base_key)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        assetType = determine_asset_type(assetId, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {assetId}: {assetType}")
 
 

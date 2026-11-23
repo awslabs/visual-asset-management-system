@@ -98,7 +98,7 @@ describe("EKS state machine defaults a missing inputVersionId", () => {
         expect(states.StageInputVersionDefault.Next).toBe("DefaultInputVersionId");
         expect(states.DefaultInputVersionId.Next).toBe("ConstructPipeline");
         expect(states.StageInputVersionDefault.Parameters).toEqual({
-            defaults: { inputVersionId: "" },
+            defaults: { inputVersionId: "", inputRelativePath: "" },
             "input.$": "$",
         });
         // The input is the SECOND argument, so its fields win over the default.
@@ -114,12 +114,22 @@ describe("EKS state machine defaults a missing inputVersionId", () => {
         );
     });
 
-    test("an input without the field reaches ConstructPipeline with an empty version", () => {
-        expect(run(OLD_INPUT)).toEqual({ ...OLD_INPUT, inputVersionId: "" });
+    test("ConstructPipeline reads the input's asset-relative path from the state input", () => {
+        expect(states.ConstructPipeline.Parameters.Payload["inputRelativePath.$"]).toBe(
+            "$.inputRelativePath"
+        );
     });
 
-    test("an input with a version keeps it, and every other field passes unchanged", () => {
-        const input = { ...OLD_INPUT, inputVersionId: "v-launch" };
+    test("an input without the fields reaches ConstructPipeline with empty values", () => {
+        expect(run(OLD_INPUT)).toEqual({ ...OLD_INPUT, inputVersionId: "", inputRelativePath: "" });
+    });
+
+    test("an input with a version and a path keeps them, and every other field passes unchanged", () => {
+        const input = {
+            ...OLD_INPUT,
+            inputVersionId: "v-launch",
+            inputRelativePath: "/parts/a.glb",
+        };
         expect(run(input)).toEqual(input);
     });
 });

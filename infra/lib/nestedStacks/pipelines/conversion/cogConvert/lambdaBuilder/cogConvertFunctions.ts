@@ -97,6 +97,7 @@ export function buildOpenPipelineFunction(
     subnets: ec2.ISubnet[],
     orchestrationBus: events.IEventBus,
     stateMachineLogGroup: logs.ILogGroup,
+    stateFunctions: Record<string, lambda.IFunction>,
     kmsKey?: kms.IKey
 ): lambda.Function {
     const name = "openPipeline";
@@ -130,6 +131,14 @@ export function buildOpenPipelineFunction(
             ORCHESTRATION_BUS_NAME: orchestrationBus.eventBusName,
             STATE_MACHINE_LOG_GROUP_NAME: stateMachineLogGroup.logGroupName,
             STATE_MACHINE_LOG_GROUP_ARN: stateMachineLogGroup.logGroupArn,
+            // The function each Lambda state runs, keyed by the state's name; openPipeline registers
+            // their /aws/lambda/<name> groups as this run's log sources (openPipeline.py
+            // LAMBDA_STATE_NAMES). Names only: the ARNs are derived from the state machine's group.
+            STATE_FUNCTION_NAMES: cdk.Stack.of(scope).toJsonString(
+                Object.fromEntries(
+                    Object.entries(stateFunctions).map(([state, fn]) => [state, fn.functionName])
+                )
+            ),
         },
     });
 

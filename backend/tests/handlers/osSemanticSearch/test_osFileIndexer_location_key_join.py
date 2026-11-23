@@ -34,6 +34,11 @@ class TestJoinAssetLocationKey:
             ("asset-1/", "//m.glb", "asset-1/m.glb"),
             ("", "/m.glb", "m.glb"),
             (None, "/m.glb", "m.glb"),
+            # A single-file location: its own file name names the object, a preview its own
+            # preview, and "/" the asset as a whole.
+            ("projects/model.glb", "/model.glb", "projects/model.glb"),
+            ("projects/model.glb", "/model.glb.previewFile.png", "projects/model.glb.previewFile.png"),
+            ("projects/model.glb", "/", "projects/model.glb"),
         ],
     )
     def test_the_folder_and_the_path_meet_at_one_slash(self, location_key, relative_path, expected):
@@ -64,3 +69,17 @@ class TestMetadataStreamReindexKey:
         request = process.call_args[0][0]
         assert request.s3Key == "projects/building-a/sub/m.glb"
         assert request.filePath == "/sub/m.glb"
+
+    @pytest.mark.parametrize("event_name", ["INSERT", "MODIFY"])
+    def test_a_single_file_assets_own_path_reindexes_its_object(self, fileIndexer, event_name):
+        record = _metadata_stream_record("db-1:asset-1:/model.glb", event_name)
+
+        with patch.object(fileIndexer, "get_asset_details", return_value=_asset("projects/model.glb")), \
+                patch.object(fileIndexer, "get_bucket_details", return_value=_BUCKET), \
+                patch.object(fileIndexer, "process_file_index_request") as process:
+            fileIndexer.handle_metadata_stream(record)
+
+        assert process.called
+        request = process.call_args[0][0]
+        assert request.s3Key == "projects/model.glb"
+        assert request.filePath == "/model.glb"

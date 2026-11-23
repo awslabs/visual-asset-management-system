@@ -29,6 +29,7 @@ from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 
+from common.resourceNames import ResourceParamKey
 from common.s3MetadataKeys import VAMS_COPY_UPLOAD_TOKEN_METADATA_KEY, is_own_upload_object  # noqa: F401
 from customLogging.logger import safeLogger
 
@@ -118,9 +119,15 @@ COPY_RECONCILE_CHECK_ATTRIBUTE = "lastCopyReconcileCheckDate"
 ENV_STATE_MACHINE_ARN = "LARGE_OBJECT_COPY_STATE_MACHINE_ARN"
 # Copy engine function name, on the functions that hand it an ended execution to reconcile.
 ENV_ENGINE_FUNCTION_NAME = "LARGE_OBJECT_COPY_FUNCTION_NAME"
-# Name of the SSM parameter holding that function name, for the one caller that cannot take the name
-# as an environment variable: the workflow output step (the engine already references the output
-# step, so a reference back would be a CloudFormation dependency cycle).
+# The copy engine function name as a resource name under the deployment's resource-name prefix, for the
+# one caller that cannot take the name as an environment variable: the workflow output step (the engine
+# already references the output step, so a reference back would be a CloudFormation dependency cycle).
+# It resolves the key with common.resourceNames.get_resource_name(); ENV_ENGINE_FUNCTION_NAME overrides
+# it. The key is RESOURCE_PARAM_KEYS.lambdaFunctions.largeObjectCopyEngine (infra/common/resourceParamKeys.ts).
+ENGINE_FUNCTION_RESOURCE_KEY = ResourceParamKey("lambdaFunctions/largeObjectCopyEngine", (ENV_ENGINE_FUNCTION_NAME,))
+# The full name of that parameter, set by CDK on the output step. The output step reads it directly,
+# uncached, while the resolver remembers the key as missing (its negative record lasts longer than the
+# copy engine call waits for a name the deployment is still publishing).
 ENV_ENGINE_FUNCTION_NAME_PARAMETER = "LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER"
 
 # Engine settings. Fixed values, not deployment configuration.
@@ -163,28 +170,12 @@ def settings():
     }
 
 
-_engine_function_names = {}
-
-
-def engine_function_name(environ=None, ssm_client=None):
-    """The copy engine function name, or "" when this function was not given one: the environment
-    variable, else the SSM parameter it names (read once per container with ``ssm_client``). A failed
-    parameter read is logged and returns "" (the next call tries again)."""
+def engine_function_name(environ=None):
+    """The copy engine function name from the environment, or "" when this function was not given one.
+    The workflow output step, which cannot take the name as an environment variable, resolves
+    ENGINE_FUNCTION_RESOURCE_KEY instead."""
     environ = os.environ if environ is None else environ
-    name = environ.get(ENV_ENGINE_FUNCTION_NAME, "") or ""
-    if name:
-        return name
-    parameter = environ.get(ENV_ENGINE_FUNCTION_NAME_PARAMETER, "") or ""
-    if not parameter or ssm_client is None:
-        return ""
-    if parameter not in _engine_function_names:
-        try:
-            value = ssm_client.get_parameter(Name=parameter)["Parameter"]["Value"]
-        except Exception as e:
-            logger.warning(f"Could not read the copy engine function name: {e}")
-            return ""
-        _engine_function_names[parameter] = value or ""
-    return _engine_function_names[parameter]
+    return environ.get(ENV_ENGINE_FUNCTION_NAME, "") or ""
 
 
 def request_reconcile(lambda_client, function_name, execution_arns):
@@ -254,7 +245,13 @@ API_CALLER_WAIT_SECONDS = 15
 
 class EngineCallFailed(Exception):
     """The copy engine could not do an operation the workflow output step asked for. Raised to the
-    output step, which fails like any failed write of its own (the run is not reported done)."""
+    output step, which fails like any failed write of its own (the run is not reported done).
+    ``error_type`` is the engine's own error type when the engine answered with a function error
+    ("" otherwise), so the output step can tell an engine that could not start from one that failed."""
+
+    def __init__(self, message="", error_type=""):
+        super().__init__(message)
+        self.error_type = error_type or ""
 
 
 class LargeObjectCopyEngineBusy(Exception):
@@ -442,7 +439,7 @@ def call_engine(lambda_client, function_name, operation, sleep=None, remaining_m
                 _wait_throttled(error_type)
                 continue
             logger.error(f"The copy engine failed the {operation} call: {raw[:500]!r}")
-            raise EngineCallFailed(f"The copy engine failed the {operation} call")
+            raise EngineCallFailed(f"The copy engine failed the {operation} call", error_type=error_type)
         try:
             return json.loads(raw or b"{}") or {}
         except ValueError as e:

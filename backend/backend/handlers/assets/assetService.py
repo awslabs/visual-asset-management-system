@@ -32,6 +32,11 @@ from common.s3MetadataKeys import (
     normalize_history_file_path,
 )
 from common.assetProvenance import asset_edit_provenance
+from common.assetLocations import (
+    UNARCHIVE_LOCATION_IN_USE_REFUSAL, NestedLocations, contains, fill_location_attributes, held_objects,
+    is_folder_location, normalize_base_prefix, relative_path_in, unarchive_conflicts,
+)
+from common.fileAttribution import nested_locations_of_asset
 from common.assetHistory import (
     CHANGE_SOURCE_EDIT,
     CHANGE_SOURCE_ARCHIVE,
@@ -175,13 +180,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -458,12 +457,21 @@ def mark_file_as_archived(key, bucket):
         Key=key
     )
 
-def delete_assetAuxiliary_files(databaseId, assetLocation):
+def nested_locations_for(asset, bucket_name):
+    """The stored locations of other assets nested in this asset's location, read for an archive, unarchive
+    or permanent delete of the asset (``fileAttribution.nested_locations_of_asset``, destructive): the files
+    they hold belong to those assets and are left alone."""
+    return nested_locations_of_asset(asset_table, buckets_table, asset, bucket_name, destructive=True,
+                                     asset_table_name=asset_database)
+
+
+def delete_assetAuxiliary_files(databaseId, assetLocation, nested: NestedLocations = None):
     """Delete auxiliary files for an asset
 
     Args:
         databaseId: The database ID owning the asset
         assetLocation: The asset location object with Key (dict or AssetLocationModel)
+        nested: The locations of other assets nested in the asset's location; their auxiliary data is kept
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(assetLocation, dict):
@@ -493,7 +501,8 @@ def delete_assetAuxiliary_files(databaseId, assetLocation):
         paginator = s3.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=s3_assetAuxiliary_bucket, Prefix=key):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if not nested or nested.keep_aux(databaseId, entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3.delete_objects(
@@ -570,7 +579,8 @@ def get_asset_archive_marker_versions(database_id, asset_id):
     return markers
 
 
-def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
+def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None,
+                             nested: NestedLocations = None):
     """Archive all files in a multi-file asset
 
     Each created delete marker is recorded in the file version history with
@@ -584,6 +594,7 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
         database_id: The database ID (for provenance records)
         asset_id: The asset ID (for provenance records)
         user_id: The acting user (for provenance records)
+        nested: The locations of other assets nested in this location; their files are not archived
     """
     # Convert to AssetLocationModel if it's a dictionary
     if isinstance(location, dict):
@@ -606,11 +617,14 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
     logger.info(f'Archiving folder with multiple files from bucket: {bucket}')
 
     paginator = s3.get_paginator('list_objects_v2')
-    files = []
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        if 'Contents' in page:
-            for obj in page.get('Contents', []):
-                files.append(obj['Key'])
+    # A single-file location is listed by its own prefixes (its object, its previews, its companion
+    # folder), so keys that only share its characters are never read; held_objects yields each held key once
+    def _list(list_prefix, cap):
+        for page in paginator.paginate(Bucket=bucket, Prefix=list_prefix,
+                                       PaginationConfig={'MaxItems': cap} if cap else {}):
+            yield from page.get('Contents', [])
+
+    files = [obj['Key'] for obj in held_objects(prefix, _list) if not nested or nested.keep(obj['Key'])]
 
     def _archive_one(key):
         try:
@@ -622,7 +636,7 @@ def archive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, 
             if (asset_file_version_history_table and database_id and asset_id
                     and not key.endswith('/')):
                 marker_version_id = response.get('VersionId')
-                relative_path = key[len(prefix):] if key.startswith(prefix) else key
+                relative_path = relative_path_in(prefix, key)
                 try:
                     asset_file_version_history_table.put_item(
                         Item=build_asset_archive_history_record(
@@ -685,7 +699,8 @@ def archive_file_preview(location, bucket):
         logger.exception(f"Error archiving file {key}: {e}")
     return
 
-def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None):
+def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None, user_id=None,
+                               nested: NestedLocations = None):
     """Selectively unarchive an asset's files by removing the delete markers
     that the asset archive created.
 
@@ -703,6 +718,7 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
         database_id: The database ID (for provenance lookup/records)
         asset_id: The asset ID (for provenance lookup/records)
         user_id: The acting user (for provenance records)
+        nested: The locations of other assets nested in this location; their files are not restored
 
     Returns:
         Number of files restored.
@@ -744,10 +760,16 @@ def unarchive_multi_assetFiles(location, bucket, database_id=None, asset_id=None
                 if not delete_marker.get('IsLatest'):
                     continue
                 key = delete_marker['Key']
-                relative_path = normalize_history_file_path(
-                    key[len(prefix):] if key.startswith(prefix) else key
-                )
-                if delete_marker['VersionId'] in archive_markers.get(relative_path, set()):
+                if not contains(prefix, key) or (nested and not nested.keep(key)):
+                    continue
+                relative_path = normalize_history_file_path(relative_path_in(prefix, key))
+                recorded = archive_markers.get(relative_path, set())
+                if not is_folder_location(prefix):
+                    # A single-file location's archive may be recorded relative to the bare file
+                    # key ('/' for the object, '/.previewFile.png' for a preview)
+                    recorded = recorded | archive_markers.get(
+                        normalize_history_file_path(key[len(prefix):]), set())
+                if delete_marker['VersionId'] in recorded:
                     markers_to_remove.append((key, delete_marker['VersionId'], relative_path))
 
         def _remove_marker(marker):
@@ -1491,7 +1513,8 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         # so unarchive can selectively restore exactly these files
         if "assetLocation" in asset:
             archive_multi_assetFiles(asset['assetLocation'], bucket_name,
-                                     databaseId, assetId, username)
+                                     databaseId, assetId, username,
+                                     nested=nested_locations_for(asset, bucket_name))
 
         # Archive preview if exists
         if "previewLocation" in asset:
@@ -1508,8 +1531,8 @@ def archive_asset(databaseId, assetId, request_model, claims_and_roles):
         archived_db_id = f"{databaseId}#deleted"
         asset['databaseId'] = archived_db_id
         
-        # Save to archived location
-        asset_table.put_item(Item=asset)
+        # Save to archived location (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket_name))
 
         # Delete from original location
         asset_table.delete_item(Key={'databaseId': databaseId, 'assetId': assetId})
@@ -1589,6 +1612,16 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
     bucketDetails = get_asset_bucket_details(asset)
     bucket_name = bucketDetails['bucketName']
 
+    # Not while another live asset is stored at exactly this asset's location: the unarchive would make the
+    # location shared again, and bucket sync could not attribute a new file there. A nested pair is no
+    # conflict (each key has one deepest owner). Read from the location index once it is ready, before
+    # anything is written; the response names neither asset.
+    conflicts = unarchive_conflicts(asset_table, asset, bucket_name, asset_table_name=asset_database)
+    if conflicts:
+        logger.info(f"Not unarchiving asset {assetId} in database {original_db_id}: {len(conflicts)} other live "
+                    "asset(s) are stored at its location")
+        raise VAMSGeneralErrorResponse(UNARCHIVE_LOCATION_IN_USE_REFUSAL)
+
     # Unarchive the asset record; file restoration is opt-in
     logger.info(f"Unarchiving asset {assetId} from database {archived_db_id}")
 
@@ -1604,7 +1637,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
             if "assetLocation" in asset:
                 files_restored = unarchive_multi_assetFiles(
                     asset['assetLocation'], bucket_name,
-                    original_db_id, assetId, username
+                    original_db_id, assetId, username,
+                    nested=nested_locations_for(asset, bucket_name)
                 )
 
             # Unarchive preview if exists
@@ -1626,8 +1660,8 @@ def unarchive_asset(databaseId, assetId, request_model, claims_and_roles):
         # Move back to original database ID
         asset['databaseId'] = original_db_id
         
-        # Save to original location
-        asset_table.put_item(Item=asset)
+        # Save to original location (the whole row: it keeps or gains the location index attributes)
+        asset_table.put_item(Item=fill_location_attributes(asset, bucket_name))
 
         # Delete from archived location
         asset_table.delete_item(Key={'databaseId': archived_db_id, 'assetId': assetId})
@@ -1793,12 +1827,14 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 asset objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds; the files of an asset nested
+                # in the location are that asset's and stay
+                nested = nested_locations_for(asset, bucket_name)
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix, nested=nested)
                 deleted_items["s3_objects"].extend(deleted_keys)
                 
                 # Also delete any auxiliary files
-                delete_assetAuxiliary_files(original_db_id, asset["assetLocation"])
+                delete_assetAuxiliary_files(original_db_id, asset["assetLocation"], nested=nested)
 
         if "previewLocation" in asset and "Key" in asset["previewLocation"]:
             prefix = asset["previewLocation"]["Key"]
@@ -1806,8 +1842,8 @@ def delete_asset_permanent(databaseId, assetId, request_model, claims_and_roles)
                 # Get bucket from assetLocation or use default
                 logger.info(f"Deleting S3 preview objects and all versions with prefix {prefix} from bucket {bucket_name}")
                 
-                # Delete all objects and all versions with this prefix
-                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix)
+                # Delete all objects and all versions this location holds
+                deleted_keys = delete_s3_prefix_all_versions(bucket_name, prefix, location=prefix)
                 deleted_items["s3_objects"].extend(deleted_keys)
         
         # 2. Delete from asset table (both active and archived locations)

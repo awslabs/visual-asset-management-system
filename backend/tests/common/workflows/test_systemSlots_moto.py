@@ -14,11 +14,12 @@ import pytest
 from moto import mock_aws
 
 from backend.backend.common.workflows import executionLocks as el
-from backend.tests.common.workflows.test_executionLocks_moto import (
+from backend.tests.common.workflows.test_executionLocks_moto import (  # noqa: F401 -- item_atomic_moto: a fixture
     _inputs_table,
     _lock_table,
     _resource,
     _workflow_table,
+    item_atomic_moto,
 )
 
 REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
@@ -55,7 +56,11 @@ class TestNeverMoreThanTheSlotCount:
         assert sorted(claimed) == _keys(3) and busy == 7
         assert _held(table) == ["E0", "E1", "E2"]
 
+    @pytest.mark.usefixtures("item_atomic_moto")
     def test_concurrent_launches_never_hold_more_than_the_slot_count(self, ddb):
+        """Twelve launches race for four slots. Each claim is one conditional PutItem, which DynamoDB
+        applies atomically per item; item_atomic_moto gives moto that guarantee, so the test checks the
+        slot code rather than moto's unlocked check-then-write."""
         table = _lock_table(ddb)
         results = []
 

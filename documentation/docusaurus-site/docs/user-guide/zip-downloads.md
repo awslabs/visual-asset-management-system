@@ -9,6 +9,7 @@ Download as Zip is available when your administrator enables it for the deployme
 -   Any mix of files and folders from one asset, or the whole asset.
 -   The current files, or the file versions recorded in an asset version.
 -   Only assets that are distributable and not archived.
+-   Only assets whose location is a folder. Download the files of an asset created from a single Amazon S3 object directly instead.
 
 The archive holds the files the **File Manager** lists. The generated preview images of files (`{file}.previewFile.{ext}`, such as `model.glb.previewFile.png`), which the file list does not show, are left out of every zip download, under a folder, in the whole asset and in an asset version alike. A selection that holds nothing but such preview files is refused with **The selection has no files**.
 
@@ -60,7 +61,7 @@ While a job is queued or running, the list refreshes itself every few seconds. A
 
 Each job's actions are icon buttons in its **Actions** column, named for screen readers and in their tooltip: a download icon (**Download**), a close icon (**Cancel**) and a remove icon (**Delete**). An action your role does not allow is greyed, with its reason when you hover or focus it.
 
--   **Download** -- available when the job has succeeded. VAMS checks the archive's files again first: if a file in it has since been archived, deleted, or blocked, the download is refused with **A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.** Otherwise VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
+-   **Download** -- available when the job has succeeded. VAMS checks the archive's files again first: if a file in it has since been archived, deleted, or blocked, the download is refused with **A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.** If VAMS cannot check all of the archive's files in time, which can happen for a very large archive, the message is **The files in this archive could not be checked right now. Try again in a moment.** Nothing is wrong with the archive: choose **Download** again. Otherwise VAMS issues a short-lived link and the browser downloads the archive under its archive name. Choose **Download** again for each later download.
 -   **Cancel** -- available while a job is queued or running. The Zip Archive run stops and nothing is kept. A cancel never deletes a job. If the job finishes while the cancel dialog is open, the dialog says so and no longer offers the cancel; close it and download or delete the job from the list. If the job finishes just before your cancel reaches it, it keeps its outcome and a message says it finished before it could be cancelled.
 -   **Delete** -- available when a job has finished. The archive and the job are removed.
 

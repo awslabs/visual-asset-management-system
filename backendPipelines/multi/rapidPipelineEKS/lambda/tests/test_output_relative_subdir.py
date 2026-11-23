@@ -597,3 +597,42 @@ class TestSameFormatConversionDoesNotWriteItsOwnSource(_Chain):
         assert _output_relative_path(command) == "parts/housing/pump-gltf.gltf"
         assert construct_same_format_subdir() not in _output_relative_path(command)
         assert _write_back_key(command) == f"{ASSET_ROOT}parts/housing/pump-gltf.gltf"
+
+
+CUSTOM_ROOT = "projects/site-a/"
+
+
+class _CustomRootChain(_Chain):
+    """The same chain for an asset created on an existing bucket folder, whose keys carry no asset ID."""
+
+    def _manifest(self, relative_path):
+        manifest = super()._manifest(relative_path)
+        manifest["inputFiles"][0].update(key=f"{CUSTOM_ROOT}{relative_path.lstrip('/')}",
+                                         assetRootS3Key=CUSTOM_ROOT, assetRootBucket=BUCKET)
+        return manifest
+
+
+@pytest.mark.unit
+class TestTheSubfolderComesFromTheManifestPath(_CustomRootChain):
+    def test_the_declared_task_payload_reads_the_relative_path(self):
+        assert construct_pipeline_task_payload_spec().get("inputRelativePath") == ("ref", "inputRelativePath")
+
+    def test_an_asset_on_an_existing_bucket_folder_keeps_its_subfolder(self):
+        assert _output_relative_path(self.run("/parts/housing/pump.glb")) == "parts/housing/pump-gltf.gltf"
+
+    def test_same_named_inputs_in_two_folders_stage_apart(self):
+        assert (_output_relative_path(self.run("/left/pump.glb")),
+                _output_relative_path(self.run("/right/pump.glb"))) == ("left/pump-gltf.gltf", "right/pump-gltf.gltf")
+
+
+@pytest.mark.unit
+class TestInputRelativeSubdirOf:
+    @pytest.mark.parametrize("event,key,expected", [
+        ({"inputRelativePath": "/a/b/m.glb", "assetId": "xidM"}, "projects/site-a/a/b/m.glb", "a/b"),
+        ({"inputRelativePath": "/a/m.glb", "assetId": "xidM"}, "pipelines/p0/J/output/E1/files/a/m.glb", "a"),
+        ({"inputRelativePath": "/m.glb", "assetId": "xidM"}, "projects/site-a/m.glb", ""),
+        ({"inputRelativePath": "", "assetId": "xidM"}, "xidM/a/m.glb", "a"),
+        ({"assetId": "xidM"}, "projects/site-a/a/m.glb", ""),
+    ])
+    def test_the_manifest_path_wins_and_the_asset_id_is_the_fallback(self, event, key, expected):
+        assert _load("consolidated_handler").input_relative_subdir_of(event, key) == expected

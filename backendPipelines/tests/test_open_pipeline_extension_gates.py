@@ -14,6 +14,7 @@ Every pipeline is covered by the same cases so the property holds for a new pipe
 existing one, which is how the loose form spread in the first place.
 """
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -35,6 +36,10 @@ PIPELINES = (
      "infra/lib/nestedStacks/pipelines/3dRecon/splatToolbox/constructs/splatToolbox-construct.ts"),
     ("cogConvert", "backendPipelines/conversion/cogConvert",
      "infra/lib/nestedStacks/pipelines/conversion/cogConvert/constructs/cogConvert-construct.ts"),
+    # The Batch tier's launcher; its builder file holds the allow list the pipeline's schema also uses.
+    ("conversion3dBasic", "backendPipelines/conversion/3dBasic",
+     "infra/lib/nestedStacks/pipelines/conversion/3dBasic/lambdaBuilder/"
+     "conversion3dBasicLauncherFunctions.ts"),
     ("coordinateTransform", "backendPipelines/conversion/coordinateTransform",
      "infra/lib/nestedStacks/pipelines/conversion/coordinateTransform/constructs/"
      "coordinateTransform-construct.ts"),
@@ -130,9 +135,12 @@ def _load(name, lambda_dir_rel, allowed=_ALLOWED):
     os.environ.update(overrides)
 
     module_name = f"{name}_openPipeline_undertest"
-    # manifestHelper is vendored per pipeline; drop any previously loaded copy so each handler
-    # imports its own rather than the first one cached.
-    sys.modules.pop("manifestHelper", None)
+    # manifestHelper is vendored per pipeline, and two pipelines ship their own computeTier; drop any
+    # previously loaded copy of a module this lambda directory holds, so each handler imports its own
+    # rather than the first one cached.
+    for entry in os.listdir(lambda_dir):
+        if entry.endswith(".py"):
+            sys.modules.pop(entry[:-3], None)
     sys.path.insert(0, lambda_dir)
     try:
         spec = importlib.util.spec_from_file_location(module_name, path)
@@ -179,9 +187,14 @@ def _invoke(mod, file_uri):
         "startDate": datetime.datetime(2026, 1, 1, 0, 0, 0),
     })
     send_failure = MagicMock()
-    with patch.object(mod.sfn, "start_execution", start), \
-            patch.object(mod.sfn, "send_task_failure", send_failure), \
-            patch.object(mod.events_client, "put_events", MagicMock()):
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(mod.sfn, "start_execution", start))
+        stack.enter_context(patch.object(mod.sfn, "send_task_failure", send_failure))
+        stack.enter_context(patch.object(mod.events_client, "put_events", MagicMock()))
+        # A handler that reads the run's input configuration (3D Basic, for a forced compute tier)
+        # reads it from a stub, never from Amazon S3.
+        if hasattr(mod, "s3_client"):
+            stack.enter_context(patch.object(mod, "s3_client", MagicMock()))
         resp = mod.lambda_handler(_event(file_uri), MagicMock())
     return resp, start, send_failure
 
@@ -217,7 +230,8 @@ def _cdk_allow_list(construct_rel, name=None):
     assert os.path.isfile(path), path
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
-    match = re.search(r"const allowed(?:Input)?(?:File)?Extensions\s*=\s*([^;]*);", source)
+    match = re.search(
+        r"const (?:allowed(?:Input)?(?:File)?Extensions|[A-Z0-9_]+_INPUT_FILE_EXTENSIONS)\s*=\s*([^;]*);", source)
     assert match, f"no allow-list declaration found in {path}"
     return "".join(re.findall(r'"([^"]*)"', match.group(1)))
 

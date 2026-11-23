@@ -100,10 +100,15 @@ BUCKET_TWO = {"bucketId": "b2", "bucketName": "bucket-two", "baseAssetsPrefix": 
 @pytest.mark.unit
 class TestKeyHelpers:
     def test_normalize_base_prefix(self, fe):
-        assert fe.normalize_base_prefix("/assets") == "assets"
-        assert fe.normalize_base_prefix("assets") == "assets"
+        # The shared canonical form (assetLocations.normalize_base_prefix): a trailing slash, so a
+        # listing under "assets" never reaches the sibling folder "assets-other/".
+        assert fe.normalize_base_prefix("/assets") == "assets/"
+        assert fe.normalize_base_prefix("assets") == "assets/"
+        assert fe.normalize_base_prefix("/assets/") == "assets/"
         assert fe.normalize_base_prefix("") == ""
         assert fe.normalize_base_prefix(None) == ""
+        assert fe.normalize_base_prefix("/") == ""
+        assert fe.list_objects_kwargs("b", fe.normalize_base_prefix("assets"))["Prefix"] == "assets/"
 
     def test_folder_marker(self, fe):
         assert fe.is_folder_marker("a1/dir/") is True
@@ -208,8 +213,8 @@ class TestEnumerateLatestLiveFiles:
         assert sorted((r.database_id, r.asset_id, r.relative_file_key, r.bucket_name, r.base_assets_prefix, r.s3_key) for r in refs) == [
             ("db1", "a1", "/dir/scan.e57", "bucket-one", "", "a1/dir/scan.e57"),
             ("db1", "a1", "/model.glb", "bucket-one", "", "a1/model.glb"),
-            ("db2", "a2", "/img.png", "bucket-two", "assets", "assets/a2/img.png"),
-            ("db2", "a2", "/notes.txt", "bucket-two", "assets", "assets/a2/notes.txt"),
+            ("db2", "a2", "/img.png", "bucket-two", "assets/", "assets/a2/img.png"),
+            ("db2", "a2", "/notes.txt", "bucket-two", "assets/", "assets/a2/notes.txt"),
         ]
 
     def test_database_id_is_resolved_once_per_asset(self, fe):
@@ -220,7 +225,7 @@ class TestEnumerateLatestLiveFiles:
     def test_prefix_is_passed_only_for_buckets_that_have_one(self, fe):
         s3 = FakeS3(self.KEYS)
         _run(fe, s3, FakeAssetTable(self.ROWS), [BUCKET_ONE, BUCKET_TWO])
-        assert s3.paginate_calls == [{"Bucket": "bucket-one"}, {"Bucket": "bucket-two", "Prefix": "assets"}]
+        assert s3.paginate_calls == [{"Bucket": "bucket-one"}, {"Bucket": "bucket-two", "Prefix": "assets/"}]
 
     def test_database_filter_keeps_that_database_only(self, fe):
         refs, _ = _run(fe, FakeS3(self.KEYS), FakeAssetTable(self.ROWS), [BUCKET_ONE, BUCKET_TWO], database_id="db2")

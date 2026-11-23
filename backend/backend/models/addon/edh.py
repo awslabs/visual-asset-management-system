@@ -203,9 +203,9 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     # Why a workstation cannot be connected to: ``DISPLAY_SESSION_ENDED``, EDH reports it running but its remote display
     # session has ended (a stop and a start recover it), returned only while the row is ACTIVE and running and not
     # connectable; ``DESKTOP_ERROR``, EDH reports a workstation that has run in its error state (its Amazon DCV health
-    # check failed; it keeps its state, disk and credential), returned only while the row is ACTIVE, STOPPED or
-    # CREATING and not connectable. Never a stale value a stop, a delete or a later state left on the row; None
-    # otherwise.
+    # check failed; it keeps its state and disk, and the error itself revokes nothing), returned only while the row
+    # is ACTIVE, STOPPED or CREATING and not connectable. Never a stale value a stop, a delete or a later state left
+    # on the row; None otherwise.
     connectionUnavailableReason: Optional[str] = None
     # Launch bookkeeping kept by the launch worker: the generic error code of a definite refusal
     # and the number of launch starts made for the row.

@@ -189,7 +189,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/createAssetResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use ("The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.") and an assetId equal to the name of such a folder ("The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
                     content:
                         application/json:
                             schema:
@@ -2166,7 +2166,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip:
         post:
             summary: "Create a Download as Zip job for files, folders, or the whole asset."
-            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
+            description: "Creates a zip download job that packages the selected files, folders, or the whole asset into one zip (ZIP64), tar, or tar.gz archive in the background. The job is owned by the authenticated caller, and only the caller can cancel or delete it. A caller whose role grants the all-users list route (GET /database/{databaseId}/assets/{assetId}/download/zip-all-users) and who holds asset GET permission also sees the job in that list. The download URL route also signs another user's finished archive for a caller who holds asset GET permission and may download from the asset. The request requires API access to this route and asset GET permission, the same asset action a file download requires. The asset must be distributable and not archived. The whole job is refused when any selected file is archived, a deleted version, in the GLACIER or DEEP_ARCHIVE storage class, or has an extension or media type on the executable blocklist, and when the selection exceeds the deployment's file count or total size limit. Folder and whole-asset entries are checked within a bounded pre-scan; members beyond that budget are checked by the Zip Archive job before it writes, and a refusal there ends the job FAILED with a reason naming the file. Error messages never echo a requested version ID or alias. A single-file asset (one created from a bucketExistingKey without a trailing '/') is refused with 400: download its files directly instead. Answers 404 when Download as Zip is not enabled for the deployment (app.pipelines.useZipDownloads.enabled)."
             requestBody:
                 required: true
                 content:
@@ -2377,7 +2377,7 @@ paths:
     /database/{databaseId}/assets/{assetId}/download/zip/{requestId}/url:
         post:
             summary: "Issue a short-lived download URL for a finished zip download."
-            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, 'A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.'). Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
+            description: "Returns a presigned Amazon S3 URL for the job's archive, with a Content-Disposition of attachment and the archive's file name. The URL is issued only when the caller still holds asset GET permission, the asset is still distributable and not archived, the job is SUCCEEDED and within its retention, the archive object exists, and every file in the archive is still present, not archived and not a blocked type at the time of the request (otherwise 400, 'A file in this archive has since been archived or deleted. Restore it, or create a new zip download without it.'). An archive of up to 2,000 files has each file checked; a larger one is checked from listings of its own file keys, current objects only: about one call per 1,000 files, plus at most one more for each stretch of other files in the asset that sorts between the archive's files (such as an unselected folder between two selected ones), whatever its folders or version history. When the check cannot finish within its time bound (15 seconds by default), nothing is signed and the route answers 503 'The files in this archive could not be checked right now. Try again in a moment.'; request the URL again. Another user's job on this asset is signed only when the caller may also download from the asset (the role grants POST /database/{databaseId}/assets/{assetId}/download, the file download route); otherwise it answers 404. Each URL issued for another user's archive is audited with both user IDs. The URL is short-lived (expiresIn seconds) and is never written to the logs; request a new one for each download. Answers 404 when Download as Zip is not enabled for the deployment."
             responses:
                 "200":
                     description: "A download URL for the archive."
@@ -2417,6 +2417,12 @@ paths:
                                 $ref: '#/components/schemas/error'
                 "500":
                     description: Error processing request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/error'
+                "503":
+                    description: "The files in this archive could not all be checked within the time bound ('The files in this archive could not be checked right now. Try again in a moment.'). Nothing was signed and nothing is known to be wrong with the archive; request the URL again."
                     content:
                         application/json:
                             schema:
@@ -3495,7 +3501,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/fileOperationResponse"
                 "400":
-                    description: Invalid parameters, file already exists at destination, source file is archived, or the destination file name has a blocked extension. A missing source file also answers 400.
+                    description: Invalid parameters, file already exists at destination, source file is archived, the source is the file of a single-file asset (it cannot be moved or renamed), or the destination file name has a blocked extension. A missing source file also answers 400.
                     content:
                         application/json:
                             schema:
@@ -9298,7 +9304,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
     /search/nlp:
         post:
             summary: "Natural-language search over vector embeddings."
-            description: "Embed a natural-language query with the deployment's embedding model and match it against the latest, non-archived vector items of every database the caller may read. The route exists only when app.vectorSearch.enabled is set. The answer is one page: size is the whole window and there is no pagination or cursor. Segment items (video windows, text chunks) collapse to one hit per file; the hit's _vector carries segmentHits and the best matching segment. hits.total.relation is gte for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search, so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of 0 is eq unless nlp.truncated is true; nlp.truncated is true when a whole-file result window filled, the accessible database list was cut, or a searched database is one the caller may open only in part. OpenSearch-only constraints (filters, metadataQuery, metadataSearchMode, geoSearch, tags) are applied, on the file index for a file answer and on the asset index for an asset answer as in keyword search, and hits enriched, only when an OpenSearch mode is enabled; otherwise they are ignored with an opensearch:fields_ignored warning. When an OpenSearch mode is enabled and an OpenSearch-only constraint cannot be applied, the request fails with 503 rather than returning hits the constraint was not applied to. File-type words in the query (for example 'video', 'point cloud', 'pdf') add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; _score and _vector.distance are the similarity without the bonus, and the detected classes are reported in nlp.classIntent."
+            description: "Embed a natural-language query with the deployment's embedding model and match it against the latest, non-archived vector items of every database the caller may read. The route exists only when app.vectorSearch.enabled is set. The answer is one page: size is the whole window and there is no pagination or cursor. Segment items (video windows, text chunks) collapse to one hit per file; the hit's _vector carries segmentHits and the best matching segment. hits.total.relation is gte for every answer with at least one hit: the vector index uses approximate nearest-neighbour (ANN) search, so a weak match can be left out even when no window filled, and identical requests can differ in their weakest matches. A total of 0 is eq unless nlp.truncated is true; nlp.truncated is true when a whole-file result window filled, the accessible database list was cut, or a searched database is one the caller may open only in part. OpenSearch-only constraints (filters, metadataQuery, metadataSearchMode, geoSearch, tags) are applied, on the file index for a file answer and on the asset index for an asset answer as in keyword search, and hits enriched, only when an OpenSearch mode is enabled; otherwise they are ignored with an opensearch:fields_ignored warning. When an OpenSearch mode is enabled and an OpenSearch-only constraint cannot be applied, the request fails with 503 rather than returning hits the constraint was not applied to. The OpenSearch reads are bounded by keyword search's deadline, 26.5 seconds after API Gateway received the request: none starts later than 26 seconds after that, each waits at most the time left for its connection and for its answer, and none is retried, so a slow or cold index answers the hits with the opensearch:enrichment_failed warning (or 503 under an OpenSearch-only constraint) instead of API Gateway's 504. File-type words in the query (for example 'video', 'point cloud', 'pdf') add a fixed bonus of 0.1 to the ranking value of hits of those file classes, so such a hit moves ahead of a hit of another class that scores less than 0.1 higher; _score and _vector.distance are the similarity without the bonus, and the detected classes are reported in nlp.classIntent."
             requestBody:
                 required: true
                 content:
@@ -9325,7 +9331,7 @@ Several triggers of one type are supported: address each with its own key ('<typ
                             schema:
                                 $ref: '#/components/schemas/error'
                 "503":
-                    description: "Retry later: the vector index is being built ('Vector index is being built'), an OpenSearch-only constraint could not be applied ('The search filters could not be applied. Try again; if it keeps failing, contact your administrator.'), or Amazon Bedrock or Amazon DynamoDB throttled or timed out the request ('Search is busy right now. Try again in a moment.')."
+                    description: "Retry later: the vector index is being built ('Vector index is being built'), an OpenSearch-only constraint could not be applied, or not before the search's deadline ('The search filters could not be applied. Try again; if it keeps failing, contact your administrator.'), or Amazon Bedrock or Amazon DynamoDB throttled or timed out the request ('Search is busy right now. Try again in a moment.')."
                     content:
                         application/json:
                             schema:
@@ -13511,7 +13517,7 @@ components:
                     description: "Whether the asset can be downloaded."
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
-                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation."
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces, vams.preparedDownloads) is refused with 400."
                 tags:
                     type: array
                     items:
@@ -13521,7 +13527,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset."
+                    description: "Existing key in the database default Amazon S3 bucket for the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace`, `workspaces` or `vams.preparedDownloads`) as any path segment is refused with 400."
             required:
                 - databaseId
                 - assetName
@@ -14256,7 +14262,7 @@ components:
                 connectionUnavailableReason:
                     type: string
                     nullable: true
-                    description: "Why the workstation cannot be connected to. `DISPLAY_SESSION_ENDED`: an ACTIVE workstation EDH reports `running` whose connection link signs no user in (no `authToken` or `username`), which EDH lists when its Amazon DCV broker holds no session for the desktop; recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. Stop the workstation, then start it again, to reconnect. `DESKTOP_ERROR`: EDH reports a workstation that has run (ACTIVE, STOPPED, or CREATING after a start EDH accepted) in its `error` state, which EDH sets when the desktop's Amazon DCV health check fails; the workstation keeps its state, disk and credential, and EDH moves it on once the check passes, which clears the reason. Wait a few minutes, or stop it, then start it again. Only a new launch that never ran becomes ORPHANED for `error`. Either way `connectionAvailable` is false and `activity` null. Null otherwise."
+                    description: "Why the workstation cannot be connected to. `DISPLAY_SESSION_ENDED`: an ACTIVE workstation EDH reports `running` whose connection link signs no user in (no `authToken` or `username`), which EDH lists when its Amazon DCV broker holds no session for the desktop; recorded when connect or the desktop sign-in of a Windows desktop reads that link and kept while EDH still reports the desktop running; a connectable link, or a state other than `running`, clears it. Stop the workstation, then start it again, to reconnect. `DESKTOP_ERROR`: EDH reports a workstation that has run (ACTIVE, STOPPED, or CREATING after a start EDH accepted) in its `error` state, which EDH sets when the desktop's Amazon DCV health check fails; the workstation keeps its state and disk, and the error does not revoke its key (a `STOPPED` workstation's key is revoked as any stopped one's is); EDH moves it on once the check passes, which clears the reason. Wait a few minutes, or stop it, then start it again. Only a new launch that never ran becomes ORPHANED for `error`. Either way `connectionAvailable` is false and `activity` null. Null otherwise."
                     enum:
                         - DISPLAY_SESSION_ENDED
                         - DESKTOP_ERROR
@@ -19224,7 +19230,7 @@ components:
                     description: "File path relative to the asset root"
                 isPrefix:
                     type: boolean
-                    description: "Whether to archive all files under this prefix"
+                    description: "Whether filePath names a folder: archive every file in that folder. A trailing '/' is added when missing, so a file whose name only starts with the folder name is not selected."
                     default: false
             required:
                 - filePath
@@ -19246,7 +19252,7 @@ components:
                     description: "File path relative to the asset root"
                 isPrefix:
                     type: boolean
-                    description: "Whether to delete all files under this prefix"
+                    description: "Whether filePath names a folder: delete every file in that folder. A trailing '/' is added when missing, so a file whose name only starts with the folder name is not selected."
                     default: false
                 confirmPermanentDelete:
                     type: boolean

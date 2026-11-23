@@ -501,7 +501,7 @@ aws ecr describe-repositories \
 
 ## Step 6: Delete AWS Systems Manager parameters
 
-VAMS creates explicitly named SSM parameters under the deployment prefix `/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying.
+VAMS creates explicitly named SSM parameters under the deployment prefix `/<CONFIG_NAME>-<BASE_STACK_NAME>-<REGION>/` (resource-name parameters under `.../resourceNames/`, plus OpenSearch, web URL, and Location Service parameters). They are deleted with the stack, but if a stack deletion fails partway, orphaned parameters conflict with the same-named parameters on a subsequent redeploy using the same configuration name, so delete any remaining ones before redeploying. One parameter is never part of the stack: `.../resourceNames/dataMigrations/assetLocationIndex`, the completion marker the v2.6 to v2.7 migration's `assetLocationIndex` step writes. It always remains after the stack is deleted; the loop below removes it with the rest.
 
 ```bash
 # List remaining VAMS parameters for the deployment

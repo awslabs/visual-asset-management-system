@@ -87,7 +87,16 @@ _UNREPORTED_KINDS = (KIND_METADATA, KIND_RENDERER_MDL)
 
 
 class ReferencedFileError(ValueError):
-    """A buffer the input model references cannot be used: rejected, missing, or over a limit."""
+    """A buffer the input model references cannot be used: rejected, missing, or over a limit.
+
+    ``for_size`` is True when a size or memory limit refused it (the AWS Batch tier may be able to
+    convert it); ``needed_bytes`` is then the total of the files the input references with the one
+    that crossed the limit, when known."""
+
+    def __init__(self, message, for_size=False, needed_bytes=None):
+        super().__init__(message)
+        self.for_size = for_size
+        self.needed_bytes = needed_bytes
 
 
 class Reference(NamedTuple):
@@ -181,6 +190,9 @@ class FetchReport:
     # completion message.
     skipped_for_size: List[str] = field(default_factory=list)
     skipped_for_size_count: int = 0
+    # The declared sizes (HeadObject) of every referenced file found in the asset, fetched or left out
+    # for size. A larger job is sized from this and the input, not from what was fetched.
+    declared_bytes: int = 0
     # Bytes of the non-image files fetched, and decoded bytes of the images fetched.
     geometry_bytes: int = 0
     image_decoded_bytes: int = 0
@@ -473,6 +485,8 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
     input_bytes = os.path.getsize(local_input_path)
     available = {input_relative_path: local_input_path}
     unavailable: Dict[str, str] = {}
+    # The references a size or memory limit refused, with the bytes the referenced files would total.
+    size_refused: Dict[str, int] = {}
     looked_up = 0
     queue = deque([(local_input_path, input_relative_path, ext, 0)])
     scanned: Dict[str, object] = {}
@@ -492,10 +506,11 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
             "unsampled": getattr(reference, "kind", "") == KIND_UNSAMPLED_TEXTURE})
 
     def refuse(reference: Reference, rel_path: str, name: str, failure: str, reason: str,
-               for_size: bool = False, rejected: bool = False, raw_name: str = None):
+               for_size: bool = False, rejected: bool = False, raw_name: str = None,
+               needed_bytes: int = None):
         """Fail on a required reference; skip an optional one with a warning naming it."""
         if reference.required:
-            raise ReferencedFileError(failure)
+            raise ReferencedFileError(failure, for_size=for_size, needed_bytes=needed_bytes)
         record(reference, rel_path, raw_name if raw_name is not None else name, reason, rejected, for_size)
         if for_size:
             report.skipped_for_size_count += 1
@@ -569,7 +584,8 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
             if relative in unavailable:
                 # Already looked up and not fetched, and already reported once if it was skipped.
                 if reference.required:
-                    raise ReferencedFileError(unavailable[relative])
+                    raise ReferencedFileError(unavailable[relative], for_size=relative in size_refused,
+                                              needed_bytes=size_refused.get(relative))
                 continue
             if looked_up >= limits.max_files:
                 failure = (f"The input references more than {limits.max_files} files; this "
@@ -591,14 +607,17 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                        f"again to include it)")
                 continue
             size, version_id = measured
+            report.declared_bytes += size
             image = is_image(relative)
             if report.total_bytes + size > limits.max_total_bytes:
                 failure = (f"The files the input references exceed {limits.max_total_bytes} bytes "
                            f"(reached at {relative}, {size} bytes).")
                 unavailable[relative] = failure
+                size_refused[relative] = report.total_bytes + size
                 refuse(reference, rel_path, relative, failure,
                        f"its {size} bytes take the referenced files past "
-                       f"{limits.max_total_bytes} bytes", for_size=True)
+                       f"{limits.max_total_bytes} bytes", for_size=True,
+                       needed_bytes=report.total_bytes + size)
                 continue
             if (not image and limits.max_geometry_bytes is not None
                     and report.geometry_bytes + size > limits.max_geometry_bytes):
@@ -606,10 +625,11 @@ def fetch_referenced_files(client, bucket: str, root_key: str, input_relative_pa
                            f"{limits.max_geometry_bytes} bytes this function can convert beyond the "
                            f"input.")
                 unavailable[relative] = failure
+                size_refused[relative] = report.total_bytes + size
                 refuse(reference, rel_path, relative, failure,
                        f"its {size} bytes take the model's files past the "
                        f"{limits.max_geometry_bytes} bytes this function can convert beyond the input",
-                       for_size=True)
+                       for_size=True, needed_bytes=report.total_bytes + size)
                 continue
             image_room = None
             if image and limits.image_budget is not None:

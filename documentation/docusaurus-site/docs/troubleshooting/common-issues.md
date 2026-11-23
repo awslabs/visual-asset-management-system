@@ -452,6 +452,41 @@ For operations that may exceed the integration timeout, check your AWS Lambda fu
 
 Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
+### Requests Time Out or Workflow Runs Fail After an Idle Period
+
+Each VAMS AWS Lambda function reads its resource names from AWS Systems Manager Parameter Store when it starts. Parameter Store throughput is shared by every application in an AWS account and Region, so when many functions start at once (the first requests after an idle period, a burst of workflow runs, or several VAMS deployments in one account and Region), Parameter Store can throttle those reads.
+
+**Symptoms:**
+
+-   API requests fail or time out for a short time after the deployment was idle, or the web application shows "Page access could not be checked"
+-   Workflow runs fail with an error that names `GetParametersByPath` and `ThrottlingException`, or with `ResourceNameUnavailableError` and "Resource name not resolved while SSM sweeps back off after a failure" or "Resource name parameters could not be read from SSM"
+-   Function logs in Amazon CloudWatch show `Resource name sweep failed (ThrottlingException)` lines
+-   Search answers "Search is temporarily unavailable. Try again in a moment.", the web application starts slowly or shows no map until the page is reloaded, or new files appear in search results later than usual
+-   Function logs show `Parameter Store read failed (ThrottlingException)` lines
+
+**Behavior:**
+
+A function retries a throttled read for up to 4 seconds. The same limit and back-off apply to the other settings VAMS reads from Parameter Store: the search endpoint and index names, the web application URL and the ARN of the map API key. Each function reads them on first use and keeps them for a while (an hour for the search settings, five minutes for the web application URL and the map API key ARN). While the reads fail, search answers that it is temporarily unavailable, the web application starts without the map until a later reload, and the indexers hand their batch back to the queue, which delivers it again about 16 minutes later. If the read still fails, the function does not read Parameter Store again for a short back-off window (about 2 seconds, doubling up to 30 seconds while the reads keep failing), and a lookup of a name the function has not cached fails without reading again. A cold API request that meets this fails within about 15 seconds instead of waiting out the API's 29-second limit. Requests succeed again once Parameter Store answers. A workflow step that VAMS runs between and after the pipelines (output processing, the wait for large outputs, the step between two pipelines, and the error handling) is retried when it, or a VAMS function it calls (file ingestion, the metadata service or the copy engine), could not start because its resource names were refused: up to 12 times, with randomized delays that start at up to 15 seconds and grow to at most 60 seconds, about 11 minutes at most in all. A retried output step ingests only the outputs that had not landed. A burst can still fail runs, for example when a step is refused more often than that or the request that starts a run is refused.
+
+**Resolution:**
+
+-   Run fewer VAMS deployments, or other applications that read Parameter Store heavily, in the same account and Region.
+-   Turn on the Parameter Store higher-throughput setting for the account and Region. It raises the `GetParametersByPath` limit from the default of 40 transactions per second, which `GetParameter` and `GetParameters` share, to 500. The setting applies to every application in the account and Region and is charged per API interaction (one per parameter a request returns). Check that it is offered in your partition and Region before relying on it.
+
+Read the current setting (read-only):
+
+```bash
+aws ssm get-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled
+```
+
+Turn it on:
+
+```bash
+aws ssm update-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled --setting-value true
+```
+
+See [Managing Parameter Store throughput](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-throughput.html) for the quotas and pricing.
+
 ### Asset ID Refused as Not Unique Although No Asset Exists
 
 **Symptoms:**
@@ -505,6 +540,29 @@ Amazon OpenSearch indexing is asynchronous. After bulk operations, allow 30-60 s
 2. Verify the Amazon OpenSearch cluster health in the AWS Management Console.
 3. If necessary, trigger a re-index by setting `reindexOnCdkDeploy: true` in the configuration and redeploying, or by using the manual re-index tool in `infra/deploymentDataMigration/`.
 4. If a file is in the asset's file list but never appears in search, or a deleted asset or file is still listed, check the indexing dead-letter queues (next section).
+
+### Bucket Sync Rejected-Record Queue Holds Messages
+
+**Symptoms:**
+
+-   The Amazon CloudWatch alarm `<configuration name>-<app.baseStackName>-bucketSyncRejected` is in the `ALARM` state.
+-   A file written directly to an asset bucket is in no asset and not in search, and the bucket-sync function logged `Bucket sync rejected key ... (ambiguousLocation)`, `(archivedOwnerLocationInUse)` or `(assetIdInUse)` at `ERROR`.
+-   An upload, a new folder, a copy into an asset, a file revert, unarchive or primary-file change, or a workflow output is refused with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.`
+-   Unarchiving an asset is refused with `This asset shares its storage location with another asset, so it cannot be unarchived while that asset is live.`
+
+**Cause:** two live assets hold the same stored location in the bucket, so bucket sync cannot tell which one the file belongs to. It attributes the file to neither and sends the S3 notification to the deployment's bucket-sync rejected-record queue (`reason` `ambiguousLocation`). A file written directly into the location of an archived asset while another live asset is stored at exactly that location goes there too (`reason` `archivedOwnerLocationInUse`): bucket sync does not unarchive the asset, because the location would be shared again. So does a file that no asset's location holds, written into a top-level folder whose name is the ID of an existing asset stored somewhere else, live or archived, in any database or bucket (`reason` `assetIdInUse`); for example, a file put under `<assetId>/` for an asset created with `bucketExistingKey`. Bucket sync would otherwise create a new asset for the folder with that same ID, and two assets with one ID break the operations that find an asset by its ID, such as comments and subscriptions. Each message carries `reason`, `bucket`, `key`, `candidateAssets` (the `databaseId:assetId` of each asset that claims the location) and the original S3 `record`. Messages are kept for 14 days.
+
+**What archive and permanent delete do to a shared location:** the files of a location two live assets share belong to both, so neither asset's destructive operations change them. Archiving one asset archives its asset record and leaves every shared file live. Permanently deleting one asset removes its records and leaves every shared file and every version of it in place; viewer data in the auxiliary bucket stays when both assets are in one database. Deleting, archiving or moving a shared file through either asset is refused with `This file is also held by another asset and is not archived or deleted through this asset`. Do not move or delete the shared objects in Amazon S3 directly: they are the remaining asset's files.
+
+**What VAMS refuses on a shared location:** once the `assetLocationIndex` migration step has run, VAMS writes no file into a location another live asset also holds, because bucket sync could not attribute the file to either asset. An upload, a new folder, a copy into either asset, a file revert, unarchive or primary-file change, and a workflow output that would land there are refused before anything is written, with `This asset shares its storage location with another asset, so no file can be added or changed here until one of them is archived.` The refusal names neither asset. Writes work again once you have followed the resolution below. For the same reason an archived asset is not unarchived, through the API or by bucket sync, while another live asset is stored at exactly its location; that refusal names neither asset either. An asset whose location is inside another asset's folder, or holds another asset's location, is unarchived as usual: each of its files has one owner, the asset with the deepest location.
+
+**Resolution:**
+
+1. Read the messages in the queue (Amazon SQS console, **Send and receive messages**) and note the `candidateAssets` of each.
+2. Decide which asset keeps the location, then archive the other asset. Only its asset record is archived; the shared files stay live and belong to the remaining asset from then on. If you no longer need the archived asset, you can permanently delete it later, which leaves the shared files in place too. VAMS refuses to unarchive it while the remaining asset is live. For an `archivedOwnerLocationInUse` message, the archived asset in `candidateAssets` (its `databaseId` ends in `#deleted`) stays archived: to bring it back, archive the live asset first and then unarchive it; otherwise move the object into the live asset's own location.
+   For an `assetIdInUse` message, `candidateAssets` names the assets that already have the folder's ID. If the file belongs to one of them, upload it through VAMS, or move the object into that asset's own location in Amazon S3, and delete the message. To make the folder an asset of its own, create an asset in a database whose default bucket is the folder's bucket, with `bucketExistingKey` set to the folder (for example `<assetId>/`) and no asset ID, so VAMS gives the asset a new one. VAMS imports the files already in the folder into the new asset, so the messages of that folder can then be deleted without sending them again.
+3. Send each message's `record` again as an S3 event to the bucket's created-events queue (`<configuration name>-<app.baseStackName>-bucketSyncCreated--<n>`), wrapped as `{"Records": [<record>]}`, then delete it from the rejected-record queue. Bucket sync then attributes the file to the remaining asset.
+4. Check the remaining asset's file list: it lists every file of the location, live.
 
 ### Indexing Dead-Letter Queue Holds Messages
 
@@ -696,6 +754,7 @@ These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). 
 **Resolution:**
 
 -   STEP input is off by default because it adds Open CASCADE to the conversion image. Set `app.pipelines.useConversion3dBasic.enableStepInput` to `true` in `infra/config/config.json` and deploy again; the image is rebuilt with cascadio. See the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) and the [configuration reference](../deployment/configuration-reference.md).
+-   A model is refused as too large for the conversion function. Turn on the AWS Batch tier (`app.pipelines.useConversion3dBasic.batchTier.enabled`, which needs `app.useGlobalVpc.enabled`) to convert it on an AWS Fargate job of up to 120 GiB. A run that waits for a job and then fails in `RUNNABLE` is blocked by the account's Fargate On-Demand vCPU quota; a run refused above the largest job size, or naming a Region, is explained in the [Batch tier troubleshooting](../pipelines/3d-conversion.md#troubleshooting).
 -   An incomplete conversion names the referenced files it could not include in `conversion-incomplete.json` and the run log, with the reason for each. Upload a missing file to the asset at the path the model names, or change a reference that points outside the asset (an absolute path, a URL, or a path that leaves the asset) to a relative path, and run the conversion again. Set the template's Missing references option to `fail` to stop such a run instead of converting without the files.
 
 ### Media Preview Run Completes With No Preview

@@ -337,7 +337,7 @@ vamscli edh workstation connect SESSION_ID
 
 **Cause:**
 
-EDH checks every running desktop's Amazon DCV server and marks the desktop `error` when the check fails, then moves it on once the check passes again. VAMS keeps such a workstation in its state, with its disk, data and session key; only a new launch that never ran is recorded `ORPHANED` for `error`.
+EDH checks every running desktop's Amazon DCV server and marks the desktop `error` when the check fails, then moves it on once the check passes again. VAMS keeps such a workstation in its state, with its disk and data, and the error does not revoke its session key (a `STOPPED` workstation's key is revoked as any stopped one's is); only a new launch that never ran is recorded `ORPHANED` for `error`.
 
 **Resolution:**
 

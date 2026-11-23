@@ -24,7 +24,7 @@ Below the page title, the Search view places the query in a band of its own: the
 
 The result count next to the title reports the last search that ran, so it appears only after one has. **Clear all filters** appears in the title row once you have changed the search from the page's defaults with a query, a filter, or a metadata filter, and resets them; the count disappears until the reloaded list arrives. It keeps the asset or file choice, and on a database's page it keeps that database. When searches overlap (a page change while a search is still running, for example), the page shows the answer to the newest one and stays in its loading state until that answer arrives.
 
-A search that cannot finish shows a **Search failed** notification with the reason, and the page keeps its previous results and every search control. For example:
+A search that cannot finish shows a **Search failed** notification with the reason, and the page keeps its previous results and every search control. When no results are on screen yet, such as the first search after you open the page, a **Search did not finish** message above the results also says so until the next search runs. For example:
 
 -   "The search filters could not be applied. Try again; if it keeps failing, contact your administrator." when a natural-language search asked for metadata, tag, or location filters that could not be applied at that moment. The search does not show unfiltered results instead.
 -   "Search is busy right now. Try again in a moment." when a natural-language search was throttled or timed out.

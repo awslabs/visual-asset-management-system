@@ -234,8 +234,9 @@ def normalize_base_prefix(base_prefix: str) -> str:
     else names a folder within the bucket, so the run I/O of a bucket registered under a prefix stays
     inside it rather than at the bucket root.
     """
-    trimmed = (base_prefix or "").strip("/")
-    return f"{trimmed}/" if trimmed else ""
+    # The one shared normalizer; imported here so this module keeps no AWS dependency at import.
+    from common.assetLocations import normalize_base_prefix as shared_normalize_base_prefix
+    return shared_normalize_base_prefix(base_prefix)
 
 
 def run_bucket_key(base_prefix: str, key: str) -> str:
@@ -360,12 +361,16 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
                          database_id: str = "", asset_id: str = "",
                          asset_root_s3_key: str = "", aux_preview_prefix: str = "",
                          bucket_id: str = "", bucket_region: str = "",
-                         bucket_account_id: str = "") -> dict:
+                         bucket_account_id: str = "", asset_root_bucket: str = "",
+                         exclude_locations=None) -> dict:
     """One self-locating input-manifest entry: an asset-relative path mapped to the S3
     location (bucket/key/versionId) and asset identity a pipeline reads for that path.
 
     Locations are carried as relative keys plus the file's own bucket (never a pre-built
-    s3:// URI): `assetRootS3Key` is this file's asset-root prefix within `bucket`, and
+    s3:// URI): `assetRootS3Key` is the asset-root prefix of this file's asset within
+    `assetRootBucket`, the asset's own bucket. That is `bucket` for a file read from its asset
+    (the default when `asset_root_bucket` is not given) and the asset bucket, not the run bucket,
+    for an entry an earlier step's output shadows; both are empty for an entry no asset owns.
     `auxPreviewPrefix` is this file's unique auxiliary-bucket preview prefix. Downstream
     consumers reconstruct s3:// as needed from `bucket` + the relevant relative key.
     `bucketId` is the asset bucket's registration id (the asset-buckets table key), carried
@@ -373,12 +378,17 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
     baseAssetsPrefix -- from the manifest alone; empty when the writer has no asset row.
     `bucketRegion` is the Region the file's bucket is in, which a pipeline uses to build the
     client that reads the file; a consumer treats an empty value as the deployment Region.
-    `bucketAccountId` is the bucket's owning account when it is not the deployment account."""
-    return {
+    `bucketAccountId` is the bucket's owning account when it is not the deployment account.
+    `excludeLocations`, present only when not empty, lists the stored locations of other assets nested in
+    the input asset's location under a folder input: the keys they hold are those assets' files, so a
+    pipeline that lists the folder leaves them out. Every step's entry carries it (the interim step
+    recomputes it for steps 2+, `fileAttribution.folder_input_exclude_locations`)."""
+    entry = {
         "relativePath": normalize_file_key(relative_path),
         "databaseId": database_id or "",
         "assetId": asset_id or "",
         "assetRootS3Key": asset_root_s3_key or "",
+        "assetRootBucket": (asset_root_bucket or bucket or "") if asset_root_s3_key else "",
         "auxPreviewPrefix": aux_preview_prefix or "",
         "bucket": bucket,
         "bucketId": bucket_id or "",
@@ -387,6 +397,9 @@ def build_manifest_entry(relative_path: str, bucket: str, key: str, version_id: 
         "key": key,
         "versionId": version_id or "",
     }
+    if exclude_locations:
+        entry["excludeLocations"] = sorted(exclude_locations)
+    return entry
 
 
 def build_manifest_output_target(location_type="asset", asset_id="", database_id="",

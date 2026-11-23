@@ -15,7 +15,11 @@ import sys
 import types
 from unittest.mock import MagicMock, patch
 
+import botocore.session
 import pytest
+from botocore.exceptions import ClientError
+
+from backend.tests.ssmParametersStub import FakeClock, install_clock
 
 _SEARCH_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "osSemanticSearch", "search.py")
 _ACCESS_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend", "common", "databaseAccess.py")
@@ -31,11 +35,14 @@ class _Recorder:
 
     def __init__(self):
         self.services = []
+        self.ssm_configs = []
         self.ssm = MagicMock()
         self.ssm.get_parameter.side_effect = lambda Name: {"Parameter": {"Value": f"value-of-{Name}"}}
 
     def __call__(self, name, *args, **kwargs):
         self.services.append(name)
+        if name == "ssm":
+            self.ssm_configs.append(kwargs.get("config"))
         return self.ssm if name == "ssm" else MagicMock()
 
 
@@ -120,6 +127,18 @@ class TestOpenSearchEnabled:
         assert first.asset_index == "value-of-/vams/aos/assetIndexName"
         assert second.file_index == "value-of-/vams/aos/fileIndexName"
 
+    def test_the_client_retries_as_before_unless_the_caller_turns_retries_off(self, monkeypatch):
+        """Keyword search keeps three retries, timeouts included; natural-language search's OpenSearch step
+        asks for none, so a query that times out at its deadline is not started again."""
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        opensearchpy = MagicMock()
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": opensearchpy}):
+            module.DualIndexSearchManager()
+            module.DualIndexSearchManager(max_retries=0, retry_on_timeout=False)
+        keyword, nlp = (c.kwargs for c in opensearchpy.OpenSearch.call_args_list)
+        assert (keyword["max_retries"], keyword["retry_on_timeout"], keyword["timeout"]) == (3, True, 30)
+        assert (nlp["max_retries"], nlp["retry_on_timeout"], nlp["timeout"]) == (0, False, 30)
+
     def test_client_failure_leaves_the_manager_unavailable(self, monkeypatch):
         module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
         broken = MagicMock()
@@ -169,3 +188,56 @@ class TestOpenSearchEnabledButUnavailable:
                 module.opensearch_settings()
             recorder.ssm.get_parameter.side_effect = lambda Name: {"Parameter": {"Value": f"value-of-{Name}"}}
             assert module.opensearch_settings()["endpoint"] == "value-of-/vams/aos/endPoint"
+
+
+def _always_throttled(Name):
+    raise ClientError({"Error": {"Code": "ThrottlingException", "Message": "Rate exceeded"},
+                       "ResponseMetadata": {"HTTPStatusCode": 400}}, "GetParameter")
+
+
+class TestParameterStoreThrottling:
+    """#1820: the aos/* reads go through common.ssmParameters. A throttled first use answers the
+    existing 503 within the read budget, instead of after five adaptive retries per value (about 30 s
+    live), and the container then backs off: the next request inside the window reads nothing."""
+
+    @pytest.fixture
+    def throttled_search(self, monkeypatch):
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        recorder.ssm.get_parameter.side_effect = _always_throttled
+        # The helper this test's search module reads through (loaded fresh for every test), on a fake clock.
+        clock = install_clock(sys.modules["common.ssmParameters"], FakeClock(), monkeypatch)
+        return module, recorder, clock
+
+    @pytest.mark.parametrize("method,path", ROUTES)
+    def test_a_throttled_first_use_is_a_503_inside_the_read_budget(self, throttled_search, method, path):
+        module, recorder, clock = throttled_search
+        started = clock.now
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            response = module.lambda_handler(_event(method, path), None)
+        assert response["statusCode"] == 503
+        assert json.loads(response["body"]) == {"message": module.SEARCH_UNAVAILABLE_MESSAGE}
+        assert recorder.ssm.get_parameter.call_count > 1, "the throttled read was never retried"
+        assert clock.now - started <= sys.modules["common.ssmParameters"].PARAMETER_READ_BUDGET_SECONDS
+
+    def test_the_next_request_inside_the_back_off_window_reads_nothing(self, throttled_search):
+        module, recorder, _ = throttled_search
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            first = module.lambda_handler(_event("POST", "/search"), None)
+            calls = recorder.ssm.get_parameter.call_count
+            second = module.lambda_handler(_event("POST", "/search/simple"), None)
+        assert first["statusCode"] == second["statusCode"] == 503
+        assert recorder.ssm.get_parameter.call_count == calls
+
+    def test_search_reads_through_the_bounded_client(self, monkeypatch):
+        """Search used to build a new SSM client per read with Rule 6's config: 60 s timeouts, six
+        attempts. The client its reads use now has 1 s / 2 s timeouts and one attempt."""
+        module, recorder = _load_search(monkeypatch, {"OPENSEARCH_DISABLED": "false", **SSM_ENV})
+        with patch("boto3.client", side_effect=recorder), patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
+            module.DualIndexSearchManager()
+        assert recorder.ssm_configs, "search read no setting"
+        for config in recorder.ssm_configs:
+            resolved = botocore.session.get_session().create_client(
+                "ssm", region_name="us-east-1", config=config).meta.config
+            assert (resolved.connect_timeout, resolved.read_timeout) == (1, 2)
+            assert resolved.retries.get("total_max_attempts") == 1
+        assert len(recorder.ssm_configs) == 1, "a client was built per read"

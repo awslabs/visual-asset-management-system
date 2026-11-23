@@ -14,6 +14,8 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import is_folder_location, normalize_base_prefix, object_key_for, relative_path_in
+from common.fileAttribution import nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -79,13 +81,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -132,7 +128,17 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         
     Returns:
         The properly resolved S3 key without duplication
+
+    Raises:
+        VAMSGeneralErrorResponse: the asset is a single file and the path does not name it
     """
+    # A single-file location's paths name its object, its previews and its companion folder {key}/
+    if asset_base_key and not is_folder_location(asset_base_key):
+        object_key = object_key_for(asset_base_key, file_path)
+        if object_key is None:
+            raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
+        return object_key
+
     # Normalize the asset base key to ensure it ends with '/'
     if asset_base_key and not asset_base_key.endswith('/'):
         asset_base_key = asset_base_key + '/'
@@ -151,6 +157,14 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         resolved_path = asset_base_key + file_path
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
+
+def held_by_nested_asset(asset_bucket, asset_base_key, object_key) -> bool:
+    """Whether a resolved key is held by another asset's location nested in this asset's location: it is
+    that asset's file, and this asset answers it as a missing file."""
+    nested = nested_locations_of_asset(asset_table, buckets_table, None, asset_bucket, asset_base_key,
+                                       asset_table_name=asset_storage_table_name)
+    return nested.holder(object_key) is not None
+
 
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions
@@ -264,6 +278,8 @@ def handle_head_request(event, claims_and_roles):
         message = "File key exceeds the maximum S3 object key length"
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
+    if held_by_nested_asset(asset_bucket, asset_base_key, object_key):
+        return general_error(body={'message': 'File not found'}, status_code=404, event=event)
 
     # The quarantine block is evaluated only for an authorized caller, so a denied caller
     # cannot learn the asset's compliance state from the response. It applies to the resolved key:
@@ -275,9 +291,10 @@ def handle_head_request(event, claims_and_roles):
     if asset_version_id_alias or asset_version_id:
         # Compute relative key by stripping asset_base_key from resolved object_key
         relative_file_key = object_key
-        normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-        if relative_file_key.startswith(normalized_base):
-            relative_file_key = relative_file_key[len(normalized_base):]
+        if not is_folder_location(asset_base_key):
+            relative_file_key = relative_path_in(asset_base_key, object_key) or object_key
+        elif relative_file_key.startswith(asset_base_key):
+            relative_file_key = relative_file_key[len(asset_base_key):]
         relative_file_key = relative_file_key.lstrip('/')
 
         if asset_version_id_alias:
@@ -518,6 +535,13 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Resolve the full S3 key
             object_key = resolve_asset_file_path(asset_base_key, object_key)
+            if held_by_nested_asset(asset_bucket, asset_base_key, object_key):
+                error_response = general_error(body={"message": "File not found"}, status_code=404, event=event)
+                error_response['headers'].update({
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                })
+                return error_response
 
             # The validator bounded the asset-relative part; the resolved key carries the asset prefix
             # as well and is what S3 measures. Refuse it here so an over-long key never reaches get_object.
@@ -544,9 +568,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             if asset_version_id_alias or asset_version_id:
                 # Compute relative key by stripping asset_base_key from resolved object_key
                 relative_file_key = object_key
-                normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-                if relative_file_key.startswith(normalized_base):
-                    relative_file_key = relative_file_key[len(normalized_base):]
+                if not is_folder_location(asset_base_key):
+                    relative_file_key = relative_path_in(asset_base_key, object_key) or object_key
+                elif relative_file_key.startswith(asset_base_key):
+                    relative_file_key = relative_file_key[len(asset_base_key):]
                 relative_file_key = relative_file_key.lstrip('/')
 
                 if asset_version_id_alias:

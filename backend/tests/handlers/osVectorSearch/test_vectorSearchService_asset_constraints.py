@@ -23,6 +23,7 @@ from tests.handlers.authz import query_string_oracle as oracle
 from tests.handlers.authz.search_authz_harness import load_search_module
 from tests.handlers.osVectorSearch import test_vectorSearchService as behaviour
 from tests.handlers.osVectorSearch.test_vectorSearchService import FakeStore, call, item, rows
+from tests.handlers.osVectorSearch.vectorsearch_support import stub_api_check_deadline
 
 svc = behaviour.svc
 
@@ -62,7 +63,7 @@ def opensearch(svc, search_module, engine):
     svc.opensearch_disabled = False
     state = types.SimpleNamespace(calls=[], fail_index=None)
 
-    def search(index, body):
+    def search(index, body, **_):
         state.calls.append((index, copy.deepcopy(body)))
         if index == state.fail_index:
             raise RuntimeError("connection refused")
@@ -79,6 +80,7 @@ def opensearch(svc, search_module, engine):
     manager.client, manager.file_index, manager.asset_index = client, FILE_INDEX, ASSET_INDEX
     stub = types.ModuleType("handlers.osSemanticSearch.search")
     stub.DualIndexSearchManager = MagicMock(return_value=manager)
+    stub._api_check_deadline = stub_api_check_deadline
     stub.DualIndexQueryBuilder = search_module.DualIndexQueryBuilder
     saved = sys.modules.get("handlers.osSemanticSearch.search")
     sys.modules["handlers.osSemanticSearch.search"] = stub
@@ -157,7 +159,7 @@ def test_the_asset_index_is_asked_in_windows_of_100_each_sized_to_its_own_ids(sv
     hits = [{"_source": {"str_databaseid": "db1", "str_assetid": f"b{n}"}, "asset": {"databaseId": "db1"}}
             for n in range(150)]
     manager = sys.modules["handlers.osSemanticSearch.search"].DualIndexSearchManager()
-    kept = svc._asset_index_step(request, search_module, manager, hits)
+    kept = svc._asset_index_step(request, search_module, manager, hits, stub_api_check_deadline({}))
 
     sizes = [(len(body["query"]["bool"]["filter"][0]["ids"]["values"]), body["size"]) for _, body in opensearch.calls]
     assert sizes == [(100, 100), (50, 50)]

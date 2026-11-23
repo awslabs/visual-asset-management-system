@@ -237,7 +237,7 @@ The Mambaforge and Miniforge3 base images also carry the conda packages their in
 
 ### Preview 3D Thumbnail Pipeline
 
-**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
+**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/uv.lock`, exported to `container/requirements.txt`, which the image installs)
 
 | Name        | Version    | License                                                                     | Notes                                                 |
 | :---------- | :--------- | :-------------------------------------------------------------------------- | :---------------------------------------------------- |
@@ -274,7 +274,7 @@ The Mambaforge and Miniforge3 base images also carry the conda packages their in
 | blosc, blosc2, brotli, bitshuffle, lz4, lzfse, lzf, lzham, lzokay, snappy, libaec, zfp, sz3, isa-l, meshoptimizer, fastlz, bzip2, netcdf-c, hdf5, cfitsio, postgresql pglz | as in the wheel       | BSD-2-Clause, BSD-3-Clause, MIT, public domain or a permissive NASA/PostgreSQL licence                                                                                                                                 | General-purpose and scientific codecs, not selected by the pipeline                                                                          |
 | libgomp (OpenMP runtime)                                                                                                                                                   | GCC 8.5               | GPL-3.0-or-later with the GCC Runtime Library Exception                                                                                                                                                                | Bundled by the wheel; the image already installs Debian `libgomp1` for Open3D. The exception permits linking into programs under any licence |
 
-**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
+**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/uv.lock`; installed because a package above requires them, or compiled into one)
 
 | Name    | Version               | License           | Notes                                                                                                                                               |
 | :------ | :-------------------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -284,7 +284,7 @@ The Mambaforge and Miniforge3 base images also carry the conda packages their in
 | tqdm    | 4.70.1                | MPL-2.0 AND MIT   | Progress bars required by open3d                                                                                                                    |
 | Eigen   | da79095 (after 3.4.0) | MPL-2.0           | C++ linear algebra library compiled into the open3d 0.19.0 wheel, not a separate package. Loaded for `.fbx` and `.pcd` files                        |
 
-The other packages in `requirements.lock` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
+The other packages in `requirements.txt` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
 
 **Preview 3D Thumbnail Pipeline native libraries bundled in the cadquery-ocp wheel** (cadquery-ocp 7.9.3.1.1, installed because cadquery requires it; the pipeline loads every library below when it reads a `.step` or `.stp` file)
 
@@ -370,34 +370,34 @@ release's PyPI metadata.
 
 **Media extraction image**
 
-| Name                               | Version     | License                                        | Notes                                                                           |
-| :--------------------------------- | :---------- | :--------------------------------------------- | :------------------------------------------------------------------------------ |
-| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2       | LGPL-2.1-or-later / GPL-2.0-or-later per build | Static binary shipped inside the imageio-ffmpeg wheel; invoked as a subprocess. |
-| aws-lambda-powertools              | 3.2.0       | MIT-0                                          | Lambda utilities                                                                |
-| boto3                              | 1.43.89     | Apache-2.0                                     | AWS SDK for Python                                                              |
-| botocore                           | 1.43.89     | Apache-2.0                                     | AWS SDK for Python (core)                                                       |
-| certifi                            | 2026.10.23  | MPL-2.0                                        | CA bundle (pyproj dependency)                                                   |
-| charset-normalizer                 | 3.5.1       | MIT                                            | Text encoding detection                                                         |
-| defusedxml                         | 0.7.1       | PSF-2.0                                        | Safe XML parsing                                                                |
-| et_xmlfile                         | 2.0.0       | MIT                                            | Streaming XML writer (openpyxl dependency)                                      |
-| imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                                   | FFmpeg wrapper for video frame extraction                                       |
-| jmespath                           | 1.1.0       | MIT                                            | JSON querying (boto3 dependency)                                                |
-| lxml                               | 6.1.3       | BSD-3-Clause                                   | XML processing (python-docx / python-pptx dependency)                           |
-| numpy                              | 2.5.5       | BSD-3-Clause AND 0BSD AND MIT AND Zlib         | Array library (tifffile); bundles OpenBLAS, libgfortran (GCC exception)         |
-| openpyxl                           | 3.1.5       | MIT                                            | Excel workbook text extraction                                                  |
-| Pillow                             | 13.0.0      | MIT-CMU                                        | Image processing                                                                |
-| pyproj                             | 3.8.0       | MIT                                            | Footprint reprojection; bundles PROJ, libcurl, libtiff, SQLite                  |
-| pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)             | PDF page rendering                                                              |
-| python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)               | Date parsing (boto3 dependency)                                                 |
-| python-docx                        | 1.2.0       | MIT                                            | Word document text extraction                                                   |
-| python-pptx                        | 1.0.2       | MIT                                            | PowerPoint document text extraction                                             |
-| s3transfer                         | 0.19.2      | Apache-2.0                                     | S3 transfer manager (boto3 dependency)                                          |
-| six                                | 1.17.0      | MIT                                            | Python 2/3 compatibility (dependency)                                           |
-| tifffile                           | 2026.11.16  | BSD-3-Clause                                   | TIFF header reading for GeoTIFF/COG facts                                       |
-| tinytag                            | 2.3.2       | MIT                                            | Audio and video metadata tags                                                   |
-| typing-extensions                  | 4.16.0      | PSF-2.0                                        | Typing backports                                                                |
-| urllib3                            | 2.8.0       | MIT                                            | HTTP client (boto3 dependency)                                                  |
-| XlsxWriter                         | 3.2.9       | BSD-2-Clause                                   | Excel writer (python-pptx dependency)                                           |
+| Name                               | Version     | License                                | Notes                                                                                                                                                                  |
+| :--------------------------------- | :---------- | :------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2       | GPL-3.0-or-later                       | Static binary shipped inside the imageio-ffmpeg wheel (the johnvansickle.com static build, configured with `--enable-gpl --enable-version3`); invoked as a subprocess. |
+| aws-lambda-powertools              | 3.2.0       | MIT-0                                  | Lambda utilities                                                                                                                                                       |
+| boto3                              | 1.43.89     | Apache-2.0                             | AWS SDK for Python                                                                                                                                                     |
+| botocore                           | 1.43.89     | Apache-2.0                             | AWS SDK for Python (core)                                                                                                                                              |
+| certifi                            | 2026.10.23  | MPL-2.0                                | CA bundle (pyproj dependency)                                                                                                                                          |
+| charset-normalizer                 | 3.5.1       | MIT                                    | Text encoding detection                                                                                                                                                |
+| defusedxml                         | 0.7.1       | PSF-2.0                                | Safe XML parsing                                                                                                                                                       |
+| et_xmlfile                         | 2.0.0       | MIT                                    | Streaming XML writer (openpyxl dependency)                                                                                                                             |
+| imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                           | FFmpeg wrapper for video frame extraction                                                                                                                              |
+| jmespath                           | 1.1.0       | MIT                                    | JSON querying (boto3 dependency)                                                                                                                                       |
+| lxml                               | 6.1.3       | BSD-3-Clause                           | XML processing (python-docx / python-pptx dependency)                                                                                                                  |
+| numpy                              | 2.5.5       | BSD-3-Clause AND 0BSD AND MIT AND Zlib | Array library (tifffile); bundles OpenBLAS, libgfortran (GCC exception)                                                                                                |
+| openpyxl                           | 3.1.5       | MIT                                    | Excel workbook text extraction                                                                                                                                         |
+| Pillow                             | 13.0.0      | MIT-CMU                                | Image processing                                                                                                                                                       |
+| pyproj                             | 3.8.0       | MIT                                    | Footprint reprojection; bundles PROJ, libcurl, libtiff, SQLite                                                                                                         |
+| pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)     | PDF page rendering                                                                                                                                                     |
+| python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)       | Date parsing (boto3 dependency)                                                                                                                                        |
+| python-docx                        | 1.2.0       | MIT                                    | Word document text extraction                                                                                                                                          |
+| python-pptx                        | 1.0.2       | MIT                                    | PowerPoint document text extraction                                                                                                                                    |
+| s3transfer                         | 0.19.2      | Apache-2.0                             | S3 transfer manager (boto3 dependency)                                                                                                                                 |
+| six                                | 1.17.0      | MIT                                    | Python 2/3 compatibility (dependency)                                                                                                                                  |
+| tifffile                           | 2026.11.16  | BSD-3-Clause                           | TIFF header reading for GeoTIFF/COG facts                                                                                                                              |
+| tinytag                            | 2.3.2       | MIT                                    | Audio and video metadata tags                                                                                                                                          |
+| typing-extensions                  | 4.16.0      | PSF-2.0                                | Typing backports                                                                                                                                                       |
+| urllib3                            | 2.8.0       | MIT                                    | HTTP client (boto3 dependency)                                                                                                                                         |
+| XlsxWriter                         | 3.2.9       | BSD-2-Clause                           | Excel writer (python-pptx dependency)                                                                                                                                  |
 
 \* **Blender License Note**: Blender is the GPL-3.0 renderer of the pipeline's BLENDER branch. The image installs the official Blender release and runs it as a separate process (`blender --background`), writing rendered views to disk; no VAMS code is linked against Blender and no Blender code is modified or redistributed by this repository. The GPL-3.0 terms apply to Blender's own files, whose license text ships beside it in the image (`GPL3-license.txt`).
 
@@ -444,7 +444,7 @@ All rights reserved.
 
 ### Zip Archive Pipeline
 
-**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.lock`)
 
 | Name                     | Version | License    | Notes                                                                                                       |
 | :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |
@@ -462,7 +462,7 @@ All rights reserved.
 | openai            | 2.x     | Apache-2.0                   | OpenAI Python SDK, installed by the `strands-agents[openai]` extra     |
 | bedrock-agentcore | 1.23.1  | Apache-2.0                   | Amazon Bedrock AgentCore Runtime application SDK                       |
 | cadquery          | 2.8.0   | Apache-2.0                   | Parametric CAD modelling; STEP import and export                       |
-| cadquery-ocp      | 8.x     | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
+| cadquery-ocp      | 7.9.x   | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
 | ddgs              | 9.16.0  | MIT                          | Web search for the agent's research tool                               |
 | httpx             | 0.28.1  | BSD-3-Clause                 | Bounded page fetch for the agent's research tool                       |
 | boto3             | 1.43.x  | Apache-2.0                   | AWS SDK for Python                                                     |
@@ -548,14 +548,21 @@ content hash.
 
 **Isaac Lab Training Pipeline Dependencies**
 
-| Name                  | Version | License            | Notes                                          |
-| :-------------------- | :------ | :----------------- | :--------------------------------------------- |
-| NVIDIA Isaac Lab      | 2.0+    | Apache-2.0         | Robot learning framework                       |
-| RSL-RL                | 2.3.0+  | BSD-3-Clause       | Reinforcement learning library from ETH Zurich |
-| NVIDIA Isaac Sim      | 4.5+    | NVIDIA Proprietary | Base container image (NVIDIA EULA)             |
-| PyTorch               | 2.0+    | BSD-3-Clause       | Deep learning framework                        |
-| aws-lambda-powertools | ^3.2.0  | MIT-0              | Lambda utilities                               |
-| boto3                 | ^1.34.0 | Apache-2.0         | AWS SDK for Python                             |
+| Name                               | Version  | License                   | Notes                                                                                                                                                                              |
+| :--------------------------------- | :------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NVIDIA Isaac Lab                   | 3.0.0    | BSD-3-Clause / Apache-2.0 | Robot learning framework (`nvcr.io/nvidia/isaac-lab:3.0.0`)                                                                                                                        |
+| NVIDIA Isaac Sim                   | 6.2      | NVIDIA Proprietary        | Base container image (NVIDIA EULA)                                                                                                                                                 |
+| Newton                             | 1.6.1    | Apache-2.0                | Physics engine, default (`physics=newton_mjwarp`); ships in the base image                                                                                                         |
+| MuJoCo-Warp / MuJoCo               | 3.12.0   | Apache-2.0                | Newton's solver; ships in the base image                                                                                                                                           |
+| NVIDIA Warp                        | 1.17.0   | Apache-2.0                | GPU kernel framework used by Newton; ships in the base image                                                                                                                       |
+| RSL-RL                             | 5.5.1    | BSD-3-Clause              | Reinforcement learning library from ETH Zurich; ships in the base image                                                                                                            |
+| PyTorch                            | 2.11     | BSD-3-Clause              | Deep learning framework; ships in the base image                                                                                                                                   |
+| MoviePy                            | 1.0.3    | MIT                       | Video recording for evaluation; installed into the image                                                                                                                           |
+| imageio-ffmpeg                     | 0.6.0    | BSD-2-Clause              | Video encoding; installed into the image. It bundles an FFmpeg executable that is invoked as a subprocess and not linked                                                           |
+| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2    | GPL-3.0-or-later          | Static binary shipped inside the imageio-ffmpeg wheel (the johnvansickle.com static build, configured with `--enable-gpl --enable-version3`); invoked as a subprocess, not linked. |
+| boto3                              | 1.41.5   | Apache-2.0                | AWS SDK for Python, in the training image (held at the version the base image's botocore allows)                                                                                   |
+| aws-lambda-powertools              | 2.36.0   | MIT-0                     | Lambda utilities, in the pipeline's AWS Lambda functions (the VAMS Lambda base layer)                                                                                              |
+| boto3                              | 1.43.126 | Apache-2.0                | AWS SDK for Python, in the pipeline's AWS Lambda functions (the VAMS Lambda base layer)                                                                                            |
 
 **Container Base Image**
 

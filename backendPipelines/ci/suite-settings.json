@@ -1,5 +1,5 @@
 {
-    "description": "CI-only settings for pipeline test directories, read by backendPipelines/ci/pipeline_tests.py. Keyed by repo-relative test directory. They live here, not in the pipeline folders, because CDK packages those folders as container build contexts and Lambda code, and a file there changes the deployed asset. extraRequirements are installed after the common and nearest requirements files, in one pip call: an entry '-r <repo-relative path>' names a requirements file, any other entry is a requirement line. headlessDisplay runs the suite under xvfb-run with the thumbnail image's rendering environment.",
+    "description": "CI-only settings for pipeline test directories, read by backendPipelines/ci/pipeline_tests.py. Keyed by repo-relative test directory. They live here, not in the pipeline folders, because CDK packages those folders as container build contexts and Lambda code, and a file there changes the deployed asset. extraRequirements are installed after the common and nearest requirements files, in one pip call: an entry '-r <repo-relative path>' names a requirements file, any other entry is a requirement line. ownRequirements skips the nearest requirements file of a container whose environment is the GPU image's. headlessDisplay runs the suite under xvfb-run with the thumbnail image's rendering environment.",
     "suites": {
         "backendPipelines/addon/conversion/mirisUpload/container/tests": {
             "extraRequirements": {
@@ -11,9 +11,14 @@
             "extraRequirements": {
                 "reason": "The harness runs in the container's environment plus PyYAML for corpus.yaml, as evaluation/README.md describes.",
                 "requirements": [
-                    "-r backendPipelines/genAi/cadStepAgent/container/requirements.txt",
+                    "-r backendPipelines/genAi/cadStepAgent/container/requirements.lock",
                     "pyyaml==6.0.3"
                 ]
+            }
+        },
+        "backendPipelines/genAi/nvidia/gr00t/container/tests": {
+            "ownRequirements": {
+                "reason": "The container's requirements.lock is the hashed export for the image's Python 3.10 (torch, flash-attn and CUDA wheels), which a CPU runner on Python 3.12 does not install; these suites import only the standard library and the common requirements."
             }
         },
         "backendPipelines/genAi/imageTo3d/benchmark/tests": {
@@ -24,7 +29,7 @@
         },
         "backendPipelines/genAi/videoSopBom/lambda/tests": {
             "extraRequirements": {
-                "reason": "jsonschema validates the construct step's document against the container's definition schema; keep it at videoSopBom/container/requirements.txt's pin.",
+                "reason": "jsonschema validates the construct step's document against the container's definition schema; keep it at videoSopBom/container/requirements.lock's pin.",
                 "requirements": ["jsonschema==4.26.0"]
             }
         },
