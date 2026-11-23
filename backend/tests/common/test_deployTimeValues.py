@@ -197,7 +197,8 @@ class TestResolveTogether:
         log = _wire(dtv, names, reader)
         assert dtv.resolve_together(_os_keys(dtv), LEGACY) == ["https://old", "assets-old", "files-old"]
         assert names.lookups == ["openSearch/endpoint"]
-        assert [name for name, _ in reader.reads] == list(LEGACY)
+        ttl = dtv.PARAMETER_CACHE_TTL_SECONDS
+        assert reader.reads == [(name, ttl) for name in LEGACY]
         assert len([m for level, m in log.lines if level == "info"]) == 1
 
     def test_a_later_key_not_carried_falls_back_for_the_whole_set(self, dtv):
