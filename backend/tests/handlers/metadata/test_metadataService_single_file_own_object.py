@@ -58,3 +58,40 @@ class TestFileMetadataTarget:
 
     def test_control_a_folder_asset_is_unchanged(self):
         assert self._check("/x.txt", location="proj/a/") == "proj/a/x.txt"
+
+
+@pytest.mark.unit
+class TestFileRecordPath:
+    """The web sends a file's full key; every accepted form keys the record by the path the file is listed at."""
+
+    def _path(self, file_path, companion=False, location=LOCATION, asset_found=True):
+        s3 = MagicMock()
+        s3.list_object_versions.return_value = _versions_listing(companion)
+        table = MagicMock()
+        table.get_item.return_value = {"Item": _asset(location)} if asset_found else {}
+        with patch.object(metadataService, "asset_storage_table", table), \
+                patch.object(metadataService, "get_bucket_details", return_value={"bucketName": "b"}), \
+                patch.object(metadataService, "s3", s3):
+            return metadataService.file_record_path("db1", "asset1", file_path)
+
+    @pytest.mark.parametrize("file_path", ["/model.glb", "/p1/model.glb"])
+    def test_the_objects_path_and_its_full_key_key_the_object(self, file_path):
+        assert self._path(file_path) == "/model.glb"
+
+    def test_with_a_companion_entry_the_full_key_keeps_its_earlier_path(self):
+        assert self._path("/p1/model.glb", companion=True) == "/p1/model.glb"
+        assert self._path("/model.glb", companion=True) == "/model.glb"
+
+    @pytest.mark.parametrize("file_path", ["/sub/x.obj", "/p1/model.glb/sub/x.obj"])
+    def test_a_companion_entrys_path_and_full_key_key_the_entry(self, file_path):
+        assert self._path(file_path) == "/sub/x.obj"
+
+    def test_the_asset_id_segment_is_dropped_as_before_without_a_read(self):
+        assert self._path("/asset1/x.txt", asset_found=False) == "/x.txt"
+
+    def test_an_unknown_asset_keeps_the_path_given(self):
+        assert self._path("/p1/model.glb", asset_found=False) == "/p1/model.glb"
+
+    def test_a_folder_location_keys_its_full_key_by_the_path_after_the_folder(self):
+        assert self._path("/custom/path/x.glb", location="custom/path/") == "/x.glb"
+        assert self._path("/x.glb", location="custom/path/") == "/x.glb"
