@@ -193,6 +193,11 @@ REJECTED_REASON_AMBIGUOUS = "ambiguousLocation"
 # restoring the archived asset would make the location shared again (the API unarchive refuses it too), so
 # nothing is restored or attributed and the record goes to the rejected-record queue.
 REJECTED_REASON_ARCHIVED_OWNER_LOCATION_IN_USE = "archivedOwnerLocationInUse"
+# A file no stored location holds, written under a first-level folder named by the id of an existing asset (live or
+# archived, in any database or bucket) that is stored elsewhere: auto-creating an asset for the folder would give two
+# assets one id, which every handler that finds an asset by its id alone refuses, so nothing is created or attributed
+# and the record goes to the rejected-record queue (D12).
+REJECTED_REASON_ASSET_ID_IN_USE = "assetIdInUse"
 
 # A first-level auto-create whose folder already holds other objects is deferred once by this many
 # seconds, so an asset created through the API a moment earlier reaches the location index first.
@@ -211,6 +216,15 @@ class RecordRedrive(Exception):
     def __init__(self, message: str, visibility_timeout: Optional[int] = None):
         super().__init__(message)
         self.visibility_timeout = visibility_timeout
+
+
+class AssetIdInUseError(Exception):
+    """An auto-create named an asset id the asset table already holds: `holders` are its rows, live or
+    archived, in any database."""
+
+    def __init__(self, asset_id: str, holders: List[Dict]):
+        super().__init__(f"Asset id {asset_id} is already in use")
+        self.holders = holders
 
 
 def record_identity(record: Dict) -> str:
@@ -273,6 +287,33 @@ def reject_record(record: Dict, bucket_name: str, object_key: str, reason: str,
         logger.exception(f"Could not send key {object_key} to the rejected-record queue: {e}")
         raise RecordRedrive(f"Could not send {object_key} to the rejected-record queue")
     return True, False, f"Rejected {object_key}: {reason}"
+
+
+def asset_id_rows(asset_id: str) -> List[Dict]:
+    """Every asset row with `asset_id`, live or archived, in any database and bucket (`assetIdGSI`, paged
+    to the end). A read that fails raises RecordRedrive, so no asset is created on an id that could not
+    be checked."""
+    table = dynamodb.Table(asset_table_name)
+    query_kwargs = {'IndexName': 'assetIdGSI', 'KeyConditionExpression': Key('assetId').eq(asset_id)}
+    rows: List[Dict] = []
+    try:
+        while True:
+            response = table.query(**query_kwargs)
+            rows.extend(response.get('Items', []))
+            if 'LastEvaluatedKey' not in response:
+                return rows
+            query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
+    except Exception as e:
+        logger.exception(f"Could not read the asset rows of id {asset_id}: {e}")
+        raise RecordRedrive(f"Could not check whether asset id {asset_id} is in use")
+
+
+def asset_id_entries(rows: List[Dict]) -> List[LocationEntry]:
+    """The asset rows of an id in use, as the candidates of a rejected record."""
+    return [LocationEntry(database_id=str(row.get('databaseId') or ''), asset_id=str(row.get('assetId') or ''),
+                          bucket_id=str(row.get('bucketId') or ''),
+                          location=normalize_location((row.get('assetLocation') or {}).get('Key')))
+            for row in rows]
 
 
 def auto_create_refusal(asset_table, bucket_name: str, location: str) -> Optional[str]:
@@ -1160,7 +1201,17 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         
     Returns:
         str: Asset ID if created successfully, None otherwise
+
+    Raises:
+        AssetIdInUseError: the asset table already holds `asset_id`, live or archived, in any database or
+            bucket. createAsset checks the id only in the target database, so a second asset with the id
+            would be created in another one (D12).
+        AssetLocationInUseError: another asset's location holds the folder.
+        RecordRedrive: the id could not be checked.
     """
+    holders = asset_id_rows(asset_id)
+    if holders:
+        raise AssetIdInUseError(asset_id, holders)
     try:
         # Create asset request model
         request_model = CreateAssetRequestModel(
@@ -2355,6 +2406,35 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
             index_is_ready = index_usable and index_ready(asset_table_name)
             if not archived_asset and not index_is_ready and first_folder_valid:
                 archived_asset = lookup_archived_asset(bucket_id, asset_id)
+                if archived_asset and not contains(asset_location_of(archived_asset, base_prefix, asset_id),
+                                                   object_key):
+                    # Stored elsewhere: an archived asset is restored only for a key its location holds,
+                    # like a live one is found (D12). The id check below decides the key.
+                    logger.info(f"Archived asset {asset_id} does not hold {object_key} at its stored location")
+                    archived_asset = None
+
+            # 2.d No asset holds the key. Its first folder becomes a new asset's id only when no asset row, live
+            # or archived, in any database or bucket, has that id: two assets with one id break every handler
+            # that finds an asset by its id alone (D12), so the key is refused instead. An asset of this
+            # registration that does hold the key but that the lookups above did not return (an index that
+            # has not caught up with a new row, or an archived row the location index does not list) is used:
+            # a live one is looked up again on the next receive, an archived one is restored.
+            if not asset_data and not archived_asset and first_folder_valid:
+                holders = asset_id_rows(asset_id)
+                holding = [row for row in holders if str(row.get('bucketId') or '') == bucket_id
+                           and contains(asset_location_of(row, base_prefix, asset_id), object_key)]
+                if any(not str(row.get('databaseId') or '').endswith(ARCHIVED_DATABASE_SUFFIX) for row in holding):
+                    logger.info(f"Asset {asset_id} holds {object_key} but was not found by its lookups; looking again")
+                    raise RecordRedrive(f"Asset {asset_id} holds {object_key}; looking it up again",
+                                        DEFERRED_AUTO_CREATE_VISIBILITY_SECONDS)
+                if holding:
+                    archived_asset = holding[0]
+                    resolved_by, owner_asset_id, owner_bucket_id = RESOLVED_BY_FAST_PATH, asset_id, bucket_id
+                elif holders:
+                    logger.info(f"Asset id {asset_id} of {object_key}'s first folder is in use by an asset stored "
+                                "elsewhere; not auto-creating")
+                    return reject_record(record, bucket_name, object_key, REJECTED_REASON_ASSET_ID_IN_USE,
+                                         asset_id_entries(holders))
 
             if asset_data:
                 logger.info(f"Asset {owner_asset_id} found in bucket {owner_bucket_id} ({resolved_by})")
@@ -2451,6 +2531,11 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                 logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
                 try:
                     created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                except AssetIdInUseError as e:
+                    # The id came into use after the check above, or this path skipped it (an archived owner
+                    # deleted since its lookup): never a second asset with it.
+                    return reject_record(record, bucket_name, object_key, REJECTED_REASON_ASSET_ID_IN_USE,
+                                         asset_id_entries(e.holders))
                 except AssetLocationInUseError as e:
                     # An expected refusal: createAsset logged it once at WARNING with the asset that
                     # holds the location.

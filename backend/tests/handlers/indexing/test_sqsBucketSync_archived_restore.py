@@ -45,7 +45,9 @@ def _archived_asset():
         "archivedAt": "2026-07-01T00:00:00",
         "archivedBy": "someone",
         "archivedReason": "old",
-        "assetLocation": {"Key": "x-asset-1/"},
+        # The folder createAsset stores for the registration prefix `db/`: an archived asset is restored only
+        # for a key its stored location holds (#1207 D12).
+        "assetLocation": {"Key": "db/x-asset-1/"},
     }
 
 
