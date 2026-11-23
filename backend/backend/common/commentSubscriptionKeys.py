@@ -6,7 +6,9 @@
 An asset id is unique within its database only, so a comment or a subscription is stored under both
 ids. The table shapes are defined in infra/lib/nestedStacks/storage/storageBuilder-nestedStack.ts
 (CommentStorageTableV2, SubscriptionsStorageTableV2); the v2.6 to v2.7 migration step
-commentSubscriptionKeys copies the rows of the V1 tables into these keys.
+commentSubscriptionKeys copies the rows of the V1 tables into these keys, and records each copy in the
+comment table under a partition starting with "#commentSubscriptionKeys:", which no handler reads (a
+database id never contains '#').
 """
 
 # Comment table: one partition per asset, one row per comment.
