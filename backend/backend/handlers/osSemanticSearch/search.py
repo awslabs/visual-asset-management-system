@@ -20,6 +20,7 @@ from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.resourceNames import get_table_name, ResourceKeys
+from common.ssmParameters import get_parameter_value
 from common.databaseAccess import DatabaseAccessManager  # noqa: F401 -- the search routes' pre-filter, also addressed as handlers.osSemanticSearch.search.DatabaseAccessManager
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
@@ -145,31 +146,20 @@ class SearchServiceUnavailable(Exception):
     could not be created. Answered 503 with SEARCH_UNAVAILABLE_MESSAGE; the cause stays in the log."""
 
 
-# Get SSM parameter values
-def get_ssm_parameter_value(parameter_name: str) -> str:
-    """Get SSM parameter value. A failed read raises SearchServiceUnavailable; the parameter name is
-    logged, never returned to the caller."""
-    try:
-        ssm_client = boto3.client('ssm', config=retry_config)
-        response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
-    except Exception as e:
-        logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
-        raise SearchServiceUnavailable() from e
-
-# The three aos/* SSM values, read on first OpenSearch use so a deployment without OpenSearch imports.
-_opensearch_settings: Optional[Dict[str, str]] = None
-
-
 def opensearch_settings() -> Dict[str, str]:
-    global _opensearch_settings
-    if _opensearch_settings is None:
-        _opensearch_settings = {
-            "asset_index": get_ssm_parameter_value(opensearch_asset_index_ssm_param),
-            "file_index": get_ssm_parameter_value(opensearch_file_index_ssm_param),
-            "endpoint": get_ssm_parameter_value(opensearch_endpoint_ssm_param),
+    """The three aos/* Parameter Store values, read on first OpenSearch use (so a deployment without
+    OpenSearch imports, and init makes no read) through common.ssmParameters, which bounds each read,
+    caches the value per container and backs off after a throttled read. A value that cannot be read
+    raises SearchServiceUnavailable; the parameter name is logged, never returned to the caller."""
+    try:
+        return {
+            "asset_index": get_parameter_value(opensearch_asset_index_ssm_param),
+            "file_index": get_parameter_value(opensearch_file_index_ssm_param),
+            "endpoint": get_parameter_value(opensearch_endpoint_ssm_param),
         }
-    return _opensearch_settings
+    except Exception as e:
+        logger.warning(f"OpenSearch settings could not be read from Parameter Store: {type(e).__name__}")
+        raise SearchServiceUnavailable() from e
 
 
 SEARCH_NOT_AVAILABLE_MESSAGE = "Search is not available when OpenSearch feature is not enabled"

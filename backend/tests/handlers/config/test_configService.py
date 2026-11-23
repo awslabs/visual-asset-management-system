@@ -1,11 +1,21 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import importlib.util
+import itertools
 import json
+import os
+import sys
+import types
 from unittest.mock import MagicMock, patch
 
+import boto3
+import pytest
+
 from backend.backend.handlers.config import configService
+from backend.tests.ssmParametersStub import (
+    FakeClock, ParameterStoreStub, always, install_clock, load_ssm_parameters, throttled,
+)
 
 
 @pytest.fixture(scope="function")
@@ -69,11 +79,11 @@ class TestConfigService:
         mock_dynamodb_client = MagicMock()
         mock_dynamodb_client.get_paginator.return_value = _make_paginator([])
 
-        mock_ssm_client = MagicMock()
-        mock_ssm_client.get_parameter.side_effect = [
-            {"Parameter": {"Value": "arn:aws:geo:us-east-1:123456789012:api-key/test-key"}},
-            {"Parameter": {"Value": "https://example.com "}},
-        ]
+        parameters = ParameterStoreStub({
+            "/test/location-key-arn": "arn:aws:geo:us-east-1:123456789012:api-key/test-key",
+            "/test/web-url": "https://example.com ",
+        })
+        helper = load_ssm_parameters(parameters)
         mock_geo_client = MagicMock()
         mock_geo_client.describe_key.return_value = {"Key": "test-api-key-value"}
 
@@ -81,7 +91,7 @@ class TestConfigService:
         mock_enforcer.enforceAPI.return_value = True
 
         with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
-             patch.object(configService, "ssm_client", mock_ssm_client), \
+             patch.object(configService, "get_parameter_value", helper.get_parameter_value), \
              patch.object(configService, "geo_client", mock_geo_client), \
              patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
              patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
@@ -126,9 +136,8 @@ class TestConfigService:
         mock_dynamodb_client = MagicMock()
         mock_dynamodb_client.get_paginator.return_value = _make_paginator([])
 
-        mock_ssm_client = MagicMock()
-        mock_ssm_client.get_parameter.return_value = {
-            "Parameter": {"Value": "arn:aws:geo:us-east-1:123456789012:api-key/test-key"}}
+        helper = load_ssm_parameters(ParameterStoreStub({
+            "/test/location-key-arn": "arn:aws:geo:us-east-1:123456789012:api-key/test-key"}))
         mock_geo_client = MagicMock()
         mock_geo_client.describe_key.side_effect = EndpointConnectionError(
             endpoint_url="https://cp.metadata.geo.us-east-1.amazonaws.com")
@@ -137,7 +146,7 @@ class TestConfigService:
         mock_enforcer.enforceAPI.return_value = True
 
         with patch.object(configService, "dynamodb_client", mock_dynamodb_client), \
-             patch.object(configService, "ssm_client", mock_ssm_client), \
+             patch.object(configService, "get_parameter_value", helper.get_parameter_value), \
              patch.object(configService, "geo_client", mock_geo_client), \
              patch.object(configService, "CasbinEnforcer", return_value=mock_enforcer), \
              patch.object(configService, "request_to_claims", return_value={"tokens": ["test-user"], "roles": []}), \
@@ -203,3 +212,94 @@ class TestConfigService:
             response = configService.lambda_handler(config_event, MagicMock())
 
         assert response["statusCode"] == 400
+
+
+# --------------------------------------------------------------------------------------------- #
+# #1820: the two Parameter Store reads go through common.ssmParameters, cached for five minutes
+# --------------------------------------------------------------------------------------------- #
+
+_CONFIG_SERVICE_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "backend", "handlers", "config", "configService.py"))
+_LOCATION_PARAM = "/test/location-key-arn"
+_WEB_PARAM = "/test/web-url"
+_loads = itertools.count()
+
+
+@pytest.fixture
+def secure_config(monkeypatch):
+    """configService loaded by path with every boto3 client replaced: SSM is a ParameterStoreStub
+    (kept for the whole test, so a client built on first read gets it too), the rest MagicMocks.
+    The helper it reads through is a fresh copy on a fake clock."""
+    stub = ParameterStoreStub({_LOCATION_PARAM: "arn:aws:geo:us-east-1:123456789012:api-key/test-key",
+                               _WEB_PARAM: "https://example.com"})
+    monkeypatch.setattr(boto3, "client", lambda name, *args, **kwargs: stub if name == "ssm" else MagicMock())
+    helper = load_ssm_parameters()
+    clock = install_clock(helper, FakeClock())
+    monkeypatch.setitem(sys.modules, "common.ssmParameters", helper)
+    authz = types.ModuleType("handlers.authz")
+    enforcer = MagicMock()
+    enforcer.enforceAPI.return_value = True
+    authz.CasbinEnforcer = MagicMock(return_value=enforcer)
+    auth = types.ModuleType("handlers.auth")
+    auth.request_to_claims = MagicMock(return_value={"tokens": ["test-user"], "roles": []})
+    monkeypatch.setitem(sys.modules, "handlers.authz", authz)
+    monkeypatch.setitem(sys.modules, "handlers.auth", auth)
+    monkeypatch.setenv("LOCATION_SERVICE_API_KEY_ARN_SSM_PARAM", _LOCATION_PARAM)
+    monkeypatch.setenv("LOCATION_SERVICE_URL_FORMAT", "https://maps.test/<apiKey>")
+    monkeypatch.setenv("WEB_DEPLOYED_URL_SSM_PARAM", _WEB_PARAM)
+    spec = importlib.util.spec_from_file_location(f"configService_parameter_reads_{next(_loads)}", _CONFIG_SERVICE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.dynamodb_client = MagicMock(**{"get_paginator.return_value": _make_paginator([])})
+    module.geo_client = MagicMock(**{"describe_key.return_value": {"Key": "test-api-key-value"}})
+    return module, stub, clock
+
+
+def _get(module, event):
+    response = module.lambda_handler(event, MagicMock())
+    assert response["statusCode"] == 200
+    return json.loads(response["body"])
+
+
+@pytest.mark.unit
+class TestSecureConfigParameterReads:
+    def test_two_requests_read_each_parameter_once(self, secure_config, config_event):
+        module, stub, _ = secure_config
+        for _ in range(2):
+            body = _get(module, config_event)
+            assert body["locationServiceApiUrl"] == "https://maps.test/test-api-key-value"
+            assert body["webDeployedUrl"] == "https://example.com"
+        assert sorted(stub.calls) == [_LOCATION_PARAM, _WEB_PARAM]
+        # Both are CDK String parameters: nothing to decrypt, so the reads do not ask for it.
+        assert stub.call_arguments == [{}, {}]
+
+    def test_a_changed_value_is_read_again_after_five_minutes(self, secure_config, config_event):
+        module, stub, clock = secure_config
+        _get(module, config_event)
+        stub.values[_WEB_PARAM] = "https://new.example.com"
+        clock.advance(299)
+        assert _get(module, config_event)["webDeployedUrl"] == "https://example.com"
+        clock.advance(2)
+        assert _get(module, config_event)["webDeployedUrl"] == "https://new.example.com"
+
+    def test_a_throttled_read_answers_empty_urls_and_backs_off(self, secure_config, config_event):
+        module, stub, clock = secure_config
+        stub.fault = always(throttled)
+        started = clock.now
+
+        body = _get(module, config_event)
+
+        assert (body["locationServiceApiUrl"], body["webDeployedUrl"]) == ("", "")
+        assert clock.now - started <= sys.modules["common.ssmParameters"].PARAMETER_READ_BUDGET_SECONDS
+        calls = len(stub.calls)
+        body = _get(module, config_event)
+        assert (body["locationServiceApiUrl"], body["webDeployedUrl"]) == ("", "")
+        assert len(stub.calls) == calls, "a request inside the back-off window read Parameter Store"
+
+    def test_a_missing_parameter_is_an_empty_url(self, secure_config, config_event):
+        module, stub, _ = secure_config
+        del stub.values[_LOCATION_PARAM]
+        body = _get(module, config_event)
+        assert body["locationServiceApiUrl"] == ""
+        assert body["webDeployedUrl"] == "https://example.com"
+        module.geo_client.describe_key.assert_not_called()
