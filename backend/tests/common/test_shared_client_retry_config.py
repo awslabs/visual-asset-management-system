@@ -119,7 +119,6 @@ SSM_CLIENTS_KEPT = {
     # resource has just written, so it neither caches nor gives up early.
     "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
     # Moving to common/ssmParameters.py in this change (#1820).
-    "handlers/search/search.py": "moves to the shared lookup",
     "handlers/indexing/assetIndexer.py": "moves to the shared lookup",
     "handlers/indexing/fileIndexer.py": "moves to the shared lookup",
 }
@@ -586,7 +585,7 @@ class TestParameterStoreReadsAreBounded:
     through common/resourceNames.py. Pure AST over the source.
     """
 
-    MOVED = ("handlers/config/configService.py",)
+    MOVED = ("handlers/search/search.py", "handlers/config/configService.py")
 
     @staticmethod
     def _ssm_client_modules():
