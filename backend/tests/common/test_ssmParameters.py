@@ -407,6 +407,73 @@ class TestReadWithoutCache:
             helper.read_parameter_value(NAME)
         assert helper.read_parameter_value(OTHER) == "https://web.example"
 
+    def test_concurrent_reads_run_one_at_a_time_and_open_one_window(self, make_helper):
+        """Two threads reading while Parameter Store throttles: the second waits for the first read,
+        finds the window it opened, and is refused without a call, so the failure is counted once."""
+        entered, release = threading.Event(), threading.Event()
+
+        def hold_first_call_then_throttle(name):
+            if not entered.is_set():
+                entered.set()
+                assert release.wait(5), "the test never released the first call"
+            raise throttled()
+
+        stub = ParameterStoreStub(fault=hold_first_call_then_throttle)
+        helper = make_helper(stub)
+        results = {}
+
+        def read(label, name):
+            try:
+                results[label] = helper.read_parameter_value(name)
+            except Exception as e:  # recorded for the assertions below
+                results[label] = e
+
+        first = threading.Thread(target=read, args=("first", NAME))
+        first.start()
+        assert entered.wait(5), "the first read never reached Parameter Store"
+        second = threading.Thread(target=read, args=("second", OTHER))
+        second.start()
+        # Long enough for the second read to make a call of its own if nothing stops it.
+        second.join(0.3)
+        calls_while_held = list(stub.calls)
+        release.set()
+        first.join(5)
+        second.join(5)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert calls_while_held == [NAME], "a second read ran while the first was in progress"
+        assert isinstance(results["first"], helper.ParameterUnavailableError)
+        assert isinstance(results["second"], helper.ParameterUnavailableError)
+        assert OTHER not in stub.calls
+        assert helper._failed_reads == 1
+
+    def test_a_read_and_a_cached_lookup_share_the_lock(self, make_helper):
+        entered, release = threading.Event(), threading.Event()
+
+        def hold_first_call(name):
+            if not entered.is_set():
+                entered.set()
+                assert release.wait(5), "the test never released the first call"
+
+        stub = ParameterStoreStub({NAME: "now", OTHER: "cold"}, fault=hold_first_call)
+        helper = make_helper(stub)
+        results = {}
+
+        first = threading.Thread(target=lambda: results.update(first=helper.read_parameter_value(NAME)))
+        first.start()
+        assert entered.wait(5), "the first read never reached Parameter Store"
+        second = threading.Thread(target=lambda: results.update(second=helper.get_parameter_value(OTHER)))
+        second.start()
+        second.join(0.3)
+        calls_while_held = list(stub.calls)
+        release.set()
+        first.join(5)
+        second.join(5)
+
+        assert calls_while_held == [NAME]
+        assert results == {"first": "now", "second": "cold"}
+        assert stub.calls == [NAME, OTHER]
+
 
 @pytest.mark.unit
 class TestClassificationIsTheResolvers:
