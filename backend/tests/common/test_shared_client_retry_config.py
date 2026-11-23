@@ -158,8 +158,6 @@ SSM_CLIENTS_KEPT = {
     # Deploy-time custom resource (15-minute timeout) that must read the values the schema-deploy
     # resource has just written, so it neither caches nor gives up early.
     "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
-    # Moving to common/ssmParameters.py and common/resourceNames.py in this change (#1820).
-    "handlers/workflows/sfn/processWorkflowExecutionOutput.py": "moves to the shared lookup",
     # EDH add-on lane: AWS- and EDH-owned parameters, moved onto common/ssmParameters.py in its own step.
     "handlers/addon/edh/common/edhCapacityReservations.py": "EDH add-on lane, follow-up step",
     "handlers/addon/edh/common/edhImageBuilder.py": "EDH add-on lane, follow-up step",
@@ -630,7 +628,8 @@ class TestParameterStoreReadsAreBounded:
     """
 
     MOVED = ("handlers/osSemanticSearch/search.py", "handlers/osSemanticSearch/osAssetIndexer.py",
-             "handlers/osSemanticSearch/osFileIndexer.py", "handlers/config/configService.py")
+             "handlers/osSemanticSearch/osFileIndexer.py", "handlers/config/configService.py",
+             "handlers/workflows/sfn/processWorkflowExecutionOutput.py")
 
     @staticmethod
     def _ssm_client_modules():

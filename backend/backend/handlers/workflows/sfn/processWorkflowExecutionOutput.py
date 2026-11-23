@@ -14,7 +14,7 @@ from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
 from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, object_key_for
-from common.resourceNames import get_table_name, ResourceKeys, ResourceNameUnavailableError
+from common.resourceNames import get_resource_name, get_table_name, ResourceKeys, ResourceNameUnavailableError
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     COPY_PRESERVED_HEADER_FIELDS,
@@ -182,6 +182,14 @@ try:
     # the event is skipped when the bus ARN is unset).
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+    # The copy engine function name, a resource name this function cannot take as an environment
+    # variable (the engine references this function). Resolved here like the table names, so a lookup
+    # Parameter Store refuses fails init with ResourceNameUnavailableError, which the workflow retries.
+    # "" while the deployment has not published it; _copy_engine_function_name reads it again then.
+    try:
+        copy_engine_function_name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
+    except KeyError:
+        copy_engine_function_name = ""
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -223,18 +231,22 @@ engine_invoke_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'}, r
                               connect_timeout=10)
 engine_invoke_client = boto3.client('lambda', config=engine_invoke_config)
 
-_ssm = None
 # The current invocation's context, for the remaining-time bound of an engine call's retries.
 _invocation_context = None
 
 
-def _ssm_client():
-    """SSM client for the copy engine function name parameter (under the deployment's resource-name
-    prefix, which this function may already read), built on first use."""
-    global _ssm
-    if _ssm is None:
-        _ssm = boto3.client('ssm', config=retry_config)
-    return _ssm
+def _copy_engine_function_name():
+    """The copy engine function name for loc.call_engine: the one resolved at import, or, when the
+    deployment had not published it then (it may still be applying), the name read again now. A lookup
+    that fails here answers "", which call_engine waits out for its deploy window before it fails."""
+    global copy_engine_function_name
+    if not copy_engine_function_name:
+        try:
+            copy_engine_function_name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
+        except Exception as e:
+            logger.warning(f"The copy engine function name could not be resolved yet ({type(e).__name__})")
+            return ""
+    return copy_engine_function_name
 
 
 def _engine(operation, **fields):
@@ -246,8 +258,7 @@ def _engine(operation, **fields):
     context = _invocation_context
     remaining = getattr(context, "get_remaining_time_in_millis", None)
     try:
-        return loc.call_engine(engine_invoke_client,
-                               lambda: loc.engine_function_name(ssm_client=_ssm_client()),
+        return loc.call_engine(engine_invoke_client, _copy_engine_function_name,
                                operation, remaining_ms=remaining, **fields)
     except loc.EngineCallFailed as e:
         if getattr(e, "error_type", "") == RESOURCE_NAME_UNAVAILABLE_ERROR:
