@@ -313,6 +313,56 @@ describe.each(CONVERTED)(
     }
 );
 
+describe("the Stable3DGen image's pillow and gradio", () => {
+    const dir = path.join(CONTAINER_DIR, "locks", "stable3dgen");
+    const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf-8");
+    const locked = new Map(
+        ["requirements-build.lock", "requirements.lock", "requirements-gpl.lock"].flatMap((file) =>
+            exportPins(read(file)).map((p) => [p.name, p.version] as [string, string])
+        )
+    );
+
+    it("installs pillow 13 or later, with no pillow entry for the image in the audit allowlist", () => {
+        expect(Number((locked.get("pillow") ?? "0").split(".")[0])).toBeGreaterThanOrEqual(13);
+        const entries: { package: string; projects: string[] }[] = JSON.parse(
+            fs.readFileSync(
+                path.join(__dirname, "..", "..", "..", ".github", "python-audit-allowlist.json"),
+                "utf-8"
+            )
+        ).entries;
+        const project = "backendPipelines/genAi/imageTo3d/container/locks/stable3dgen";
+        expect(
+            entries.filter((e) => normalize(e.package) === "pillow" && e.projects.includes(project))
+        ).toEqual([]);
+    });
+
+    it("leaves gradio out of the lock through an override, and the build imports the job's modules without it", () => {
+        expect(locked.has("gradio")).toBe(false);
+        expect(
+            tomlArray(read("pyproject.toml"), "override-dependencies").filter((o) =>
+                o.startsWith("gradio")
+            )
+        ).toEqual(["gradio ; sys_platform == 'never'"]);
+        const dockerText = fs.readFileSync(
+            path.join(CONTAINER_DIR, "Dockerfile.stable3dgen"),
+            "utf-8"
+        );
+        const check = instructions(dockerText).find((s) =>
+            s.includes("Stable3DGen job modules import")
+        );
+        expect(check).toBeDefined();
+        expect(check).toContain("find_spec('gradio') is None");
+        expect(check).toContain("'__main__.py'");
+        expect(check).toContain("from hi3dgen.pipelines import Hi3DGenPipeline");
+        expect(check).toContain("import hubconf");
+        expect(check).toContain("/opt/torchhome/hub/facebookresearch_dinov2_main/hubconf.py");
+        // After the code is copied into the image, so the entry module it loads is the one that ships.
+        const codeCopy = dockerText.indexOf("COPY __init__.py __main__.py");
+        expect(codeCopy).toBeGreaterThan(0);
+        expect(dockerText.indexOf("Stable3DGen job modules import")).toBeGreaterThan(codeCopy);
+    });
+});
+
 describe("the images not yet converted", () => {
     it("still install the shared requirements.txt, and its exemption stays", () => {
         const exemptions = JSON.parse(
