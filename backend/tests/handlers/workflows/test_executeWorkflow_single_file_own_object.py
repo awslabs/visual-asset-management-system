@@ -57,3 +57,26 @@ class TestWorkflowInput:
     def test_control_a_folder_asset_makes_no_companion_check(self):
         key, s3c = self._key("/x.txt", location="proj/a/")
         assert key == "proj/a/x.txt" and not s3c.list_object_versions.called
+
+
+@pytest.mark.unit
+class TestFileUploadTrigger:
+    """A new version of a single-file asset's own file triggers runs on that file, not on the asset folder."""
+
+    def _relative(self, companion=False, location=LOCATION, key=LOCATION):
+        from backend.tests.handlers.workflows.test_wb5b_trigger_dispatch import wd
+        head = {"Metadata": {"databaseid": "db1", "assetid": "asset1"}}
+        with patch.object(wd.s3_client, "head_object", return_value=head), \
+                patch.object(wd.s3_client, "list_object_versions", return_value=_versions_listing(companion)), \
+                patch.object(wd.asset_storage_table, "get_item",
+                             return_value={"Item": {"assetLocation": {"Key": location}}}):
+            return wd._resolve_asset_relative_key("b1", key)[2]
+
+    def test_the_own_file_is_its_file_name(self):
+        assert self._relative() == "/model.glb"
+
+    def test_with_a_companion_entry_it_keeps_the_earlier_path(self):
+        assert self._relative(companion=True) == "/"
+
+    def test_a_companion_file_is_unchanged(self):
+        assert self._relative(key="p1/model.glb/sub/x.obj") == "/sub/x.obj"
