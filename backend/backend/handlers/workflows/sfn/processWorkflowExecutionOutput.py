@@ -15,6 +15,7 @@ from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
 from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, object_key_for
 from common.resourceNames import get_resource_name, get_table_name, ResourceKeys, ResourceNameUnavailableError
+from common.ssmParameters import read_parameter_value
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     COPY_PRESERVED_HEADER_FIELDS,
@@ -185,7 +186,8 @@ try:
     # The copy engine function name, a resource name this function cannot take as an environment
     # variable (the engine references this function). Resolved here like the table names, so a lookup
     # Parameter Store refuses fails init with ResourceNameUnavailableError, which the workflow retries.
-    # "" while the deployment has not published it; _copy_engine_function_name reads it again then.
+    # "" while the deployment has not published it; _copy_engine_function_name reads it again then,
+    # from the parameter itself, since the resolver remembers the miss for five minutes.
     try:
         copy_engine_function_name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
     except KeyError:
@@ -235,14 +237,35 @@ engine_invoke_client = boto3.client('lambda', config=engine_invoke_config)
 _invocation_context = None
 
 
+def _copy_engine_name_parameter():
+    """The full name of the copy engine name parameter: the one CDK sets on this function, else the
+    resource-name prefix plus the key (the same parameter). "" when neither is known."""
+    parameter = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER, "")
+    if parameter:
+        return parameter
+    prefix = os.environ.get("VAMS_RESOURCE_PARAM_PREFIX", "").rstrip("/")
+    return f"{prefix}/{loc.ENGINE_FUNCTION_RESOURCE_KEY.param_key}" if prefix else ""
+
+
 def _copy_engine_function_name():
     """The copy engine function name for loc.call_engine: the one resolved at import, or, when the
-    deployment had not published it then (it may still be applying), the name read again now. A lookup
-    that fails here answers "", which call_engine waits out for its deploy window before it fails."""
+    deployment had not published it then (it may still be applying), the name read again now.
+
+    The resolver remembers a key it found missing for MISSING_KEY_TTL_SECONDS (5 minutes), longer than
+    call_engine waits for a name (ENGINE_CALL_DEPLOY_WAIT_SECONDS), so on a KeyError the parameter is
+    read directly with common.ssmParameters.read_parameter_value(), uncached and bounded. Any failure
+    here answers "", which call_engine waits out for its deploy window before it fails."""
     global copy_engine_function_name
     if not copy_engine_function_name:
         try:
-            copy_engine_function_name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
+            try:
+                name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
+            except KeyError:
+                parameter = _copy_engine_name_parameter()
+                if not parameter:
+                    raise
+                name = read_parameter_value(parameter)
+            copy_engine_function_name = name or ""
         except Exception as e:
             logger.warning(f"The copy engine function name could not be resolved yet ({type(e).__name__})")
             return ""

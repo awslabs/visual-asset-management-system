@@ -20,17 +20,20 @@ engine name reaches the fake.
 """
 
 import importlib.util
+import io
 import itertools
+import json
 import os
 import re
 import sys
+import time
 import types
 from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
 
-from backend.tests.ssmParametersStub import FakeClock
+from backend.tests.ssmParametersStub import FakeClock, install_clock
 
 BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "backend"))
 OUTPUT_STEP_PATH = os.path.join(BACKEND, "handlers", "workflows", "sfn", "processWorkflowExecutionOutput.py")
@@ -47,13 +50,16 @@ def throttled(operation):
 
 
 class FakeParameterStore:
-    """The three reads the resolver makes: chunk parameters (none published here), the prefix sweep and
-    a single GetParameter. ``published`` maps a key below the prefix to its value; ``throttle`` refuses
-    every call. ``calls`` records each operation."""
+    """The three reads the resolver makes: chunk parameters, the prefix sweep and a single
+    GetParameter. ``published`` maps a key below the prefix to its value; ``chunk_names``, when given,
+    is the name map of one published chunk parameter (``<prefix>Chunks/0``), so a key it does not
+    carry costs one GetParameter (the resolver's ``_read_one``); without it no chunk is published and
+    the resolver sweeps the prefix. ``throttle`` refuses every call. ``calls`` records each operation."""
 
-    def __init__(self, published=None, throttle=False):
+    def __init__(self, published=None, throttle=False, chunk_names=None):
         self.published = dict(published or {})
         self.throttle = throttle
+        self.chunk_names = chunk_names
         self.calls = []
 
     def _call(self, operation):
@@ -63,7 +69,12 @@ class FakeParameterStore:
 
     def get_parameters(self, Names, **_):
         self._call("GetParameters")
-        return {"Parameters": [], "InvalidParameters": list(Names)}
+        chunk = f"{PREFIX}Chunks/0"
+        if self.chunk_names is None or chunk not in Names:
+            return {"Parameters": [], "InvalidParameters": list(Names)}
+        body = json.dumps({"v": 1, "n": 1, "i": 0, "l": "layout-test", "m": self.chunk_names})
+        return {"Parameters": [{"Name": chunk, "Value": body, "Type": "String"}],
+                "InvalidParameters": [name for name in Names if name != chunk]}
 
     def get_parameters_by_path(self, Path, **_):
         self._call("GetParametersByPath")
@@ -89,6 +100,7 @@ def resolver(monkeypatch):
         if isinstance(key, rn.ResourceParamKey) and not any(os.environ.get(name) for name in key.env_var_names):
             monkeypatch.setenv(key.env_var_names[0], f"test-{key.param_key.replace('/', '-')}")
     monkeypatch.delenv("LARGE_OBJECT_COPY_FUNCTION_NAME", raising=False)
+    monkeypatch.delenv("LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER", raising=False)
     monkeypatch.setenv("METADATA_SERVICE_LAMBDA_FUNCTION_NAME", "test-metadata-service")
     monkeypatch.setenv("FILE_UPLOAD_LAMBDA_FUNCTION_NAME", "test-file-upload")
     for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
@@ -103,7 +115,12 @@ def resolver(monkeypatch):
 
 
 def install(rn, monkeypatch, fake):
+    """Point the resolver and this test's common.ssmParameters (the copy the output step binds when
+    it loads) at the fake, with the helper on a fake clock too."""
     monkeypatch.setattr(rn, "_get_ssm_client", lambda: fake)
+    helper = sys.modules["common.ssmParameters"]
+    monkeypatch.setattr(helper, "_get_ssm_client", lambda: fake)
+    install_clock(helper, FakeClock(), monkeypatch)
     return fake
 
 
@@ -202,6 +219,79 @@ class TestAnEmptyNameIsReadAgainOnTheNextCall:
         monkeypatch.setattr(output_step.loc, "call_engine", call_engine)
         assert output_step._engine(output_step.loc.OUTPUT_STEP_CANCEL, batchId="E1") == {"ok": True}
         assert seen == ["vams-copy-engine"]
+
+
+# The two ways the real resolver records the engine key as missing at import: a chunk-loaded cache
+# that does not carry it (one GetParameter, _read_one), or a prefix sweep that did not find it.
+MISS_PATHS = {"chunk read": {}, "prefix sweep": None}
+# The parameter's full name as CDK sets it on the output step, or unset (derived from the prefix).
+PARAMETER_ENV = {"from the environment": f"{PREFIX}/{ENGINE_KEY}", "from the prefix": None}
+
+
+@pytest.mark.unit
+class TestANamePublishedAfterTheFirstMissIsFound:
+    """The resolver remembers a key it found missing for MISSING_KEY_TTL_SECONDS (300 s), longer than
+    call_engine waits for a name (ENGINE_CALL_DEPLOY_WAIT_SECONDS, 120 s). An output step container
+    that started before the deployment published the engine name must still find it seconds later,
+    so the call-time lookup reads the parameter itself. Against the real resolver and the real helper."""
+
+    @pytest.fixture(params=sorted(MISS_PATHS))
+    def missed(self, request, resolver, monkeypatch):
+        fake = install(resolver, monkeypatch, FakeParameterStore(chunk_names=MISS_PATHS[request.param]))
+        module = load_output_step(monkeypatch)
+        assert module.copy_engine_function_name == ""
+        assert ENGINE_KEY in resolver._missing_keys, "the resolver recorded no miss, so this proves nothing"
+        # The miss was recorded 5 s ago; the deployment has published the name since.
+        resolver._missing_keys[ENGINE_KEY] = time.time() - 5
+        fake.published[ENGINE_KEY] = "vams-copy-engine"
+        return module, fake
+
+    @pytest.mark.parametrize("parameter", sorted(PARAMETER_ENV))
+    def test_the_next_call_reads_the_parameter_and_finds_the_name(self, missed, resolver, monkeypatch, parameter):
+        module, fake = missed
+        if PARAMETER_ENV[parameter]:
+            monkeypatch.setenv("LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER", PARAMETER_ENV[parameter])
+        calls = len(fake.calls)
+        with pytest.raises(KeyError):
+            resolver.get_resource_name(resolver.ResourceParamKey(ENGINE_KEY, ()))
+        assert len(fake.calls) == calls, "the resolver read again, so its miss record blocks nothing here"
+
+        assert module._copy_engine_function_name() == "vams-copy-engine"
+        assert fake.calls[calls:] == ["GetParameter"]
+        assert module._copy_engine_function_name() == "vams-copy-engine"
+        assert fake.calls[calls:] == ["GetParameter"], "a found name was read again"
+
+    def test_a_name_still_unpublished_answers_empty_and_is_read_on_each_call(self, missed):
+        module, fake = missed
+        del fake.published[ENGINE_KEY]
+        calls = len(fake.calls)
+        assert module._copy_engine_function_name() == ""
+        assert module._copy_engine_function_name() == ""
+        assert fake.calls[calls:] == ["GetParameter", "GetParameter"]
+
+    def test_a_throttled_read_answers_empty(self, missed):
+        module, fake = missed
+        fake.throttle = True
+        assert module._copy_engine_function_name() == ""
+
+    def test_the_engine_call_waits_for_the_name_and_then_invokes_it(self, missed, monkeypatch):
+        """End to end through loc.call_engine: the first resolve finds nothing, call_engine waits its
+        first deploy-window delay, the name is published meanwhile, and the next resolve finds it."""
+        module, fake = missed
+        del fake.published[ENGINE_KEY]
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            fake.published[ENGINE_KEY] = "vams-copy-engine"
+
+        monkeypatch.setattr(time, "sleep", sleep)
+        invoke = MagicMock(return_value={"Payload": io.BytesIO(json.dumps({"ok": True}).encode())})
+        monkeypatch.setattr(module, "engine_invoke_client", MagicMock(invoke=invoke))
+
+        assert module._engine(module.loc.OUTPUT_STEP_CANCEL, batchId="E1") == {"ok": True}
+        assert sleeps == [module.loc.ENGINE_CALL_DEPLOY_DELAYS[0]]
+        assert invoke.call_args.kwargs["FunctionName"] == "vams-copy-engine"
 
 
 @pytest.mark.unit

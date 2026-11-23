@@ -125,6 +125,10 @@ ENV_ENGINE_FUNCTION_NAME = "LARGE_OBJECT_COPY_FUNCTION_NAME"
 # It resolves the key with common.resourceNames.get_resource_name(); ENV_ENGINE_FUNCTION_NAME overrides
 # it. The key is RESOURCE_PARAM_KEYS.lambdaFunctions.largeObjectCopyEngine (infra/common/resourceParamKeys.ts).
 ENGINE_FUNCTION_RESOURCE_KEY = ResourceParamKey("lambdaFunctions/largeObjectCopyEngine", (ENV_ENGINE_FUNCTION_NAME,))
+# The full name of that parameter, set by CDK on the output step. The output step reads it directly,
+# uncached, while the resolver remembers the key as missing (its negative record lasts longer than the
+# copy engine call waits for a name the deployment is still publishing).
+ENV_ENGINE_FUNCTION_NAME_PARAMETER = "LARGE_OBJECT_COPY_FUNCTION_NAME_PARAMETER"
 
 # Engine settings. Fixed values, not deployment configuration.
 # API uploads larger than this are copied by the engine; smaller ones keep the large-file queue's
