@@ -10070,7 +10070,7 @@ components:
                     pattern: "^[-_a-zA-Z0-9]{3,63}$"
                 assetId:
                     type: string
-                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly."
+                    description: "Asset identifier, ASCII characters only. Every file relativeKey must begin with '{assetId}/'. When the asset already exists the identifier must match it exactly. An identifier that an asset in another database uses, including an archived asset, is refused with 400."
                     minLength: 2
                     maxLength: 255
                 assetName:

@@ -186,15 +186,15 @@ Both stages require `PUT` permission on the asset (`objectType: "asset"`) in add
 
 #### Initialize request body
 
-| Field             | Type          | Required | Description                                                                                                          |
-| ----------------- | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| `databaseId`      | string        | Yes      | Target database identifier (4-63 characters of letters, numbers, `-` and `_`).                                       |
-| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`. |
-| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                       |
-| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                |
-| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                               |
-| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                             |
-| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                         |
+| Field             | Type          | Required | Description                                                                                                                                                                                                                    |
+| ----------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `databaseId`      | string        | Yes      | Target database identifier (4-63 characters of letters, numbers, `-` and `_`).                                                                                                                                                 |
+| `assetId`         | string        | Yes      | Asset identifier (2-255 characters), ASCII characters only. Every file's `relativeKey` must begin with `{assetId}/`. An identifier that an asset in another database uses, including an archived asset, is refused with `400`. |
+| `assetName`       | string        | Yes      | Display name for the asset (1-256 characters).                                                                                                                                                                                 |
+| `description`     | string        | Yes      | Asset description (4-256 characters).                                                                                                                                                                                          |
+| `files`           | array         | Yes      | Files to upload; at least one entry, each with a unique `relativeKey`.                                                                                                                                                         |
+| `isDistributable` | boolean       | No       | Whether the asset can be downloaded. Defaults to `true`.                                                                                                                                                                       |
+| `tags`            | array[string] | No       | Tags for categorization, applied when the asset is created. See [Tags](../concepts/tags.md).                                                                                                                                   |
 
 Each entry in `files` is an object:
 
