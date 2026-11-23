@@ -6,12 +6,17 @@
 Which lookup to use:
 
 * A resource name VAMS creates at deploy time (a table, bucket, log group or function name under the
-  deployment's resource-name prefix) is resolved with ``common.resourceNames.get_resource_name()``,
-  which loads every registered name for the container from the resource-name chunk parameters.
+  deployment's resource-name prefix) is resolved with ``common.resourceNames.get_resource_name()``.
+  It loads most of them for the container from the resource-name chunk parameters, and reads a
+  late-bound key the chunks do not carry (a tooling-only name such as
+  ``lambdaFunctions/crOsReindexer``) with one GetParameter. The deploy-time OpenSearch, web URL and
+  map key values are resolved through ``common.deployTimeValues``, which reads their earlier
+  parameters through this module only while the chunks do not carry them yet.
 * A parameter read by its full name goes through this module: a value VAMS does not create (an
   AWS-published or add-on-owned parameter), a value that can change after the deployment, or a
-  deploy-time value the chunks do not carry. The parameter name comes from the environment the
-  deployment sets; this module knows nothing about what a value means.
+  deploy-time name that must be read again before the resolver's five-minute miss record expires
+  (the copy engine name in ``processWorkflowExecutionOutput``). The parameter name comes from the
+  environment the deployment sets; this module knows nothing about what a value means.
 
 Plain String parameters only. Nothing here asks Parameter Store to decrypt: a secret is read from
 AWS Secrets Manager, never through this module, so nothing it caches is a secret.
@@ -19,10 +24,11 @@ AWS Secrets Manager, never through this module, so nothing it caches is a secret
 Under throttling a read costs what a resource-name lookup costs, never Rule 6's five adaptive
 attempts (about 30 s):
 
-* One read retries throttling, 5xx responses, and connection and read timeouts with jittered sleeps
-  inside ``PARAMETER_READ_BUDGET_SECONDS``; no call starts and no sleep runs past the budget. The
-  client has short timeouts and no botocore retries, so one call adds at most its own timeout. The
-  error classification is the resolver's (``common.resourceNames``), so both treat an error alike.
+* One read retries throttling, 5xx responses, and the transport failures the resolver retries, with
+  jittered sleeps inside ``PARAMETER_READ_BUDGET_SECONDS``; no call starts and no sleep runs past
+  the budget. The client has short timeouts and no botocore retries, so one call adds at most its
+  own timeout. The error classification is the resolver's (``common.resourceNames``), so both treat
+  an error alike.
 * A read that fails on a retryable error opens a back-off window for the whole container (a
   throttle is account- and Region-wide): no parameter is read until it passes, a cached value is
   served, stale or not, and a parameter not cached is refused with ``ParameterUnavailableError``

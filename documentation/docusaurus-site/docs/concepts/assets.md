@@ -61,16 +61,17 @@ s3://vams-assets-bucket/assets/scan-001/
     scan-001/textures/normal.png
 ```
 
-A file belongs to the deepest stored location that contains it. Earlier releases could create an asset whose
-location sits inside another asset's folder (VAMS now refuses such a location when an asset is created). The
-files under that inner location are the inner asset's, whatever its database: the containing asset does not
+A file belongs to the deepest stored location that contains it. Creating an asset whose location sits inside
+another asset's folder is refused, but a deployment can still hold such a pair (the `assetLocationIndex`
+migration step reports them as `review.nestedLocation`). The files under that inner location are the inner asset's, whatever its database: the containing asset does not
 list, show, download, zip, archive, unarchive, delete, version, move or overwrite them, does not serve their
 viewer data, and does not count them in its asset type. A Zip Archive workflow run over a folder of the
 containing asset leaves them out too, and a path of the containing asset that leads into the inner location
 answers as a file the containing asset does not have. Each asset's own permissions decide who may act on its
 files.
 
-Earlier releases could also leave two assets on exactly the same location. Archiving or permanently deleting
+Two assets can also hold exactly the same location, which creating an asset refuses as well (the step reports
+them as `review.sharedLocation`). Archiving or permanently deleting
 one of them leaves the shared files, and every version of them, to the other asset, and deleting, archiving
 or moving one of those files through either asset is refused. No file is written into such a location: an
 upload, a workflow output, a new folder, a copy into either asset, and a revert, unarchive or primary-file change
@@ -79,7 +80,7 @@ Messages" in the troubleshooting guide). An archived asset is not unarchived, th
 written into its folder, while another live asset is stored at exactly its location, so the location is not
 shared again; an asset nested in another asset's folder, or holding one, is unarchived as usual. Until the `assetLocationIndex` migration step
 has run after an upgrade, only archiving, unarchiving and permanently deleting an asset, and deleting,
-archiving or moving a file or folder, look for nested or shared assets; writes behave as before.
+archiving or moving a file or folder, look for nested or shared assets; a write into a shared location is not refused.
 
 ## Updating an asset
 
