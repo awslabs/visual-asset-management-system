@@ -12,6 +12,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import query_all_items
 from common.validators import validate
 from common.assetHistory import (
     CHANGE_SOURCE_CREATE,
@@ -154,6 +155,10 @@ def get_default_bucket_details(databaseId):
         raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
     
 
+# The refusal for a chosen assetId that is already taken, whichever database holds it.
+ASSET_ID_IN_USE_MESSAGE = "Asset with specified ID already exists"
+
+
 def save_asset_details(asset_data):
     """Save a NEW asset record to DynamoDB.
 
@@ -170,12 +175,40 @@ def save_asset_details(asset_data):
     except ClientError as e:
         if e.response.get('Error', {}).get('Code') == 'ConditionalCheckFailedException':
             logger.info(f"Asset already exists on conditional create: {asset_data.get('assetId')}")
-            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
+            raise VAMSGeneralErrorResponse(ASSET_ID_IN_USE_MESSAGE)
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse("Error saving asset.")
     except Exception as e:
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse("Error saving asset.")
+
+
+class AssetIdInUseError(VAMSGeneralErrorResponse):
+    """A chosen assetId that an existing asset already carries, in any database."""
+
+
+def assert_asset_id_not_in_use(asset_id):
+    """Refuse an assetId that any asset record, in any database, live or archived, already carries.
+
+    assetIdGSI is partitioned on assetId, so this is a keyed read of the index, paged to the end.
+    Archiving keeps the assetId and moves the record under "{databaseId}#deleted", so an archived
+    asset is found as well. The answer is the same as for an assetId taken in the caller's own
+    database and names no database.
+
+    A failed read is not caught: the create stops before anything is written and the API answers 500.
+
+    Raises:
+        AssetIdInUseError: if an asset record already carries the assetId
+    """
+    items = query_all_items(
+        asset_table,
+        IndexName='assetIdGSI',
+        KeyConditionExpression=Key('assetId').eq(asset_id),
+    )
+    if items:
+        logger.info(f"assetId {asset_id} is already used by {len(items)} asset record(s)")
+        raise AssetIdInUseError(ASSET_ID_IN_USE_MESSAGE)
+
 
 def create_sns_topic_for_asset(database_id, asset_id):
     """Create an SNS topic for an asset.
@@ -765,7 +798,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         ).get('Item')
         
         if existing_asset:
-            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
+            raise VAMSGeneralErrorResponse(ASSET_ID_IN_USE_MESSAGE)
     
     # Verify database exists
     db_response = database_table.get_item(
@@ -802,6 +835,10 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     # (databaseId, assetId) and cannot see the other database's record. Closing
     # this needs a per-location claim record written with a conditional put, which
     # is a data-model change and is tracked separately.
+
+    # Set by the derived branch when the location is new; the marker is written only
+    # after every check below has passed.
+    new_prefix_folder = False
 
     if request_model.bucketExistingKey:
         # Use the provided existing key (must still be at the base path for the database id -> bucket id provided)
@@ -886,8 +923,17 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
             assert_existing_key_not_owned(colocated_bucket_ids, s3_key)
             logger.info(f"Binding S3-external asset to existing prefix: {s3_key} in bucket: {s3_bucket}")
         else:
-            logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
-            create_prefix_folder(s3_bucket, s3_key)
+            new_prefix_folder = True
+
+    # A chosen assetId is refused when an asset in any database, live or archived, already
+    # carries it. Checked after the location checks, so their more specific refusals answer
+    # first, and before anything is written.
+    if request_model.assetId:
+        assert_asset_id_not_in_use(assetId)
+
+    if new_prefix_folder:
+        logger.info(f"Creating new prefix folder: {s3_key} in bucket: {s3_bucket}")
+        create_prefix_folder(s3_bucket, s3_key)
     
     # Get username for version creation
     username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
