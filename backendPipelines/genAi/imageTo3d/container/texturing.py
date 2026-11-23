@@ -1899,8 +1899,9 @@ def project_photograph(mesh, image_path: str, params: Optional[dict] = None,
     """
     try:
         from PIL import Image
+        from preprocess import INPUT_IMAGE_FORMATS
 
-        with Image.open(image_path) as handle:
+        with Image.open(image_path, formats=INPUT_IMAGE_FORMATS) as handle:
             image = handle.convert("RGBA") if "A" in handle.getbands() else handle.convert("RGB")
 
         mask, mask_source = _subject_mask(image)
