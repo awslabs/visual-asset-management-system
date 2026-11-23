@@ -101,7 +101,7 @@ def test_every_suite_setting_names_a_discovered_directory_and_a_reason(settings,
     for path, entry in settings.items():
         assert path in discovered, f"{path} has settings but holds no test module; remove the entry"
         assert entry, f"{path} has an empty settings entry"
-        assert set(entry) <= {"extraRequirements", "headlessDisplay"}, f"{path}: unknown setting {sorted(entry)}"
+        assert set(entry) <= {"extraRequirements", "headlessDisplay", "ownRequirements"}, f"{path}: unknown setting {sorted(entry)}"
         for name, setting in entry.items():
             assert setting.get("reason", "").strip(), f"{path}: {name} has no reason"
         if "extraRequirements" in entry:
@@ -210,3 +210,24 @@ def test_the_workflow_runs_every_group():
     groups = re.search(r"^\s+group: \[([0-9, ]+)\]\s*$", workflow, re.M)
     assert groups, "the pipeline test job has no group matrix"
     assert [int(g) for g in groups.group(1).split(",")] == list(range(1, runner.GROUP_COUNT + 1))
+
+
+def test_own_requirements_setting_skips_the_nearest_requirements_file(monkeypatch):
+    """A directory with an ``ownRequirements`` entry installs only the common requirements (and extras)."""
+    target = "backendPipelines/genAi/imageTo3d/container/tests"
+    plain = {s.rel: s for s in runner.suites()}[target]
+    assert any(p.name == "requirements.txt" for p in plain.requirement_files)
+
+    settings = runner.load_settings()
+    monkeypatch.setattr(
+        runner, "load_settings", lambda: {**settings, target: {"ownRequirements": {"reason": "test"}}}
+    )
+    opted_out = {s.rel: s for s in runner.suites()}[target]
+    assert opted_out.requirement_files == (runner.COMMON_REQUIREMENTS,)
+
+
+def test_the_gr00t_suite_installs_only_the_common_requirements():
+    """The GR00T image's requirements.lock is Python 3.10 GPU wheels, which a CPU runner does not install."""
+    suite = {s.rel: s for s in runner.suites()}["backendPipelines/genAi/nvidia/gr00t/container/tests"]
+    assert suite.requirement_files == (runner.COMMON_REQUIREMENTS,)
+    assert (runner.REPO_ROOT / "backendPipelines/genAi/nvidia/gr00t/container/uv.lock").is_file()
