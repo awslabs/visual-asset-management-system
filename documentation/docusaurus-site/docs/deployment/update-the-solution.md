@@ -894,6 +894,13 @@ From v2.6.7 the API authorizer derives each caller's user identifier only from t
 
 **After updating, check the authorizer log.** In Amazon CloudWatch Logs, the API authorizer Lambda function logs `Verified token carries no username claim` each time it refuses a token that carries none of the three claims.
 
+### v2.6.8 and later: Isaac Lab run configuration files
+
+From v2.6.8, the Isaac Lab training and evaluation pipeline saves only the run's settings in the `train-config.json` and `evaluate-config.json` files it writes beside a run's outputs. Versions from v2.4.0 to v2.6.7 saved the whole job definition the pipeline passed to its container, which also carried workflow and pipeline fields that are not run settings.
+
+-   **New runs need no action.** A run started after the update writes the shorter file.
+-   **Files from earlier runs keep their content.** The update does not change files already in your asset buckets. To bring them in line, delete the `train-config.json` and `evaluate-config.json` files of runs made before the update, or replace each with a copy that keeps only the run's settings. VAMS does not need these files to run or evaluate a policy: from v2.7.0 an evaluation reads a training run's `train-config.json` only to add a note when the two runs used different physics engines, and a missing file only leaves that note out.
+
 ### v2.6 to v2.7
 
 :::info[What this release changes for an existing deployment]
