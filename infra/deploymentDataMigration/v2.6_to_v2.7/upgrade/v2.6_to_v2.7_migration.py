@@ -45,11 +45,11 @@ The v2.7 release introduces:
      both sets and prints guidance. It writes nothing.
   4. A location index on the asset table (``AssetLocationGSI``: bucket name and stored location to
      database and asset). The ``assetLocationIndex`` step writes the two indexed attributes,
-     ``locationBucket`` and ``locationKey``, on every asset row that lacks them (one conditional
-     ``UpdateItem`` each, paced, resumable from a checkpoint file), verifies every row with strongly
-     consistent passes, writes a report of the rows it could not index, and writes the completion
-     marker (an SSM parameter under the resource-name prefix) last. Nothing reads the index before the
-     marker exists. No S3 call is made.
+     ``locationBucket`` and ``locationKey``, on every asset row whose two attributes are missing or
+     wrong (one conditional ``UpdateItem`` each, paced, resumable from a checkpoint file), verifies
+     every row with strongly consistent passes, writes a report of the rows it could not index, and
+     writes the completion marker (an SSM parameter under the resource-name prefix) last. Nothing reads
+     the index before the marker exists. No S3 call is made.
 
 Configuration: set ``resource_names_ssm_param_prefix`` (from the core stack output
 ``ResourceNamesSSMParamPrefixOutput``); every table and function name is then resolved from SSM
@@ -2502,10 +2502,11 @@ Notes:
     '/{name}/{name}' and marks the asset row done, so no later run moves them again. Run it before users
     edit metadata on single-file assets. It runs first under --steps all.
   - assetLocationIndex is required after the v2.7 deploy and runs after assetLocationFolderKeys (last under
-    --steps all, and skipped in a real run when assetLocationFolderKeys failed): it writes locationBucket and
-    locationKey on every asset row (one UpdateItem per row that lacks them, paced), verifies them with
-    strongly consistent passes, writes a report of the rows it could not index, and writes the completion
-    marker last. It resumes from its checkpoint file after an interruption, and a second run writes no row.
+    --steps all, and skipped in a real run when assetLocationFolderKeys did not finish): it writes
+    locationBucket and locationKey on every asset row (one UpdateItem per row whose attributes are missing
+    or wrong, paced), verifies them with strongly consistent passes, writes a report of the rows it could
+    not index, and writes the completion marker last. It resumes from its checkpoint file after an
+    interruption, and a second run writes no row.
   - --limit caps asset rows examined (assetLocationFolderKeys, assetLocationIndex; a limited index run never
     writes the completion marker), trigger rows examined (orphanedTriggers), is forwarded as the reindexer's
     limit (vectorBackfill), and caps rows listed per section (systemPipelineRetirement).
@@ -2726,7 +2727,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.info("")
         logger.error("assetLocationIndex skipped: assetLocationFolderKeys did not finish in this run, and the "
                      "index is built from the location keys that step fixes. Re-run it until it exits 0, then "
-                     "run --steps assetLocationIndex.")
+                     "run --steps assetLocationIndex. A key that can never be read (an unregistered bucket) "
+                     "keeps it non-zero: once you have checked its report, run --steps assetLocationIndex on "
+                     "its own.")
         outcomes.append(('assetLocationIndex', held_outcome))
         exit_code = exit_code or 1
     elif run_asset_location_index:

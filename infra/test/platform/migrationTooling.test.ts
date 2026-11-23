@@ -889,6 +889,43 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
         expect(append.slice(0, append.indexOf("\ndef "))).toContain("ASSET_LOCATION_KEY_ATTRIBUTE");
     });
 
+    it("is held on a real run whose folder-keys step did not finish, with a way on for a key never read", () => {
+        const body = script.slice(script.indexOf("def main("));
+        // The flag is set in the folder-keys step's failure branch, before the steps it holds.
+        const folderKeys = body.slice(body.indexOf("run_asset_location_folder_keys_step("));
+        const branch = folderKeys.slice(0, folderKeys.indexOf("if run_orphaned_triggers:"));
+        expect(branch).toMatch(
+            /if rc != 0:\s*\n\s*exit_code = rc\s*\n\s*location_keys_unfinished = not dry_run\n/
+        );
+        // The index step runs only in the branch the flag does not hold.
+        const held = body.slice(
+            body.indexOf("if run_asset_location_index and location_keys_unfinished:")
+        );
+        const runs = held.indexOf("elif run_asset_location_index:");
+        expect(runs).toBeGreaterThan(-1);
+        expect(runs).toBeLessThan(held.indexOf("run_asset_location_index_step("));
+        const skip = held.slice(0, runs).replace(/"\s*\n\s*"/g, "");
+        expect(skip).toContain("outcomes.append(('assetLocationIndex', held_outcome))");
+        expect(skip).toContain("exit_code = exit_code or 1");
+        expect(skip).toContain(
+            "once you have checked its report, run --steps assetLocationIndex on its own."
+        );
+        const readme = readMigrationFile(release, release.readme);
+        const guide = fs.readFileSync(
+            path.join(DOCS_ROOT, "deployment/update-the-solution.md"),
+            "utf8"
+        );
+        for (const page of [readme, guide]) {
+            expect(page).toMatch(/run `--steps assetLocationIndex` on\s+its own/);
+            expect(page).not.toContain("skipped: assetLocationFolderKeys failed in this run");
+        }
+        // The step writes rows whose attributes are missing or wrong, not only rows that lack them.
+        const config = readMigrationFile(release, "v2.6_to_v2.7_migration_config.json");
+        expect(readme).not.toContain("writes only the rows that lack the attributes");
+        expect(guide).not.toContain("writes only rows that lack the two attributes");
+        expect(config).not.toContain("every asset row that lacks them");
+    });
+
     it("writes the table name into the marker, which the backend requires", () => {
         expect(script).toMatch(/'assetTable': self\.asset_table/);
         expect(backend).toMatch(/marker\.get\('assetTable'\) == asset_table_name/);
