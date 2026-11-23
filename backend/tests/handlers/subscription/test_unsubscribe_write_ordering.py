@@ -48,6 +48,7 @@ def _body(subscriber=USER):
         "eventName": EVENT_NAME,
         "entityName": "Asset",
         "entityId": ASSET_ID,
+        "databaseId": DATABASE_ID,
         "subscribers": [subscriber],
     }
 
@@ -63,7 +64,7 @@ def _row(*subscribers):
     """The attribute-value shape ``get_subscription_obj`` returns for a stored row."""
     return {
         "eventName": {"S": EVENT_NAME},
-        "entityName_entityId": {"S": f"Asset#{ASSET_ID}"},
+        "entityName:databaseId:entityId": {"S": f"Asset:{DATABASE_ID}:{ASSET_ID}"},
         "subscribers": {"L": [{"S": subscriber} for subscriber in subscribers]},
     }
 
@@ -103,10 +104,8 @@ class Wiring:
 
         monkeypatch.setattr(
             unsubscribeService, "get_asset",
-            lambda asset_id: {"databaseId": DATABASE_ID, "snsTopic": TOPIC})
-        monkeypatch.setattr(
-            unsubscribeService, "get_subscription_obj",
-            lambda event_name, entity_name, entity_id: row)
+            lambda database_id, asset_id: {"databaseId": database_id, "snsTopic": TOPIC})
+        monkeypatch.setattr(unsubscribeService, "get_subscription_obj", lambda body: row)
 
     def _record(self, name):
         def side_effect(**kwargs):
@@ -143,7 +142,7 @@ def _patch_handler(monkeypatch):
     monkeypatch.setattr(unsubscribeService, "CasbinEnforcer", lambda claims_and_roles: enforcer)
     monkeypatch.setattr(
         unsubscribeService, "get_asset_object_from_id",
-        lambda database_id, asset_id: {"assetId": ASSET_ID, "databaseId": DATABASE_ID})
+        lambda database_id, asset_id, include_archived=False: {"assetId": ASSET_ID, "databaseId": DATABASE_ID})
 
 
 @pytest.mark.unit

@@ -753,17 +753,20 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
     assetId = request_model.assetId if request_model.assetId else f"x{str(uuid.uuid4())}"
     databaseId = request_model.databaseId
     
-    # Check if asset already exists (if assetId was provided)
+    # Check if asset already exists (if assetId was provided). An archived asset of the same database
+    # still holds its id: its comments, subscription, versions and metadata stay keyed by
+    # (databaseId, assetId), so a new asset with that id would inherit them.
     if request_model.assetId:
-        existing_asset = asset_table.get_item(
-            Key={
-                'databaseId': databaseId,
-                'assetId': assetId
-            }
-        ).get('Item')
-        
-        if existing_asset:
-            raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
+        for partition_database_id in (databaseId, f"{databaseId}{ARCHIVED_DATABASE_SUFFIX}"):
+            existing_asset = asset_table.get_item(
+                Key={
+                    'databaseId': partition_database_id,
+                    'assetId': assetId
+                }
+            ).get('Item')
+
+            if existing_asset:
+                raise VAMSGeneralErrorResponse("Asset with specified ID already exists")
     
     # Verify database exists
     db_response = database_table.get_item(

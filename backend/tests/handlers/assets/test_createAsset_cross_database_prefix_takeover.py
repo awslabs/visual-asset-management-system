@@ -292,11 +292,12 @@ class TestArchivedPrefixTakeoverDenied:
         # under the prefix for the S3 layer to see.
         m.check_s3_prefix_exists.assert_not_called()
 
-        # The pre-persist existence check really is blind to the victim's partition,
-        # which is why the ownership query is the only thing that can catch this.
-        m.asset_table.get_item.assert_called_once_with(
-            Key={"databaseId": _OWN_DB, "assetId": _VICTIM_ASSET_ID}
-        )
+        # The pre-persist existence check reads only the caller's own database (its live and its
+        # archived partition), so it really is blind to the victim's partition, which is why the
+        # ownership query is the only thing that can catch this.
+        read_keys = [c.kwargs["Key"] for c in m.asset_table.get_item.call_args_list]
+        assert {"databaseId": _OWN_DB, "assetId": _VICTIM_ASSET_ID} in read_keys
+        assert all(key["databaseId"] in (_OWN_DB, f"{_OWN_DB}#deleted") for key in read_keys)
 
         lookups = _ownership_lookup_calls(m)
         assert len(lookups) == 1
