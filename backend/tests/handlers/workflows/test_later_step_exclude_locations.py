@@ -59,7 +59,8 @@ def _row(asset, relative_folder="/"):
 
 def _tables(input_rows, asset_table):
     inputs = MagicMock(query=MagicMock(return_value={"Items": list(input_rows)}))
-    asset_name = ipt.get_table_name(ipt.ResourceKeys.ASSET_STORAGE_TABLE)
+    # The name the module resolved at import, whatever another test has since set in the environment.
+    asset_name = ipt.asset_storage_table_name
     return lambda name: asset_table if name == asset_name else inputs
 
 

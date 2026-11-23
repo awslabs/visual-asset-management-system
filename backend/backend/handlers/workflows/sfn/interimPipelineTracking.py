@@ -64,6 +64,9 @@ try:
     workflow_execution_inputs_table = get_table_name(ResourceKeys.WORKFLOW_EXECUTION_INPUTS_STORAGE_TABLE)
     pipeline_execution_input_configuration_table = get_table_name(
         ResourceKeys.PIPELINE_EXECUTION_INPUT_CONFIGURATION_STORAGE_TABLE)
+    # The asset table, read for the locations of assets nested in a folder input. Resolved here with
+    # the others: a lookup inside the handler could be refused after step 1 has written its records.
+    asset_storage_table_name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
     # Auxiliary bucket name, written into each next pipeline's manifest.auxBucket. Resolved here
     # (not threaded through the SFN input) so the aux bucket lives in one place per its purpose.
     bucket_name_assetAuxiliary = get_bucket_name(ResourceKeys.ASSET_AUXILIARY_BUCKET)
@@ -103,10 +106,9 @@ def _relative_to_asset(full_file_key, base_key):
 
 
 def _asset_table():
-    """The asset table and its name, resolved when used (get_table_name caches the name): only a folder
-    input reads it, for the locations of the assets nested in it."""
-    name = get_table_name(ResourceKeys.ASSET_STORAGE_TABLE)
-    return dynamodb.Table(name), name
+    """The asset table and its name (resolved at import): only a folder input reads it, for the
+    locations of the assets nested in it."""
+    return dynamodb.Table(asset_storage_table_name), asset_storage_table_name
 
 
 def _exclude_locations(file_bucket, asset_root_s3_key, file_key):
