@@ -117,8 +117,43 @@ class TestWriteOutboundSyncRecord:
         m.write_outbound_sync_record(m.SYNC_OBJECT_TYPE_DATABASE, "db1", "physna", "sys1",
                                      m.SYNC_ACTION_CREATE, m.SYNC_STATUS_SUCCESS)
 
-    def test_missing_table_is_swallowed(self, sync_tracking_module):
+    def test_missing_table_is_swallowed(self, sync_tracking_module, monkeypatch):
         m = sync_tracking_module
         m.sync_tracking_outbound_table = None
+
+        def unresolved(key):
+            raise KeyError(key.param_key)
+
+        monkeypatch.setitem(m.write_outbound_sync_record.__globals__, "get_table_name", unresolved)
         m.write_outbound_sync_record(m.SYNC_OBJECT_TYPE_DATABASE, "db1", "physna", "sys1",
                                      m.SYNC_ACTION_CREATE, m.SYNC_STATUS_SUCCESS)
+
+    def test_a_name_not_resolved_at_import_is_resolved_at_the_next_write(self, sync_tracking_module, monkeypatch):
+        # The import-time lookup was refused (Parameter Store throttled the cold start). The first
+        # write is refused too; a later write resolves the name and records, and keeps the table.
+        m = sync_tracking_module
+        m.sync_tracking_outbound_table = None
+        module_globals = m.write_outbound_sync_record.__globals__
+        answers = [RuntimeError("refused"), "sync-table"]
+        lookups = []
+
+        def get_table_name(key):
+            lookups.append(key.param_key)
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        table = MagicMock()
+        resource = MagicMock()
+        resource.Table.return_value = table
+        monkeypatch.setitem(module_globals, "get_table_name", get_table_name)
+        monkeypatch.setitem(module_globals, "dynamodb", resource)
+
+        for system_id in ("sys1", "sys2", "sys3"):
+            m.write_outbound_sync_record(m.SYNC_OBJECT_TYPE_DATABASE, "db1", "physna", system_id,
+                                         m.SYNC_ACTION_CREATE, m.SYNC_STATUS_SUCCESS)
+
+        resource.Table.assert_called_once_with("sync-table")
+        assert [c[1]["Item"]["systemUniqueId"] for c in table.put_item.call_args_list] == ["sys2", "sys3"]
+        assert lookups == ["dynamoTables/syncTrackingOutboundStorage"] * 2

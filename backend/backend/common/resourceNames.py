@@ -8,13 +8,8 @@ import threading
 import time
 import boto3
 from botocore.config import Config
-from botocore.exceptions import (
-    ClientError,
-    ConnectionClosedError,
-    ConnectTimeoutError,
-    EndpointConnectionError,
-    ReadTimeoutError,
-)
+from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import ConnectionError as BotocoreConnectionError
 from customLogging.logger import safeLogger
 
 logger = safeLogger()
@@ -76,8 +71,11 @@ _RETRYABLE_ERROR_CODES = frozenset({
     "ServiceUnavailable",
 })
 
-# Connection failures and timeouts a page is retried on inside the budget.
-_RETRYABLE_CONNECTION_ERRORS = (ConnectTimeoutError, ReadTimeoutError, EndpointConnectionError, ConnectionClosedError)
+# Connection failures and timeouts a page is retried on inside the budget: the two exception classes
+# botocore's standard retry mode treats as transient. They cover connect and read timeouts, an
+# unreachable endpoint, a closed connection, a TLS failure (SSLError), a proxy failure
+# (ProxyConnectionError) and any other socket failure the HTTP client reports (HTTPClientError).
+_RETRYABLE_CONNECTION_ERRORS = (BotocoreConnectionError, HTTPClientError)
 
 # Clock, sleep and jitter the sweep and the back-off window use.
 _monotonic = time.monotonic
@@ -86,9 +84,21 @@ _uniform = random.uniform
 
 
 class ResourceNameUnavailableError(RuntimeError):
-    """A resource name could not be resolved because Parameter Store could not be read: the sweep
-    failed, or the lookup came inside the back-off window that follows a failed sweep. Not a
-    KeyError, because the parameter may well be published."""
+    """A resource name could not be resolved because Parameter Store could not be read: a refresh
+    or a single-key read failed with throttling, a service fault, a timeout or a connection failure,
+    or the lookup came inside the back-off window that follows such a failure. Not a KeyError,
+    because the parameter may well be published. The workflow scaffolding states retry it
+    (workflowAslBuilder.RESOURCE_NAME_UNAVAILABLE_RETRIER)."""
+
+
+class ResourceNameAccessError(RuntimeError):
+    """A resource name could not be resolved because the sweep or a single-key read was refused
+    with an error a retry cannot fix: a client error that is not throttling or a service fault (most
+    often AccessDeniedException, when the function's role may not call ssm:GetParametersByPath, or
+    ssm:GetParameter for a single key, on the deployment's parameters; also ValidationException or
+    UnrecognizedClientException), or missing credentials. Opens no back-off window, and no workflow
+    state retries it as it does ResourceNameUnavailableError, so the lookup fails at once with the
+    original error as its cause."""
 
 
 class ResourceParamKey:
@@ -230,6 +240,12 @@ def _is_retryable(error: Exception) -> bool:
     return False
 
 
+def _is_transient_sweep_failure(error: Exception) -> bool:
+    """A read that ran out of its budget on retryable errors (or on none, TimeoutError), as
+    opposed to one a non-retryable error ended at once."""
+    return isinstance(error, TimeoutError) or _is_retryable(error)
+
+
 def _sweep_parameters(prefix: str, deadline: float = None) -> dict:
     """Read every parameter under the prefix with GetParametersByPath, page by page, inside
     SWEEP_BUDGET_SECONDS (or until ``deadline``, the _monotonic() time a refresh that already spent
@@ -293,14 +309,16 @@ class _ChunksUnusable(Exception):
     unreadable JSON, or a non-retryable error); the refresh reads the prefix instead."""
 
 
-def _call_within_budget(call, deadline: float, counter: list):
+def _call_within_budget(call, deadline: float, counter: list, first_call_past_deadline: bool = False):
     """Run one SSM call, retrying a retryable error after the sweep's jittered sleep until
     ``deadline``. Counts every call in ``counter[0]``. Raises a non-retryable error at once, and
-    the last retryable error (or TimeoutError) when no further call or sleep fits the budget."""
+    the last retryable error (or TimeoutError) when no further call or sleep fits the budget. With
+    ``first_call_past_deadline`` the first call is made even when the deadline has already passed;
+    it stays bounded by the client's timeouts and is not retried."""
     retries = 0
     last_error = None
     while True:
-        if _monotonic() >= deadline:
+        if _monotonic() >= deadline and (last_error is not None or not first_call_past_deadline):
             raise last_error or TimeoutError(
                 f"Resource name read did not finish within {SWEEP_BUDGET_SECONDS}s")
         counter[0] += 1
@@ -359,7 +377,7 @@ def _read_chunks(prefix: str, deadline: float) -> dict:
         try:
             response = _call_within_budget(lambda: client.get_parameters(Names=names), deadline, calls)
         except Exception as e:
-            if isinstance(e, TimeoutError) or _is_retryable(e):
+            if _is_transient_sweep_failure(e):
                 logger.error(
                     f"Resource name chunk read failed ({_error_code(e)}) after {calls[0]} calls, "
                     f"{_monotonic() - started:.2f}s")
@@ -422,31 +440,50 @@ def _refresh_cache():
         _missing_keys = {k: at for k, at in _missing_keys.items() if k not in _cache}
 
 
-def _read_one(key: ResourceParamKey):
+def _read_one(key: ResourceParamKey, deadline: float = None):
     """One GetParameter for a key the chunk-loaded cache does not carry (a parameter created under
-    the prefix outside the registry, for example). The name is added to the cache, which keeps the
-    cache's timestamp; ParameterNotFound goes into the negative record and raises KeyError. Any other
-    failure counts as a failed sweep for the back-off window and raises ResourceNameUnavailableError.
-    Called with _sweep_lock held."""
+    the prefix outside the registry, for example), inside ``deadline`` (the _monotonic() time a
+    refresh that has just run passes in, so one lookup spends one budget) or else a fresh
+    SWEEP_BUDGET_SECONDS. A refresh whose last call ended past that deadline still leaves one call,
+    bounded by the client's timeouts and not retried. The name is added to the cache, which keeps the cache's timestamp, and the
+    failure count is reset; ParameterNotFound goes into the negative record and raises KeyError.
+    A transient failure (throttling, a service fault, a timeout or a connection failure) counts as a
+    failed sweep for the back-off window and raises ResourceNameUnavailableError; any other error
+    opens no window and raises ResourceNameAccessError. Called with _sweep_lock held."""
     global _cache
     prefix = os.environ["VAMS_RESOURCE_PARAM_PREFIX"].rstrip("/")
     client = _get_ssm_client()
     calls = [0]
+    if deadline is None:
+        deadline = _monotonic() + SWEEP_BUDGET_SECONDS
     try:
         response = _call_within_budget(
-            lambda: client.get_parameter(Name=f"{prefix}/{key.param_key}"),
-            _monotonic() + SWEEP_BUDGET_SECONDS, calls)
+            lambda: client.get_parameter(Name=f"{prefix}/{key.param_key}"), deadline, calls,
+            first_call_past_deadline=True)
     except Exception as e:
-        if _error_code(e) == "ParameterNotFound":
+        code = _error_code(e)
+        if code == "ParameterNotFound":
             _missing_keys[key.param_key] = time.time()
             logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
             raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
-        logger.error(f"Resource name read failed ({_error_code(e)}) after {calls[0]} calls: {key.param_key}")
-        _record_failed_sweep()
-        raise ResourceNameUnavailableError(
-            f"Resource name parameters could not be read from SSM: {key.param_key}") from e
+        logger.error(f"Resource name read failed ({code}) after {calls[0]} calls: {key.param_key}")
+        if _is_transient_sweep_failure(e):
+            _record_failed_sweep()
+            raise ResourceNameUnavailableError(
+                f"Resource name parameters could not be read from SSM: {key.param_key}") from e
+        # Not throttling: a retry meets the same refusal, so it is reported for what it is.
+        if code.startswith("AccessDenied"):
+            raise ResourceNameAccessError(
+                f"Resource name parameter could not be read from SSM ({code}): the function's role "
+                f"needs ssm:GetParameter on <prefix>/{key.param_key}, <prefix> being its "
+                f"VAMS_RESOURCE_PARAM_PREFIX; check its policy, permissions boundary and service "
+                f"control policies") from e
+        raise ResourceNameAccessError(
+            f"Resource name parameter could not be read from SSM ({code}), and a retry cannot "
+            f"fix it: {key.param_key}") from e
     value = response["Parameter"]["Value"]
     _cache = {**_cache, key.param_key: value}
+    _record_completed_sweep()
     return value
 
 
@@ -513,10 +550,17 @@ def get_resource_name(key: ResourceParamKey) -> str:
     ParameterNotFound) is remembered as missing for MISSING_KEY_TTL_SECONDS, so it costs one
     read per window rather than one per call.
 
-    A refresh is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A failed
-    refresh opens a back-off window in which no refresh starts: a lookup inside it is answered from
-    the cache, stale or not, or refused with ResourceNameUnavailableError, as is a failed refresh
-    for a name the cache does not hold. A cache hit takes no lock and reads no SSM."""
+    A refresh is bounded by SWEEP_BUDGET_SECONDS and runs one at a time per container. A refresh
+    that fails on throttling, a service fault, a timeout or a connection failure opens a back-off
+    window in which no refresh starts: a lookup inside it is answered from the cache, stale or not,
+    or refused with ResourceNameUnavailableError, as is the failed refresh for a name the cache
+    does not hold. A refresh a non-retryable error ends (access denied on the sweep, for one) opens
+    no window and, for a name the cache does not hold, raises ResourceNameAccessError. A failed
+    single-key GetParameter is split the same way: a transient failure opens the window and raises
+    ResourceNameUnavailableError, any other raises ResourceNameAccessError. The GetParameter that
+    follows a refresh has only what remains of the refresh's budget, so one lookup spends one
+    budget; when the refresh's last call ended past it, the GetParameter still gets one call,
+    bounded by the client's timeouts. A cache hit takes no lock and reads no SSM."""
     for env_name in key.env_var_names:
         value = os.environ.get(env_name)
         if value:
@@ -536,6 +580,9 @@ def get_resource_name(key: ResourceParamKey) -> str:
             # The chunk-loaded cache is current and does not carry this key.
             return _read_one(key)
 
+        # _refresh_cache sets its own deadline the same budget from now; the GetParameter that
+        # may follow it gets what remains of this one.
+        refresh_deadline = _monotonic() + SWEEP_BUDGET_SECONDS
         try:
             _refresh_cache()
         except Exception as e:
@@ -547,10 +594,24 @@ def get_resource_name(key: ResourceParamKey) -> str:
                     return _cache[key.param_key]
                 logger.exception(f"Failed loading resource name parameters from SSM: {e}")
                 raise
-            _record_failed_sweep()
+            transient = _is_transient_sweep_failure(e)
+            if transient:
+                _record_failed_sweep()
             if key.param_key in _cache:
                 logger.warning(f"SSM refresh failed; serving cached value for {key.param_key}")
                 return _cache[key.param_key]
+            if not transient:
+                # Not throttling: a retry meets the same refusal, so it is reported for what it is.
+                code = _error_code(e)
+                if code.startswith("AccessDenied"):
+                    raise ResourceNameAccessError(
+                        f"Resource name parameters could not be read from SSM ({code}): the "
+                        f"function's role needs ssm:GetParametersByPath on the deployment's resource-name "
+                        f"parameters; check its policy, permissions boundary and service control "
+                        f"policies: {key.param_key}") from e
+                raise ResourceNameAccessError(
+                    f"Resource name parameters could not be read from SSM ({code}), and a retry cannot "
+                    f"fix it: {key.param_key}") from e
             raise ResourceNameUnavailableError(
                 f"Resource name parameters could not be read from SSM: {key.param_key}") from e
         _record_completed_sweep()
@@ -559,7 +620,7 @@ def get_resource_name(key: ResourceParamKey) -> str:
         if key.param_key in cache:
             return cache[key.param_key]
         if not _cache_complete:
-            return _read_one(key)
+            return _read_one(key, refresh_deadline)
         _missing_keys[key.param_key] = _cache_fetched_at
         logger.warning(f"Resource name parameter not published under the deployment prefix: {key.param_key}")
         raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")

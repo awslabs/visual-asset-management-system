@@ -458,3 +458,174 @@ class TestBackoffAndOverrides:
         rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
         assert fake.count("get_parameters") == 2
         assert fake.count("get_parameters_by_path") == 0
+
+
+COMMENT = "dynamoTables/commentStorage"
+
+
+@pytest.mark.unit
+class TestFailureClassesOnTheChunkPath:
+    """Which error class a failed lookup raises, and whether it opens the back-off window, for the
+    chunk read, the sweep it falls back to and the single-key read."""
+
+    @pytest.mark.parametrize("code,needle", [
+        ("AccessDeniedException", f"ssm:GetParameter on <prefix>/{DATABASE}"),
+        ("ValidationException", "a retry cannot fix it"),
+    ])
+    def test_a_refused_getparameter_opens_no_window(self, rn, monkeypatch, code, needle):
+        names = published_names(rn)
+        chunk_names = {k: v for k, v in names.items() if k != DATABASE}
+
+        def refuse_single(operation, call):
+            if operation == "get_parameter":
+                raise client_error(code, "GetParameter")
+
+        fake = install(rn, monkeypatch, FakeSsm(chunks=chunked(chunk_names, 2), parameters=names,
+                                                fault=refuse_single))
+        with pytest.raises(rn.ResourceNameAccessError) as raised:
+            rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+        assert needle in str(raised.value)
+        assert "GetParametersByPath" not in str(raised.value)
+        assert isinstance(raised.value.__cause__, ClientError)
+        assert rn._failed_sweeps == 0
+        assert rn._sweep_retry_after == 0.0
+        # Refused at once, not retried inside the budget.
+        assert fake.count("get_parameter") == 1
+        assert rn.test_clock.now == 1000.0
+        assert f"Resource name read failed ({code}) after 1 calls: {DATABASE}" in rn.test_log.at("error")
+        assert DATABASE not in rn._missing_keys
+
+        # No window: the next lookup reads again and meets the same refusal.
+        with pytest.raises(rn.ResourceNameAccessError):
+            rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+        assert fake.count("get_parameter") == 2
+        assert rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == names[ASSET]
+
+    def test_a_getparameter_after_a_late_refresh_has_only_the_rest_of_its_budget(self, rn, monkeypatch):
+        names = published_names(rn)
+        chunk_names = {k: v for k, v in names.items() if k != DATABASE}
+        clock = rn.test_clock
+
+        def late_chunks_then_throttled_single(operation, call):
+            # The chunk read is throttled until 3.4 s into the lookup and then succeeds.
+            if operation == "get_parameters" and clock.now < 1003.4:
+                raise client_error("ThrottlingException")
+            if operation == "get_parameter":
+                raise client_error("ThrottlingException", "GetParameter")
+
+        fake = install(rn, monkeypatch, FakeSsm(chunks=chunked(chunk_names, 2), parameters=names,
+                                                fault=late_chunks_then_throttled_single))
+        with pytest.raises(rn.ResourceNameUnavailableError):
+            rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+
+        assert fake.count("get_parameters") > 1
+        assert fake.count("get_parameter") >= 1
+        assert rn._cache == chunk_names
+        # One lookup, one budget: the refresh and the single-key read together stay inside it.
+        assert clock.now - 1000.0 <= rn.SWEEP_BUDGET_SECONDS
+        assert rn._failed_sweeps == 1
+
+    @pytest.mark.parametrize("single_throttled", [False, True])
+    def test_a_refresh_that_ends_past_its_budget_still_leaves_one_getparameter(
+            self, rn, monkeypatch, single_throttled):
+        names = published_names(rn)
+        chunk_names = {k: v for k, v in names.items() if k != DATABASE}
+        clock = rn.test_clock
+
+        def slow_last_chunk_call(operation, call):
+            # The chunk read is throttled until 3.4 s; its successful call then takes 0.6 s and
+            # ends at 4.1 s, past the 4 s budget.
+            if operation == "get_parameters":
+                if clock.now < 1003.4:
+                    raise client_error("ThrottlingException")
+                clock.now += 0.6
+            if operation == "get_parameter" and single_throttled:
+                raise client_error("ThrottlingException", "GetParameter")
+
+        fake = install(rn, monkeypatch, FakeSsm(chunks=chunked(chunk_names, 2), parameters=names,
+                                                fault=slow_last_chunk_call))
+        if single_throttled:
+            with pytest.raises(rn.ResourceNameUnavailableError):
+                rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+            assert rn._failed_sweeps == 1
+        else:
+            assert rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE) == names[DATABASE]
+            assert rn._failed_sweeps == 0
+
+        assert clock.now - 1000.0 > rn.SWEEP_BUDGET_SECONDS
+        # One call even though the budget had run out, and no retry or sleep after it.
+        assert fake.count("get_parameter") == 1
+        assert fake.calls[-1] == ("get_parameter", f"{PREFIX}/{DATABASE}")
+        assert clock.now == pytest.approx(1004.1)
+
+    def test_a_successful_getparameter_resets_the_failure_count(self, rn, monkeypatch):
+        names = published_names(rn)
+        chunk_names = {k: v for k, v in names.items() if k not in (DATABASE, COMMENT)}
+        throttled = {"single": True}
+
+        def throttle_single(operation, call):
+            if operation == "get_parameter" and throttled["single"]:
+                raise client_error("ThrottlingException", "GetParameter")
+
+        install(rn, monkeypatch, FakeSsm(chunks=chunked(chunk_names, 2), parameters=names, fault=throttle_single))
+        with pytest.raises(rn.ResourceNameUnavailableError):
+            rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+        assert rn._failed_sweeps == 1
+
+        # Past the window, on the same chunk-loaded cache, the read succeeds.
+        rn.test_clock.now = rn._sweep_retry_after + 0.1
+        throttled["single"] = False
+        assert rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE) == names[DATABASE]
+        assert rn._failed_sweeps == 0
+        assert rn._sweep_retry_after == 0.0
+
+        # The next failure opens the first window again, not a doubled one.
+        throttled["single"] = True
+        with pytest.raises(rn.ResourceNameUnavailableError):
+            rn.get_resource_name(rn.ResourceKeys.COMMENT_STORAGE_TABLE)
+        assert rn._failed_sweeps == 1
+        assert rn._sweep_retry_after - rn.test_clock.now == pytest.approx(rn.SWEEP_BACKOFF_BASE_SECONDS)
+
+    @pytest.mark.parametrize("chunk_code,sweep_code,error,failed_sweeps", [
+        ("AccessDeniedException", "AccessDeniedException", "ResourceNameAccessError", 0),
+        ("AccessDeniedException", "ThrottlingException", "ResourceNameUnavailableError", 1),
+        ("ThrottlingException", None, "ResourceNameUnavailableError", 1),
+    ])
+    def test_a_refresh_is_classed_by_the_read_that_ended_it(
+            self, rn, monkeypatch, chunk_code, sweep_code, error, failed_sweeps):
+        names = published_names(rn)
+
+        def fault(operation, call):
+            if operation == "get_parameters":
+                raise client_error(chunk_code)
+            if operation == "get_parameters_by_path" and sweep_code:
+                raise client_error(sweep_code, "GetParametersByPath")
+
+        fake = install(rn, monkeypatch, FakeSsm(chunks=chunked(names, 2), parameters=names, fault=fault))
+        with pytest.raises(getattr(rn, error)) as raised:
+            rn.get_resource_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+
+        assert rn._failed_sweeps == failed_sweeps
+        assert (rn._sweep_retry_after > rn.test_clock.now) == (failed_sweeps > 0)
+        assert rn.test_clock.now - 1000.0 <= rn.SWEEP_BUDGET_SECONDS
+        assert fake.count("get_parameter") == 0
+        warnings = rn.test_log.at("warning")
+        if chunk_code == "AccessDeniedException":
+            # A denied chunk read falls back to the sweep, which shares its budget.
+            assert fake.count("get_parameters") == 1
+            assert fake.count("get_parameters_by_path") >= 1
+            assert "chunk parameters not used" in warnings[0]
+            assert "GetParameters failed (AccessDeniedException)" in warnings[0]
+            # The denied chunk read logs no error; the sweep logs one line, with no page read.
+            errors = rn.test_log.at("error")
+            assert len(errors) == 1
+            assert f"({sweep_code}) after 0 pages" in errors[0]
+        else:
+            # A throttled chunk read is a failed refresh and reads no further.
+            assert fake.count("get_parameters") > 1
+            assert fake.count("get_parameters_by_path") == 0
+            assert not any("chunk parameters not used" in line for line in warnings)
+        if error == "ResourceNameAccessError":
+            assert fake.calls == [("get_parameters", [f"{CHUNKS}/{i}" for i in range(10)]),
+                                  ("get_parameters_by_path", None)]
+            assert "ssm:GetParametersByPath" in str(raised.value)
