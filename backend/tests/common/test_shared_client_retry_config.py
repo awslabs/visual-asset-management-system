@@ -118,9 +118,6 @@ SSM_CLIENTS_KEPT = {
     # Deploy-time custom resource (15-minute timeout) that must read the values the schema-deploy
     # resource has just written, so it neither caches nor gives up early.
     "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
-    # Moving to common/ssmParameters.py in this change (#1820).
-    "handlers/indexing/assetIndexer.py": "moves to the shared lookup",
-    "handlers/indexing/fileIndexer.py": "moves to the shared lookup",
 }
 
 
@@ -585,7 +582,8 @@ class TestParameterStoreReadsAreBounded:
     through common/resourceNames.py. Pure AST over the source.
     """
 
-    MOVED = ("handlers/search/search.py", "handlers/config/configService.py")
+    MOVED = ("handlers/search/search.py", "handlers/config/configService.py",
+             "handlers/indexing/assetIndexer.py", "handlers/indexing/fileIndexer.py")
 
     @staticmethod
     def _ssm_client_modules():
