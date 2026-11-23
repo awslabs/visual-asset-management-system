@@ -56,3 +56,26 @@ class TestAssetTypeAfterLanding:
     def test_control_a_folder_asset_with_two_files_is_a_folder(self, s3):
         s3.put_object(Bucket=BUCKET, Key="proj/a/three.obj", Body=b"x")
         assert engine._determine_asset_type(BUCKET, "proj/a/") == "folder"
+
+
+@pytest.mark.unit
+class TestAssetLocationForTheAssetType:
+    """The asset type is read under the asset's stored location; a legacy row with none uses the
+    asset's folder under the registration prefix, which the copy's destination key carries."""
+
+    def test_the_stored_location_is_used(self):
+        job = {"assetId": "a1", "dest": {"bucket": BUCKET, "key": "vams/projects/x/part.obj"}}
+        asset = {"assetLocation": {"Key": "/vams/projects/x/"}}
+        assert engine._asset_location(asset, job) == "vams/projects/x/"
+
+    def test_a_legacy_row_uses_its_folder_under_the_registration_prefix(self):
+        job = {"assetId": "a1", "dest": {"bucket": BUCKET, "key": "vams/a1/sub/part.obj"}}
+        assert engine._asset_location({}, job) == "vams/a1/"
+
+    def test_a_legacy_row_at_the_bucket_root(self):
+        job = {"assetId": "a1", "dest": {"bucket": BUCKET, "key": "a1/part.obj"}}
+        assert engine._asset_location({}, job) == "a1/"
+
+    def test_a_segment_that_only_ends_with_the_asset_id_is_not_its_folder(self):
+        job = {"assetId": "a1", "dest": {"bucket": BUCKET, "key": "vams/xa1/part.obj"}}
+        assert engine._asset_location({}, job) == ""

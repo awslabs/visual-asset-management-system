@@ -13,7 +13,10 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
-from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, object_key_for
+from common.assetLocations import (
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, is_folder_location,
+    normalize_base_prefix, object_key_for,
+)
 from common.resourceNames import get_resource_name, get_table_name, ResourceKeys, ResourceNameUnavailableError
 from common.ssmParameters import read_parameter_value
 from common.s3MetadataKeys import (
@@ -114,9 +117,11 @@ FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
 MAX_FILES_PER_COMPLETION_CALL = MAX_FILES_PER_UPLOAD_REQUEST
 # Output files a failed write-back names in the run's error; the rest are counted.
 MAX_NAMED_WRITE_BACK_FAILURES = 20
-# Per-file refusals of the file ingestion that the user can act on. The run's error repeats one by its
-# fixed text after the file it refused; any other per-file error stays in the log.
-USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL})
+# Per-file refusals of the file ingestion that the user can act on (a shared location: through the
+# troubleshooting section the text names). The run's error repeats one by its fixed text after the file it
+# refused; any other per-file error stays in the log.
+USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL, NESTED_PATH_REFUSAL,
+                                                  SHARED_LOCATION_WRITE_REFUSAL})
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
@@ -365,13 +370,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise Exception(f"Error getting database default bucket details: missing bucket_name or base_assets_prefix")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,

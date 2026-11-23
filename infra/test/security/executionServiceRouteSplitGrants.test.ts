@@ -157,6 +157,7 @@ const EXECUTE_WORKFLOW_GRANTS = expand({
     workflow: ["GetItem"],
     pipeline: ["GetItem"],
     asset: ["Query"],
+    "asset/index/AssetLocationGSI": ["Query"],
     buckets: ["Query", "Scan"],
     templates: ["GetItem", "Query"],
     "tagSchema/index/TagSchemaByTemplateGSI": ["Query"],

@@ -15,6 +15,7 @@ helpers directly."""
 
 import contextlib
 import json
+import sys
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,8 @@ from tests.handlers.workflows.test_execute_per_input_file_version_lock import ( 
 )
 from backend.tests.workflowDeploymentStub import with_current_deployment
 
+_locations = sys.modules["common.assetLocations"]
+
 #: What the execute role grants on each table: the reads of the launch's inputs (workflow, pipeline,
 #: template and tag schema definitions, assets and their buckets), the execution records it writes, and
 #: the main row's UpdateItem a launch refused by a concurrency restriction writes its skip record with.
@@ -32,6 +35,9 @@ EXECUTE_WORKFLOW_GRANTS = {
     "workflow": {"GetItem"},
     "pipeline": {"GetItem"},
     "asset": {"Query"},
+    # The locations of assets nested in an input's asset (common/assetLocations.nested_locations_of), read
+    # once the location index is ready (#1207 D5: without the grant every launch answered 500)
+    "asset/index/AssetLocationGSI": {"Query"},
     "buckets": {"Query", "Scan"},
     "templates": {"GetItem", "Query"},
     "tagSchema/index/TagSchemaByTemplateGSI": {"Query"},
@@ -86,6 +92,13 @@ class _RecordingTable:
 
     def __init__(self, name, calls, rows):
         self.name, self.calls, self.rows = name, calls, rows
+        # The location index reads go through the table's low-level client (assetLocations._index_query_kwargs)
+        self.meta = MagicMock()
+        self.meta.client.query.side_effect = self._client_query
+
+    def _client_query(self, **kwargs):
+        self.record("Query", kwargs.get("IndexName"))
+        return {"Items": []}
 
     def record(self, action, index=None):
         self.calls.add((f"{self.name}/index/{index}" if index else self.name, action))
@@ -151,6 +164,9 @@ def _launch(restriction="perAsset", metadata_rows=None, refused_trigger=False):
     calls = set()
     body = dict(_TWO_FILES, triggerType="fileUpload") if refused_trigger else _TWO_FILES
     with contextlib.ExitStack() as stack:
+        # Every launch runs with the location index ready, so its reads are recorded too
+        stack.enter_context(patch.object(_locations, "index_ready", return_value=True))
+        _locations.clear_nested_locations_cache()
         if metadata_rows is not None:
             stack.enter_context(patch.object(ewv2.er, "pipeline_metadata_envelope_rows",
                                              return_value=list(metadata_rows)))
@@ -193,6 +209,8 @@ class TestTheLaunchCallsOnlyWhatTheRoleGrants:
         assert response["statusCode"] == 200, response
         assert ("main", "PutItem") in calls and ("pipelineExecutions", "PutItem") in calls
         assert calls == _granted(calls), sorted(calls - _granted(calls))
+        # The input assets' nested locations were read through the location index
+        assert ("asset/index/AssetLocationGSI", "Query") in calls
 
     def test_a_locking_launch_takes_its_lock(self):
         # The acquire reads a conflicting holder's main row only on a conflict; that read is recorded

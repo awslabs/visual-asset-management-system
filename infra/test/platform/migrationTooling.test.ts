@@ -786,7 +786,12 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
             path.join(__dirname, "..", "../lib/nestedStacks/storage/storageBuilder-nestedStack.ts"),
             "utf8"
         );
-        const block = storage.slice(storage.indexOf('indexName: "AssetLocationGSI"'));
+        const at = storage.indexOf("indexName: ASSET_LOCATION_INDEX,");
+        expect(at).toBeGreaterThan(-1);
+        const block = storage.slice(at);
+        expect(storage).toContain(
+            `export const ASSET_LOCATION_INDEX = "${pyConstant(backend, "LOCATION_INDEX_NAME")}";`
+        );
         expect(block.slice(0, 400)).toContain(
             `name: "${pyConstant(backend, "LOCATION_BUCKET_ATTRIBUTE")}"`
         );
@@ -797,5 +802,65 @@ describe("the v2.6 to v2.7 assetLocationIndex step writes what the backend reads
 
     it("[control] the constant reader rejects a name that is not assigned", () => {
         expect(() => pyConstant(script, "NO_SUCH_CONSTANT")).toThrow();
+    });
+});
+
+describe("reindex_utility.py --tag-synced reaches its readiness check with the backend it loads", () => {
+    // tag_synced_objects() imports the backend's common/assetLocations.py at run time and calls
+    // index_ready() before it reads anything else. A signature change there does not show in a text merge
+    // and fails only when an operator runs the tool, so the real tool and the real backend module are run
+    // to and past that check by a standard-library harness with a fake boto3 session.
+    const HARNESS = path.join(__dirname, "fixtures", "tagSyncedReadinessHarness.py");
+    const TOOL = path.join(MIGRATIONS_ROOT, "tools", "tag_synced_objects.py");
+    const BACKEND = path.join(__dirname, "..", "../../backend/backend");
+    const MARKER = "/vams-test/resourceNames/dataMigrations/assetLocationIndex";
+    const NOT_READY = "The asset location index is not ready";
+
+    interface Outcome {
+        exception: string | null;
+        result: { error?: string; objectsSeen?: number } | null;
+        markerReads: string[];
+        sessionClients: string[];
+        sessionResources: string[];
+        scans: string[];
+        defaultReaderLoaded: boolean;
+    }
+
+    let results: Record<string, Outcome>;
+    beforeAll(() => {
+        const run = spawnSync("python3", [HARNESS, TOOL, BACKEND], { encoding: "utf8" });
+        if (run.status !== 0) {
+            throw new Error(`the harness failed (${run.status}): ${run.stderr}`);
+        }
+        results = JSON.parse(run.stdout);
+    });
+
+    it.each(["missing", "throttled", "otherTable", "complete"])(
+        "%s marker: the readiness check runs and reads the marker once with the tool's session",
+        (scenario) => {
+            const outcome = results[scenario];
+            expect(outcome.exception).toBeNull();
+            expect(outcome.markerReads).toEqual([MARKER]);
+            expect(outcome.sessionClients).toEqual(["ssm"]);
+            expect(outcome.defaultReaderLoaded).toBe(false);
+        }
+    );
+
+    it.each(["missing", "throttled", "otherTable"])(
+        "%s marker: the run stops before any table is read",
+        (scenario) => {
+            const outcome = results[scenario];
+            expect(outcome.result?.error).toContain(NOT_READY);
+            expect(outcome.sessionResources).toEqual([]);
+            expect(outcome.scans).toEqual([]);
+        }
+    );
+
+    it("a completed marker for the table lets the run go on to the bucket registrations", () => {
+        const outcome = results.complete;
+        expect(outcome.result?.error).toBeUndefined();
+        expect(outcome.result?.objectsSeen).toBe(0);
+        expect(outcome.sessionResources).toEqual(["dynamodb"]);
+        expect(outcome.scans).toEqual(["vams-test-s3AssetBucketsStorageTable"]);
     });
 });

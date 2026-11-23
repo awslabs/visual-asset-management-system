@@ -228,6 +228,8 @@ def _wire(m, bucket_records=None, owned_records=(), prefix_exists=False, key_exi
     else:
         _stub_s3_versions(m, s3_entries)
     m.check_s3_key_exists = MagicMock(return_value=key_exists)
+    # Nothing at the key means nothing under it either, so a folder import cannot apply.
+    m.check_s3_folder_has_objects = MagicMock(return_value=key_exists)
     m.create_prefix_folder = MagicMock(return_value=True)
     m.create_initial_version_record = MagicMock(return_value="v0")
     m.create_sns_topic_for_asset = MagicMock(return_value="arn:sns")

@@ -1,27 +1,15 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""`sqsBucketSync` must not treat its OWN metadata stamp as a new file event.
+"""`sqsBucketSync` must not treat the echo of a metadata stamp copy as a new file event.
 
-`update_s3_metadata` stamps `databaseid` / `assetid` / `vams-changesource` onto an object by copying
-it onto itself. That copy is an object write, so Amazon S3 raises a second `ObjectCreated:Copy`
-notification (`ObjectCreated:CompleteMultipartUpload` at or above boto3's 8 MiB multipart threshold)
-for a file that only ever changed once, and every consumer downstream of this handler
-acted on it: the indexers re-indexed, and `asset.file.uploaded` was published a second time so a
-`fileUpload` workflow trigger fired TWICE for one written file.
-
-Two things this suite deliberately does NOT claim, both because they were measured and turned out
-false:
-
-*   **The history row does not duplicate.** The second pass makes no further copy, so it reads the
-    same `VersionId` and `put_item` overwrites the same PK+SK. The waste is a redundant `head_object`
-    and write, not a phantom file version.
-*   **A VAMS upload never produced an echo at all.** `uploadFile` stamps the same three keys itself,
-    so `update_s3_metadata` takes its "metadata already matches" branch and never copies. The echo
-    belongs to objects arriving UNSTAMPED — a direct S3 write, a folder marker, a pipeline output
-    landing on an asset path. Confirmed live on the deployment: a CLI upload of one file produced one
-    notification and one indexer publish; an `s3 cp` of the same content produced two notifications,
-    the second of which this guard withholds.
+Earlier releases stamped `databaseid` / `assetid` / `vams-changesource` onto a directly written object
+by copying it onto itself. That copy was an object write, so Amazon S3 raised a second
+`ObjectCreated:Copy` notification (`ObjectCreated:CompleteMultipartUpload` at or above boto3's 8 MiB
+multipart threshold) for a file that only ever changed once: the indexers re-indexed, and
+`asset.file.uploaded` was published a second time so a `fileUpload` workflow trigger fired TWICE for
+one written file. The handler no longer copies anything (it writes the VAMS object tags instead), but
+echoes of copies made before an upgrade may still be queued, so the guard stays and this suite pins it.
 
 The doubling is also what makes a burst dangerous. Measured on a live deployment: 27,729 notifications
 in one hour, after which 15 messages sat permanently in flight on `bucketSyncCreated--0` — received
@@ -54,7 +42,7 @@ from tests.handlers.indexing.test_sqsBucketSync_recreation_guard import _load
 _PATCHED_ATTRS = (
     "self_function_name", "asset_bucket_name", "asset_bucket_prefix",
     "get_bucket_id", "validate_asset_id", "lookup_asset", "update_asset_type",
-    "update_s3_metadata", "write_file_version_history", "s3_client",
+    "tag_version", "write_file_version_history", "s3_client",
     "publish_to_file_indexer_sns", "publish_to_orchestration_bus", "parse_event",
 )
 
@@ -99,7 +87,7 @@ def _wire(m):
     m.validate_asset_id = MagicMock(return_value=True)
     m.lookup_asset = MagicMock(return_value={"databaseId": "db1", "assetId": "x-asset-1"})
     m.update_asset_type = MagicMock(return_value=True)
-    m.update_s3_metadata = MagicMock(return_value=True)
+    m.tag_version = MagicMock(return_value=None)
     m.write_file_version_history = MagicMock()
     # head_object is called only on the history path; a MagicMock return is enough because the
     # history writer itself is mocked.
@@ -177,7 +165,7 @@ class TestEchoDoesNoWork:
         assert success is True
         assert should_index is False
         assert "metadata stamp echo" in message
-        m.update_s3_metadata.assert_not_called()
+        m.tag_version.assert_not_called()
         m.update_asset_type.assert_not_called()
         m.write_file_version_history.assert_not_called()
         # Exits before the asset lookup too, so an echo costs no DynamoDB read.
@@ -193,7 +181,7 @@ class TestEchoDoesNoWork:
 
         assert success is True
         assert should_index is True
-        m.update_s3_metadata.assert_called_once()
+        m.tag_version.assert_called_once()
         m.update_asset_type.assert_called_once()
         m.lookup_asset.assert_called_once()
 
@@ -206,7 +194,7 @@ class TestEchoDoesNoWork:
 
         assert success is True
         assert should_index is True
-        m.update_s3_metadata.assert_called_once()
+        m.tag_version.assert_called_once()
 
 
 @pytest.mark.unit
@@ -292,7 +280,7 @@ class TestMultipartStampEcho:
         assert success is True
         assert should_index is False
         assert "metadata stamp echo" in message
-        m.update_s3_metadata.assert_not_called()
+        m.tag_version.assert_not_called()
         m.update_asset_type.assert_not_called()
         m.write_file_version_history.assert_not_called()
         m.lookup_asset.assert_not_called()
