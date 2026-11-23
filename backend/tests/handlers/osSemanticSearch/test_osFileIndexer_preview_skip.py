@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.tests.ssmParametersStub import serve_parameters_from
+
 # fileIndexer reads several env vars and calls SSM at import time. Set the env
 # here, and stub boto3 (SSM get_parameter, DynamoDB, S3, OpenSearch) in the
 # `fileIndexer` fixture below so import succeeds deterministically without
@@ -87,6 +89,9 @@ def fileIndexer():
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The index name and endpoint are read on first use through common.ssmParameters: from the stub.
+    serve_parameters_from(module, _ssm_stub)
+    module.load_opensearch_settings()
     return module
 
 

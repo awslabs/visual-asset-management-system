@@ -62,8 +62,9 @@ single file ``X``), plus the key and its preview bases. A key or location with m
 ``resolve_owner`` answers ``RESOLVED_TOO_DEEP`` and ``find_conflicts`` raises
 ``LocationTooDeepError``. A caller keeps the checks that do not use the index for such a key.
 
-The index functions build no AWS client at import. Index reads take the caller's asset table
-handle; ``index_ready()`` builds its SSM client on first use unless one is passed.
+The index functions build no AWS client. Index reads take the caller's asset table handle;
+``index_ready()`` reads the completion marker with ``common.ssmParameters.read_parameter_value()``
+(bounded, uncached, backing off after a throttled read) unless the caller passes its own reader.
 """
 
 import json
@@ -72,9 +73,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
-
-import boto3
-from botocore.config import Config
 
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN
 from customLogging.logger import safeLogger
@@ -475,8 +473,6 @@ INDEX_READY_PARAMETER_SUFFIX = "dataMigrations/assetLocationIndex"
 INDEX_READY_MARKER_VERSION = 1
 INDEX_READY_STATUS_COMPLETE = "complete"
 INDEX_READY_CACHE_TTL_SECONDS = 300
-
-_SSM_CLIENT_CONFIG = Config(retries={'max_attempts': 5, 'mode': 'adaptive'})
 
 
 #######################
@@ -1185,7 +1181,6 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
 
 _index_ready_lock = threading.Lock()
 _index_ready_cache: Dict[str, Tuple[bool, float]] = {}
-_ssm_client = None
 
 
 def index_ready_parameter_name(resource_param_prefix: Optional[str] = None) -> Optional[str]:
@@ -1219,7 +1214,17 @@ def reset_index_ready_cache() -> None:
         _index_ready_cache.clear()
 
 
-def index_ready(asset_table_name: str, ssm_client=None, clock: Callable[[], float] = time.monotonic) -> bool:
+def _error_code_of(error: Exception) -> str:
+    """The Parameter Store error code behind a failed marker read: the service error code of the
+    ClientError the read raised, or that common.ssmParameters' error carries as its cause, else the
+    exception's class name (a lookup refused inside the back-off window has no cause)."""
+    cause = error.__cause__ if error.__cause__ is not None else error
+    return ((getattr(cause, 'response', None) or {}).get('Error', {}).get('Code')
+            or type(cause).__name__)
+
+
+def index_ready(asset_table_name: str, read_parameter: Optional[Callable[[str], str]] = None,
+                clock: Callable[[], float] = time.monotonic) -> bool:
     """Whether the location index covers every row of `asset_table_name` whose location holds keys:
     the backfill's completion marker exists, records `complete` and names that table. Until it does,
     every decision keeps the logic that does not read the index.
@@ -1231,8 +1236,13 @@ def index_ready(asset_table_name: str, ssm_client=None, clock: Callable[[], floa
     The answer is cached per container and table for INDEX_READY_CACHE_TTL_SECONDS either way. A
     marker that cannot be read (no prefix, a missing parameter, AccessDenied, throttling) answers
     False, so a failure falls back to the checks that do not depend on the index.
+
+    The marker is written after the deployment, so it is read uncached with
+    common.ssmParameters.read_parameter_value(): one read gives up within
+    PARAMETER_READ_BUDGET_SECONDS, and after a throttled read the container reads no parameter
+    until its back-off window passes. `read_parameter` replaces that reader (a callable taking the
+    parameter name and returning its value).
     """
-    global _ssm_client
     now = clock()
     with _index_ready_lock:
         cached = _index_ready_cache.get(asset_table_name)
@@ -1242,17 +1252,17 @@ def index_ready(asset_table_name: str, ssm_client=None, clock: Callable[[], floa
     ready = False
     if name and asset_table_name:
         try:
-            if ssm_client is None:
-                if _ssm_client is None:
-                    _ssm_client = boto3.client('ssm', config=_SSM_CLIENT_CONFIG)
-                ssm_client = _ssm_client
-            value = ssm_client.get_parameter(Name=name)['Parameter']['Value']
+            if read_parameter is None:
+                # Imported on first use: only this check reads Parameter Store, and the location
+                # rules above stay free of AWS dependencies for the handlers that import them.
+                from common.ssmParameters import read_parameter_value as read_parameter
+            value = read_parameter(name)
             ready = marker_says_complete(value, asset_table_name)
             if not ready:
                 logger.warning(f"Location index marker {name} does not record a completed backfill "
                                f"of {asset_table_name}")
         except Exception as e:
-            code = getattr(e, 'response', {}).get('Error', {}).get('Code', type(e).__name__)
+            code = _error_code_of(e)
             if code != 'ParameterNotFound':
                 logger.warning(f"Location index marker {name} could not be read ({code}); "
                                "the index is treated as not ready")

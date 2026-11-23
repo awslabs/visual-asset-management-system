@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from botocore.exceptions import ClientError
 
+from backend.tests.ssmParametersStub import serve_parameters_from
 from tests.common.fileAttributionFakes import (
     AttributionAssetTable,
     AttributionBucketsTable,
@@ -75,6 +76,9 @@ def fileIndexer():
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The index name and endpoint are read on first use through common.ssmParameters: from the stub.
+    serve_parameters_from(module, _ssm_stub)
+    module.load_opensearch_settings()
     fa.clear_registration_cache()
     al.clear_location_cache()
     return module

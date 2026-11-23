@@ -120,7 +120,14 @@ def tag_synced_objects(session, resource_names_prefix: str, asset_table_name: st
     with `error` set when the run could not start."""
     os.environ["VAMS_RESOURCE_PARAM_PREFIX"] = resource_names_prefix
     asset_locations, path_patterns, tags_module = _backend_modules(backend_path)
-    if not asset_locations.index_ready(asset_table_name, ssm_client=session.client("ssm", config=_RETRY)):
+    # The marker is read with this run's own session (its profile and Region), not the backend's default
+    # reader, which builds a client from the environment.
+    ssm = session.client("ssm", config=_RETRY)
+
+    def read_parameter(name: str) -> str:
+        return ssm.get_parameter(Name=name)["Parameter"]["Value"]
+
+    if not asset_locations.index_ready(asset_table_name, read_parameter=read_parameter):
         return {"error": "The asset location index is not ready: run the assetLocationIndex migration step "
                          "(it writes the completion marker) before --tag-synced."}
 
