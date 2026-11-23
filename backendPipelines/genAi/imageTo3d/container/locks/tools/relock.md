@@ -29,7 +29,10 @@ Use the repository's pinned uv (`required-version` in each `pyproject.toml`) and
 3. Write the result to `frozen-set.txt` (keep the header comment), then `python ../tools/sync_constraints.py .`.
 4. Copy the new upstream requirements file to `upstream/<file>.recorded` and update the matching lines in
    `pyproject.toml` `dependencies`. A line that a later Dockerfile step replaces gets an entry in
-   `override-dependencies` with a comment.
+   `override-dependencies` with a comment. A package whose dependency list uv derives differently from what pip
+   installed (an sdist whose setup.py decides its requirements at build time, or a wheel whose published list
+   differs) is declared in `[[tool.uv.dependency-metadata]]` with the list the image has (`locks/step1x3d` does
+   this for open3d and deepspeed); the locked set must equal `frozen-set.txt`, and the tests check it.
 5. Move `exclude-newer` in `pyproject.toml` (an absolute date, not "7 days") to the day of the build you froze in
    step 2, never earlier: an earlier date or a relative window rejects versions that build installed, and
    `uv lock --check` then fails. Then `uv lock`, then the three exports above.

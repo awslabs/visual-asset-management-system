@@ -2372,6 +2372,881 @@
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/triposr"],
             "reason": "transformers 4.35.0 is the version the TripoSR image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. TripoSR's requirements.txt pins transformers==4.35.0 exactly. #1864 tracks the version bumps for the TripoSR image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3804",
+            "package": "accelerate",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "accelerate 1.5.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins accelerate==1.5.2 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3716",
+            "package": "datasets",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "datasets 2.19.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.1) is not taken here. Step1X-3D's requirements.txt pins datasets==2.19.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2446",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "diffusers 0.32.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. Step1X-3D's requirements.txt pins diffusers==0.32.2 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-40",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "diffusers 0.32.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. Step1X-3D's requirements.txt pins diffusers==0.32.2 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-41",
+            "package": "diffusers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "diffusers 0.32.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.38.0) is not taken here. Step1X-3D's requirements.txt pins diffusers==0.32.2 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4217",
+            "package": "fsspec",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "fsspec 2024.3.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2026.6.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-118",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.11.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-119",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.31.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1410",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1423",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-211",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.15.1) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2178",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.15.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2179",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.16.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-63",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.6.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-64",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.7.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-65",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.6.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-66",
+            "package": "gradio",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "gradio 5.5.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 6.6.0) is not taken here. Step1X-3D's requirements.txt pins gradio==5.5.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2858",
+            "package": "paramiko",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "paramiko 3.5.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112390",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112391",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112393",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112395",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112399",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112400",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112401",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112404",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112406",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112891",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112892",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112893",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112894",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112895",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112897",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112899",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-112900",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128066",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-128067",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96638",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96640",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-96778",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-165",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2249",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.1.1) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2250",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2252",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2253",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2254",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2255",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2256",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2257",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2874",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.2.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3451",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3453",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3454",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3493",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3494",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3495",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3496",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 12.3.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4326",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4327",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4329",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4330",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4331",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4332",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4334",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4335",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4337",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4338",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4340",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4341",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4343",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-4363",
+            "package": "pillow",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pillow 10.3.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 13.0.0) is not taken here. Step1X-3D's requirements.txt pins pillow==10.3.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1851",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.18) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1852",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.22) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3036",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.30) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3037",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.30) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3038",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.26) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3039",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.27) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3040",
+            "package": "python-multipart",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "python-multipart 0.0.12 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.0.31) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1857",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3043",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3967",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.6.6) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3970",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.4.0) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3974",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.3.3) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3975",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.3.3) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-507",
+            "package": "pytorch-lightning",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "pytorch-lightning 2.2.4 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.4.0) is not taken here. Step1X-3D's requirements.txt pins pytorch-lightning==2.2.4 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "CVE-2026-115924",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "rembg 2.0.65 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.82) is not taken here. Step1X-3D's requirements.txt pins rembg==2.0.65 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-55v6-g8pm-pw4c",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "rembg 2.0.65 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.75) is not taken here. Step1X-3D's requirements.txt pins rembg==2.0.65 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2274",
+            "package": "rembg",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "rembg 2.0.65 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.0.75) is not taken here. Step1X-3D's requirements.txt pins rembg==2.0.65 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1909",
+            "package": "sentencepiece",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "sentencepiece 0.2.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 0.2.1) is not taken here. Step1X-3D's requirements.txt pins sentencepiece==0.2.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-xmj3-9gf7-h52w",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-49",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3447",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-161",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.0.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2280",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.1.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2281",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.1.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-248",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.3.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-249",
+            "package": "starlette",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.3.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "torch 2.11.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1976",
+            "package": "tqdm",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "tqdm 4.66.2 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.66.3) is not taken here. Step1X-3D's requirements.txt pins tqdm==4.66.2 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-211",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-212",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-213",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-214",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-215",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-216",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-217",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-218",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and no fixed version is listed. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-40",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.50.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1977",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.52.1) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1980",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1981",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1983",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1984",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.50.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1985",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.51.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1986",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.52.1) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1987",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.51.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-1988",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 4.53.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2288",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.0.0rc3) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2289",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.3.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-2290",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.5.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3929",
+            "package": "transformers",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "transformers 4.48.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 5.10.0) is not taken here. Step1X-3D's requirements.txt pins transformers==4.48.0 exactly. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-xmj3-9gf7-h52w",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-49",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3447",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
+            "reason": "torch 2.11.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. Hunyuan3D-2's requirements.txt does not pin torch; the baseline build resolved it to this version. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
         }
     ]
 }
