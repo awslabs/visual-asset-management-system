@@ -87,9 +87,10 @@ jobs:
     # infra/test/ci/pythonDependencyLocks.test.ts fails a new Python dependency set that has neither a
     # uv.lock nor an exemption. Per project: `uv lock --check`, regeneration of each committed export
     # (requirements.txt) with a diff, and pip-audit of the exports. Any advisory not on
-    # .github/python-audit-allowlist.json fails the job, as does an allowlist entry with no reason, a
-    # past review date or no matching finding, and an advisory service that cannot be reached. One job
-    # loops over the projects (no matrix): each check takes seconds, and one job writes one summary.
+    # .github/python-audit-allowlist.json for its project fails the job, as does an allowlist entry with
+    # no reason, no projects, a past review date or a project with no matching finding, and an advisory
+    # service that cannot be reached. One job loops over the projects (no matrix): each check takes
+    # seconds, and one job writes one summary.
     python-dependency-audit:
         if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/')) }}
         runs-on: ubuntu-latest

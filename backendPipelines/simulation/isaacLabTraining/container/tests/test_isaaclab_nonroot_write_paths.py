@@ -334,13 +334,11 @@ class TestIsaacLab3CachesAndUser:
         assert users == ["root", "10000:10000"]
 
     def test_the_video_packages_are_pinned_for_isaac_lab(self):
-        with open(os.path.join(_CONTAINER_DIR, "requirements.txt"), encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
-        names = {re.split(r"[=<>]", line)[0]: line for line in lines}
+        with open(os.path.join(_CONTAINER_DIR, "requirements.lock"), encoding="utf-8") as f:
+            pins = dict(re.findall(r"^([A-Za-z0-9._-]+)==(\S+)", f.read(), re.MULTILINE))
         # Isaac Lab's --video recording imports MoviePy 1.x; 2.x raises ImportError there
-        assert names["moviepy"].startswith("moviepy==1.")
-        assert "imageio-ffmpeg" in names and "boto3" in names
-        assert all("==" in line for line in lines), f"unpinned requirement in {lines}"
+        assert pins["moviepy"].startswith("1.")
+        assert "imageio-ffmpeg" in pins and "boto3" in pins
 
 
 @pytest.mark.unit

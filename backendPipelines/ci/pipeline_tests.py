@@ -21,6 +21,8 @@ from, in install order:
    ``uv.lock`` this file is its pinned export (``uv export``), so the suite runs on the locked versions
    for this runner's Python. The coordinate transform lock forks by Python version: its image is
    Python 3.11 and the runner is 3.12, so those suites run on the 3.12 versions, not the image's.
+   A directory whose image environment cannot be installed on a CPU runner (GPU wheels for another Python)
+   has an ``ownRequirements`` entry in ``suite-settings.json`` stating why, and skips this step.
 3. The directory's ``extraRequirements`` in ``suite-settings.json`` beside this file, when it has
    any, for packages only the tests import: requirement lines, or ``-r <repo-relative path>``.
 
@@ -145,7 +147,7 @@ def load_exclusions() -> Dict[str, str]:
 
 
 def load_settings() -> Dict[str, dict]:
-    """Repo-relative test directory -> its CI-only settings (extraRequirements, headlessDisplay)."""
+    """Repo-relative test directory -> its CI-only settings (extraRequirements, headlessDisplay, ownRequirements)."""
     return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))["suites"]
 
 
@@ -178,10 +180,10 @@ def suites() -> List[Suite]:
     result = []
     for tests_dir in discover():
         files = [COMMON_REQUIREMENTS]
-        own = own_requirements(tests_dir)
+        entry = settings.get(tests_dir.relative_to(REPO_ROOT).as_posix(), {})
+        own = None if "ownRequirements" in entry else own_requirements(tests_dir)
         if own is not None:
             files.append(own)
-        entry = settings.get(tests_dir.relative_to(REPO_ROOT).as_posix(), {})
         extra = tuple(entry.get("extraRequirements", {}).get("requirements", []))
         result.append(Suite(tests_dir, tuple(files), extra, "headlessDisplay" in entry))
     return result

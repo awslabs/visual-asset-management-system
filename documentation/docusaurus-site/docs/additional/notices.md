@@ -97,7 +97,7 @@ The COG Conversion pipeline runs the GDAL command line (`gdal_translate`, MIT li
 The SYSTEM GenAI metadata pipeline ships three AWS Lambda container images built in the deploying account. Their licensed components are recorded in the repository's `NOTICE.md`; the ones that carry copyleft terms are:
 
 -   **Blender** (GPL-3.0-or-later) -- The Blender renderer image downloads the Blender 5.2.3 LTS release archive at build time, verifies its checksum, and invokes the `blender` executable as a subprocess to import mesh and USD files and render views. Blender is not linked into VAMS code and no Blender source is modified.
--   **FFmpeg** (LGPL-2.1-or-later; GPL for builds that enable GPL components) -- The media extractor image installs `imageio-ffmpeg` (BSD-2-Clause), which bundles a static FFmpeg binary that the pipeline invokes as a subprocess to read video metadata and extract keyframes. The license of the bundled binary is determined by the `imageio-ffmpeg` release's build.
+-   **FFmpeg** (GPL-3.0-or-later) -- The media extractor image installs `imageio-ffmpeg` 0.6.0 (BSD-2-Clause), which bundles a static FFmpeg 7.0.2 binary that the pipeline invokes as a separate process to read video metadata and extract keyframes; VAMS code does not link against it. The bundled binary is the johnvansickle.com static build, configured with `--enable-gpl --enable-version3`, so it is licensed under the GNU General Public License version 3 or later. The Isaac Lab training image installs the same wheel.
 -   **IfcOpenShell** (LGPL-3.0) and **CadQuery / OCP** (Apache-2.0 bindings over LGPL-2.1 Open CASCADE) -- used by the 3D render image; recorded under [Optional LGPL-Licensed Components](#optional-lgpl-licensed-components) above.
 
 No Python library imported by the three images carries a GPL license. The remaining libraries are permissively licensed: tinytag (MIT; the media extractor image reads audio tags and durations with it), defusedxml (PSF-2.0; SVG parsing without entity expansion), python-docx, python-pptx, and openpyxl (MIT; the media extractor image reads Word, PowerPoint, and Excel text and document properties with them) with their dependencies lxml (BSD-3-Clause), XlsxWriter (BSD-2-Clause), and et_xmlfile (MIT), trimesh, PyVista, Pillow (MIT-CMU), pypdfium2 (Apache-2.0 or BSD-3-Clause, bundling PDFium under BSD-3-Clause), charset-normalizer, ezdxf, networkx, numpy, scipy, laspy, pye57, DracoPy, VTK (BSD-3-Clause), and OpenUSD (`usd-core`, modified Apache-2.0; 26.8 in the Blender renderer image, which reads USD layers with it to find the files a scene references, and 25.11 in the 3D render image). The media extractor image also reads GeoTIFF and Cloud Optimized GeoTIFF headers with tifffile (BSD-3-Clause) and reprojects a raster's outline and a GeoPackage layer's extent to WGS84 with pyproj (MIT; its wheel bundles PROJ, libcurl, libtiff and SQLite). pyproj requires certifi, which is MPL-2.0 code. `NOTICE.md` lists all three.
@@ -126,6 +126,16 @@ The Video SOP/BOM Extraction pipeline container installs the Debian trixie `ffmp
 
 :::warning
 GPL-2.0-or-later terms apply only when this optional pipeline is enabled (`app.pipelines.useGenAiVideoSopBom.enabled`). Review the license requirements with your legal team before enabling it. See the [Video SOP/BOM Extraction pipeline](../pipelines/video-sop-bom.md#third-party-library-licenses) page.
+:::
+
+### Isaac Lab Training Pipeline Library Notice
+
+The Isaac Lab training pipeline container is built on the NVIDIA Isaac Lab 3.0.0 image (`nvcr.io/nvidia/isaac-lab:3.0.0`, pinned by digest), which carries NVIDIA Isaac Sim 6.2. Isaac Sim is proprietary NVIDIA software under the NVIDIA Software License Agreement; see [NVIDIA License Notices](#nvidia-license-notices). The base image also ships the open-source libraries the pipeline runs: Isaac Lab (BSD-3-Clause, with parts under Apache-2.0), the Newton physics engine (Apache-2.0), MuJoCo-Warp and MuJoCo (Apache-2.0), NVIDIA Warp (Apache-2.0), RSL-RL (BSD-3-Clause) and PyTorch (BSD-3-Clause). The image build adds MoviePy (MIT) and `imageio-ffmpeg` (BSD-2-Clause) for evaluation video, and boto3 (Apache-2.0).
+
+`imageio-ffmpeg` bundles a static FFmpeg 7.0.2 binary, which the pipeline runs as a separate process to encode evaluation video and does not link against. The bundled binary is a GPL build of FFmpeg (configured with `--enable-gpl --enable-version3`), so it is distributed under the GNU General Public License version 3 or later (GPL-3.0-or-later). The exact versions are in the repository's `NOTICE.md`.
+
+:::warning
+These terms apply only when this optional pipeline is enabled (`app.pipelines.useIsaacLabTraining.enabled`, which also requires `acceptNvidiaEula: true`). Review the license requirements with your legal team before enabling it. See the [NVIDIA Isaac Lab pipeline](../pipelines/nvidia-isaac-lab.md) page.
 :::
 
 ### Gaussian Splat Toolbox Pipeline Model Notice
@@ -168,7 +178,7 @@ The `isaacsim` recipe (`backendAddons/edh/amiRecipes/isaacsim/`) downloads and i
 
 ### NVIDIA License Notices
 
-**Isaac Lab Training Pipeline:** Uses NVIDIA Isaac Sim container images, which are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
+**Isaac Lab Training Pipeline:** Uses the NVIDIA Isaac Lab 3.0.0 container image, which carries NVIDIA Isaac Sim 6.2. NVIDIA Isaac Sim container images are subject to the [NVIDIA Software License Agreement](https://docs.nvidia.com/ngc/gpu-cloud/ngc-catalog-user-guide/index.html#ngc-software-license). Users must accept the NVIDIA EULA by setting `acceptNvidiaEula: true` in the deployment configuration to use this pipeline.
 
 **NVIDIA Cosmos Predict Pipeline (v1 -- Predict1):** The v1 pipeline is not a deployable pipeline. Its container definition is retained under `backendPipelines/genAi/nvidia/cosmos/predict/containerv1/` as a reference implementation for anyone building an equivalent pipeline of their own, and there is no configuration key that deploys it — `app.pipelines.useNvidiaCosmos` provisions the v2.5 pipeline described below. The licence terms are recorded here because the container definition ships in the repository.
 

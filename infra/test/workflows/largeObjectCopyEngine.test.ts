@@ -634,12 +634,20 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(param.Properties.Value).toEqual({ Ref: engineFunctionId });
         const roleId = roleIdOf(fn);
         // The read is covered by the resource-name grant every VAMS function holds: the role gains
-        // no statement for it.
+        // no statement for it. Its other SSM statement is the GetParameters-only grant on the
+        // resource-name chunk parameters, which every VAMS function holds too.
         const ssmStatements = roleDocsOf(roleId)
             .flatMap((d: any) => d.Statement as any[])
             .filter((st) => JSON.stringify(st.Action).includes("ssm:"));
-        expect(ssmStatements).toHaveLength(1);
-        expect(JSON.stringify(ssmStatements[0].Resource)).toContain("/resourceNames/*");
+        expect(ssmStatements).toHaveLength(2);
+        const onChunks = (st: any) =>
+            JSON.stringify(st.Resource).includes("/resourceNamesChunks/*");
+        const prefixGrant = ssmStatements.filter((st) => !onChunks(st));
+        const chunkGrant = ssmStatements.filter(onChunks);
+        expect(prefixGrant).toHaveLength(1);
+        expect(JSON.stringify(prefixGrant[0].Resource)).toContain("/resourceNames/*");
+        expect(chunkGrant).toHaveLength(1);
+        expect(chunkGrant[0].Action).toBe("ssm:GetParameters");
         expect(enginePermitsRole(roleId)).toBe(true);
         // No hand-written managed policy; CDK's overflow of the role may hold its statements.
         expect(handWrittenManagedPoliciesOf(roleId)).toEqual([]);

@@ -29,13 +29,14 @@ def rn(monkeypatch):
     for var in ALL_OVERRIDE_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     import common.resourceNames as resourceNames
-    # Reset module state instead of reloading (reload doesn't work with import_module_from_path)
-    resourceNames._cache = {}
-    resourceNames._cache_fetched_at = 0.0
-    resourceNames._ssm_client = None
-    # Reset alongside the positive cache: a negative record carries its own timestamp, so
-    # zeroing _cache_fetched_at alone would leave a recorded miss live in the next test.
-    resourceNames._missing_keys = {}
+    # Reset module state instead of reloading (reload doesn't work with import_module_from_path),
+    # through monkeypatch so the next test gets the module back as it was. The negative record is
+    # reset with the positive cache because it carries its own timestamp, and the back-off state
+    # because a failed sweep would otherwise refuse the next test's lookups for its window.
+    for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
+                        ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
+                        ("_window_logged_for", None), ("_cache_complete", True)):
+        monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 
 
@@ -178,10 +179,12 @@ class TestMissingKeyNegativeCache:
         assert "dynamoTables/assetStorage" not in rn._missing_keys
 
     def test_ssm_failure_is_not_recorded_as_a_missing_key(self, rn, monkeypatch):
-        # A failed sweep says nothing about whether the parameter exists, so the next call
-        # must retry rather than serve a negative for the rest of the window.
+        # A failed sweep says nothing about whether the parameter exists: it is not reported as a
+        # KeyError, leaves no negative record, and the first sweep after the back-off window resolves it.
         ssm = boto3.client("ssm", region_name=self._region())
         _put(ssm, "dynamoTables/assetStorage", "v1")
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(rn, "_monotonic", lambda: clock["now"], raising=False)
         real_refresh = rn._refresh_cache
         state = {"fail": True}
 
@@ -192,8 +195,13 @@ class TestMissingKeyNegativeCache:
             real_refresh()
 
         monkeypatch.setattr(rn, "_refresh_cache", flaky)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(rn.ResourceNameUnavailableError) as failed:
             rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
+        assert not isinstance(failed.value, KeyError)
+        assert isinstance(failed.value.__cause__, RuntimeError)
+        assert "dynamoTables/assetStorage" not in rn._missing_keys
+
+        clock["now"] += rn.SWEEP_BACKOFF_MAX_SECONDS + 1
         assert rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE) == "v1"
 
     def test_negative_record_raises_the_same_error_as_a_fresh_miss(self, rn):

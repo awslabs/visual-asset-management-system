@@ -620,7 +620,7 @@ def upload_training_results(s3: S3Client, config: PipelineConfig, checkpoint_dir
       agent_*.pt and best_agent.pt for skrl)
     - {output_s3_path}metrics.csv (training metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
-    - {output_s3_path}train-config.json (input configuration)
+    - {output_s3_path}train-config.json (the run settings)
     """
     if not config.output_s3_path:
         print("No output S3 path configured, skipping upload")
@@ -669,7 +669,7 @@ def upload_evaluation_results(s3: S3Client, config: PipelineConfig, job_config: 
     - {output_s3_path}metrics.csv (evaluation metrics from TensorBoard)
     - {output_s3_path}*.txt (converted .diff files)
     - {output_s3_path}videos/*.mp4 (evaluation videos, when recordVideo is set)
-    - {output_s3_path}evaluate-config.json (input configuration)
+    - {output_s3_path}evaluate-config.json (the run settings)
 
     Note: Videos are always generated because the --video flag is required for play.py to
     terminate, so recordVideo decides whether the recording is uploaded rather than whether it
@@ -864,8 +864,14 @@ def upload_logs(s3: S3Client, config: PipelineConfig):
                 print(f"Warning: Failed to upload {log_path}: {e}")
 
 
+# What the uploaded run record keeps of the job configuration: the run's settings. The workflow's
+# callback fields, the bucket and location fields and the Region map are used to run the job and are
+# left out of a file that sits beside the run's outputs.
+RECORDED_CONFIG_KEYS = ("jobName", "trainingConfig", "customEnvironmentS3Uri", "stageAssetFiles")
+
+
 def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict):
-    """Upload the input configuration to the output directory for reference."""
+    """Upload the run's settings to the output directory for reference."""
     base_output_path = resolve_output_base_path(config.output_s3_path)
 
     # Determine config filename based on mode
@@ -875,7 +881,7 @@ def upload_config(s3: S3Client, config: PipelineConfig, job_config: dict):
     # Write config to temp file. The record carries the physics engine the run used and the Isaac
     # Lab release it ran on, so a run made before the upgrade (PhysX, Isaac Lab 2.3.0) is told
     # apart from one made after it, and the resolved engine is there even if the caller left it out.
-    recorded = dict(job_config)
+    recorded = {key: job_config[key] for key in RECORDED_CONFIG_KEYS if key in job_config}
     recorded_training = dict(recorded.get("trainingConfig") or {})
     recorded_training["physics"] = config.physics
     recorded["trainingConfig"] = recorded_training

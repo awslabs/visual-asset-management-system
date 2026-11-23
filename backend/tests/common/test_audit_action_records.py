@@ -567,6 +567,9 @@ class TestRequestContext:
             assert len(clients.flush.calls) == 2, "after the timer a record is written at once"
 
     def test_a_context_opened_near_the_timeout_writes_through(self, clients, capsys):
+        # A write slower than the zero wait, so the record is still unconfirmed when the wait ends;
+        # an instant write could finish first and be counted as delivered.
+        clients.flush.delay = 0.5
         context = SimpleNamespace(aws_request_id="r", get_remaining_time_in_millis=lambda: 100)
         event = api_event()
         with auditLogging.audit_request(event, context):
