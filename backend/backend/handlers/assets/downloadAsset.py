@@ -9,6 +9,8 @@ from boto3.dynamodb.conditions import Key
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
+from common.fileAttribution import nested_locations_of_asset
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate
@@ -102,13 +104,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -206,6 +202,8 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         is_allowed=validateUnallowedFileExtensionAndContentType,
         object_exists=check_s3_object_exists,
         check_key_quarantine=check_key_quarantine if check_quarantine_for_key else None,
+        nested=nested_locations_of_asset(asset_table, buckets_table, None, asset_bucket, asset_base_key,
+                                         asset_table_name=asset_storage_table_name),
     )
 
     # Generate presigned URL

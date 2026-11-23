@@ -32,11 +32,9 @@ from botocore.exceptions import ClientError
 
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, current_audit_context, log_action
-from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
-)
-from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS, join_asset_location_key
+from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
+from common.assetLocations import object_key_for
+from common.fileAttribution import AMBIGUOUS, attribute_object, binding_of, stored_location
 from common.s3 import region_routing_s3_client
 from common.syncTracking import (
     SYNC_ACTION_CREATE,
@@ -49,6 +47,7 @@ from common.syncTracking import (
 )
 
 from . import physnaCommon
+from . import physnaCommon as _physna_common
 from .physnaCommon import (
     PhysnaClient,
     PhysnaError,
@@ -62,8 +61,6 @@ from .physnaCommon import (
     get_asset_details,
     get_asset_metadata,
     get_bucket_details,
-    get_bucket_details_by_name,
-    get_database_id_for_asset_id,
     get_file_metadata,
     get_physna_asset,
     is_sync_supported_file,
@@ -141,81 +138,76 @@ def _head_object_with_encoding_fallback(
             return None
 
 
+def _asset_row_any_state(database_id: str, asset_id: str, include_archived: bool):
+    """(row, archived): the live asset row, else (when asked) the `{databaseId}#deleted` one."""
+    row = get_asset_details(database_id, asset_id)
+    if row and row.get("status") != "archived":
+        return row, False
+    if include_archived:
+        archived = get_asset_details(f"{database_id}#deleted", asset_id)
+        if archived:
+            return archived, True
+        if row:
+            return row, True
+    return None, False
+
+
+def _attribute(bucket_name: str, s3_key: str, record: Optional[Dict[str, Any]], include_archived: bool,
+               read_stamp=None):
+    """The asset whose stored location holds the key in this bucket (`common.fileAttribution`)."""
+    attribution = attribute_object(
+        bucket_name, s3_key,
+        asset_table=_physna_common.asset_storage_table,
+        buckets_table=_physna_common.s3_asset_buckets_table,
+        binding=binding_of(record),
+        include_archived=include_archived,
+        read_stamp=read_stamp,
+        asset_table_name=_physna_common._ASSET_STORAGE_TABLE_NAME,
+        get_row=lambda database_id, asset_id, archived: _asset_row_any_state(database_id, asset_id, archived),
+        get_registration=lambda bucket_id: get_bucket_details(bucket_id),
+    )
+    if not attribution.attributed:
+        logger.warning(
+            f"No asset location holds bucket={bucket_name}, key={s3_key} "
+            f"({'claimed by several assets' if attribution.status == AMBIGUOUS else 'not attributed'}); "
+            "skipping."
+        )
+        return None
+    return attribution
+
+
 def _resolve_asset_from_s3_key_without_metadata(
-    bucket_name: str, s3_key: str
+    bucket_name: str, s3_key: str, record: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
-    """Derive databaseId / assetId / relative path from an S3 key alone.
+    """Derive databaseId / assetId / relative path for an object that has left its key.
 
-    Used for ``ObjectRemoved`` events (including archive delete markers):
-    by the time we handle them, ``head_object`` can no longer retrieve the
-    VAMS-injected user-metadata (``assetid``, ``databaseid``). Instead we
-    reverse-look up the bucket registry (``bucketNameGSI``) to get
-    ``baseAssetsPrefix``, strip that prefix, treat the first path segment
-    as the assetId, and reverse-look up the assetId (``assetIdGSI``) with
-    bucket disambiguation to obtain the databaseId. Disambiguation mirrors
-    ``fileIndexer.lookup_database_id_for_permanent_delete`` so both sync
-    paths resolve identically on the same event.
+    Used for ``ObjectRemoved`` events (including archive delete markers): by the time we handle them,
+    ``head_object`` can no longer read the object. The asset is the one whose stored location holds the
+    key in this bucket, live or archived: the record's binding, the location index, then (before the
+    index is ready) the first folder under a registered prefix, with the bucket and containment checks
+    the file indexer applies to the same event.
 
-    Returns ``None`` when any step fails — callers must not fabricate
-    identifiers from partial data.
+    Returns ``None`` when no asset holds the key; callers must not fabricate identifiers.
     """
-    bucket_details = get_bucket_details_by_name(bucket_name)
-    if not bucket_details:
-        logger.warning(
-            f"Cannot resolve S3 key without metadata: bucket not registered "
-            f"in s3_asset_buckets: {bucket_name}"
-        )
+    attribution = _attribute(bucket_name, s3_key, record, include_archived=True)
+    if attribution is None:
         return None
-
-    base_prefix = bucket_details.get("baseAssetsPrefix") or ""
-    key_after_prefix = (
-        s3_key[len(base_prefix):] if base_prefix and s3_key.startswith(base_prefix)
-        else s3_key
-    )
-    key_after_prefix = key_after_prefix.lstrip("/")
-    if "/" not in key_after_prefix:
-        logger.warning(
-            f"S3 key does not contain an asset-path separator after stripping "
-            f"base prefix (expected `{{assetId}}/...`): "
-            f"bucket={bucket_name}, key={s3_key}, stripped={key_after_prefix}"
-        )
-        return None
-    asset_id, remainder = key_after_prefix.split("/", 1)
-    if not asset_id or not remainder:
-        logger.warning(
-            f"S3 key does not match VAMS asset layout: bucket={bucket_name}, "
-            f"key={s3_key}"
-        )
-        return None
-
-    # Pass bucket + prefix so the GSI lookup can disambiguate when an
-    # assetId happens to appear in more than one database.
-    database_id = get_database_id_for_asset_id(
-        asset_id,
-        bucket_name=bucket_name,
-        base_assets_prefix=base_prefix,
-    )
-    if not database_id:
-        logger.warning(
-            f"Could not resolve databaseId for assetId={asset_id} (bucket="
-            f"{bucket_name}, key={s3_key}); treating as non-VAMS and skipping."
-        )
-        return None
-
-    relative = "/" + remainder
     return {
-        "databaseId": database_id,
-        "assetId": asset_id,
-        "relativePath": relative,
+        "databaseId": attribution.database_id,
+        "assetId": attribution.asset_id,
+        "relativePath": attribution.relative_path,
         "bucketName": bucket_name,
         "s3Key": s3_key,
     }
 
 
-def _resolve_asset_from_s3_event(bucket_name: str, s3_key: str) -> Optional[Dict[str, Any]]:
-    """Look up asset+db IDs and relative path for an S3 object.
+def _resolve_asset_from_s3_event(bucket_name: str, s3_key: str,
+                                 record: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Look up asset+db IDs and relative path for an S3 object that is present.
 
-    Returns None when the event should be silently skipped.
+    The asset is the live one whose stored location holds the key in this bucket (the record's
+    binding, the location index, then before the index is ready the object's stamp and the first
+    folder, each checked). Returns None when the event should be silently skipped.
     """
     head_result = _head_object_with_encoding_fallback(bucket_name, s3_key)
     if not head_result:
@@ -224,41 +216,17 @@ def _resolve_asset_from_s3_event(bucket_name: str, s3_key: str) -> Optional[Dict
     # Use whichever key form actually existed in S3 — this becomes the
     # canonical key for all downstream calls (download, Physna path, etc.).
     s3_key = head_result["key"]
-    s3_metadata = head.get("Metadata", {}) or {}
-    asset_id = s3_metadata.get(ASSET_ID_METADATA_KEY)
-    database_id = s3_metadata.get(DATABASE_ID_METADATA_KEY)
-    if not asset_id or not database_id:
-        logger.warning(f"Missing assetid/databaseid in S3 metadata for {s3_key}")
+    attribution = _attribute(bucket_name, s3_key, record, include_archived=False,
+                             read_stamp=lambda: head.get("Metadata", {}) or {})
+    if attribution is None:
         return None
-
-    asset_details = get_asset_details(database_id, asset_id)
-    if not asset_details:
-        logger.warning(f"Asset not found: {database_id}/{asset_id}")
-        return None
-
-    bucket_details = get_bucket_details(asset_details.get("bucketId"))
-    if not bucket_details:
-        logger.warning(f"Bucket not registered for asset {asset_id}")
-        return None
-
-    asset_location = asset_details.get("assetLocation", {}) or {}
-    asset_base_key = asset_location.get(
-        "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
-    )
-    if s3_key.startswith(asset_base_key):
-        relative = s3_key[len(asset_base_key):]
-    else:
-        relative = s3_key
-    if not relative.startswith("/"):
-        relative = "/" + relative
-
     return {
-        "databaseId": database_id,
-        "assetId": asset_id,
-        "relativePath": relative,
+        "databaseId": attribution.database_id,
+        "assetId": attribution.asset_id,
+        "relativePath": attribution.relative_path,
         "bucketName": bucket_name,
         "s3Key": s3_key,
-        "assetDetails": asset_details,
+        "assetDetails": attribution.asset_row,
     }
 
 
@@ -1043,11 +1011,11 @@ def _s3_object_still_exists(
     if not bucket_details or not bucket_details.get("bucketName"):
         # Can't resolve the bucket — don't take destructive action on a guess.
         return None
-    asset_location = asset_details.get("assetLocation", {}) or {}
-    asset_base_key = asset_location.get(
-        "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
-    )
-    s3_key = join_asset_location_key(asset_base_key, relative_path)
+    s3_key = object_key_for(stored_location({**asset_details, "assetId": asset_id}, bucket_details),
+                            relative_path)
+    if not s3_key:
+        # The path names no single file of the asset; nothing in S3 answers for it.
+        return False
     bucket_name = bucket_details["bucketName"]
     head_result = _head_object_with_encoding_fallback(bucket_name, s3_key)
     # head_object returning None can be either "genuine 404" or "other
@@ -1179,9 +1147,9 @@ def _handle_s3_record(record: Dict[str, Any]) -> bool:
     # (ObjectCreated / ObjectRestore / ...), the head_object resolver
     # remains authoritative because the file is present.
     if event_name.startswith("ObjectRemoved"):
-        resolved = _resolve_asset_from_s3_key_without_metadata(bucket, s3_key)
+        resolved = _resolve_asset_from_s3_key_without_metadata(bucket, s3_key, record)
     else:
-        resolved = _resolve_asset_from_s3_event(bucket, s3_key)
+        resolved = _resolve_asset_from_s3_event(bucket, s3_key, record)
     if not resolved:
         return True
 
@@ -1280,11 +1248,9 @@ def _handle_file_metadata_stream(record: Dict[str, Any]) -> bool:
     if not bucket_details or not bucket_details.get("bucketName"):
         return True
 
-    asset_location = asset_details.get("assetLocation", {}) or {}
-    asset_base_key = asset_location.get(
-        "Key", f"{bucket_details['baseAssetsPrefix']}{asset_id}/"
-    )
-    s3_key = join_asset_location_key(asset_base_key, relative)
+    s3_key = object_key_for(stored_location({**asset_details, "assetId": asset_id}, bucket_details), relative)
+    if not s3_key:
+        return True
     bucket_name = bucket_details["bucketName"]
 
     client = PhysnaClient()

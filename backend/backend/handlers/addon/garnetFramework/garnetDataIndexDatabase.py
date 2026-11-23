@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
 from common.resourceNames import get_table_name, ResourceKeys
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, current_audit_context, log_action
@@ -411,13 +412,7 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
         
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
         
         logger.info(f"Bucket details (processed) - baseAssetsPrefix: {base_assets_prefix}")
         

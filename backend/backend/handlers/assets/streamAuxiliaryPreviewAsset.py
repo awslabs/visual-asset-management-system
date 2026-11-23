@@ -13,7 +13,8 @@ from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
-from common.assetLocations import is_folder_location, normalize_location, object_key_for
+from common.assetLocations import LOCATION_BUCKET_ATTRIBUTE, is_folder_location, normalize_location, object_key_for
+from common.fileAttribution import nested_locations_of_asset
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -74,6 +75,19 @@ def get_asset_details(databaseId, assetId):
         raise VAMSGeneralErrorResponse("Error retrieving asset")
 
 AUX_PREVIEW_SEGMENT = "/preview/"
+
+
+def viewer_data_of_nested_asset(asset_object, database_id: str, aux_key: str) -> bool:
+    """Whether a resolved auxiliary key is the viewer data of a file another asset's location, nested in this
+    asset's, holds. That file is the nested asset's whatever its database, so its data is not served through
+    this asset. The asset row's index attribute names the bucket; a row without it (before the index backfill)
+    finds no nested location, as before."""
+    bucket = (asset_object or {}).get(LOCATION_BUCKET_ATTRIBUTE)
+    if not bucket:
+        return False
+    nested = nested_locations_of_asset(asset_table, None, asset_object, bucket,
+                                       asset_table_name=asset_storage_table_name)
+    return bool(nested) and not nested.keep_aux(database_id, aux_key)
 
 
 def resolve_aux_preview_key(database_id: str, location_key: str, file_path: str) -> str:
@@ -214,6 +228,8 @@ def handle_head_request(event, claims_and_roles):
     # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
     # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
     object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+    if viewer_data_of_nested_asset(asset_object, databaseId, object_key):
+        return general_error(body={'message': 'File not found'}, status_code=404, event=event)
 
     # The validator bounded the asset-relative part; the resolved key carries the database and asset
     # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
@@ -415,6 +431,14 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
                 # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
                 object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+                if viewer_data_of_nested_asset(asset_object, databaseId, object_key):
+                    error_response = general_error(body={"message": "File not found"}, status_code=404, event=event)
+                    error_response['headers'].update({
+                        'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache, no-store',
+                    })
+                    return error_response
 
                 # The validator bounded the asset-relative part; the resolved key carries the database and
                 # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never

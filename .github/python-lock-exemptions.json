@@ -33,31 +33,6 @@
             "path": "backendPipelines/3dRecon/splatToolbox/container/requirements.txt",
             "reason": "Upstream-owned: the Splat Toolbox sync copies upstream's container/requirements.txt over this file on every cdk synth, so it cannot be a uv export. The image is upstream's Dockerfile, which does not install it; only the pipeline test runner does.",
             "plannedIn": "not planned: upstream-owned file (#1741 / #1808)"
-        },
-        {
-            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-image.txt",
-            "reason": "What the GR00T image installs besides Isaac-GR00T's own dependencies; an input of requirements.lock.",
-            "plannedIn": "#1741: after #1812 merges"
-        },
-        {
-            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-overrides.txt",
-            "reason": "The versions that replace Isaac-GR00T's own exact pins when requirements.lock is compiled (uv --override); an input of requirements.lock, not installed itself.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
-        },
-        {
-            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
-            "plannedIn": "#1741: after #1812 merges"
-        },
-        {
-            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-build.txt",
-            "reason": "The build tools the source-only packages of requirements.lock build with; an input of requirements-build.lock.",
-            "plannedIn": "#1741: after #1812 merges"
-        },
-        {
-            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-build.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
-            "plannedIn": "#1741: after #1812 merges"
         }
     ]
 }

@@ -16,6 +16,11 @@ that:
 -   The file route's prefix delete removes the records and derived data of the files it deleted and
     then answers 400. A single-file delete that S3 refuses keeps the file's previews, derived data and
     records.
+-   The keys of another asset nested in the location, and every key of a location another live asset
+    also holds, are that asset's: neither delete touches them, so S3 refusing one of them is no failure.
+
+The nested-location lookup reads the location index from in-memory asset and registration tables
+(``state.rows``), as on a deployment where the index is ready.
 
 The objects live in a versioned moto bucket. A wrapper client answers ``AccessDenied`` for the
 listing or for chosen deletes, as S3 does for a bucket VAMS cannot write to or a version a policy
@@ -24,6 +29,7 @@ protects. The route tests run the handlers under the production audit decorator.
 
 import json
 import os
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -38,7 +44,13 @@ os.environ.setdefault("ASSET_FILE_VERSIONS_STORAGE_TABLE_NAME", "test-asset-file
 
 from backend.backend.customLogging import auditLogging as production_audit  # noqa: E402
 from backend.backend.handlers.assets import assetFiles as af  # noqa: E402
+from tests.common.fileAttributionFakes import (  # noqa: E402
+    AttributionAssetTable, AttributionBucketsTable, asset_row, registration,
+)
 from tests.handlers.assets.test_assetService_history import _asset, _load  # noqa: E402
+
+al = sys.modules["common.assetLocations"]
+fa = sys.modules["common.fileAttribution"]
 
 BUCKET = "vams-test-assets"
 FOLDER_LOCATION = "proj/a/"
@@ -175,6 +187,9 @@ def s3(monkeypatch):
 
         faulty = _FaultyS3(client)
         monkeypatch.setattr(af, "s3_client", faulty)
+        al.clear_nested_locations_cache()
+        fa.clear_registration_cache()
+        monkeypatch.setattr(al, "index_ready", lambda name: True)
         # moto serves one request at a time reliably; the worker pool is not under test
         monkeypatch.setattr(af, "MAX_PARALLEL_S3_WORKERS", 1)
         yield SimpleNamespace(client=client, faulty=faulty)
@@ -258,7 +273,13 @@ def svc(s3, aux, monkeypatch):
     asset = _asset(db="db1", aid="a1", assetLocation={"Key": FOLDER_LOCATION},
                    snsTopic="arn:aws:sns:us-east-1:111122223333:a1-topic")
     state = SimpleNamespace(m=m, asset=asset, client=s3.client, faulty=s3.faulty, aux=aux,
-                            bucket={"bucketName": BUCKET})
+                            bucket={"bucketName": BUCKET}, rows=[])
+    real_lookup = fa.nested_locations_of_asset
+
+    def nested_lookup(_table, _buckets, row, bucket_name, *args, **kwargs):
+        rows = [asset_row("db1", "a1", "b1", state.asset["assetLocation"]["Key"], BUCKET)] + state.rows
+        return real_lookup(AttributionAssetTable(rows), AttributionBucketsTable([registration("b1", BUCKET, "/")]),
+                           row, bucket_name, *args, **kwargs)
     stubs = {
         "get_asset_details": MagicMock(side_effect=lambda *args, **kwargs: dict(state.asset)),
         "authorize_single_asset": MagicMock(return_value=True),
@@ -282,6 +303,7 @@ def svc(s3, aux, monkeypatch):
         "versions_table": None,
         "asset_versions_files_table": None,
         "asset_file_metadata_versions_table": None,
+        "nested_locations_of_asset": nested_lookup,
     }
     if hasattr(af, "S3PrefixDeleteIncomplete"):
         stubs["S3PrefixDeleteIncomplete"] = af.S3PrefixDeleteIncomplete
@@ -454,6 +476,9 @@ class TestAssetPermanentDeleteSuccessIsUnchanged:
 def files(s3, aux, monkeypatch):
     """assetFiles' file route on the folder asset, with its record helpers observed."""
     asset = {"databaseId": "db1", "assetId": "a1", "bucketId": "b1", "assetLocation": {"Key": FOLDER_LOCATION}}
+    table = AttributionAssetTable([asset_row("db1", "a1", "b1", FOLDER_LOCATION, BUCKET)])
+    monkeypatch.setattr(af, "asset_table", table)
+    monkeypatch.setattr(af, "buckets_table", AttributionBucketsTable([registration("b1", BUCKET, "/")]))
     monkeypatch.setattr(af, "get_asset_with_permissions", lambda *args, **kwargs: asset)
     monkeypatch.setattr(af, "get_default_bucket_details",
                         lambda bucket_id: {"bucketId": bucket_id, "bucketName": BUCKET, "baseAssetsPrefix": ""})
@@ -461,7 +486,7 @@ def files(s3, aux, monkeypatch):
                                                         "delete_file_version_records", "send_subscription_email")}
     for name, mock in observed.items():
         monkeypatch.setattr(af, name, mock, raising=False)
-    yield SimpleNamespace(client=s3.client, faulty=s3.faulty, aux=aux, **observed)
+    yield SimpleNamespace(client=s3.client, faulty=s3.faulty, aux=aux, rows=table.rows, **observed)
 
 
 def _prefix_metadata_paths(files):
@@ -591,7 +616,7 @@ def record_tables(monkeypatch):
                 "attributes": [("/x.txt", "a1"), ("/sub/z.txt", "a1"), ("/notes.txt ", "a1")]}
         for name, entries in rows.items():
             for path, key in entries:
-                tables[name].put_item(Item={TABLE_KEYS[name]: key, "databaseId:assetId:filePath": f"db1:a1:{path}",
+                tables[name].put_item(Item={TABLE_KEYS[name]: key, "databaseId:assetId:filePath": "db1:a1:" + path,
                                             "databaseId:assetId": "db1:a1"})
             tables[name].put_item(Item={TABLE_KEYS[name]: "other", "databaseId:assetId:filePath": "db1:a2:/x.txt",
                                         "databaseId:assetId": "db1:a2"})
@@ -819,3 +844,4 @@ class TestTheRoutesAnswerTheRefusedDelete:
         assert response["statusCode"] == 400
         assert json.loads(response["body"])["message"].endswith(PREFIX_MESSAGE)
         assert _failed_records(real_audit.recorder) == [("fileDelete", "failed", "validation")]
+

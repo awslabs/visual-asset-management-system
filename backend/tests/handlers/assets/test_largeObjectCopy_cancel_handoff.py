@@ -266,7 +266,6 @@ def test_no_engine_function_logs_and_leaves_it_to_the_event(env, machine, bucket
     handoff = _HandOff()
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop(loc.ENV_ENGINE_FUNCTION_NAME, None)
-        os.environ.pop(loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER, None)
         assert _abort_route(env, _DeniedHead(env["s3"]), handoff) == []
     handoff.client.invoke.assert_not_called()
     assert run.row()["status"] == loc.STATUS_RUNNING
@@ -303,31 +302,15 @@ class TestRequestReconcile:
 
 @pytest.mark.unit
 class TestEngineFunctionName:
-    @pytest.fixture(autouse=True)
-    def _fresh_cache(self):
-        with patch.dict(loc._engine_function_names, {}, clear=True):
-            yield
+    """The callers that hand ended executions to the engine take its name from the environment; the
+    output step resolves ENGINE_FUNCTION_RESOURCE_KEY instead (test_processOutput_copy_engine_name.py)."""
 
-    def test_the_environment_variable_wins(self):
-        ssm = MagicMock()
-        environ = {loc.ENV_ENGINE_FUNCTION_NAME: "fn", loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER: "/p"}
-        assert loc.engine_function_name(environ, ssm) == "fn"
-        ssm.get_parameter.assert_not_called()
-
-    def test_the_parameter_is_read_once_per_container(self):
-        ssm = MagicMock(**{"get_parameter.return_value": {"Parameter": {"Value": "fn"}}})
-        environ = {loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER: "/p"}
-        assert loc.engine_function_name(environ, ssm) == "fn"
-        assert loc.engine_function_name(environ, ssm) == "fn"
-        ssm.get_parameter.assert_called_once_with(Name="/p")
-
-    def test_a_failed_read_returns_empty_and_is_retried(self):
-        ssm = MagicMock()
-        ssm.get_parameter.side_effect = [RuntimeError("denied"), {"Parameter": {"Value": "fn"}}]
-        environ = {loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER: "/p"}
-        assert loc.engine_function_name(environ, ssm) == ""
-        assert loc.engine_function_name(environ, ssm) == "fn"
+    def test_the_environment_variable_names_the_engine(self):
+        assert loc.engine_function_name({loc.ENV_ENGINE_FUNCTION_NAME: "fn"}) == "fn"
 
     def test_none_configured(self):
-        assert loc.engine_function_name({}, MagicMock()) == ""
-        assert loc.engine_function_name({loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER: "/p"}, None) == ""
+        assert loc.engine_function_name({}) == ""
+        assert loc.engine_function_name({loc.ENV_ENGINE_FUNCTION_NAME: ""}) == ""
+
+    def test_the_resource_key_is_overridden_by_the_same_environment_variable(self):
+        assert loc.ENGINE_FUNCTION_RESOURCE_KEY.env_var_names == (loc.ENV_ENGINE_FUNCTION_NAME,)

@@ -148,9 +148,9 @@ describe("workflowTriggerDispatch SQS event source mapping", () => {
         expect(mappings[0].Properties.EventSourceArn).toBeDefined();
         expect(mappings[0].Properties.FunctionName).toBeDefined();
         // Batch size is bounded from ABOVE rather than pinned: a smaller batch is a strictly safer
-        // change, while a larger one widens the whole-batch failure this mapping has (it declares no
-        // FunctionResponseTypes, so one failing record redelivers the batch and re-fires the triggers
-        // of every record in it). See support/sqsEventSourceBounds.ts. The batching window is left
+        // change, while a larger one widens a whole-batch failure (an error outside the per-message
+        // loop still redelivers the batch and re-fires the triggers of every record in it). See
+        // support/sqsEventSourceBounds.ts. The batching window is left
         // unasserted there for a reason worth not rediscovering: CDK's own 300 s cap guarantees any
         // upper bound that could be written for it, and a bound nothing can fail asserts nothing.
         expect(
@@ -198,6 +198,18 @@ describe("workflowTriggerDispatch SQS event source mapping", () => {
                 { at: "commercial dispatch mapping", properties: mappings[0].Properties },
             ])
         ).toEqual([]);
+    });
+
+    test("reports batch item failures in both partitions", () => {
+        // A message whose bucket registration could not be read is returned in batchItemFailures;
+        // without ReportBatchItemFailures Lambda ignores that list and deletes the message.
+        for (const govCloud of [true, false]) {
+            const mappings = eventSourceMappings(synthDispatchFunction(govCloud));
+            expect(mappings).toHaveLength(1);
+            expect(mappings[0].Properties.FunctionResponseTypes).toContain(
+                "ReportBatchItemFailures"
+            );
+        }
     });
 
     test("both branches configure the mapping identically apart from Tags", () => {

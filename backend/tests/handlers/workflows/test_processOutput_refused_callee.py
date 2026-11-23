@@ -144,7 +144,7 @@ def _run(refuse_upload=None, refuse_engine=None, refuse_metadata=None, with_prev
         record = p(po, "record_execution_outputs")
         p(po, "s3c", s3)
         p(po, "engine_invoke_client", MagicMock(**{"invoke.side_effect": invoke_engine}))
-        p(po.loc, "engine_function_name", return_value="vams-copy-engine")
+        p(po, "copy_engine_function_name", "vams-copy-engine")
         p(po, "_mark_ingesting", return_value=True)
         p(uf, "request_to_claims", return_value={"tokens": ["SYSTEM_USER"], "roles": ["SYSTEM"]})
         p(uf, "CasbinEnforcer", return_value=enforcer)

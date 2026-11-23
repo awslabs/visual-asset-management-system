@@ -25,15 +25,16 @@ import os
 import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.config import Config
+from botocore.exceptions import ClientError, ConnectionError as BotocoreConnectionError, HTTPClientError
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from common.resourceNames import get_table_name, ResourceKeys
 from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY,
 )
+from common.batchItemFailures import batch_item_identifier, with_batch_item_failures
+from common.fileAttribution import RegistrationUnavailableError, attribute_object, binding_of
 from common.s3PathPatterns import RESERVED_S3_PREFIX_FOLDERS, EXCLUDED_FILE_PATH_PATTERNS
 from common.workflows import triggerMatching as tm
 from common.workflows import executionLocks as el
@@ -84,6 +85,30 @@ _workflow_row_cache = {}
 _excluded_prefixes = RESERVED_S3_PREFIX_FOLDERS
 _excluded_patterns = EXCLUDED_FILE_PATH_PATTERNS
 
+# AWS error codes of a read a later attempt can complete: throttling, capacity and service-side faults.
+RETRYABLE_READ_ERROR_CODES = frozenset({
+    "ProvisionedThroughputExceededException", "ThrottlingException", "Throttling", "RequestLimitExceeded",
+    "TooManyRequestsException", "InternalServerError", "InternalFailure", "ServiceUnavailable",
+    "ServiceUnavailableException",
+})
+
+
+class AttributionReadUnavailableError(Exception):
+    """A read a file's attribution depends on (the location index, the asset id lookup, an asset row)
+    failed in a way a later attempt can complete; the message is retried."""
+
+
+def is_retryable_read_error(error):
+    """Whether a failed AWS read is worth retrying: a throttle or service-side fault (one of
+    RETRYABLE_READ_ERROR_CODES, or HTTP 429 or 5xx), or a connection or timeout error."""
+    if isinstance(error, (BotocoreConnectionError, HTTPClientError)):
+        return True
+    if not isinstance(error, ClientError):
+        return False
+    status = (error.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0
+    code = (error.response.get("Error") or {}).get("Code", "")
+    return code in RETRYABLE_READ_ERROR_CODES or status == 429 or status >= 500
+
 
 def _should_skip_key(s3_key):
     """Skip folder markers, VAMS-reserved prefixes, and excluded patterns."""
@@ -119,19 +144,6 @@ def _list_fileupload_triggers():
     return rows
 
 
-def _asset_bucket_name(bucket_id):
-    """The asset bucket's name for a bucketId, or '' when it cannot be resolved."""
-    if not bucket_id:
-        return ""
-    try:
-        response = s3_asset_buckets_table.query(
-            KeyConditionExpression=Key("bucketId").eq(bucket_id), Limit=1)
-        return ((response.get("Items") or [{}])[0]).get("bucketName", "") or ""
-    except Exception as e:
-        logger.info(f"Could not resolve asset bucket {bucket_id} (skipping bucket check): {e}")
-        return ""
-
-
 def _head_object_metadata(bucket_name, s3_key, version_id=""):
     """The S3 user metadata of one object version, or of the current version when version_id is
     empty."""
@@ -141,87 +153,40 @@ def _head_object_metadata(bucket_name, s3_key, version_id=""):
     return s3_client.head_object(**head_kwargs).get("Metadata", {}) or {}
 
 
-def _resolve_asset_relative_key(bucket_name, s3_key, version_id=""):
-    """Resolve (databaseId, assetId, assetRelativeKey) for an uploaded S3 object from its metadata +
-    asset record. Returns None when the object has no VAMS asset metadata, the asset is unknown, the
-    object sits in a different bucket than the asset, or the object does not sit within the resolved
-    asset's own location.
+def _resolve_asset_relative_key(bucket_name, s3_key, version_id="", binding=None):
+    """Resolve (databaseId, assetId, assetRelativeKey, changeSource, changeWorkflowId) for an uploaded
+    S3 object, or None when no asset holds it.
 
-    A file written straight to the asset bucket arrives without the asset ids, or with the ids of the
-    asset it was copied from. Bucket sync stamps the ids of the asset the key belongs to by copying
-    the object onto itself, which creates a newer version, before it forwards the event for the
-    uploaded version; so when the pinned version does not bind, the binding is retried with the
-    current version's ids, under the same checks. The provenance of the write is always read from the
-    pinned version."""
+    The asset is the one whose stored location contains the key in this bucket
+    (`common.fileAttribution`): the event's `vamsBinding` from bucket sync, accepted only when its
+    registration is in this bucket and the asset's location holds the key; then the location index;
+    and before the index is ready, the pinned version's stamp and the first folder, under the same
+    bucket and boundary checks. The stamp's ids are client-settable on a direct write and survive an
+    S3 copy, so they never bind a key outside the named asset's location. The provenance of the write
+    (who wrote it, which workflow) is always read from the pinned version."""
     try:
         metadata = _head_object_metadata(bucket_name, s3_key, version_id)
     except Exception as e:
         logger.info(f"Could not head uploaded object (skipping): {e}")
         return None
-
-    def _bind(md):
-        asset_id = md.get(ASSET_ID_METADATA_KEY)
-        database_id = md.get(DATABASE_ID_METADATA_KEY)
-        if not asset_id or not database_id:
-            logger.info(f"Uploaded object missing asset/database metadata (skipping): {s3_key}")
-            return None
-
-        asset = asset_storage_table.get_item(
-            Key={"databaseId": database_id, "assetId": asset_id}).get("Item")
-        if not asset:
-            logger.info(f"Asset not found for uploaded object (skipping): {database_id}/{asset_id}")
-            return None
-
-        # Same-prefix assets can exist in different buckets, so the binding also requires the
-        # object to sit in the asset's own bucket. An unresolvable bucket row leaves the key check
-        # as the only gate.
-        asset_bucket_name = _asset_bucket_name(asset.get("bucketId", ""))
-        if asset_bucket_name and asset_bucket_name != bucket_name:
-            logger.info(f"Uploaded object {s3_key} is in a different bucket than asset "
-                        f"{database_id}/{asset_id} (skipping)")
-            return None
-
-        asset_location = asset.get("assetLocation") or {}
-        asset_base_key = asset_location.get("Key", "") if isinstance(asset_location, dict) else ""
-        # The metadata that named the asset is client-settable on a direct asset-bucket write, so
-        # the binding only holds when the object actually lives inside that asset's own S3 location.
-        normalized_key = s3_key.lstrip("/")
-        normalized_base = (asset_base_key or "").lstrip("/")
-        if not normalized_base:
-            logger.warning(f"Asset {database_id}/{asset_id} has no location key; fileUpload "
-                           f"triggers cannot be dispatched for {s3_key}")
-            return None
-        remainder = None
-        if normalized_key.startswith(normalized_base):
-            candidate = normalized_key[len(normalized_base):]
-            # Containment: the base key is either a prefix ending in '/', or the remainder starts
-            # at a path boundary (or is empty). A shared name prefix ("db/a1" vs "db/a10/x.glb") is
-            # not containment.
-            if normalized_base.endswith("/") or candidate == "" or candidate.startswith("/"):
-                remainder = candidate
-        if remainder is None:
-            logger.info(f"Uploaded object {s3_key} is outside the location of asset "
-                        f"{database_id}/{asset_id} (skipping)")
-            return None
-        return database_id, asset_id, "/" + remainder.lstrip("/")
-
-    binding = _bind(metadata)
-    if binding is None and version_id:
-        try:
-            current_metadata = _head_object_metadata(bucket_name, s3_key)
-        except Exception as e:
-            logger.info(f"Could not head current version of uploaded object (skipping): {e}")
-            return None
-        binding = _bind(current_metadata)
-    if binding is None:
+    attribution = attribute_object(
+        bucket_name, s3_key,
+        asset_table=asset_storage_table,
+        buckets_table=s3_asset_buckets_table,
+        binding=binding,
+        read_stamp=lambda: metadata,
+        asset_table_name=asset_storage_table_name,
+    )
+    if not attribution.attributed:
+        logger.info(f"Uploaded object {s3_key} is not in any asset's location in bucket {bucket_name} "
+                    f"({attribution.status}); no fileUpload trigger is dispatched")
         return None
-    database_id, asset_id, relative = binding
     # The provenance of the write travels with the binding: who wrote this object decides whether a
-    # workflow may re-fire on it. It comes from the pinned version's head_object above, never from
-    # the current version's, so reading it is free.
+    # workflow may re-fire on it. It comes from the pinned version's head_object above.
     change_source = metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY, "") or ""
     change_workflow_id = metadata.get(VAMS_CHANGE_WORKFLOW_ID_METADATA_KEY, "") or ""
-    return database_id, asset_id, relative, change_source, change_workflow_id
+    return (attribution.database_id, attribution.asset_id, attribution.relative_path,
+            change_source, change_workflow_id)
 
 
 def _workflow_row(workflow_database_id, workflow_id):
@@ -339,15 +304,22 @@ def _invoke_execute(workflow_database_id, workflow_id, body):
         return False
 
 
-def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id=""):
+def _dispatch_uploaded_file(bucket_name, s3_key, trigger_rows, version_id="", binding=None):
     """Match + launch every fileUpload trigger that fires for one uploaded object. Returns the number
     of workflows launched. version_id pins the run to the object version that was uploaded (empty on
-    an unversioned bucket, where the run reads the current object)."""
+    an unversioned bucket, where the run reads the current object); binding is the record's
+    `vamsBinding`, absent on an event published before bucket sync carried it."""
     if _should_skip_key(s3_key):
         return 0
-    resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id)
+    resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding)
     if not resolved:
         return 0
+    return _launch_matching_triggers(trigger_rows, resolved, version_id)
+
+
+def _launch_matching_triggers(trigger_rows, resolved, version_id=""):
+    """Launch every fileUpload trigger that fires for one resolved upload. Returns the number of
+    workflows launched."""
     database_id, asset_id, relative_key, change_source, change_workflow_id = resolved
     matches = tm.match_fileupload_triggers(
         trigger_rows, database_id, asset_id, relative_key, version_id,
@@ -372,8 +344,19 @@ def _object_version_id(object_info):
     return "" if version_id == "null" else version_id
 
 
+def _uploaded_objects_by_message(event):
+    """Yield (SQS record or None, [(bucket_name, s3_key, versionId, vamsBinding)]) per message: one per
+    SQS record for an SQS-buffered event, one with no record for a direct EventBridge invocation."""
+    if "Records" in event:
+        for record in event["Records"]:
+            yield record, list(_iter_uploaded_objects({"Records": [record]}))
+    else:
+        yield None, list(_iter_uploaded_objects(event))
+
+
 def _iter_uploaded_objects(event):
-    """Yield (bucket_name, s3_key, versionId) for each uploaded object in the event. Handles the two
+    """Yield (bucket_name, s3_key, versionId, vamsBinding or None) for each uploaded object in the
+    event. Handles the two
     shapes the orchestration-bus -> SQS buffer delivers: an EventBridge S3 detail (detail.bucket.name
     + detail.object.key) and a legacy S3-notification Records array, each possibly wrapped in SQS
     Records / an EventBridge envelope."""
@@ -384,7 +367,7 @@ def _iter_uploaded_objects(event):
             b = (s3_info.get("bucket", {}) or {}).get("name")
             k = object_info.get("key")
             if b and k:
-                yield b, k, _object_version_id(object_info)
+                yield b, k, _object_version_id(object_info), binding_of(rec)
 
     def _from_detail(detail):
         bucket = ((detail.get("bucket") or {}).get("name")
@@ -392,7 +375,7 @@ def _iter_uploaded_objects(event):
         object_info = detail.get("object") or {}
         key = object_info.get("key") or detail.get("key") or ""
         if bucket and key:
-            yield bucket, key, _object_version_id(object_info)
+            yield bucket, key, _object_version_id(object_info), binding_of(detail)
         # A detail may itself carry an S3-notification Records array.
         yield from _from_records(detail.get("Records", []))
 
@@ -434,9 +417,12 @@ def _iter_uploaded_objects(event):
 def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     """Dispatch fileUpload workflow triggers for each uploaded object in the (SQS-buffered
     EventBridge) event. Best-effort per file: per-file/per-workflow failures are logged and do not
-    fail the batch. A failure that prevents dispatching the batch at all (trigger enumeration, or
-    an error outside the per-file loop) raises so the SQS event source retries the batch and it
-    eventually reaches the DLQ rather than being silently deleted."""
+    fail the batch. A message whose files depend on a bucket registration that could not be read, or
+    whose attribution met a retryable read error (`is_retryable_read_error`), is reported as a batch
+    item failure and retried, with none of its workflows launched. A failure that
+    prevents dispatching the batch at all (trigger enumeration, or an error outside the per-file loop)
+    raises so the SQS event source retries the batch and it eventually reaches the DLQ rather than
+    being silently deleted."""
     import urllib.parse
 
     # A warm container keeps module state between invocations, so the workflow-row memo is cleared per
@@ -457,24 +443,54 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     try:
         total_launched = 0
         files_seen = 0
-        for bucket_name, raw_key, version_id in _iter_uploaded_objects(event):
-            files_seen += 1
-            s3_key = urllib.parse.unquote_plus(raw_key)
-            # Per-file isolation: an unexpected failure resolving/dispatching one file must not drop
-            # trigger dispatch for the rest of the batch (best-effort contract).
+        failures = []
+        for message_record, objects in _uploaded_objects_by_message(event):
+            # Every file of a message is resolved before any of its workflows launch, so a message
+            # retried because one registration could not be read launches nothing twice.
+            pending = []
             try:
-                total_launched += _dispatch_uploaded_file(
-                    bucket_name, s3_key, trigger_rows, version_id)
-            except Exception as e:
-                logger.exception(f"Error dispatching triggers for {s3_key} (continuing): {e}")
+                for bucket_name, raw_key, version_id, binding in objects:
+                    files_seen += 1
+                    s3_key = urllib.parse.unquote_plus(raw_key)
+                    if _should_skip_key(s3_key):
+                        continue
+                    # Per-file isolation: an unexpected failure resolving one file must not drop
+                    # trigger dispatch for the rest of the batch (best-effort contract).
+                    try:
+                        resolved = _resolve_asset_relative_key(bucket_name, s3_key, version_id, binding)
+                    except RegistrationUnavailableError:
+                        raise
+                    except Exception as e:
+                        if is_retryable_read_error(e):
+                            raise AttributionReadUnavailableError(f"{s3_key}: {e}") from e
+                        logger.exception(f"Error resolving {s3_key} for fileUpload triggers (continuing): {e}")
+                        continue
+                    if resolved:
+                        pending.append((s3_key, version_id, resolved))
+            except (RegistrationUnavailableError, AttributionReadUnavailableError) as e:
+                identifier = batch_item_identifier(message_record) if message_record else ""
+                if not identifier:
+                    raise
+                unread = ("a bucket registration" if isinstance(e, RegistrationUnavailableError)
+                          else "what a file's attribution depends on")
+                logger.warning(f"fileUpload dispatch could not read {unread} ({e}); message {identifier} is retried")
+                failures.append({"itemIdentifier": identifier})
+                continue
+            for s3_key, version_id, resolved in pending:
+                try:
+                    total_launched += _launch_matching_triggers(trigger_rows, resolved, version_id)
+                except Exception as e:
+                    logger.exception(f"Error dispatching triggers for {s3_key} (continuing): {e}")
 
         if files_seen == 0:
             # An event carrying no recognizable object means the producer-side envelope no longer
             # matches what this dispatcher enumerates; triggers silently stop firing otherwise.
             logger.warning("fileUpload dispatch found no recognizable uploaded object in the event")
         logger.info(f"fileUpload dispatch: {files_seen} file(s), {total_launched} workflow(s) launched")
-        return success(body={"message": "File-upload triggers dispatched",
-                             "filesProcessed": files_seen, "workflowsLaunched": total_launched})
+        return with_batch_item_failures(
+            success(body={"message": "File-upload triggers dispatched",
+                          "filesProcessed": files_seen, "workflowsLaunched": total_launched}),
+            event, failures)
     except Exception as e:
         logger.exception(f"Internal error in workflow trigger dispatch; failing the batch: {e}")
         raise

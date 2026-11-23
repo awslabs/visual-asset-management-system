@@ -202,6 +202,8 @@ def _wire_file_ops(monkeypatch):
     are in play. Returns (module, s3 client mock)."""
     af = asset_files._load_asset_files()
     mock_s3 = MagicMock()
+    # No other asset's location lies inside or at this asset's (the nested-location lookup is not under test)
+    monkeypatch.setattr(af, "nested_locations_for", lambda *args, **kwargs: af.NestedLocations(""))
     monkeypatch.setattr(af, "get_asset_with_permissions",
                         lambda databaseId, assetId, op, claims: _file_ops_asset())
     monkeypatch.setattr(af, "get_asset_s3_location", lambda asset: (BUCKET, ASSET_BASE_KEY))

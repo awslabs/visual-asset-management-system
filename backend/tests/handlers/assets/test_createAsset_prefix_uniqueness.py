@@ -66,7 +66,7 @@ class TestPrefixUniqueness:
         response = m.create_asset(_request_model(m), {"tokens": ["SYSTEM_USER"]}, True)
         assert response.assetId == "asset-1"
         # Ownership check ran; no folder marker written over existing files
-        m.assert_existing_key_not_owned.assert_called_once_with(["b1"], "asset-1/")
+        m.assert_existing_key_not_owned.assert_called_once_with(["b1"], "asset-1/", "bucket")
         m.create_prefix_folder.assert_not_called()
 
     def test_s3_external_rejects_owned_prefix(self):

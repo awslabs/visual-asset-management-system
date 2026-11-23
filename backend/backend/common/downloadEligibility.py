@@ -362,8 +362,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
                            list_objects: Callable = None,
                            is_allowed: Callable[[str, str], bool] = None,
                            object_exists: Callable[[str, str], bool] = None,
-                           check_key_quarantine: Optional[Callable[[str, bool], None]] = None
-                           ) -> Tuple[str, Optional[str]]:
+                           check_key_quarantine: Optional[Callable[[str, bool], None]] = None,
+                           nested=None) -> Tuple[str, Optional[str]]:
     """Run every per-file check for one requested key and return what to sign.
 
     Order (each step refuses before the next runs): key containment and length, the per-key
@@ -386,6 +386,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
             version or an asset-version pin was requested. It raises ``QuarantineBlockedResponse``
             for a refused key and runs before any S3 call. A caller that passes it has not applied the
             block in ``get_distributable_asset_context``.
+        nested: ``assetLocations.NestedLocations`` of the asset's location; a key a nested asset's
+            location holds is that asset's file and answers as a missing file, before any S3 call.
 
     Returns:
         ``(final_key, version_id)`` - the S3 key and version to sign
@@ -400,6 +402,8 @@ def check_file_eligibility(database_id: str, asset_id: str, s3_client, asset_buc
             return s3_object_exists(s3_client, bucket, key)
 
     final_key = resolve_asset_file_key(asset_base_key, raw_key)
+    if nested is not None and nested.holder(final_key) is not None:
+        raise VAMSGeneralErrorResponse(MSG_FILE_NOT_FOUND)
 
     if check_key_quarantine is not None:
         check_key_quarantine(final_key, bool(version_id or asset_version_id or asset_version_alias))

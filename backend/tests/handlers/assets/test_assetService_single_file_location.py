@@ -246,7 +246,8 @@ class TestPermanentDelete:
 
         m.delete_asset_permanent("db1#deleted", "a1", request, {"tokens": ["u1"]})
 
-        calls = [(c.args, c.kwargs) for c in m.delete_s3_prefix_all_versions.call_args_list]
+        calls = [(c.args, {k: v for k, v in c.kwargs.items() if k != "nested"})
+                 for c in m.delete_s3_prefix_all_versions.call_args_list]
         assert calls == [
             (("bucket", FILE_LOCATION), {"location": FILE_LOCATION}),
             (("bucket", preview_key), {"location": preview_key}),
