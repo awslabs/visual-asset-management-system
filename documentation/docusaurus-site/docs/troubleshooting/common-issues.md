@@ -460,8 +460,8 @@ Each VAMS AWS Lambda function reads its resource names from AWS Systems Manager 
 
 -   API requests fail or time out for a short time after the deployment was idle, or the web application shows "Page access could not be checked"
 -   Workflow runs fail with an error that names `GetParametersByPath` and `ThrottlingException`, or with `ResourceNameUnavailableError` and "Resource name not resolved while SSM sweeps back off after a failure" or "Resource name parameters could not be read from SSM"
--   Function logs in Amazon CloudWatch show `Resource name sweep failed (ThrottlingException)` lines
--   Requests or workflow runs fail with `ResourceNameAccessError`, and function logs show `Resource name sweep failed (AccessDeniedException)` or another code. This is not throttling (see the end of **Resolution**)
+-   Function logs in Amazon CloudWatch show `Resource name chunk read failed (ThrottlingException)`, `Resource name sweep failed (ThrottlingException)` or `Resource name read failed (ThrottlingException)` lines
+-   Requests or workflow runs fail with `ResourceNameAccessError`. Function logs show `Resource name sweep failed (AccessDeniedException)` or another code, after the warning `Resource name chunk parameters not used (GetParameters failed (AccessDeniedException)), reading every parameter under the prefix`, or, for a single name, `Resource name read failed (AccessDeniedException) after 1 calls: <key>`. This is not throttling (see the end of **Resolution**)
 
 **Behavior:**
 
@@ -488,7 +488,7 @@ aws ssm update-service-setting --setting-id /ssm/parameter-store/high-throughput
 
 See [Managing Parameter Store throughput](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-throughput.html) for the quotas and pricing.
 
-For `ResourceNameAccessError` with any code other than `AccessDeniedException` (for example `ValidationException`, `UnrecognizedClientException` or `NoCredentialsError`), check the function's `VAMS_RESOURCE_PARAM_PREFIX` value and its execution role. For `AccessDeniedException`, the function's role needs `ssm:GetParametersByPath` on the deployment's resource-name parameters: the path in the function's `VAMS_RESOURCE_PARAM_PREFIX` environment variable (`/<name>-<baseStackName>/resourceNames`) and everything under it. VAMS grants it on the roles it creates. Check what can remove it: a permissions boundary (`environments.aws.PermissionBoundaryArn` in `infra/cdk.json`), a service control policy, or the policies of a pre-created role (`app.iamRoleConfig.useCustomVamsStackRoles`).
+For `ResourceNameAccessError` with any code other than `AccessDeniedException` (for example `ValidationException`, `UnrecognizedClientException` or `NoCredentialsError`), check the function's `VAMS_RESOURCE_PARAM_PREFIX` value and its execution role. For `AccessDeniedException`, the function's role needs `ssm:GetParametersByPath` on the deployment's resource-name parameters, the path in the function's `VAMS_RESOURCE_PARAM_PREFIX` environment variable (`/<name>-<baseStackName>-<region>/resourceNames`) and everything under it, and `ssm:GetParameter` on each name below it (`<prefix>/<key>`, the key the `Resource name read failed` line names). It also needs `ssm:GetParameters` on the chunk parameters, `.../resourceNamesChunks/*`: without that, lookups still succeed, but every refresh logs the `chunk parameters not used` warning and reads the whole prefix. VAMS grants all three on the roles it creates. Check what can remove it: a permissions boundary (`environments.aws.PermissionBoundaryArn` in `infra/cdk.json`), a service control policy, or the policies of a pre-created role (`app.iamRoleConfig.useCustomVamsStackRoles`).
 
 ### Asset ID Refused as Not Unique Although No Asset Exists
 
