@@ -452,6 +452,39 @@ For operations that may exceed the integration timeout, check your AWS Lambda fu
 
 Deployments that regularly run these operations can raise `app.api.apiGatewayRest.apiGatewayTimeoutTime` (up to 300 seconds) so the request completes synchronously instead of returning a 504. Values above 29 seconds require an approved account-level **Integration timeout** quota increase (`L-E5AE38E3`) in the deployment Region before deploying — see the [configuration reference](../deployment/configuration-reference.md).
 
+### Requests Time Out or Workflow Runs Fail After an Idle Period
+
+Each VAMS AWS Lambda function reads its resource names from AWS Systems Manager Parameter Store when it starts. Parameter Store throughput is shared by every application in an AWS account and Region, so when many functions start at once (the first requests after an idle period, a burst of workflow runs, or several VAMS deployments in one account and Region), Parameter Store can throttle those reads.
+
+**Symptoms:**
+
+-   API requests fail or time out for a short time after the deployment was idle, or the web application shows "Page access could not be checked"
+-   Workflow runs fail with an error that names `GetParametersByPath` and `ThrottlingException`, or with `ResourceNameUnavailableError` and "Resource name not resolved while SSM sweeps back off after a failure" or "Resource name parameters could not be read from SSM"
+-   Function logs in Amazon CloudWatch show `Resource name sweep failed (ThrottlingException)` lines
+
+**Behavior:**
+
+A function retries a throttled read for up to 4 seconds. If the read still fails, the function does not read Parameter Store again for a short back-off window (about 2 seconds, doubling up to 30 seconds while the reads keep failing), and a lookup of a name the function has not cached fails without reading again. A cold API request that meets this fails within about 15 seconds instead of waiting out the API's 29-second limit. Requests succeed again once Parameter Store answers. A workflow step that VAMS runs between and after the pipelines (output processing, the wait for large outputs, the step between two pipelines, and the error handling) is retried when it, or a VAMS function it calls (file ingestion, the metadata service or the copy engine), could not start because its resource names were refused: up to 12 times, with randomized delays that start at up to 15 seconds and grow to at most 60 seconds, about 11 minutes at most in all. A retried output step ingests only the outputs that had not landed. A burst can still fail runs, for example when a step is refused more often than that or the request that starts a run is refused.
+
+**Resolution:**
+
+-   Run fewer VAMS deployments, or other applications that read Parameter Store heavily, in the same account and Region.
+-   Turn on the Parameter Store higher-throughput setting for the account and Region. It raises the `GetParametersByPath` limit from the default of 40 transactions per second, which `GetParameter` and `GetParameters` share, to 500. The setting applies to every application in the account and Region and is charged per API interaction (one per parameter a request returns). Check that it is offered in your partition and Region before relying on it.
+
+Read the current setting (read-only):
+
+```bash
+aws ssm get-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled
+```
+
+Turn it on:
+
+```bash
+aws ssm update-service-setting --setting-id /ssm/parameter-store/high-throughput-enabled --setting-value true
+```
+
+See [Managing Parameter Store throughput](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-throughput.html) for the quotas and pricing.
+
 ### Asset ID Refused as Not Unique Although No Asset Exists
 
 **Symptoms:**
@@ -696,6 +729,7 @@ These are fixed limits of the pipeline (see [Quotas](../additional/quotas.md)). 
 **Resolution:**
 
 -   STEP input is off by default because it adds Open CASCADE to the conversion image. Set `app.pipelines.useConversion3dBasic.enableStepInput` to `true` in `infra/config/config.json` and deploy again; the image is rebuilt with cascadio. See the [3D Basic Conversion pipeline](../pipelines/3d-conversion.md) and the [configuration reference](../deployment/configuration-reference.md).
+-   A model is refused as too large for the conversion function. Turn on the AWS Batch tier (`app.pipelines.useConversion3dBasic.batchTier.enabled`, which needs `app.useGlobalVpc.enabled`) to convert it on an AWS Fargate job of up to 120 GiB. A run that waits for a job and then fails in `RUNNABLE` is blocked by the account's Fargate On-Demand vCPU quota; a run refused above the largest job size, or naming a Region, is explained in the [Batch tier troubleshooting](../pipelines/3d-conversion.md#troubleshooting).
 -   An incomplete conversion names the referenced files it could not include in `conversion-incomplete.json` and the run log, with the reason for each. Upload a missing file to the asset at the path the model names, or change a reference that points outside the asset (an absolute path, a URL, or a path that leaves the asset) to a relative path, and run the conversion again. Set the template's Missing references option to `fail` to stop such a run instead of converting without the files.
 
 ### Media Preview Run Completes With No Preview

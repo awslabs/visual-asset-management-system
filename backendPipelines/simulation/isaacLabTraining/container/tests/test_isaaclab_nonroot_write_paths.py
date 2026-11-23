@@ -3,13 +3,14 @@
 
 """The Isaac Lab image's non-root user can write everywhere Isaac Lab writes (issue #1312).
 
-The image runs as uid 10000 (issue #327) and ``__main__.py`` starts Isaac Lab's ``train.py`` and
-``play.py`` from ``/workspace/isaaclab``, which the base image (``nvcr.io/nvidia/isaac-lab:2.3.0``)
-copies root-owned ``0755`` with no ``logs`` or ``outputs`` folder in it (Isaac Lab's ``.dockerignore``
-excludes both). Isaac Lab writes relative to that working directory, so each write below raises
+The image runs as uid 10000 (issue #327) and ``__main__.py`` starts Isaac Lab's ``train`` and
+``play`` entry points from ``/workspace/isaaclab``, which the base image
+(``nvcr.io/nvidia/isaac-lab:3.0.0``) gives to its own user (uid 1000) with mode ``0755`` and no ``logs``
+or ``outputs`` folder in it (Isaac Lab's ``.dockerignore`` excludes both). Isaac Lab writes relative to that working directory, so each write below raises
 ``PermissionError: [Errno 13]`` unless the image gives the runtime user somewhere to write it.
 
-What Isaac Lab v2.3.0 writes, and where:
+What Isaac Lab 3.0.0 writes, and where (read from the image and from a run of the stock image
+as uid 1000 and uid 10000):
 
 - Hydra's run folder. ``hydra.run.dir`` defaults to ``outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}``
   (hydra-core 1.3, ``hydra/conf/hydra/output/default.yaml``), relative to the working directory, and
@@ -18,7 +19,7 @@ What Isaac Lab v2.3.0 writes, and where:
 - ``train.py``'s run folder, ``os.path.abspath(os.path.join("logs", <library>, <experiment>))`` plus
   a timestamp, in all three libraries: checkpoints, TensorBoard events, ``params/*.yaml``, git diffs.
 - Files a task writes straight into the working directory while its environment is built. The
-  AutoMate tasks (``Isaac-AutoMate-Assembly-Direct-v0``, ``-Disassembly-Direct-v0``) download their
+  AutoMate tasks (``IsaacContrib-AutoMate-Assembly-Direct``, ``-Disassembly-Direct``) download their
   grasp, distance and trajectory JSON and their plug and socket meshes with
   ``retrieve_file_path(<Nucleus URL>, download_dir="./")`` and open them by basename
   (``direct/automate/assembly_env.py``, ``disassembly_env.py``, ``industreal_algo_utils.py``); a
@@ -50,7 +51,7 @@ _OUTPUT_PREFIX = "s3://run-bucket/pipelines/isaacLab/JOB/output/3f2c9a10/files/"
 
 # The Isaac Lab release whose train.py, play.py, Hydra configuration and AutoMate tasks the write
 # paths in this module were read from, and that the Dockerfile builds on.
-_MODELLED_ISAAC_LAB_VERSION = "2.3.0"
+_MODELLED_ISAAC_LAB_VERSION = "3.0.0"
 
 # Files that build the image without passing a build argument to it.
 _IMAGE_BUILD_SOURCES = (
@@ -93,7 +94,7 @@ def _config(main_module, mode, library="rsl_rl", record_video=False):
     return main_module.PipelineConfig(
         job_name="isaaclab-job",
         mode=mode,
-        task="Isaac-Cartpole-Direct-v0",
+        task="Isaac-Cartpole-Direct",
         rl_library=library,
         input_s3_path="s3://run-bucket/asset/config.json",
         output_s3_path=_OUTPUT_PREFIX,
@@ -108,11 +109,11 @@ def _isaac_lab_cwd(main_module, mode, monkeypatch):
 
     def _run(cmd, cwd=None, **kwargs):
         calls.append(cwd)
-        return SimpleNamespace(returncode=0)
+        return SimpleNamespace(returncode=0, tail="", timed_out=False)
 
     # Undone on return, so a test can go on to call the real download and upload functions.
     with monkeypatch.context() as m:
-        m.setattr(main_module, "subprocess", SimpleNamespace(run=_run))
+        m.setattr(main_module, "run_isaac_lab", _run)
         m.setattr(main_module, "setup_checkpoint_dir", lambda config: "/unused")
         m.setattr(main_module, "upload_training_results", lambda *args: None)
         m.setattr(main_module, "download_policy", lambda s3, config: "/unused/policy.pt")
@@ -172,7 +173,7 @@ def _downloaded_policy_path(main_module, monkeypatch):
 
 
 def _play_write_dirs(library, checkpoint, cwd):
-    """The folders Isaac Lab v2.3.0's play.py creates for a ``--checkpoint`` (module docstring)."""
+    """The folders Isaac Lab 3.0.0's ``play`` creates for a ``--checkpoint`` (module docstring)."""
     checkpoint = os.path.normpath(checkpoint)
     if library == "rsl_rl":
         run_dir = os.path.dirname(checkpoint)
@@ -249,7 +250,7 @@ class TestIsaacLabWorkingDirectory:
         """The user may add entries to the working directory, not replace Isaac Lab's own.
 
         Group write lets the user create files there; the sticky bit stops it renaming or deleting
-        the root-owned ``isaaclab.sh``, ``scripts/`` and ``source/`` (the ``/tmp`` model). Owning the
+        the ``isaaclab.sh``, ``scripts/`` and ``source/`` (the ``/tmp`` model). Owning the
         folder, or a recursive change over it, would hand those sources to the user.
         """
         cwd = os.path.normpath(_isaac_lab_cwd(main_module, "train", monkeypatch))
@@ -271,6 +272,73 @@ class TestIsaacLabWorkingDirectory:
         """Checkpoints, metrics and diffs are uploaded from the folder train.py logs to."""
         cwd = _isaac_lab_cwd(main_module, "train", monkeypatch)
         assert os.path.normpath(main_module.LOCAL_LOG_PATH) == os.path.join(cwd, "logs")
+
+
+def _dockerfile_env(image_path):
+    """``ENV`` name -> value of the Dockerfile, with ``${NAME}`` of earlier entries not expanded."""
+    env = {}
+    with open(image_path, encoding="utf-8") as f:
+        text = f.read().replace("\\\n", " ")
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("ENV "):
+            continue
+        for part in re.findall(r"([A-Za-z_][A-Za-z0-9_]*)=(\S+)", line[4:]):
+            env[part[0]] = part[1]
+    return env
+
+
+@pytest.mark.unit
+class TestIsaacLab3CachesAndUser:
+    """Isaac Lab 3.0 compiles Warp and Newton kernels and CUDA caches them, all under ``HOME``; the
+    runtime user needs a passwd entry (torch calls ``getpass.getuser()``) and a writable cache tree
+    (issue #1669)."""
+
+    @pytest.fixture
+    def env(self):
+        return _dockerfile_env(os.path.join(_CONTAINER_DIR, "Dockerfile"))
+
+    def test_the_runtime_user_has_a_passwd_entry_with_a_home(self, image):
+        # useradd creates the passwd entry that getpass.getuser() reads for uid 10000
+        assert "vams" in image.names
+
+    def test_home_and_the_caches_are_under_the_runtime_users_home(self, env):
+        assert env["HOME"] == "/home/vams"
+        for name in ("XDG_CACHE_HOME", "WARP_CACHE_PATH", "CUDA_CACHE_PATH"):
+            assert env[name].startswith("/home/vams/"), f"{name}={env[name]}"
+
+    @pytest.mark.parametrize("name", ["WARP_CACHE_PATH", "CUDA_CACHE_PATH", "XDG_CACHE_HOME"])
+    def test_each_cache_folder_is_writable(self, image, env, name):
+        assert image.writable(env[name]), f"{name}={env[name]} is not writable by {image.runtime_user}"
+        assert image.writable(os.path.join(env[name], "kernels"))
+
+    def test_the_interpreter_is_the_isaac_lab_environment(self, env):
+        assert env["VIRTUAL_ENV"] == "/opt/isaaclab-venv"
+        assert env["PATH"].startswith("/opt/isaaclab-venv/bin:")
+
+    def test_the_entrypoint_runs_that_interpreter(self):
+        with open(os.path.join(_CONTAINER_DIR, "entrypoint.sh"), encoding="utf-8") as f:
+            text = f.read()
+        assert "/opt/isaaclab-venv/bin/python -u __main__.py" in text
+        assert "/isaac-sim/python.sh" not in text
+
+    def test_the_image_installs_its_requirements_into_that_environment(self):
+        with open(os.path.join(_CONTAINER_DIR, "Dockerfile"), encoding="utf-8") as f:
+            text = f.read()
+        assert "/opt/isaaclab-venv/bin/python -m pip install" in text
+        assert "/isaac-sim/kit/python" not in text
+
+    def test_the_build_steps_run_as_root_and_the_run_as_the_runtime_user(self):
+        with open(os.path.join(_CONTAINER_DIR, "Dockerfile"), encoding="utf-8") as f:
+            users = [line.split()[1] for line in f if line.startswith("USER ")]
+        assert users == ["root", "10000:10000"]
+
+    def test_the_video_packages_are_pinned_for_isaac_lab(self):
+        with open(os.path.join(_CONTAINER_DIR, "requirements.lock"), encoding="utf-8") as f:
+            pins = dict(re.findall(r"^([A-Za-z0-9._-]+)==(\S+)", f.read(), re.MULTILINE))
+        # Isaac Lab's --video recording imports MoviePy 1.x; 2.x raises ImportError there
+        assert pins["moviepy"].startswith("1.")
+        assert "imageio-ffmpeg" in pins and "boto3" in pins
 
 
 @pytest.mark.unit
@@ -321,7 +389,12 @@ class TestModelledIsaacLabVersion:
             "_MODELLED_ISAAC_LAB_VERSION.")
 
     def test_the_base_image_follows_that_version(self, image):
-        assert image.args.get("BASE_IMAGE") == "nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}"
+        assert image.args.get("BASE_IMAGE") == "nvcr.io/nvidia/isaac-lab:${ISAAC_LAB_VERSION}@${ISAAC_LAB_DIGEST}"
+
+    def test_the_base_image_is_pinned_by_digest(self, image):
+        """A tag can be re-pointed; the digest is what fixes the image a rebuild of this commit pulls."""
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", image.args.get("ISAAC_LAB_DIGEST") or ""), (
+            image.args.get("ISAAC_LAB_DIGEST"))
 
     @pytest.mark.parametrize("path", _IMAGE_BUILD_SOURCES, ids=os.path.basename)
     def test_no_build_overrides_the_base_image(self, path):
@@ -342,14 +415,17 @@ class TestControls:
         assert image.runtime_user == "10000:10000"
         assert "vams" in image.names
         assert "vams" in image.groups
-        # Custom environment installs: pip writes into Isaac Sim's Python, which the user owns.
-        assert image.writable("/isaac-sim/kit/python/lib/python3.11/site-packages/pkg")
+        # Custom environment installs: pip writes into the Isaac Lab Python environment, whose
+        # site-packages the base image ships world-writable and whose bin folder the build opens to
+        # the runtime user's group.
+        assert image.writable("/opt/isaaclab-venv/lib/python3.12/site-packages/pkg")
+        assert image.writable("/opt/isaaclab-venv/bin/console-script")
         assert image.writable("/home/vams/.cache/ov")
 
     def test_the_parser_reports_root_owned_folders(self, image):
         assert not image.writable("/videos/play")
         assert not image.writable("/workspace/isaaclab/source/isaaclab")
-        # Entries the base image ships in the working directory stay root-owned.
+        # Entries the base image ships in the working directory stay owned by the image's own user.
         assert not image.writable("/workspace/isaaclab/isaaclab.sh")
         assert not image.writable("/workspace/isaaclab/scripts")
         assert not image.writable("/workspace/isaaclab/scripts/reinforcement_learning/train.py")
@@ -376,3 +452,32 @@ class TestControls:
             pattern = pattern.format(r=tmp_path)
             assert sorted(virtual.glob(pattern, recursive=True)) == \
                 sorted(real_glob.glob(pattern, recursive=True)), pattern
+
+
+@pytest.mark.unit
+class TestKitStateFolders:
+    """Kit writes its caches, user config and logs under ``/isaac-sim/kit`` (issue #1669, D1).
+
+    The base image owns them as root. With the PhysX engine the evaluation video comes from Kit's
+    RTX renderer, which cannot create its shader database in a folder it cannot write; the video is
+    black. The log lines of the failing run are ``Unable to create ShaderDb cache directory
+    /isaac-sim/kit/cache/shadercache/common``, ``Permission denied: '/isaac-sim/kit/cache/
+    ogn_generated'`` and ``failed to open file '/isaac-sim/kit/data/Kit/IsaacLab/3.0/user.config.json'``.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "/isaac-sim/kit/cache/shadercache/common",
+        "/isaac-sim/kit/cache/nv_shadercache",
+        "/isaac-sim/kit/cache/DerivedDataCache",
+        "/isaac-sim/kit/cache/ogn_generated",
+        "/isaac-sim/kit/data/Kit/IsaacLab/3.0/user.config.json",
+        "/isaac-sim/kit/data/documents/Kit/apps/IsaacLab/scripts/new_stage",
+        "/isaac-sim/kit/logs/Kit/IsaacLab/3.0/kit.log",
+    ])
+    def test_the_runtime_user_can_write_where_kit_writes(self, image, path):
+        assert image.writable(path), f"{image.runtime_user} cannot write {path}"
+
+    def test_only_the_kit_state_folders_are_handed_over(self, image):
+        owned = [folder for folder, _ in image.owned if folder.startswith("/isaac-sim")]
+        assert sorted(owned) == ["/isaac-sim/kit/cache", "/isaac-sim/kit/data", "/isaac-sim/kit/logs"]
+        assert not any(t in ("/isaac-sim", "/isaac-sim/kit") for t in image.recursive_changes)

@@ -19,7 +19,7 @@ from casbin.util import util as casbin_util
 from simpleeval import AttributeDoesNotExist
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_authorization, log_authorization_api
-from handlers.auth import request_to_claims
+from handlers.auth import request_to_claims, CLAIMS_CHECK_FAILED
 from datetime import datetime, timedelta
 from common.constants import (
     PERMISSION_CONSTRAINT_FIELDS,
@@ -401,6 +401,13 @@ class CasbinEnforcer:
         self.claims_and_roles = claims_and_roles  # Store for audit logging
         user_id = claims_and_roles["tokens"][0]
         mfaEnabled = is_mfa_enabled(claims_and_roles)
+
+        # The custom claims check raised for this request (request_to_claims): decide it on a
+        # deny-all service of its own, which refuses every Tier 1 and Tier 2 check and is never
+        # cached for the user, so the user's later requests are decided on their own policy.
+        if claims_and_roles.get(CLAIMS_CHECK_FAILED):
+            self.service_object = CasbinEnforcerService(user_id, mfaEnabled, policy_text=POLICY_TEXT_DENY_ALL)
+            return
         
         if user_id in casbin_user_enforcer_map:
             # Previously cached user-specific enforcers - validate cache freshness
@@ -496,7 +503,10 @@ class CasbinEnforcer:
                 "route__path": lambdaEvent['requestContext']['http']['path'] #"/" + event['requestContext']['http']['path'].split("/")[1]
             }
 
-            result = self.service_object.enforce(request_object, http_method)
+            # A failed custom claims check on this event's claims denies the route too, whichever
+            # claims the enforcer was built from.
+            result = (self.service_object.enforce(request_object, http_method)
+                      and not claims_and_roles.get(CLAIMS_CHECK_FAILED))
             
             # AUDIT LOG: Log API authorization result with full request_object
             try:
@@ -514,8 +524,10 @@ class CasbinEnforcer:
             return False
 
 class CasbinEnforcerService:
-    def __init__(self, user_id, mfa_enabled):
-        # Handle user policy-specific caching and updates (globally)
+    def __init__(self, user_id, mfa_enabled, policy_text=None):
+        # Handle user policy-specific caching and updates (globally). A caller that passes
+        # policy_text (the deny-all text for a failed claims check) gets an enforcer built from it,
+        # with no read of the user's roles and nothing written to the policy cache.
         #
         global casbin_user_policy_map
 
@@ -542,13 +554,13 @@ class CasbinEnforcerService:
         self._model_text = PERMISSION_CONSTRAINT_POLICY
         # Routines below have exception handling already covered
         #
-        policy_text = None
-        if self._user_id in casbin_user_policy_map:
-            # Use previously cached user-specific policies?
-            #
-            policy_text = casbin_user_policy_map[self._user_id]
-        else:
-            policy_text = self._create_policy_text()
+        if policy_text is None:
+            if self._user_id in casbin_user_policy_map:
+                # Use previously cached user-specific policies?
+                #
+                policy_text = casbin_user_policy_map[self._user_id]
+            else:
+                policy_text = self._create_policy_text()
         self._create_casbin_enforcer(policy_text)
 
     def _read_policies_batch_optimized(self, role_names):

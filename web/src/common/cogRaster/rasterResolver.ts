@@ -103,7 +103,11 @@ export interface PreparedRaster {
     file: RasterFileRef;
     sourceKey: string;
     usedCog: boolean;
-    /** The COG was made from an earlier version of its source. */
+    /**
+     * A converted COG is recorded, but it was not made from the version shown. With `usedCog` the COG is
+     * drawn and its source has moved on since; without it, the file was opened at a version (a file
+     * version or an asset version) the COG was not made from, so that version of the source is drawn.
+     */
     staleCog: boolean;
     approximate: boolean;
     approximateNote: string | null;
@@ -173,7 +177,72 @@ function refusal(reason: RasterRefusal["reason"], message: string): RasterRefusa
     return { refused: true, reason, message };
 }
 
-async function lookupSize(file: RasterFileRef): Promise<number | undefined> {
+/** True for a file opened at a version: a file version id or an asset version. */
+function isPinned(file: RasterFileRef): boolean {
+    return !!(file.versionId || file.assetVersionId);
+}
+
+/** One version of a file, as the file-info route lists it. */
+interface FileVersionEntry {
+    versionId: string;
+    isLatest: boolean;
+    size?: number;
+    /** The asset versions that record this file version. */
+    assetVersionIds: string[];
+}
+
+/** The file's versions from the file-info route; empty when the API cannot say. */
+async function readFileVersions(file: RasterFileRef): Promise<FileVersionEntry[]> {
+    try {
+        const [ok, info] = await fetchFileInfo({
+            databaseId: file.databaseId,
+            assetId: file.assetId,
+            fileKey: file.key,
+            includeVersions: true,
+        });
+        if (!ok) return [];
+        const versions: any[] = (info as any)?.versions ?? [];
+        return versions
+            .filter((version) => typeof version?.versionId === "string" && version.versionId)
+            .map((version) => {
+                const size = Number(version.size);
+                return {
+                    versionId: version.versionId,
+                    isLatest: version.isLatest === true,
+                    size: Number.isFinite(size) ? size : undefined,
+                    assetVersionIds: (Array.isArray(version.assetVersionIds)
+                        ? version.assetVersionIds
+                        : []
+                    )
+                        .map((entry: any) => entry?.id)
+                        .filter((id: unknown): id is string => typeof id === "string"),
+                };
+            });
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * The version a pinned file is opened at: its file version, or the version its asset version records.
+ * Undefined for an unpinned file, or when the API does not say.
+ */
+function pinnedVersion(
+    file: RasterFileRef,
+    versions: FileVersionEntry[]
+): FileVersionEntry | undefined {
+    if (file.versionId) return versions.find((version) => version.versionId === file.versionId);
+    if (file.assetVersionId) {
+        return versions.find((version) =>
+            version.assetVersionIds.includes(file.assetVersionId as string)
+        );
+    }
+    return undefined;
+}
+
+/** The file's size from the file-info route: for a pinned file, the size of the version it is opened at. */
+export async function lookupSize(file: RasterFileRef): Promise<number | undefined> {
+    if (isPinned(file)) return pinnedVersion(file, await readFileVersions(file))?.size;
     try {
         const [ok, info] = await fetchFileInfo({
             databaseId: file.databaseId,
@@ -185,6 +254,35 @@ async function lookupSize(file: RasterFileRef): Promise<number | undefined> {
     } catch {
         return undefined;
     }
+}
+
+/**
+ * The converted COG made from the version a pinned file is opened at. The COG as the file's asset version
+ * recorded it is tried first, then the COG's latest version; a COG is taken only when its
+ * `cog_link_cogOfVersionId` names that version and the API grants its download. Without one, says
+ * whether a COG of that version was found at all (and refused).
+ */
+async function cogOfPinnedVersion(
+    file: RasterFileRef,
+    cogKey: string,
+    shownVersionId: string
+): Promise<{ ref: RasterFileRef; url: string } | { matched: boolean }> {
+    const base = { databaseId: file.databaseId, assetId: file.assetId, key: cogKey };
+    const candidates: RasterFileRef[] = file.assetVersionId
+        ? [{ ...base, assetVersionId: file.assetVersionId }, base]
+        : [base];
+    let matched = false;
+    for (const ref of candidates) {
+        const attributes = await readRasterAttributes(ref);
+        if (attributes.cogOfVersionId !== shownVersionId) continue;
+        matched = true;
+        try {
+            return { ref, url: await requestPresignedUrl(ref) };
+        } catch {
+            // Refused, gone or not yet written: try the next candidate, or draw the source.
+        }
+    }
+    return { matched };
 }
 
 /** Who a file is, as the API names it: its asset-relative path and the version its latest is at. */
@@ -258,7 +356,9 @@ export async function isStaleCog(
  *
  *  1. Reads the file's attributes. When a converted COG is recorded (`cog_link_cogFile`) and the caller
  *     did not open a COG directly, the COG is requested through the same download route; if the API
- *     refuses it or it is gone, the source is used.
+ *     refuses it or it is gone, the source is used. A file opened at a version (a file version or an
+ *     asset version) is drawn from a COG only when the COG was made from that version; otherwise that
+ *     version of the source is drawn, labelled with its version and flagged `staleCog`.
  *  2. Refuses from the attributes (ext_crs, ext_georeferenced) before the file is opened: no
  *     georeference, or a coordinate system the viewer cannot place.
  *  3. Reads the TIFF header by ranged reads and decides from it, so wrong or stale attributes cannot
@@ -279,11 +379,38 @@ export async function prepareRaster(
 
     const sourceAttributes = await readRasterAttributes(file);
 
-    if (options.preferCog !== false && !isCogFileName(file.key) && sourceAttributes.cogFile) {
+    const cogFile =
+        options.preferCog !== false && !isCogFileName(file.key)
+            ? sourceAttributes.cogFile
+            : undefined;
+
+    let pinned = false;
+    if (cogFile && isPinned(file)) {
+        const shown = pinnedVersion(file, await readFileVersions(file));
+        // The file page passes the version a file is at even when it is the latest; a latest file
+        // version is the file as it is now and takes the latest COG, as an unpinned file does.
+        pinned = !!file.assetVersionId || !shown?.isLatest;
+        if (pinned) {
+            // Opened at a version: only a COG made from that version stands in for it.
+            const shownVersionId = file.versionId ?? shown?.versionId;
+            const cog = shownVersionId
+                ? await cogOfPinnedVersion(file, cogKeyFor(cogFile), shownVersionId)
+                : { matched: false };
+            if ("url" in cog) {
+                target = cog.ref;
+                url = cog.url;
+                usedCog = true;
+            } else {
+                // The version itself is drawn, named by its file version or its asset version.
+                staleCog = !!shownVersionId && !cog.matched;
+            }
+        }
+    }
+    if (cogFile && !pinned) {
         const cogRef: RasterFileRef = {
             databaseId: file.databaseId,
             assetId: file.assetId,
-            key: cogKeyFor(sourceAttributes.cogFile),
+            key: cogKeyFor(cogFile),
         };
         try {
             const cogUrl = await requestPresignedUrl(cogRef);
@@ -335,7 +462,13 @@ export async function prepareRaster(
             id: rasterId(target),
             label:
                 rasterLabel(target.key) +
-                (target.versionId ? ` (version ${target.versionId})` : ""),
+                (usedCog
+                    ? ""
+                    : target.versionId
+                    ? ` (version ${target.versionId})`
+                    : target.assetVersionId
+                    ? ` (asset version ${target.assetVersionId})`
+                    : ""),
             file: target,
             sourceKey,
             usedCog,

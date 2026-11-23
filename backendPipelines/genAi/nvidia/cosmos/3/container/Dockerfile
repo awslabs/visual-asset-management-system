@@ -1,7 +1,9 @@
 # VAMS Cosmos 3 (omni) Pipeline Container
 # Built on the NVIDIA Cosmos framework (https://github.com/NVIDIA/cosmos-framework)
 
-FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+# Base pinned by digest: the tag records which release the digest resolves to, and a re-pointed tag
+# cannot change what a rebuild of this commit pulls. Move the tag and the digest together.
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04@sha256:24c8e3581ea6330038b0d374920721983312627f8adbfcf390bdb4b399d280ed
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -41,7 +43,7 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_VERSION
     rm -rf aws awscliv2.zip
 
 # Install uv package manager (cosmos-framework requires uv >= 0.11.3)
-COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa /uv /uvx /usr/local/bin/
 
 # Clone the NVIDIA Cosmos framework (serves all Cosmos 3 variants), pinned to a commit.
 # The upstream default branch advances daily, so a clone with no ref makes the framework version part
@@ -58,7 +60,10 @@ RUN git clone ${COSMOS_FRAMEWORK_REPO} /opt/cosmos-framework && \
     git rev-parse HEAD > /opt/cosmos-framework/VAMS_UPSTREAM_COMMIT && \
     git log -1 --format="cosmos-framework %H %ai %s"
 
-# Install Python dependencies using uv. The extras carry the runtime libraries
+# Install Python dependencies using uv, exactly as the framework's own uv.lock at the pinned commit lists
+# them, every file checked against the SHA-256 the lock records. `--frozen` rather than `--locked`: this uv
+# release orders the lock's `conflicts` table differently from the one that wrote it and so calls the lock
+# stale, although re-locking resolves the same 573 packages (checked 2026-11-19). The extras carry the runtime libraries
 # the inference entrypoint imports (iopath, fvcore, and friends); the
 # `cu128-train` group pins the CUDA 12.8 torch stack (torch, flash-attn, natten,
 # transformer-engine) from the NVIDIA cosmos and PyTorch indexes.
@@ -67,7 +72,7 @@ WORKDIR /opt/cosmos-framework
 # second layer just to change ownership. Also pre-create the cache dirs the runtime user may write to
 # (uv cache; HF/torch/pip fallbacks when HF_HOME is not pointed at EFS). inference.py runs
 # python/torchrun with cwd=/opt/cosmos-framework, so the tree must be writable for __pycache__.
-RUN uv sync --all-extras --group cu128-train && \
+RUN uv sync --frozen --all-extras --group cu128-train && \
     mkdir -p /home/vams/.cache/uv /home/vams/.cache/huggingface /home/vams/.cache/torch \
              /home/vams/.cache/pip /home/vams/.local/share/uv && \
     chown -R vams:vams /home/vams /opt/cosmos-framework

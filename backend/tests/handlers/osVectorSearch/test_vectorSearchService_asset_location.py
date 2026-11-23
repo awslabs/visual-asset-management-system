@@ -21,6 +21,7 @@ import pytest
 
 from tests.handlers.osVectorSearch import test_vectorSearchService as behaviour
 from tests.handlers.osVectorSearch.test_vectorSearchService import FakeStore, call, item, rows
+from tests.handlers.osVectorSearch.vectorsearch_support import stub_api_check_deadline
 
 svc = behaviour.svc
 
@@ -42,7 +43,7 @@ def opensearch(svc):
     svc.opensearch_disabled = False
     state = types.SimpleNamespace(assets={}, files={}, fail_index=None, calls=[])
 
-    def search(index, body):
+    def search(index, body, **_):
         state.calls.append((index, copy.deepcopy(body)))
         if index == state.fail_index:
             raise RuntimeError("connection refused to host-42")
@@ -57,6 +58,7 @@ def opensearch(svc):
     manager.client, manager.file_index, manager.asset_index = client, FILE_INDEX, ASSET_INDEX
     stub = types.ModuleType("handlers.osSemanticSearch.search")
     stub.DualIndexSearchManager = MagicMock(return_value=manager)
+    stub._api_check_deadline = stub_api_check_deadline
     builder = MagicMock()
     builder._build_query_clause.return_value = {"bool": {"filter": [{"term": {"str_databaseid": "db1"}}]}}
     stub.DualIndexQueryBuilder = MagicMock(return_value=builder)

@@ -12,6 +12,7 @@ import pytest
 
 from tests.handlers.osVectorSearch import test_vectorSearchService as behaviour
 from tests.handlers.osVectorSearch.test_vectorSearchService import FakeStore, call, item, rows
+from tests.handlers.osVectorSearch.vectorsearch_support import stub_api_check_deadline
 
 svc = behaviour.svc
 
@@ -29,6 +30,7 @@ def opensearch(svc, monkeypatch):
     manager = MagicMock()
     manager.client, manager.file_index = client, "vams-files-v3"
     stub.DualIndexSearchManager = MagicMock(return_value=manager)
+    stub._api_check_deadline = stub_api_check_deadline
     builder = MagicMock()
     builder._build_query_clause.return_value = {"bool": {"filter": [{"term": {"str_databaseid": "db1"}}]}}
     stub.DualIndexQueryBuilder = MagicMock(return_value=builder)
@@ -112,7 +114,7 @@ def test_constrained_hits_go_to_opensearch_in_windows_each_sized_to_its_own_ids(
     alike, so a query over more ids than its size would answer an arbitrary subset), and the constraint
     clauses ride on every window."""
     store = _two_databases_of_sixty_files(svc)
-    opensearch.client.search.side_effect = lambda index, body: {"hits": {"hits": [
+    opensearch.client.search.side_effect = lambda index, body, **_: {"hits": {"hits": [
         {"_id": doc, "_source": {"MD_color": "red"}} for doc in body["query"]["bool"]["filter"][0]["ids"]["values"]]}}
     _, body = call(svc, store, {"query": "tractor", "tags": ["x"], "size": 100, "includeSegments": False})
     hits = body["hits"]["hits"]
@@ -131,7 +133,7 @@ def test_a_constrained_hit_the_index_answers_in_a_later_window_is_kept(svc, open
     """Only the two most distant files satisfy the constraint; they sit past the first window and are
     the answer, not a casualty of the window."""
     store = _two_databases_of_sixty_files(svc)
-    opensearch.client.search.side_effect = lambda index, body: {"hits": {"hits": [
+    opensearch.client.search.side_effect = lambda index, body, **_: {"hits": {"hits": [
         {"_id": doc, "_source": {}} for doc in body["query"]["bool"]["filter"][0]["ids"]["values"]
         if doc.endswith("f059.glb")]}}
     _, body = call(svc, store, {"query": "tractor", "tags": ["x"], "size": 100, "includeSegments": False})

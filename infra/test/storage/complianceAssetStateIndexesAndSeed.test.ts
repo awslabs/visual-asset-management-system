@@ -276,9 +276,14 @@ describe("default compliance schema seed", () => {
         expect(actionsOf(logs[0]).sort()).toEqual(["logs:CreateLogStream", "logs:PutLogEvents"]);
         expect(logs[0].Resource).toHaveLength(9);
         expect(JSON.stringify(logs[0].Resource)).toMatch(/AuditLogGroup/);
+        // The resource-name prefix grant and the GetParameters-only grant on its chunk parameters.
         const ssm = statements.filter((st) => actionsOf(st).some((a) => a.startsWith("ssm:")));
-        expect(ssm).toHaveLength(1);
-        expect(JSON.stringify(ssm[0].Resource)).toMatch(/resourceNames/);
+        expect(ssm).toHaveLength(2);
+        const onChunks = (st: any) => /resourceNamesChunks\/\*/.test(JSON.stringify(st.Resource));
+        expect(ssm.filter((st) => !onChunks(st)).map((st) => JSON.stringify(st.Resource))).toEqual([
+            expect.stringMatching(/resourceNames\/\*/),
+        ]);
+        expect(ssm.filter(onChunks).map(actionsOf)).toEqual([["ssm:GetParameters"]]);
         expect(JSON.stringify(statements)).not.toMatch(
             /ConstraintsStorageTable|RolesStorageTable|UserRolesStorageTable/
         );

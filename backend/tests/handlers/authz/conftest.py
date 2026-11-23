@@ -97,6 +97,8 @@ def _install_real_authz_dependencies():
     # imports them, so a run that collects the auth tests with these ones needs them on the stub too.
     auth_mod.AUTH_METHOD_JWT = "jwt"
     auth_mod.AUTH_METHOD_API_KEY = "apiKey"
+    # The claims key a failed custom claims check sets; authz imports it.
+    auth_mod.CLAIMS_CHECK_FAILED = "claimsCheckFailed"
     sys.modules["handlers.auth"] = auth_mod
 
 

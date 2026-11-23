@@ -222,13 +222,17 @@ This software includes third party software subject to the following copyrights:
 | libE57Format    | [3.3.0](https://github.com/asmaloney/libE57Format/releases/tag/v3.3.0) (vendored in PDAL's E57 plugin)                                                    | POTREE VIEWER                                                                      | BSL-1.0          |
 | Xerces-C++      | [3.3.0](https://xerces.apache.org/xerces-c/) (PDAL E57 plugin dependency)                                                                                 | POTREE VIEWER                                                                      | Apache-2.0       |
 | PotreeConverter | [develop-latest](https://github.com/potree/PotreeConverter)                                                                                               | POTREE VIEWER                                                                      | BSD-2-Clause     |
+| Mambaforge      | [24.9.2-0](https://github.com/conda-forge/miniforge-images) (`condaforge/mambaforge` base image of the PDAL build stage)                                  | POTREE VIEWER                                                                      | BSD-3-Clause     |
+| Miniforge3      | [26.5.3-0](https://github.com/conda-forge/miniforge-images) (`condaforge/miniforge3` base image of the PDAL runtime stage)                                | POTREE VIEWER                                                                      | BSD-3-Clause     |
 | SplatToolbox    | [feature/batch-sogs-vggt](https://github.com/aws-solutions-library-samples/guidance-for-open-source-3d-reconstruction-toolbox-for-gaussian-splats-on-aws) | SPLAT TOOLBOX                                                                      | MIT              |
 | FFmpeg          | Ubuntu `ffmpeg` package (installed at image build time, not version-pinned)                                                                               | NVIDIA COSMOS PREDICT, COSMOS REASON, COSMOS TRANSFER, COSMOS 3, GR00T FINE-TUNING | GPL-2.0-or-later |
 | FFmpeg          | Debian trixie `ffmpeg` package (7.1.x, installed at build time; 7:7.1.5-0+deb13u1 in the reference build)                                                 | VIDEO SOP/BOM EXTRACTION                                                           | GPL-2.0-or-later |
 
+The Mambaforge and Miniforge3 base images also carry the conda packages their installers add, each under its own license (recorded as SPDX identifiers in `/opt/conda/conda-meta/<package>.json`). Both images are built on Ubuntu, and their Ubuntu base layers carry the OS packages' own licenses.
+
 ### Preview 3D Thumbnail Pipeline
 
-**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/requirements.lock`, which the image installs)
+**Preview 3D Thumbnail Pipeline Dependencies** (versions as pinned by `container/uv.lock`, exported to `container/requirements.txt`, which the image installs)
 
 | Name        | Version    | License                                                                     | Notes                                                 |
 | :---------- | :--------- | :-------------------------------------------------------------------------- | :---------------------------------------------------- |
@@ -265,7 +269,7 @@ This software includes third party software subject to the following copyrights:
 | blosc, blosc2, brotli, bitshuffle, lz4, lzfse, lzf, lzham, lzokay, snappy, libaec, zfp, sz3, isa-l, meshoptimizer, fastlz, bzip2, netcdf-c, hdf5, cfitsio, postgresql pglz | as in the wheel       | BSD-2-Clause, BSD-3-Clause, MIT, public domain or a permissive NASA/PostgreSQL licence                                                                                                                                 | General-purpose and scientific codecs, not selected by the pipeline                                                                          |
 | libgomp (OpenMP runtime)                                                                                                                                                   | GCC 8.5               | GPL-3.0-or-later with the GCC Runtime Library Exception                                                                                                                                                                | Bundled by the wheel; the image already installs Debian `libgomp1` for Open3D. The exception permits linking into programs under any licence |
 
-**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/requirements.lock`; installed because a package above requires them, or compiled into one)
+**Preview 3D Thumbnail Pipeline transitive dependencies with weak-copyleft licenses** (pinned by `container/uv.lock`; installed because a package above requires them, or compiled into one)
 
 | Name    | Version               | License           | Notes                                                                                                                                               |
 | :------ | :-------------------- | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -275,7 +279,7 @@ This software includes third party software subject to the following copyrights:
 | tqdm    | 4.70.1                | MPL-2.0 AND MIT   | Progress bars required by open3d                                                                                                                    |
 | Eigen   | da79095 (after 3.4.0) | MPL-2.0           | C++ linear algebra library compiled into the open3d 0.19.0 wheel, not a separate package. Loaded for `.fbx` and `.pcd` files                        |
 
-The other packages in `requirements.lock` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
+The other packages in `requirements.txt` declare permissive licenses (MIT, BSD, Apache-2.0, ISC, PSF and similar) in their package metadata.
 
 **Preview 3D Thumbnail Pipeline native libraries bundled in the cadquery-ocp wheel** (cadquery-ocp 7.9.3.1.1, installed because cadquery requires it; the pipeline loads every library below when it reads a `.step` or `.stp` file)
 
@@ -361,34 +365,34 @@ release's PyPI metadata.
 
 **Media extraction image**
 
-| Name                               | Version     | License                                        | Notes                                                                           |
-| :--------------------------------- | :---------- | :--------------------------------------------- | :------------------------------------------------------------------------------ |
-| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2       | LGPL-2.1-or-later / GPL-2.0-or-later per build | Static binary shipped inside the imageio-ffmpeg wheel; invoked as a subprocess. |
-| aws-lambda-powertools              | 3.2.0       | MIT-0                                          | Lambda utilities                                                                |
-| boto3                              | 1.43.89     | Apache-2.0                                     | AWS SDK for Python                                                              |
-| botocore                           | 1.43.89     | Apache-2.0                                     | AWS SDK for Python (core)                                                       |
-| certifi                            | 2026.10.23  | MPL-2.0                                        | CA bundle (pyproj dependency)                                                   |
-| charset-normalizer                 | 3.5.1       | MIT                                            | Text encoding detection                                                         |
-| defusedxml                         | 0.7.1       | PSF-2.0                                        | Safe XML parsing                                                                |
-| et_xmlfile                         | 2.0.0       | MIT                                            | Streaming XML writer (openpyxl dependency)                                      |
-| imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                                   | FFmpeg wrapper for video frame extraction                                       |
-| jmespath                           | 1.1.0       | MIT                                            | JSON querying (boto3 dependency)                                                |
-| lxml                               | 6.1.3       | BSD-3-Clause                                   | XML processing (python-docx / python-pptx dependency)                           |
-| numpy                              | 2.5.5       | BSD-3-Clause AND 0BSD AND MIT AND Zlib         | Array library (tifffile); bundles OpenBLAS, libgfortran (GCC exception)         |
-| openpyxl                           | 3.1.5       | MIT                                            | Excel workbook text extraction                                                  |
-| Pillow                             | 13.0.0      | MIT-CMU                                        | Image processing                                                                |
-| pyproj                             | 3.8.0       | MIT                                            | Footprint reprojection; bundles PROJ, libcurl, libtiff, SQLite                  |
-| pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)             | PDF page rendering                                                              |
-| python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)               | Date parsing (boto3 dependency)                                                 |
-| python-docx                        | 1.2.0       | MIT                                            | Word document text extraction                                                   |
-| python-pptx                        | 1.0.2       | MIT                                            | PowerPoint document text extraction                                             |
-| s3transfer                         | 0.19.2      | Apache-2.0                                     | S3 transfer manager (boto3 dependency)                                          |
-| six                                | 1.17.0      | MIT                                            | Python 2/3 compatibility (dependency)                                           |
-| tifffile                           | 2026.11.16  | BSD-3-Clause                                   | TIFF header reading for GeoTIFF/COG facts                                       |
-| tinytag                            | 2.3.2       | MIT                                            | Audio and video metadata tags                                                   |
-| typing-extensions                  | 4.16.0      | PSF-2.0                                        | Typing backports                                                                |
-| urllib3                            | 2.8.0       | MIT                                            | HTTP client (boto3 dependency)                                                  |
-| XlsxWriter                         | 3.2.9       | BSD-2-Clause                                   | Excel writer (python-pptx dependency)                                           |
+| Name                               | Version     | License                                | Notes                                                                                                                                                                  |
+| :--------------------------------- | :---------- | :------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2       | GPL-3.0-or-later                       | Static binary shipped inside the imageio-ffmpeg wheel (the johnvansickle.com static build, configured with `--enable-gpl --enable-version3`); invoked as a subprocess. |
+| aws-lambda-powertools              | 3.2.0       | MIT-0                                  | Lambda utilities                                                                                                                                                       |
+| boto3                              | 1.43.89     | Apache-2.0                             | AWS SDK for Python                                                                                                                                                     |
+| botocore                           | 1.43.89     | Apache-2.0                             | AWS SDK for Python (core)                                                                                                                                              |
+| certifi                            | 2026.10.23  | MPL-2.0                                | CA bundle (pyproj dependency)                                                                                                                                          |
+| charset-normalizer                 | 3.5.1       | MIT                                    | Text encoding detection                                                                                                                                                |
+| defusedxml                         | 0.7.1       | PSF-2.0                                | Safe XML parsing                                                                                                                                                       |
+| et_xmlfile                         | 2.0.0       | MIT                                    | Streaming XML writer (openpyxl dependency)                                                                                                                             |
+| imageio-ffmpeg                     | 0.6.0       | BSD-2-Clause                           | FFmpeg wrapper for video frame extraction                                                                                                                              |
+| jmespath                           | 1.1.0       | MIT                                    | JSON querying (boto3 dependency)                                                                                                                                       |
+| lxml                               | 6.1.3       | BSD-3-Clause                           | XML processing (python-docx / python-pptx dependency)                                                                                                                  |
+| numpy                              | 2.5.5       | BSD-3-Clause AND 0BSD AND MIT AND Zlib | Array library (tifffile); bundles OpenBLAS, libgfortran (GCC exception)                                                                                                |
+| openpyxl                           | 3.1.5       | MIT                                    | Excel workbook text extraction                                                                                                                                         |
+| Pillow                             | 13.0.0      | MIT-CMU                                | Image processing                                                                                                                                                       |
+| pyproj                             | 3.8.0       | MIT                                    | Footprint reprojection; bundles PROJ, libcurl, libtiff, SQLite                                                                                                         |
+| pypdfium2                          | 5.13.0      | BSD-3-Clause / Apache-2.0 (PDFium)     | PDF page rendering                                                                                                                                                     |
+| python-dateutil                    | 2.9.0.post0 | Apache-2.0 / BSD-3-Clause (dual)       | Date parsing (boto3 dependency)                                                                                                                                        |
+| python-docx                        | 1.2.0       | MIT                                    | Word document text extraction                                                                                                                                          |
+| python-pptx                        | 1.0.2       | MIT                                    | PowerPoint document text extraction                                                                                                                                    |
+| s3transfer                         | 0.19.2      | Apache-2.0                             | S3 transfer manager (boto3 dependency)                                                                                                                                 |
+| six                                | 1.17.0      | MIT                                    | Python 2/3 compatibility (dependency)                                                                                                                                  |
+| tifffile                           | 2026.11.16  | BSD-3-Clause                           | TIFF header reading for GeoTIFF/COG facts                                                                                                                              |
+| tinytag                            | 2.3.2       | MIT                                    | Audio and video metadata tags                                                                                                                                          |
+| typing-extensions                  | 4.16.0      | PSF-2.0                                | Typing backports                                                                                                                                                       |
+| urllib3                            | 2.8.0       | MIT                                    | HTTP client (boto3 dependency)                                                                                                                                         |
+| XlsxWriter                         | 3.2.9       | BSD-2-Clause                           | Excel writer (python-pptx dependency)                                                                                                                                  |
 
 \* **Blender License Note**: Blender is the GPL-3.0 renderer of the pipeline's BLENDER branch. The image installs the official Blender release and runs it as a separate process (`blender --background`), writing rendered views to disk; no VAMS code is linked against Blender and no Blender code is modified or redistributed by this repository. The GPL-3.0 terms apply to Blender's own files, whose license text ships beside it in the image (`GPL3-license.txt`).
 
@@ -435,7 +439,7 @@ All rights reserved.
 
 ### Zip Archive Pipeline
 
-**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.txt`)
+**Zip Archive Pipeline Dependencies** (`backendPipelines/utility/zipArchive/container/requirements.lock`)
 
 | Name                     | Version | License    | Notes                                                                                                       |
 | :----------------------- | :------ | :--------- | :---------------------------------------------------------------------------------------------------------- |
@@ -453,7 +457,7 @@ All rights reserved.
 | openai            | 2.x     | Apache-2.0                   | OpenAI Python SDK, installed by the `strands-agents[openai]` extra     |
 | bedrock-agentcore | 1.23.1  | Apache-2.0                   | Amazon Bedrock AgentCore Runtime application SDK                       |
 | cadquery          | 2.8.0   | Apache-2.0                   | Parametric CAD modelling; STEP import and export                       |
-| cadquery-ocp      | 8.x     | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
+| cadquery-ocp      | 7.9.x   | LGPL-2.1 with OCCT exception | Open CASCADE Technology bindings bundled by CadQuery (dynamic linking) |
 | ddgs              | 9.16.0  | MIT                          | Web search for the agent's research tool                               |
 | httpx             | 0.28.1  | BSD-3-Clause                 | Bounded page fetch for the agent's research tool                       |
 | boto3             | 1.43.x  | Apache-2.0                   | AWS SDK for Python                                                     |
@@ -518,14 +522,21 @@ content hash.
 
 **Isaac Lab Training Pipeline Dependencies**
 
-| Name                  | Version | License            | Notes                                          |
-| :-------------------- | :------ | :----------------- | :--------------------------------------------- |
-| NVIDIA Isaac Lab      | 2.0+    | Apache-2.0         | Robot learning framework                       |
-| RSL-RL                | 2.3.0+  | BSD-3-Clause       | Reinforcement learning library from ETH Zurich |
-| NVIDIA Isaac Sim      | 4.5+    | NVIDIA Proprietary | Base container image (NVIDIA EULA)             |
-| PyTorch               | 2.0+    | BSD-3-Clause       | Deep learning framework                        |
-| aws-lambda-powertools | ^3.2.0  | MIT-0              | Lambda utilities                               |
-| boto3                 | ^1.34.0 | Apache-2.0         | AWS SDK for Python                             |
+| Name                               | Version  | License                   | Notes                                                                                                                                                                              |
+| :--------------------------------- | :------- | :------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NVIDIA Isaac Lab                   | 3.0.0    | BSD-3-Clause / Apache-2.0 | Robot learning framework (`nvcr.io/nvidia/isaac-lab:3.0.0`)                                                                                                                        |
+| NVIDIA Isaac Sim                   | 6.2      | NVIDIA Proprietary        | Base container image (NVIDIA EULA)                                                                                                                                                 |
+| Newton                             | 1.6.1    | Apache-2.0                | Physics engine, default (`physics=newton_mjwarp`); ships in the base image                                                                                                         |
+| MuJoCo-Warp / MuJoCo               | 3.12.0   | Apache-2.0                | Newton's solver; ships in the base image                                                                                                                                           |
+| NVIDIA Warp                        | 1.17.0   | Apache-2.0                | GPU kernel framework used by Newton; ships in the base image                                                                                                                       |
+| RSL-RL                             | 5.5.1    | BSD-3-Clause              | Reinforcement learning library from ETH Zurich; ships in the base image                                                                                                            |
+| PyTorch                            | 2.11     | BSD-3-Clause              | Deep learning framework; ships in the base image                                                                                                                                   |
+| MoviePy                            | 1.0.3    | MIT                       | Video recording for evaluation; installed into the image                                                                                                                           |
+| imageio-ffmpeg                     | 0.6.0    | BSD-2-Clause              | Video encoding; installed into the image. It bundles an FFmpeg executable that is invoked as a subprocess and not linked                                                           |
+| FFmpeg (bundled by imageio-ffmpeg) | 7.0.2    | GPL-3.0-or-later          | Static binary shipped inside the imageio-ffmpeg wheel (the johnvansickle.com static build, configured with `--enable-gpl --enable-version3`); invoked as a subprocess, not linked. |
+| boto3                              | 1.41.5   | Apache-2.0                | AWS SDK for Python, in the training image (held at the version the base image's botocore allows)                                                                                   |
+| aws-lambda-powertools              | 2.36.0   | MIT-0                     | Lambda utilities, in the pipeline's AWS Lambda functions (the VAMS Lambda base layer)                                                                                              |
+| boto3                              | 1.43.126 | Apache-2.0                | AWS SDK for Python, in the pipeline's AWS Lambda functions (the VAMS Lambda base layer)                                                                                            |
 
 **Container Base Image**
 
@@ -563,7 +574,7 @@ repository, and anyone adapting it takes on the model-licence acceptance obligat
 | NVIDIA Cosmos-Guardrail1       | 1.0                                                                         | NVIDIA Open Model License | Content safety blocklist and face filter (~1GB, shared across v1 and v2.5)                              |
 | NVIDIA Transformer Engine      | 2.2.0                                                                       | Apache-2.0                | Optimized transformer computation (updated for v2.5)                                                    |
 | flash-attn                     | 2.7.3                                                                       | BSD-3-Clause              | Flash attention for v2.5 flow-matching architecture                                                     |
-| NVIDIA APEX                    | latest                                                                      | BSD-3-Clause              | Mixed precision training utilities                                                                      |
+| NVIDIA APEX                    | 4db5403 (v1 reference container)                                            | BSD-3-Clause              | Mixed precision training utilities                                                                      |
 | PyTorch                        | 2.6.0                                                                       | BSD-3-Clause              | Deep learning framework                                                                                 |
 | FFmpeg (`ffmpeg`)              | Ubuntu `ffmpeg` package, installed at image build time (not version-pinned) | GPL-2.0-or-later          | Preview GIF generation from the generated video, run as a separate process; video I/O for the framework |
 | boto3                          | latest                                                                      | Apache-2.0                | AWS SDK for Python                                                                                      |
@@ -642,16 +653,16 @@ All six models listed above are gated on HuggingFace and require explicit licens
 
 | Name                        | Version                                                                            | License                                                                                  | Purpose                                                                                                      |
 | :-------------------------- | :--------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------- |
-| Meta SAM 3D Objects         | latest                                                                             | Meta SAM License                                                                         | Single-image to 3D mesh generation (commercial use permitted with obligations)                               |
+| Meta SAM 3D Objects         | f91db41                                                                            | Meta SAM License                                                                         | Single-image to 3D mesh generation (commercial use permitted with obligations)                               |
 | MoGe (`Ruicheng/moge-vitl`) | latest                                                                             | MIT                                                                                      | Monocular depth and point-map estimation feeding SAM 3D Objects                                              |
-| Stable-X Stable3DGen        | latest                                                                             | MIT                                                                                      | Single-image to 3D geometry generation via normal bridging, default model                                    |
-| Stable-X StableNormal       | latest                                                                             | Apache-2.0                                                                               | Normal-map prediction feeding Stable3DGen                                                                    |
+| Stable-X Stable3DGen        | c29f668                                                                            | MIT                                                                                      | Single-image to 3D geometry generation via normal bridging, default model                                    |
+| Stable-X StableNormal       | 1b7203c                                                                            | Apache-2.0                                                                               | Normal-map prediction feeding Stable3DGen                                                                    |
 | Meta DINOv2                 | 7764ea0; checkpoint `dinov2_vitl14_reg4_pretrain`                                  | Apache-2.0, code and weights                                                             | StableNormal's backbone, cloned and its checkpoint downloaded at image build time (`stable3dgen` image only) |
 | BiRefNet                    | latest                                                                             | MIT                                                                                      | Background removal used by Stable3DGen when an image carries no alpha channel                                |
 | Meta Segment Anything (SAM) | latest                                                                             | Apache-2.0                                                                               | Prompted background removal, when `BACKGROUND_REMOVAL` selects `sam`                                         |
 | BRIA RMBG-2.0               | latest                                                                             | CC BY-NC 4.0 -- **non-commercial use only**; commercial use needs an agreement with BRIA | Background removal, when `BACKGROUND_REMOVAL` selects `rmbg2` or `TRELLIS2_PREPROCESS_IMAGE` is `true`       |
 | Microsoft TRELLIS.2 (4B)    | 2.0                                                                                | MIT                                                                                      | Single-image to 3D mesh generation (disabled by default)                                                     |
-| VAST-AI TripoSR             | latest                                                                             | MIT                                                                                      | Fast single-image to 3D mesh generation                                                                      |
+| VAST-AI TripoSR             | 107cefd                                                                            | MIT                                                                                      | Fast single-image to 3D mesh generation                                                                      |
 | StepFun Step1X-3D           | cb5ac94                                                                            | Apache-2.0                                                                               | Single-image to 3D mesh generation with patent grant                                                         |
 | Tencent Hunyuan3D-2         | f8db630                                                                            | Tencent Hunyuan 3D 2.0 Community License Agreement -- **territorial**                    | Single-image to 3D textured mesh generation (disabled by default)                                            |
 | Blender                     | 4.5.13                                                                             | GPL-2.0-or-later                                                                         | Headless 3D tool driven by the Blender agent (`blenderagent` image only)                                     |
@@ -659,9 +670,10 @@ All six models listed above are gated on HuggingFace and require explicit licens
 | bubblewrap (`bwrap`)        | Codex CLI rust-v0.153.4 release binary                                             | LGPL-2.0-or-later                                                                        | The sandbox Codex CLI runs commands in where Landlock is unavailable (`blenderagent` image only)             |
 | ripgrep                     | Ubuntu 24.04 `ripgrep` package (installed at image build time, not version-pinned) | MIT OR Unlicense                                                                         | File listing and search the coding agent runs in its workspace (`blenderagent` image only)                   |
 | LiteLLM                     | 1.100.0                                                                            | MIT                                                                                      | Loopback bridge from the Responses API to Amazon Bedrock Converse (`blenderagent`)                           |
+| openai (OpenAI Python SDK)  | 2.54.0                                                                             | Apache-2.0                                                                               | Client the agent adapter checks the loopback bridge with (`blenderagent` image only)                         |
 | MoGe-2                      | 0744441                                                                            | MIT; weights `Ruicheng/moge-2-vitl-normal` MIT; vendored DINOv2 Apache-2.0               | Depth estimate the scripted refit reads relief from (`blenderagent` image only)                              |
 | utils3d                     | 3fab839                                                                            | MIT                                                                                      | Geometry utilities MoGe-2 imports (`blenderagent` image only)                                                |
-| PyTorch                     | 2.7.1                                                                              | BSD-3-Clause                                                                             | The runtime MoGe-2 runs on (`blenderagent` image only)                                                       |
+| PyTorch                     | by image, listed below the table                                                   | BSD-3-Clause                                                                             | Deep learning runtime of every model image; in `blenderagent`, the runtime MoGe-2 runs on                    |
 | NVlabs nvdiffrast           | v0.4.0                                                                             | NVIDIA Source Code License (1-Way Commercial) -- **non-commercial use only**             | Differentiable rasterization, required by both the TRELLIS.2 and Step1X-3D images                            |
 | trimesh                     | latest                                                                             | MIT                                                                                      | Mesh I/O, hole filling, normal and winding repair, decimation                                                |
 | networkx                    | latest                                                                             | BSD-3-Clause                                                                             | Graph traversal behind trimesh's hole filling                                                                |
@@ -673,9 +685,12 @@ All six models listed above are gated on HuggingFace and require explicit licens
 | numpy                       | latest                                                                             | BSD-3-Clause                                                                             | Numerical computing                                                                                          |
 | scipy                       | latest                                                                             | BSD-3-Clause                                                                             | Scientific computing (used by trimesh)                                                                       |
 | Pillow                      | latest                                                                             | HPND                                                                                     | Image loading and validation                                                                                 |
-| boto3                       | latest                                                                             | Apache-2.0                                                                               | AWS SDK for Python                                                                                           |
-| pymeshfix                   | latest                                                                             | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
-| PyMeshLab                   | latest                                                                             | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
+| boto3                       | 1.44.5 in `blenderagent`; unpinned (latest) in the other images                    | Apache-2.0                                                                               | AWS SDK for Python                                                                                           |
+| huggingface_hub             | 2.4.0 in `blenderagent`; elsewhere as each model's requirements resolve            | Apache-2.0                                                                               | Model weight download, held to pinned HuggingFace revisions                                                  |
+| pymeshfix                   | 0.18.1                                                                             | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
+| PyMeshLab                   | 2025.7.post1                                                                       | GPL-3.0                                                                                  | Mesh repair backend, selectable through the `REPAIR_BACKENDS` pipeline setting                               |
+
+PyTorch by image: 2.10.0 in `stable3dgen`; 2.11.0 in `triposr`, `step1x3d` and `hunyuan3d`; 2.6.0 in `trellis2`; 2.7.1 in `blenderagent`; and 2.5.1 in `sam3d`, where upstream's own requirements fix it (`torchaudio==2.5.1+cu121`). The model rows with a short commit are checked out at that commit when the image is built.
 
 **HuggingFace Pre-Approval Is a License Gate**
 
@@ -749,6 +764,17 @@ The Blender agent image (`blenderagent`) installs **Blender** under GPL-2.0-or-l
 **HuggingFace Model Access**
 
 The model weights for each enabled model are downloaded from HuggingFace using the configured access token. Accept each model's license on HuggingFace before deployment.
+
+**Image to 3D Image Build Components**
+
+These are built or installed into the Image to 3D container images in addition to the components above.
+
+| Name                   | Version | License                                                     | Purpose                                                                   |
+| :--------------------- | :------ | :---------------------------------------------------------- | :------------------------------------------------------------------------ |
+| CuMesh                 | 12289e1 | MIT                                                         | CUDA mesh processing extension built from source into the TRELLIS.2 image |
+| FlexGEMM               | 6dd94a8 | MIT                                                         | Sparse convolution extension built from source into the TRELLIS.2 image   |
+| opencv-python-headless | latest  | MIT (packaging); OpenCV Apache-2.0; bundled FFmpeg LGPL-2.1 | Image I/O in the TRELLIS.2 and Blender agent (`blenderagent`) images      |
+| xformers               | 0.0.34  | BSD-3-Clause                                                | Attention backend of the Stable3DGen image                                |
 
 ### EDH Workstations Add-on
 

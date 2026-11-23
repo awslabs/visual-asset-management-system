@@ -26,7 +26,9 @@ S3 ``Prefix`` matching is not path-aware, so a single-file location used as a pr
 also matches longer keys that only share its characters (``projects/model.glb.bak``,
 ``projects/model.glbx/...``). Those are never part of the asset. Code that lists, reads,
 archives or deletes an asset's objects decides membership with ``contains`` rather
-than with the prefix match alone.
+than with the prefix match alone. Code that decides whether two locations overlap asks
+``locations_share_key``: two locations can hold a common key that neither location key
+names (``a/x`` and ``a/x.previewFile`` both hold ``a/x.previewFile.previewFile.z``).
 
 Pure functions, no AWS calls.
 """
@@ -93,6 +95,64 @@ def contains(location: Optional[str], object_key: Optional[str]) -> bool:
     return object_key == loc or object_key.startswith(loc + "/") or _is_preview_of(loc, object_key)
 
 
+# The kinds of key set a location is made of (``_held_sets``)
+_ONE_KEY, _PREFIX, _PREVIEWS = "key", "prefix", "previews"
+
+
+def _held_sets(location: str) -> List[Tuple[str, str]]:
+    """The key sets whose union is what a normalized, non-empty location holds (what ``contains`` accepts).
+
+    ``(_ONE_KEY, k)`` is the key ``k``; ``(_PREFIX, p)`` is every key that starts with ``p``, ``p`` included;
+    ``(_PREVIEWS, s)`` is every key ``s{ext}`` with a non-empty ``ext`` that has no ``/``. A folder is one
+    prefix. A single file is its key, its companion folder ``{key}/`` and its preview stem ``{key}.previewFile.``.
+    """
+    if location.endswith("/"):
+        return [(_PREFIX, location)]
+    return [(_ONE_KEY, location), (_PREFIX, location + "/"), (_PREVIEWS, location + PREVIEW_FILE_PATTERN)]
+
+
+def _set_holds(held: Tuple[str, str], key: str) -> bool:
+    kind, text = held
+    if kind == _ONE_KEY:
+        return key == text
+    if not key.startswith(text):
+        return False
+    rest = key[len(text):]
+    return kind == _PREFIX or (bool(rest) and "/" not in rest)
+
+
+def _sets_meet(first: Tuple[str, str], second: Tuple[str, str]) -> bool:
+    """Whether two of the key sets ``_held_sets`` returns have a key in common."""
+    if first[0] == _ONE_KEY:
+        return _set_holds(second, first[1])
+    if second[0] == _ONE_KEY:
+        return _set_holds(first, second[1])
+    # Two open sets, each its stem followed by more characters. They can meet only when one stem starts with
+    # the other. The set with the longer stem then holds keys made of the shorter stem and the extra characters
+    # followed by more: a prefix set with the shorter stem holds all of them, and a preview set with the shorter
+    # stem holds some (the longer stem followed by ``z``, say) exactly when the extra characters have no ``/``.
+    (shorter_kind, shorter), (_, longer) = sorted((first, second), key=lambda held: len(held[1]))
+    if not longer.startswith(shorter):
+        return False
+    return shorter_kind == _PREFIX or "/" not in longer[len(shorter):]
+
+
+def locations_share_key(first: Optional[str], second: Optional[str]) -> bool:
+    """Whether two asset locations hold at least one S3 key in common (a key ``contains`` accepts for both).
+
+    Decided over the keys each location holds (a folder: every key under it; a single file: its key, every
+    key under ``{key}/`` and its previews ``{key}.previewFile.{ext}``), not over the two location keys alone,
+    so it also finds a common key that neither location key names: ``a/x`` and ``a/x.previewFile`` both hold
+    ``a/x.previewFile.previewFile.z``, the preview of ``a/x`` with extension ``previewFile.z`` and the preview
+    of ``a/x.previewFile`` with extension ``z``. An empty location holds nothing and shares nothing.
+    """
+    a = normalize_location(first)
+    b = normalize_location(second)
+    if not a or not b:
+        return False
+    return any(_sets_meet(x, y) for x in _held_sets(a) for y in _held_sets(b))
+
+
 def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Optional[str]:
     """The asset-relative path (leading ``/``) of an object key, or None when the location does not contain it.
 
@@ -117,6 +177,12 @@ def relative_path_in(location: Optional[str], object_key: Optional[str]) -> Opti
     if depth is not None:
         return "/" + "/".join([name] * (depth + 1)) + preview
     return object_key[len(loc):]
+
+
+# The refusal of a workflow output at a single-file asset's own file path. The upload completion answers it
+# per file, and output processing repeats it in the run's error, since the user can act on it.
+OWN_FILE_OUTPUT_REFUSAL = ("A workflow output cannot replace the file of a single-file asset. "
+                           "Write the output under another file name or folder.")
 
 
 def names_own_object(location: Optional[str], relative_path: Optional[str]) -> bool:
@@ -220,3 +286,63 @@ def in_folder(location: Optional[str], relative_folder: Optional[str], object_ke
     path = relative_path_in(location, object_key)
     folder = "/" + (relative_folder or "").strip("/") + "/"
     return path is not None and folder != "//" and path.startswith(folder)
+
+
+# ---------------------------------------------------------------------------
+# Auxiliary (viewer and preview) data of one file
+#
+# Auxiliary objects live at ``{databaseId}/{file key}/...``; a file's own data is in its ``preview/``
+# subfolder (``common.workflows.executionRecords.aux_preview_file_prefix``). In a single-file location the
+# rest of ``{databaseId}/{key}/`` holds the data of the companion entries, and the data of a companion
+# entry in a folder named ``preview`` (``{key}/preview/x.glb``) sits inside the object's ``preview/``
+# folder, at ``{databaseId}/{key}/preview/x.glb/preview/...``.
+# ---------------------------------------------------------------------------
+
+
+def aux_bucket_file_base(database_id: Optional[str], file_key: Optional[str]) -> str:
+    """``{databaseId}/{file key}/``, the auxiliary-bucket base of one file (or of a folder and all beneath it)."""
+    key = (file_key or "").strip("/")
+    base = (database_id or "").strip("/")
+    return f"{base}/{key}/" if key else f"{base}/"
+
+
+def is_location_object(location: Optional[str], object_key: Optional[str]) -> bool:
+    """Whether a key is the object of a single-file location (the location key itself)."""
+    loc = normalize_location(location)
+    return bool(loc) and not loc.endswith("/") and (object_key or "").lstrip("/") == loc
+
+
+def aux_file_prefix(database_id: Optional[str], location: Optional[str], object_key: Optional[str]) -> str:
+    """The auxiliary prefix of one file's own data: ``aux_bucket_file_base``, or for the object of a single-file
+    location its ``preview/`` subfolder, since the rest of that base belongs to the companion entries."""
+    base = aux_bucket_file_base(database_id, object_key)
+    return base + "preview/" if is_location_object(location, object_key) else base
+
+
+def aux_owner_filter(database_id: Optional[str], location: Optional[str], target_key: Optional[str],
+                     aux_prefix: Optional[str]) -> Optional[Callable[[str], bool]]:
+    """None, or which auxiliary keys under ``aux_prefix`` belong to ``target_key`` in a single-file location.
+
+    Under ``{databaseId}/{key}/preview/`` a key whose rest has a ``/preview/`` segment (``{entry}/preview/...``)
+    belongs to a companion entry in ``{key}/preview/``, any other key to the object. The predicate keeps the
+    object's keys for the object and the companion entries' keys for any other target.
+    """
+    loc = normalize_location(location)
+    if not loc or loc.endswith("/"):
+        return None
+    shared = aux_bucket_file_base(database_id, loc) + "preview/"
+    if not (aux_prefix or "").startswith(shared):
+        return None
+    is_object = is_location_object(loc, target_key)
+
+    def keep(aux_key: str) -> bool:
+        return ("/preview/" in aux_key[len(shared):]) != is_object
+    return keep
+
+
+def aux_scope(database_id: Optional[str], location: Optional[str],
+              object_key: Optional[str]) -> Tuple[str, Optional[Callable[[str], bool]]]:
+    """``(prefix, keep)`` of one file's own auxiliary data: ``aux_file_prefix`` and ``aux_owner_filter``.
+    ``keep`` is None when every key under the prefix is the file's."""
+    prefix = aux_file_prefix(database_id, location, object_key)
+    return prefix, aux_owner_filter(database_id, location, object_key, prefix)

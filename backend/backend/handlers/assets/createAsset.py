@@ -28,7 +28,7 @@ from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
-from common.assetLocations import contains
+from common.assetLocations import locations_share_key
 from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
@@ -404,16 +404,14 @@ def is_reserved_existing_key(s3_key, base_prefix):
 def keys_conflict(existing_key, target_key):
     """Whether two stored S3 asset locations hold a key in common.
 
-    Decided by `common.assetLocations.contains` in both directions: an exact match,
-    a folder holding the other location, or a single-file location holding the other
-    one as its companion folder or as one of its own previews.
+    Decided by `common.assetLocations.locations_share_key` over the keys each
+    location holds (a folder: every key under it; a single file: its object, its
+    companion folder `{key}/` and its own previews `{key}.previewFile.{ext}`). That
+    covers an exact match and one location holding the other's key, and also two
+    locations that share a key neither of them names: `a/x` and `a/x.previewFile`
+    both hold `a/x.previewFile.previewFile.z`. An empty location conflicts with nothing.
     """
-    existing_key = normalize_location_key(existing_key)
-    target_key = normalize_location_key(target_key)
-    if not existing_key or not target_key:
-        return False
-
-    return contains(existing_key, target_key) or contains(target_key, existing_key)
+    return locations_share_key(normalize_location_key(existing_key), normalize_location_key(target_key))
 
 
 def prefix_roots_overlap(prefix_a, prefix_b):

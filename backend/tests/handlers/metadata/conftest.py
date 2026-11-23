@@ -69,6 +69,8 @@ def _install_real_common_and_logging():
         sys.modules["handlers"] = handlers_pkg
     auth_mod = types.ModuleType("handlers.auth")
     auth_mod.request_to_claims = lambda event: {"tokens": ["test-user"], "roles": [], "mfaEnabled": False}
+    # The claims key a failed custom claims check sets; handlers.authz and auth/routes import it.
+    auth_mod.CLAIMS_CHECK_FAILED = "claimsCheckFailed"
     sys.modules["handlers.auth"] = auth_mod
 
 

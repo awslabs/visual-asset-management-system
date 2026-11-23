@@ -8,10 +8,11 @@ no pixel is read or decoded, so a multi-gigabyte raster costs a few requests and
 Reads are bounded. A walk over the file's IFD chain (the header's directory entries, struct only) runs first and
 enforces four limits before `tifffile` decodes anything: `MAX_IFDS` directories, `MAX_IFD_ENTRIES` entries in one,
 `TAG_ARRAY_MAX_BYTES` for any single array `tifffile` would load whole (the strip or tile offset and byte-count
-arrays, strings, the palette-free sample tags), and `HEADER_READ_BUDGET_BYTES` for all of them together. A striped
-file whose arrays pass the limits (one row per strip over a huge image) is still described, from the walk alone:
-`layout: striped` and `offsetsTruncated: true`, no CRS and no footprint. A file the walk or `tifffile` cannot read
-yields `other` with a warning, like any other unreadable input.
+arrays, strings, the palette-free sample tags), and `HEADER_READ_BUDGET_BYTES` for all of them together. A file
+whose arrays exceed a limit (one row per strip over a huge image) is described from the walk alone: `layout` and
+`offsetsTruncated: true`, no CRS and no footprint. A file the walk or `tifffile` cannot read yields `other` with a
+warning. Neither result is georeferenced, so the handler gives such a `.tif` or `.tiff` the `image` path and keeps no
+`sys_raster` (`handler.py`, `is_georeferenced`).
 
 `isCog` is a header-only structural check, written down once for the three runtimes that need it (this extractor,
 the TIFF-to-COG pipeline's container and the web viewer):

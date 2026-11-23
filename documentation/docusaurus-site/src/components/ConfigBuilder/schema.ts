@@ -1112,7 +1112,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "ip-range-list",
         section: "auth",
         advanced: true,
-        help: "Restrict API access to IP ranges. Each is a [min, max] IPv4 pair. Empty allows all.",
+        help: "Restrict API access to IP ranges. Each is a [min, max] pair of IPv4 or IPv6 addresses, both of one family. Empty allows all. With ranges set, the authorizer runs on every API request (no cached decision).",
     },
     {
         path: "app.authProvider.authorizerOptions.defaultUserRoleName",
@@ -1148,6 +1148,27 @@ const CORE_FIELDS: FieldMeta[] = [
         advanced: true,
         help: "Read STEP (.step, .stp) files. Adds cascadio (Open CASCADE, LGPL-2.1 with the OCCT exception) to the conversion image; off, a STEP run is refused before download.",
         visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.batchTier.enabled",
+        label: "3D basic conversion — AWS Batch tier",
+        input: "boolean",
+        section: "pipelines-standard",
+        advanced: true,
+        help: "Continue a model the Lambda function cannot convert (too large, or out of memory or time) on an AWS Batch Fargate job of 4 vCPU / 30 GiB, 8 / 60 or 16 / 120, instead of refusing it. Requires the global VPC (app.useGlobalVpc.enabled). Off by default; the tier costs nothing while no model needs it.",
+        visibleWhen: (c) => !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled"),
+    },
+    {
+        path: "app.pipelines.useConversion3dBasic.batchTier.maxMemoryGiB",
+        label: "3D basic conversion — largest Batch job (GiB)",
+        input: "number",
+        section: "pipelines-standard",
+        advanced: true,
+        min: 30,
+        help: "Memory of the largest job the tier may start: 30, 60 or 120 GiB (default 120). A model above that size's limit fails before any job starts. Fargate bills the job's vCPU and memory by the second.",
+        visibleWhen: (c) =>
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.enabled") &&
+            !!getByPath(c, "app.pipelines.useConversion3dBasic.batchTier.enabled"),
     },
     {
         path: "app.pipelines.useConversionCoordinateTransform.enabled",
@@ -2226,6 +2247,16 @@ const CORE_FIELDS: FieldMeta[] = [
         min: 1,
         visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
     },
+    {
+        path: `${IMAGETO3D}.modelCacheGeneration`,
+        label: "Image to 3D — model cache generation",
+        input: "number",
+        section: "pipelines-gpu",
+        advanced: true,
+        min: 0,
+        help: "Raise by one and deploy to start every model on an empty weight cache (new EFS directory and S3 prefix). Runs already in flight keep the old cache; remove it yourself afterwards.",
+        visibleWhen: (c) => !!getByPath(c, `${IMAGETO3D}.enabled`),
+    },
     ...imageTo3dModelFields.map((f) => ({
         ...f,
         visibleWhen: (c: ConfigShape) => !!getByPath(c, `${IMAGETO3D}.enabled`),
@@ -2576,7 +2607,7 @@ const CORE_FIELDS: FieldMeta[] = [
         input: "boolean",
         section: "compliance",
         advanced: true,
-        help: "When on, a quarantined asset cannot be downloaded unless it holds an active exception. When off, quarantine is informational only.",
+        help: "When on, a quarantined asset cannot be downloaded, its files cannot be copied to another asset and a user's workflow run cannot take them as input, unless it holds an active exception. When off, quarantine is informational only.",
     },
 ];
 

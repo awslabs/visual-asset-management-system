@@ -32,6 +32,7 @@ import {
     fileIdentity,
     isCogFileName,
     isStaleCog,
+    lookupSize,
     prepareRaster,
 } from "./rasterResolver";
 
@@ -334,6 +335,139 @@ describe("prefer the converted COG", () => {
         headers({ [FILE.key]: "cog-3857.tif" });
         const result: any = await prepareRaster(FILE, { preferCog: false });
         expect(result.usedCog).toBe(false);
+    });
+});
+
+describe("a file opened at a version (R4-1)", () => {
+    // The source has a COG made from its latest version, v2; v1 is older. Asset version 3 recorded v1,
+    // asset version 4 recorded v2 together with the COG.
+    const VERSIONS = [
+        {
+            versionId: "v2",
+            isLatest: true,
+            size: 2000,
+            assetVersionIds: [{ id: "4", label: "v4" }],
+        },
+        {
+            versionId: "v1",
+            isLatest: false,
+            size: 1000,
+            assetVersionIds: [{ id: "3", label: "v3" }],
+        },
+    ];
+    beforeEach(() => {
+        (fetchFileInfo as jest.Mock).mockResolvedValue([true, { size: 2000, versions: VERSIONS }]);
+        headers({ [FILE.key]: "cog-3857.tif", [COG_KEY]: "cog-3857.tif" });
+    });
+
+    it("draws an older file version itself, labelled with its version, and flags the COG", async () => {
+        attributesByKey({
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v2", cog_link_outputCrs: "EPSG:3857" },
+        });
+        const result: any = await prepareRaster({ ...FILE, versionId: "v1" });
+        expect(result).toMatchObject({
+            mode: "tile",
+            usedCog: false,
+            staleCog: true,
+            label: "site.tif (version v1)",
+        });
+        expect(result.file).toEqual({ ...FILE, versionId: "v1" });
+        expect(requestPresignedUrl).toHaveBeenCalledTimes(1);
+        expect(requestPresignedUrl).toHaveBeenCalledWith({ ...FILE, versionId: "v1" });
+    });
+
+    it("draws the COG for a file version the COG was made from", async () => {
+        attributesByKey({
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v2", cog_link_outputCrs: "EPSG:3857" },
+        });
+        const result: any = await prepareRaster({ ...FILE, versionId: "v2" });
+        expect(result).toMatchObject({ usedCog: true, staleCog: false, label: "site.tif.cog.tif" });
+        expect(result.file).toEqual({ databaseId: "db", assetId: "a1", key: COG_KEY });
+    });
+
+    it("draws a file opened through an asset version that has no COG of its version", async () => {
+        // Asset version 3 holds no COG (its snapshot has no attributes for it); the latest COG is of v2.
+        (fetchFileMetadata as jest.Mock).mockImplementation(
+            async ({ filePath, assetVersionId }: any) => {
+                if (filePath === FILE.key) return rows({ cog_link_cogFile: COG_KEY });
+                if (filePath === COG_KEY && !assetVersionId) {
+                    return rows({ cog_link_cogOfVersionId: "v2" });
+                }
+                return rows({});
+            }
+        );
+        const result: any = await prepareRaster({ ...FILE, assetVersionId: "3" });
+        expect(result).toMatchObject({
+            usedCog: false,
+            staleCog: true,
+            label: "site.tif (asset version 3)",
+        });
+        expect(result.file).toEqual({ ...FILE, assetVersionId: "3" });
+        expect(requestPresignedUrl).toHaveBeenCalledTimes(1);
+        expect(fetchFileInfo).toHaveBeenCalledWith(
+            expect.objectContaining({ fileKey: FILE.key, includeVersions: true })
+        );
+    });
+
+    it("draws the COG an asset version recorded with the version it was made from", async () => {
+        (fetchFileMetadata as jest.Mock).mockImplementation(
+            async ({ filePath, assetVersionId }: any) => {
+                if (filePath === FILE.key) return rows({ cog_link_cogFile: COG_KEY });
+                if (filePath === COG_KEY && assetVersionId === "4") {
+                    return rows({
+                        cog_link_cogOfVersionId: "v2",
+                        cog_link_outputCrs: "EPSG:3857",
+                    });
+                }
+                return rows({ cog_link_cogOfVersionId: "v9" });
+            }
+        );
+        const result: any = await prepareRaster({ ...FILE, assetVersionId: "4" });
+        expect(result).toMatchObject({ usedCog: true, staleCog: false });
+        expect(result.file).toEqual({ ...FILE, key: COG_KEY, assetVersionId: "4" });
+    });
+
+    it("does not flag the COG when one of the version exists but is refused", async () => {
+        attributesByKey({
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v1" },
+        });
+        (requestPresignedUrl as jest.Mock).mockImplementation(async (f: any) => {
+            if (f.key === COG_KEY) throw new RasterDownloadRefused("quarantined");
+            return `https://s3${f.key}?X-Amz-Expires=3600`;
+        });
+        const result: any = await prepareRaster({ ...FILE, versionId: "v1" });
+        expect(result).toMatchObject({ usedCog: false, staleCog: false });
+        expect(result.file.key).toBe(FILE.key);
+    });
+
+    it("draws the latest COG, flagged as older, for a file opened at its latest version", async () => {
+        // The file page passes the version a file is at even when it is the latest.
+        attributesByKey({
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v1", cog_link_outputCrs: "EPSG:3857" },
+        });
+        const result: any = await prepareRaster({ ...FILE, versionId: "v2" });
+        expect(result).toMatchObject({ usedCog: true, staleCog: true, label: "site.tif.cog.tif" });
+        expect(result.file).toEqual({ databaseId: "db", assetId: "a1", key: COG_KEY });
+    });
+
+    it("draws an unpinned file from its COG, as before", async () => {
+        attributesByKey({
+            [FILE.key]: { cog_link_cogFile: COG_KEY },
+            [COG_KEY]: { cog_link_cogOfVersionId: "v2", cog_link_outputCrs: "EPSG:3857" },
+        });
+        const result: any = await prepareRaster(FILE);
+        expect(result).toMatchObject({ usedCog: true, staleCog: false });
+    });
+
+    it("looks up the size of the version a file is opened at", async () => {
+        await expect(lookupSize({ ...FILE, versionId: "v1" })).resolves.toBe(1000);
+        await expect(lookupSize({ ...FILE, assetVersionId: "3" })).resolves.toBe(1000);
+        await expect(lookupSize({ ...FILE, assetVersionId: "9" })).resolves.toBeUndefined();
+        await expect(lookupSize(FILE)).resolves.toBe(2000);
     });
 });
 

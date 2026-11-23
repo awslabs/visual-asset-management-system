@@ -263,7 +263,9 @@ add-on's own page helpers sit beside it in `support/{addon}Fixtures.ts`.
     changes, so poll it.
 -   **A failed search is a toast, not a missing feature.** A `503` from either search route shows a
     **Search failed** toast with the API's message, and the view switch, the mode switch and the
-    query band stay; do not read a failure as "search is off".
+    query band stay; do not read a failure as "search is off". With no answer on screen (the first
+    search of a page load) the page also shows a **Search did not finish** alert above the results
+    (`getByTestId("search-failed-notice")`) and the table reads "No results to show".
 -   **The count's explanation is a named button.** Beside a minimum count the table header has a
     `button` named "About this count" (`getByRole("button", { name: "About this count" })`) that
     opens its popover on click, Enter or Space; an exact count has none.
@@ -391,7 +393,7 @@ Map viewer spec. `viewers.cogmap.layout.spec.ts` lives in the `chromium` project
 the File Viewer modal (the File Manager's Visualize File eye) and checks it fills its frame at 390,
 820 and 1280 px, and in fullscreen on the page: canvas equal to its column, map, list and the
 viewer's own map controls inside the frame, and none of the frame backdrop's stripe colours visible.
-A third case hides and shows a raster with its **Visible** switch (one name, `Show "<label>" on the map`, the checked state, Space, the status line,
+A third case hides and shows a raster with its **Visible** switch (one name, `Visible: <label>`, the checked state, Space, the status line,
 Zoom disabled while hidden). It waits on the picker's options and on the layout settling (two equal
 reads of the boxes, canvas equal to its column) rather than on fixed sleeps. It finds a `.tif` through
 the API and skips, with the reason, when the file is not a raster the viewer draws.

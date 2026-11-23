@@ -12,6 +12,7 @@ from boto3.dynamodb.conditions import Key
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
+from common.dynamodb import asset_authorization_object
 from common.validators import validate, exceeds_s3_object_key_limit
 from common.assetLocations import is_folder_location, object_key_for, relative_path_in
 from handlers.authz import CasbinEnforcer
@@ -226,31 +227,32 @@ def handle_head_request(event, claims_and_roles):
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
     
-    # Get asset details and check if it exists
+    # Get asset details; existence and the distributable flag are answered only after authorization,
+    # so a refused caller gets the same 403 for a missing asset as for an existing one (the
+    # request's ids stand in for a missing record).
     asset_object = get_asset_details(databaseId, assetId)
-    if not asset_object:
-        message = f"Asset not found in database"
-        logger.error(message)
-        return general_error(body={'message': message}, status_code=404, event=event)
-    
-    # Check if asset is distributable
-    if not asset_object.get('isDistributable', False):
-        message = "Asset not distributable"
-        logger.error(message)
-        return authorization_error(body={'message': message})
-
-    asset_object.update({"object__type": "asset"})
 
     # Check authorization
     operation_allowed_on_asset = False
     if len(claims_and_roles["tokens"]) > 0:
         casbin_enforcer = CasbinEnforcer(claims_and_roles)
         if casbin_enforcer.enforceAPI(event, "GET"):
-            if casbin_enforcer.enforce(asset_object, "GET"):
+            if casbin_enforcer.enforce(asset_authorization_object(asset_object, databaseId, assetId), "GET"):
                 operation_allowed_on_asset = True
 
     if not operation_allowed_on_asset:
         return authorization_error()
+
+    if not asset_object:
+        message = f"Asset not found in database"
+        logger.error(message)
+        return general_error(body={'message': message}, status_code=404, event=event)
+
+    # Check if asset is distributable
+    if not asset_object.get('isDistributable', False):
+        message = "Asset not distributable"
+        logger.error(message)
+        return authorization_error(body={'message': message})
 
     # Get asset location
     asset_location = asset_object.get('assetLocation')
@@ -466,46 +468,47 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
         operation_allowed_on_asset = False
 
-        # Get asset details and check if it exists
+        # Get asset details; existence and the distributable flag are answered only after
+        # authorization, so a refused caller gets the same 403 for a missing asset as for an
+        # existing one (the request's ids stand in for a missing record).
         asset_object = get_asset_details(databaseId, assetId)
-        if not asset_object:
-            message = f"Asset not found in database"
-            logger.error(message)
-            # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = general_error(body={"message": message}, status_code=404, event=event)
-            error_response['headers'].update(streaming_headers)
-            return error_response
-
-        # Check if asset is distributable (same as downloadAsset.py)
-        if not asset_object.get('isDistributable', False):
-            message = "Asset not distributable"
-            logger.error(message)
-            # Create custom headers for streaming response
-            streaming_headers = {
-                'Access-Control-Allow-Headers': 'Range',
-                'Access-Control-Allow-Origin': '*',
-            }
-            error_response = authorization_error(body={"message": message})
-            error_response['headers'].update(streaming_headers)
-            return error_response
-
-        asset_object.update({"object__type": "asset"})
-
-        logger.info(f"Asset loaded: databaseId={asset_object.get('databaseId')}, assetId={asset_object.get('assetId')}")
 
         # Check API authorization
         if len(claims_and_roles["tokens"]) > 0:
             casbin_enforcer = CasbinEnforcer(claims_and_roles)
             if casbin_enforcer.enforceAPI(event, http_method):
                 # Check object-level authorization
-                if casbin_enforcer.enforce(asset_object, http_method):
+                if casbin_enforcer.enforce(asset_authorization_object(asset_object, databaseId, assetId), http_method):
                     operation_allowed_on_asset = True
 
         if operation_allowed_on_asset:
+            if not asset_object:
+                message = f"Asset not found in database"
+                logger.error(message)
+                # Create custom headers for streaming response
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = general_error(body={"message": message}, status_code=404, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
+            # Check if asset is distributable (same as downloadAsset.py)
+            if not asset_object.get('isDistributable', False):
+                message = "Asset not distributable"
+                logger.error(message)
+                # Create custom headers for streaming response
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                }
+                error_response = authorization_error(body={"message": message})
+                error_response['headers'].update(streaming_headers)
+                return error_response
+
+            logger.info(f"Asset loaded: databaseId={asset_object.get('databaseId')}, assetId={asset_object.get('assetId')}")
+
             # Get asset location
             asset_location = asset_object.get('assetLocation')
             if not asset_location:

@@ -2693,8 +2693,10 @@ def get_asset_compliance_audit(
 # --- Audit log search (read; opt-in tool set `audit`) -----------------------
 #
 # Not part of `all`, `consumer`, `operator` or `admin`: a deployment names the `audit` set in
-# VAMS_MCP_TOOLSETS, on either transport. Core VAMS with no feature switch, so the set is the only
-# gate; the API's authorizer and the per-log-group permission decide what a caller may see. The CLI's
+# VAMS_MCP_TOOLSETS, on either transport. Core VAMS behind the AUDITLOGSEARCH switch (off in the EU
+# Sovereign template): `_audit_search_switched_off` leaves the tools unregistered on a stdio server whose
+# feature list lacks it, and `_require_audit_search` checks it on each call. The API's authorizer and
+# the per-log-group permission decide what a caller may see. The CLI's
 # `vamscli audit` helpers build the request, so a tool and the CLI send the same body. A search starts
 # a billable CloudWatch Logs Insights query; polling it is a long poll of about 20 seconds.
 
@@ -3426,7 +3428,8 @@ if CONFIG.enable_writes:
     def get_zip_download_url(database_id: str, asset_id: str, request_id: str) -> Dict[str, Any]:
         """Use only when the user asked to download a SUCCEEDED zip job: a presigned `url` with
         `expiresIn`. The URL is a bearer credential for the whole archive and lands in the
-        transcript: keep this tool out of `autoApprove` and treat a URL as disclosed."""
+        transcript: keep this tool out of `autoApprove` and treat a URL as disclosed. An error
+        "could not be checked right now. Try again in a moment." means call it again."""
         return CLIENT.api.get_zip_download_url(database_id, asset_id, request_id)
     # --- Compliance (write) ----------------------------------------------
 

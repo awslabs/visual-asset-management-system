@@ -36,12 +36,17 @@ echo "=== GPU Diagnostics ==="
 nvidia-smi 2>&1 | head -5 || echo "nvidia-smi not available"
 echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
 python -c "import torch; print(f'torch.cuda.is_available()={torch.cuda.is_available()}, device_count={torch.cuda.device_count()}')" 2>&1 || echo "torch CUDA check failed"
+# The NCCL wheel this job runs with; the image installs it from requirements-nccl.lock.
+python -c "import importlib.metadata as m; print('nvidia-nccl-cu12', m.version('nvidia-nccl-cu12'))" 2>&1 || echo "nvidia-nccl-cu12 version check failed"
 echo "=== End GPU Diagnostics ==="
 
 cd /opt/cosmos-transfer2.5
 
-# Ensure deps are synced (fast if already done during build)
-uv sync --locked --extra=${CUDA_NAME:-cu128} 2>/dev/null || true
+# No `uv sync` here. The image build already synced upstream's environment at the pinned commit and
+# then installed the hashed NCCL wheel over it. A sync at job start would put upstream's locked NCCL
+# back (nvidia-nccl-cu12 2.26.2 for the cu128 extra), and it can do so from the image's uv cache with
+# no network. tests/test_cosmos_transfer_runtime_environment.py keeps environment changes out of this
+# script.
 
 # Disable hf_xet chunked transfer: the xet client has been observed to
 # deadlock in futex_wait partway through multi-GB checkpoint downloads while

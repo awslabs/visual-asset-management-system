@@ -173,15 +173,31 @@ uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requi
 uv export --frozen --no-hashes --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o requirements-dev.txt
 
-# The 3D Basic Conversion image installs with `pip --require-hashes`, so its exports keep the hashes;
-# the optional STEP input (cascadio) is the `step` dependency group, exported to its own file
+# A container image that installs with `pip --require-hashes` keeps the hashes in its export; the
+# optional STEP input of the 3D Basic Conversion image (cascadio) is the `step` dependency group,
+# exported to its own file
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-emit-project --only-group step --no-annotate -o requirements-step.txt
+
+# Six pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
+# coordinate transform, Potree, Isaac Lab training): the same hashed export, written to that name
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
+
+# Cosmos Transfer installs the same hashed export of its NCCL wheel as `requirements-nccl.lock`
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements-nccl.lock
 ```
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
 
-Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no `pyproject.toml` beside them are hand-maintained pip files and are edited directly; each one is listed in `.github/python-lock-exemptions.json` until it gets a lock.
+Never edit an exported requirements file by hand: the next export overwrites it, and the CI audit fails because the file no longer matches the lock. Requirements files with no lock (the GPU pipeline images) are hand-maintained pip files and are edited directly; each one is listed under `exemptions` in `.github/python-lock-exemptions.json` until it gets a lock. The published command-line packages have locks; their hand-written ranged files are covered in [Published packages: VamsCLI and VamsMCP](#published-packages-vamscli-and-vamsmcp).
+
+#### Published packages: VamsCLI and VamsMCP
+
+`tools/VamsCLI/` and `tools/VamsMCP/` are installable packages, so their `pyproject.toml` ranges (and VamsCLI's `setup.py` and hand-written `requirements*.txt`) are the install contract and stay ranges. Each also has a `uv.lock` that records one resolution of those ranges for development, CI and the audit; installing either package with pip never uses it, and the build backend stays setuptools. Move a locked package with `uvx --from uv==0.13.8 uv lock --upgrade-package <package>`, in both locks when both hold it (VamsMCP's lock resolves VamsCLI's dependencies too, and no test compares the two); a range change goes into `pyproject.toml`, `setup.py` and `requirements.txt` together, followed by `uv lock`.
+
+VamsCLI's `requirements.lock`, which the EDH Linux AMI recipes install with `--require-hashes`, is a hashed export of its lock (runtime dependencies plus the `build` group): `uv export --frozen --no-emit-project --no-dev --no-annotate --group build -o requirements.lock`. The audit regenerates it and fails when it is stale. VamsMCP's lock resolves `vamscli` from `../VamsCLI`, because VamsCLI is not published to PyPI. The audit also resolves every dependency group and extra of each lock (the `dev` extras of both packages included). The hand-written ranged files beside a lock are listed under `rangedInputs` in `.github/python-lock-exemptions.json`, each with a reason; the audit and `infra/test/ci/pythonDependencyLocks.test.ts` fail an entry whose file is gone, has no `uv.lock` beside it, names a package the lock does not hold, or is installed or copied by a Dockerfile, AMI recipe, workflow, script or CDK bundling command. Keep the list to the published package files.
+
+The installer scan reads text, so it has coverage gaps. It finds a listed file named in an install, `COPY` or `cp` command by its repository path, a two-component suffix of it, a path relative to the installing file, or an absolute path whose parent directory name contains the project directory name (`/opt/vams/vamscli-src/requirements.txt` for `tools/VamsCLI`). It joins backslash-continued lines, and scans Dockerfiles, makefiles and `.yml`, `.yaml`, `.sh`, `.bash`, `.ts`, `.py`, `.toml` and `.json` files outside tests and docs. It does not find a directory `COPY` followed by `-r` on a path under another name (`COPY tools/VamsCLI /src`, then `-r /src/requirements.txt`), a path assembled in code (`path.join('tools', 'VamsCLI', 'requirements.txt')`), or a bare file name in a file of another directory. Review such a change by hand; the check that every package in a listed file is in the project's lock still limits what it can install.
 
 #### Shared packages across layers
 
@@ -191,14 +207,14 @@ The RapidPipeline EKS Kubernetes layer (`backendPipelines/multi/rapidPipelineEKS
 
 #### New layer, pipeline or package
 
-A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails any Python dependency file the audit does not cover: a `pyproject.toml` that declares dependencies or a top-level `requirements*.txt` with no `uv.lock` beside it, and, anywhere, a `Pipfile`, a `setup.py` or `setup.cfg` with `install_requires`, an `*.in` file, a pip-compile `requirements*.lock`, a `constraints*.txt`, or a file in a `requirements/` folder. It also fails a `requirements*.txt` beside a `uv.lock` that does not start with the uv export header. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
+A new Lambda layer, pipeline Lambda or container, or Python package needs its own `pyproject.toml`, `uv.lock` and committed `requirements.txt` export in the directory the build installs from. Nothing else has to be registered: the CI audit finds every tracked `uv.lock`. `infra/test/ci/pythonDependencyLocks.test.ts` fails any Python dependency file the audit does not cover: a `pyproject.toml` that declares dependencies or a top-level `requirements*.txt` or `requirements*.lock` with no `uv.lock` beside it, and, anywhere, a `Pipfile`, a `setup.py` or `setup.cfg` with `install_requires`, an `*.in` file, a pip-compile `requirements*.lock` with no `uv.lock` beside it, a `constraints*.txt`, or a file in a `requirements/` folder. It also fails a `requirements*.txt` or `requirements*.lock` beside a `uv.lock` that does not start with the uv export header. When a lock is not possible yet, add the path to `.github/python-lock-exemptions.json` with a `reason` and a `plannedIn` naming the change that will add the lock; reviewers decide whether the exemption is acceptable. The test also fails an exemption whose file is gone or already locked.
 
 #### The CI dependency audit
 
 The `python-dependency-audit` job in `.github/workflows/ci.yml` runs `.github/scripts/python_dependency_audit.py`. For every directory with a tracked `uv.lock` it:
 
 1. runs `uv lock --check`, which fails when `pyproject.toml` changed without a re-lock;
-2. requires every top-level `requirements*.txt` in the directory to be a uv export (a file without the `uv export` header fails), regenerates each one from its header command, and fails when the result differs from the committed file;
+2. requires every top-level `requirements*.txt` and `requirements*.lock` in the directory to be a uv export (a file without the `uv export` header fails), regenerates each one from its header command, and fails when the result differs from the committed file;
 3. audits the exports with [pip-audit](https://pypi.org/project/pip-audit/) against the PyPI advisory database, and fails on every advisory not on the allowlist. A run that cannot reach the advisory service fails as well.
 
 Run the same checks locally from the repository root, with the pinned uv on `PATH` (for example installed with `uv self update 0.13.8`, or the standalone installer for that version):
@@ -211,9 +227,10 @@ The script regenerates stale exports in place, so `git diff` afterwards shows th
 
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
--   the files listed in `.github/python-lock-exemptions.json`, including the hash-locked `requirements*.lock` files that `uv pip compile` produces for some pipeline containers, until each moves to a uv project;
--   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images;
--   packages that come with a container base image or the Lambda runtime;
+-   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
+-   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, only Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment) is locked. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), GR00T (after PR #1812 merges), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`);
+-   packages that come with a container base image or the Lambda runtime and are not in a lock, including the Isaac Lab base image's other Python packages (the Isaac Lab training image's lock lists the packages the image adds and the base-image packages those need, at the base image's versions, and the audit reads all of them);
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
 
 The release-time image scan remains the record for a full container image.
@@ -239,7 +256,7 @@ Fix an advisory by moving the package to a fixed version (steps above). A securi
 
 Do not pass `--exclude-newer-package` on the `uv lock` command line instead: the override is then recorded in `uv.lock` but not in `pyproject.toml`, and the next `uv lock --check`, which the CI audit runs, fails.
 
-Allowlist an advisory only when no fixed release exists, or when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime). Add an entry to `.github/python-audit-allowlist.json`:
+Allowlist an advisory only when no fixed release exists, when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime), or when a vendor base image ships the package and the image's lock keeps the base image's version (the Isaac Lab training image, whose fixes arrive with the next base image digest). Add an entry to `.github/python-audit-allowlist.json`:
 
 ```json
 {
@@ -247,6 +264,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
         {
             "id": "PYSEC-2026-0000",
             "package": "examplepkg",
+            "projects": ["backend"],
             "reason": "No fixed release yet; the affected function is not called by VAMS.",
             "reviewBy": "2027-01-31"
         }
@@ -254,7 +272,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
 }
 ```
 
-`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves.
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `projects` lists the project directories the entry applies to (each a directory with a tracked `uv.lock`, written as the audit prints it, for example `backendPipelines/simulation/isaacLabTraining/container`), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. An entry matches on the advisory id, the package and the project, not on the version, so the same advisory in a project the entry does not name still fails the build. CI fails an entry with no reason, no projects, a project without a tracked `uv.lock`, or a `reviewBy` in the past, and fails each project where the entry's id no longer matches a finding, so a project is removed from an entry once the package moves there, and the entry once it names no project.
 
 ## Infrastructure Setup
 

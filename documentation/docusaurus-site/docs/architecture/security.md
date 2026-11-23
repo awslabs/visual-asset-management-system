@@ -122,7 +122,7 @@ VAMS uses a custom Lambda authorizer for all Amazon API Gateway endpoints, provi
 -   **Comprehensive JWT Claims Context**: All JWT claims are passed to downstream Lambda functions
 -   **Public Key Caching**: `CACHE_TTL` (1 hour) for JWKS public keys to reduce external API calls
 -   **User Role Caching**: `USER_ROLES_CACHE_TTL` (60 seconds) per user for resolved role names, or `USER_ROLES_EMPTY_CACHE_TTL` (5 seconds) when the lookup resolves to no roles
--   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes
+-   **Authorizer Result Caching**: applied by Amazon API Gateway on top of the caches above — `AUTH_CACHE_TTL_SECONDS` (30 seconds) keyed on the `Authorization` header for authenticated routes, `ANON_AUTH_CACHE_TTL_SECONDS` (900 seconds) keyed on the source IP for anonymous routes. With `authProvider.authorizerOptions.allowedIpRanges` set, both are 0, so API Gateway caches no authorizer decision
 -   **API Key Caching**: `API_KEY_CACHE_TTL` (15 seconds) per key, including negative results for unknown keys
 -   **Dedicated Lambda Layer**: Isolated dependencies for security and performance
 
@@ -282,7 +282,7 @@ The following fields can be used in ABAC policy rules:
 | `metadataSchemaName`       | Metadata schema name                                                                                                  |
 | `metadataSchemaEntityType` | Metadata entity type                                                                                                  |
 | `complianceSchemaName`     | Compliance schema name                                                                                                |
-| `complianceState`          | Asset compliance state (for example `quarantined`)                                                                    |
+| `complianceState`          | Asset compliance state (for example `quarantined`); set on the quarantine routes and one asset's state read only      |
 | `cascadeId`                | Compliance cascade identifier                                                                                         |
 | `auditLogGroup`            | Audit log group key, on the `auditLog` object type; the seeded `admin` role is the only role that holds it by default |
 | `object__type`             | Entity type for Tier 2 enforcement                                                                                    |
@@ -588,13 +588,13 @@ Two headers are available only on the CloudFront path. `Cross-Origin-Embedder-Po
 
 ## IP Range Restrictions
 
-The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation.
+The custom Lambda authorizer supports optional IP-based access control. When `authProvider.authorizerOptions.allowedIpRanges` is configured with one or more CIDR ranges, the authorizer validates the source IP of each request against the allowlist before proceeding with JWT validation. API Gateway then caches no authorizer decision, so the authorizer runs on every API request.
 
 ## Presigned URL Network Restrictions
 
-VAMS supports optional network restrictions on Amazon S3 presigned URL access through bucket policies. When `app.assetBuckets.presignedUrlNetworkRestrictions` is configured with `allowedIpRanges` (IPv4/IPv6 CIDR blocks) or `allowedVpceIds` (Amazon S3 interface or gateway VPC endpoint IDs), these restrictions are enforced as bucket policy deny statements on the VAMS-created asset bucket and the auxiliary bucket. The restrictions apply only to presigned (query-string authenticated) requests, leaving backend operations and presigned URL lifetimes unchanged.
+VAMS supports optional network restrictions on Amazon S3 presigned URL access through bucket policies. When `app.assetBuckets.presignedUrlNetworkRestrictions` is configured with `allowedIpRanges` (CIDR blocks) or `allowedVpceIds` (Amazon S3 interface or gateway VPC endpoint IDs), these restrictions are enforced as bucket policy deny statements on the VAMS-created asset bucket and the auxiliary bucket. The restrictions apply only to presigned (query-string authenticated) requests, leaving backend operations and presigned URL lifetimes unchanged.
 
--   **Allowed IP ranges** — Array of IPv4 and IPv6 CIDR blocks (for example, `["192.168.1.0/24", "2001:db8::/32"]`). Requests are evaluated against the `aws:SourceIp` condition key.
+-   **Allowed IP ranges** — Array of CIDR blocks (for example, `["192.168.1.0/24"]`). Requests are evaluated against the `aws:SourceIp` condition key. Presigned requests reach Amazon S3 over IPv4, so list IPv4 ranges; see the [presigned URL restriction object](../deployment/configuration-reference.md#presigned-url-restriction-object) for why an IPv6 range never matches.
 -   **Allowed VPC endpoint IDs** — Array of Amazon S3 VPC endpoint IDs (for example, `["vpce-1234abcd"]`). Accepts both interface and gateway VPC endpoint IDs. Requests are evaluated against the `aws:SourceVpce` condition key.
 
 The two restriction types are mutually exclusive — configuration validation rejects setting both, because a request arrives either over the public path (`aws:SourceIp`) or through a VPC endpoint (`aws:SourceVpce`). Empty or omitted arrays mean no restrictions; no policy statement is emitted. The deny statement conditions include `StringEquals s3:authType=REST-QUERY-STRING` to scope it to presigned requests only, and `BoolIfExists aws:ViaAWSService=false` to exclude AWS service-to-service calls. All VAMS backend Lambda and pipeline operations use SDK header authentication and are never affected by these restrictions.

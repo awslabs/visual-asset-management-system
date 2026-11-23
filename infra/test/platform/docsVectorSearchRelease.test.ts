@@ -118,7 +118,7 @@ function featureEnumMembers(): string[] {
     return [...body[1].matchAll(/=\s*"([A-Z0-9_]+)"/g)].map((m) => m[1]);
 }
 
-/** The 63 promoted keys the pipeline page documents (the unprefixed `location` is asserted separately). */
+/** The 66 promoted keys the pipeline page documents (the unprefixed `location` is asserted separately). */
 const REGISTRY_EXT_KEYS = [
     "ext_dimensions",
     "ext_bounds_min",
@@ -173,6 +173,9 @@ const REGISTRY_EXT_KEYS = [
     "ext_row_count",
     "ext_column_count",
     "ext_feature_count",
+    "ext_is_cog",
+    "ext_band_count",
+    "ext_georeferenced",
     "ext_watertight",
     "ext_has_textures",
     "ext_has_uv",
@@ -454,6 +457,7 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
             "text",
             "data",
             "tiles3d",
+            "raster",
             "mesh",
             "usd",
             "cad",
@@ -561,6 +565,7 @@ describe("pipelines/system-genai-metadata.md — the consolidated pipeline page"
             "sys_data",
             "sys_geo",
             "sys_tiles3d",
+            "sys_raster",
             "sys_geometry",
             "sys_statistics",
             "sys_format",

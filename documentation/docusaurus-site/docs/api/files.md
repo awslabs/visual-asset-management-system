@@ -238,11 +238,11 @@ Copies a file within the same asset or to a different asset. Supports cross-data
 
 **Error Responses:**
 
-| Status | Description                                                                                      |
-| ------ | ------------------------------------------------------------------------------------------------ |
-| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. |
-| `403`  | Not authorized to copy files.                                                                    |
-| `500`  | Internal server error.                                                                           |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, source file not found, or the destination file name has a blocked extension. A copy to another asset or database of a file whose asset is quarantined without an exception, when the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and its files cannot be copied to another asset"); a copy within the asset is not refused. |
+| `403`  | Not authorized to copy files. A caller who may not read the source asset or write the destination asset receives `403` whatever the asset's compliance state.                                                                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                                                         |
 
 ---
 
@@ -614,7 +614,7 @@ For security, certain file extensions are blocked: `.jar`, `.java`, `.com`, `.ph
 :::
 
 :::info[Single-file assets]
-For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
+For an asset whose base key names one object, a `relativeKey` of `/{file name}` uploads a new version of that object, and any other `relativeKey` lands under `{key}/`. A pipeline output at `/{file name}` is refused with `A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.` The run then ends `FAILED`, and its error names the file with that message: `The asset file write-back failed. Writing output file '{file name}' into the asset failed: A workflow output cannot replace the file of a single-file asset. Write the output under another file name or folder.`
 :::
 
 :::info[Preview File Extensions]
@@ -806,8 +806,8 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 | Status | Description                                                                                                                                                                                                                                                                                              |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). A file's `{file}.previewFile.{ext}` preview image with an allowed image extension and no version parameter is still served. |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                                                                                                                                                                            |
-| `404`  | File not found.                                                                                                                                                                                                                                                                                          |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                                                                                                                                                       |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                                                                                                                                                          |
 | `500`  | Internal server error.                                                                                                                                                                                                                                                                                   |
 
 ---
@@ -839,8 +839,8 @@ In presigned-redirect mode, returns `307 Temporary Redirect` with a `Location` h
 | Status | Description                                                                                                                                                                  |
 | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `400`  | The asset is quarantined without an exception and the deployment sets `app.compliance.quarantineBlocksDownload` (`message` "Asset is quarantined and cannot be downloaded"). |
-| `403`  | Not authorized to stream this file, or the asset is not marked distributable.                                                                                                |
-| `404`  | File not found.                                                                                                                                                              |
+| `403`  | Not authorized to stream this file, whether or not the asset exists; or, for a caller allowed to stream it, the asset is not marked distributable.                           |
+| `404`  | Asset or file not found; answered only to a caller allowed to stream the asset.                                                                                              |
 | `500`  | Internal server error.                                                                                                                                                       |
 
 ---

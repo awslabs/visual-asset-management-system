@@ -10,9 +10,9 @@ import * as path from "path";
 
 const REPO = path.join(__dirname, "..", "..", "..");
 const REQUIREMENTS = [
-    "backendPipelines/system/genAiMetadata/containers/blender/requirements.txt",
-    "backendPipelines/system/genAiMetadata/containers/media/requirements.txt",
-    "backendPipelines/preview/3dThumbnail/container/requirements.lambda.txt",
+    "backendPipelines/system/genAiMetadata/containers/blender/pyproject.toml",
+    "backendPipelines/system/genAiMetadata/containers/media/pyproject.toml",
+    "backendPipelines/preview/3dThumbnail/container/lambdaImage/pyproject.toml",
 ];
 const notice = fs.readFileSync(path.join(REPO, "NOTICE.md"), "utf8");
 const SECTION_HEADING = "### System GenAI Metadata Generation Pipeline";
@@ -30,10 +30,14 @@ const section =
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** The exact pins of a project's `dependencies = [...]` array in its pyproject.toml. */
 function pins(file: string): Array<[string, string]> {
-    return fs
-        .readFileSync(path.join(REPO, file), "utf8")
+    const text = fs.readFileSync(path.join(REPO, file), "utf8");
+    const block = /^dependencies = \[([\s\S]*?)^\]/m.exec(text);
+    expect(block).not.toBeNull(); // control: the dependency list was found
+    return block![1]
         .split(/\r?\n/)
+        .map((l) => l.trim().replace(/^"|",?$/g, ""))
         .map((l) => /^([A-Za-z0-9_.-]+)(?:\[[^\]]*\])?==([^\s;#]+)/.exec(l.trim()))
         .filter((m): m is RegExpExecArray => m !== null)
         .map((m) => [m[1], m[2]]);

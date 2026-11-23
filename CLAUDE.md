@@ -107,7 +107,7 @@ Cognito/External OAuth → ID Token → Custom Lambda Authorizer
 
 ```
 React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
-  → Feature switches from /api/secure-config → conditional UI rendering
+  → Feature switches from GET /secure-config → conditional UI rendering
 ```
 
 ### **Configuration Flow**
@@ -115,7 +115,7 @@ React 18 + Cloudscape → HashRouter → apiClient (fetch-based)
 ```
 CDK config (infra/config/config.json)
   → deploys to DynamoDB (feature switches, app settings)
-    → Frontend reads from /api/secure-config at runtime
+    → Frontend reads from GET /secure-config at runtime
 ```
 
 ### **Pipeline Architecture**
@@ -302,7 +302,7 @@ ASSET_STORAGE_TABLE_NAME = "vams-asset-storage"  # VIOLATION
 
 CDK publishes each resource name as an SSM parameter under `VAMS_RESOURCE_PARAM_PREFIX` (see `ResourceNamesBuilder` nested stack; Lambda env is set via `globalLambdaEnvironmentsAndPermissions`). Keys are defined in `infra/common/resourceParamKeys.ts` (`RESOURCE_PARAM_KEYS.*`) and mirrored in `backend/backend/common/resourceNames.py` (`ResourceKeys`). The `lambdaFunctions/*` and `integration/*` categories (the `vamsSchema` import function name, the orchestration bus ARN and event source prefix, the workflow state-machine role ARN) are read by deployment tooling and by externally owned pipeline bridge stacks at their own deploy time, never by a handler, so only `infra/deploymentDataMigration/tools/ssm_resource_lookup.py` mirrors them.
 
-**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → one paginated `GetParametersByPath` fetch of all resource names. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
+**Resolution order:** environment variable override (break-glass for testing; also how pytest and local utilities work) → 60-minute in-module cache → a short-lived negative record of keys a completed sweep did not carry, so an unpublished parameter costs one sweep per window rather than one per call → a refresh, bounded by `SWEEP_BUDGET_SECONDS` (4 s, its own jittered retries included) and run one at a time per container: the resource-name chunk parameters `<prefix>Chunks/<i>` (every registered core, add-on and custom name as JSON, built by `infra/lib/nestedStacks/resourceNames/resourceNameChunks.ts`) in one `GetParameters` call per 10 chunks, or, when the chunks cannot be used (none published, one missing, a mismatch, unreadable JSON), one paginated `GetParametersByPath` fetch of everything under the prefix; a key the chunks do not carry costs one `GetParameter`. A failed refresh (a chunk read still throttled when the budget runs out included) opens a back-off window (about 2 s, doubling up to 30 s) in which no sweep starts: a lookup is answered from the cache, stale or not, or refused with `ResourceNameUnavailableError`, which is not a `KeyError`. Pipeline Lambdas use legacy environment variables (excluded from SSM resolution).
 
 ### **Pattern 5: Multi-Partition Support**
 
@@ -682,7 +682,7 @@ VAMS uses single-table design with composite keys. Common patterns:
 2. Add config option in `infra/config/config.ts` `ConfigPublic` interface
 3. Add validation in `getConfig()`
 4. Push to `enabledFeatures` array in `infra/lib/core-stack.ts`
-5. Read in frontend from `/api/secure-config` response and gate UI with a feature check
+5. Read in frontend from the `GET /secure-config` response and gate UI with a feature check
 6. Mirror the new option into the **ConfigBuilder** component (`documentation/docusaurus-site/src/components/ConfigBuilder/` — see its `README.md` for which files to touch: `schema.ts`, `defaults.ts`, `validation.ts`, `derived.ts`), then confirm `infra/test/config/configBuilderSync.test.ts` passes. The sync test covers only `schema.ts` fields and `defaults.ts` presets — it does **not** cover `validation.ts` or `derived.ts`, so when `getConfig()` validation logic changes you must hand-port the matching rule into `validation.ts`, and when `getConfig()` adds, changes, or **removes** an auto-mutation (an assignment that rewrites the operator's config, including any feature list that implies such a state) you must mirror that in `derived.ts`. Both rely on review, not the test, to stay in sync. A removed `getConfig()` auto-mutation left in `derived.ts` makes the builder keep rewriting the downloaded `config.json`.
 
 ### **Adding a New DynamoDB Table**

@@ -362,24 +362,31 @@ Wrong output:   {outputS3AssetFilesPath}pump.e57.previewFile.gif   (relative pat
 
 ### Computing the relative subdirectory
 
-The `assetId` is resolved from the manifest in the `vamsExecute` Lambda and threaded from there through
-the rest of the chain. Use it in the container to compute the relative subdirectory. The input's Amazon
-S3 key does not always contain the asset ID: an asset created on an existing bucket folder keeps that
-folder as its root, and from the second step of a workflow on, an input can be a file an earlier step
-wrote, which is keyed under the run's output folder. Allow for a key that does not contain the asset ID:
-for such a key the search below returns `""`, and the output is written at the top of the output folder.
+Take the subdirectory from the input file's manifest entry, not from its Amazon S3 key. The key does not
+always contain the asset ID: an asset created on an existing bucket folder keeps that folder as its root,
+a bucket's base prefix sits in front of the asset ID, and from the second step of a workflow on an input
+can be a file an earlier step wrote, which is keyed under the run's output folder in the run bucket.
 
-To keep the subfolder for such a key, take it from the input file's path within its asset, which is that
-file's manifest `relativePath` (with a leading `/`). In a `vamsExecute` Lambda it is
-`resolved['inputFiles'][0]['relativePath']`, which `manifestHelper.resolved_file_key(resolved)` returns
-normalized (`/` when the run has no input file).
+Each manifest input entry carries the file's asset-relative `relativePath` (with a leading `/`); its
+folder is the subdirectory. In a `vamsExecute` Lambda it is `resolved['inputFiles'][0]['relativePath']`,
+which `manifestHelper.resolved_file_key(resolved)` returns normalized (`/` when the run has no input
+file). Pass it on to the container with the rest of the definition, and search the key for the asset ID
+only for a launch that carries no `relativePath`:
 
 ```python
-# assetId comes from the pipeline definition (resolved from the manifest in vamsExecute)
-input_parts = stage_input.objectKey.split("/")
-relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
-                   if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
+# relative_path is the input's manifest relativePath ("" when the launch named none)
+relative = (relative_path or "").strip("/")
+if relative:
+    relative_subdir = relative.rsplit("/", 1)[0] if "/" in relative else ""
+else:
+    input_parts = stage_input.objectKey.split("/")
+    relative_subdir = ("/".join(input_parts[input_parts.index(assetId) + 1:-1])
+                       if assetId and assetId in input_parts else "")  # "" at the asset root or for a key without the asset ID
 ```
+
+To read another file of the same asset, join its asset-relative path to the entry's `assetRootS3Key` in
+the bucket `assetRootBucket`, never in the entry's `bucket`: an input an earlier step rewrote is read
+from the run bucket while its asset root stays in the asset bucket.
 
 ## Threading assetId through the pipeline
 
@@ -491,13 +498,17 @@ Four behaviors are worth knowing:
     rather than indexing the envelope directly.
 -   **Each `inputFiles` entry is self-locating.** It carries the file's asset-relative `relativePath`;
     its S3 location by bucket name (`bucket`, `key`, and `versionId` -- empty on an unversioned
-    bucket); its asset identity (`databaseId`, `assetId`, `assetRootS3Key`); its auxiliary-bucket
+    bucket); its asset identity (`databaseId`, `assetId`, and the asset's root folder,
+    `assetRootS3Key` in the bucket `assetRootBucket`); its auxiliary-bucket
     preview prefix (`auxPreviewPrefix`); `bucketId`, the asset bucket's registration id; and the
     bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
     Region), and `bucketAccountId`, its owning account when that is not the deployment account
     (`""` otherwise). Read S3 with `bucket`, through a client for `bucketRegion`
     (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
-    `inputBucketRegion` and the output bucket's as `outputBucketRegion`. `bucketId` is for a consumer
+    `inputBucketRegion` and the output bucket's as `outputBucketRegion`. From the second step of a
+    workflow on, an input that an earlier step rewrote is read from the run's output bucket, so its
+    `bucket` is that bucket while `assetRootBucket` stays the asset's; join the asset root with
+    `assetRootBucket`, never with `bucket`. `bucketId` is for a consumer
     downstream of the pipeline that must resolve the registered bucket row itself -- the vector
     indexer does, from the embedding event a pipeline publishes -- and is `""` only on an entry no
     asset row produced.
@@ -1552,9 +1563,11 @@ empty resource identifier, so every execution of it fails at the invoke state.
 
 A deployment can register a bundle with a different execution config than the one in its
 `pipeline.json` by passing `executionConfigOverrides` to `VamsSchemaRegistration`. It takes any of
-`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout`, `taskHeartbeatTimeout` (seconds; `""`
-clears the heartbeat) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
-value replaces the bundle's own. Leave the property out and the registration is exactly what it was.
+`waitForCallback` (`"Enabled"` or `"Disabled"`), `taskTimeout` and `taskHeartbeatTimeout` (seconds; `""`
+clears the value, so the pipeline has no heartbeat and a `taskTimeout` of 24 hours) and `lambdaName` (the Lambda invoke target; Lambda execution type only), and each
+value replaces the bundle's own. Setting `waitForCallback` to `"Enabled"` is only safe when the target
+Lambda reports back with the task token it receives (`SendTaskSuccess` or `SendTaskFailure`); otherwise
+every run waits until `taskTimeout` and then fails. Leave the property out and the registration is exactly what it was.
 A malformed value, such as an unknown key or a `waitForCallback` other than `Enabled` or `Disabled`,
 fails the registration before anything is written. When a value changes the state machines a pipeline
 produces (`waitForCallback`, `taskTimeout`, `taskHeartbeatTimeout`, `lambdaName`), VAMS redeploys every

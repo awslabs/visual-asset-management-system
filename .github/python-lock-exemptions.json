@@ -1,135 +1,63 @@
 {
-    "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a Python dependency file (pyproject.toml, requirements*.txt/.in/.lock, Pipfile, setup.py with install_requires) the audit does not cover unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock.",
-    "exemptions": [
-        {
-            "path": "backendPipelines/ci/requirements-common.txt",
-            "reason": "Exact pins shared by the pipeline test runner; becomes the export of a backendPipelines/ci project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/conversion/coordinateTransform/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/genAi/cadStepAgent/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/genAi/videoSopBom/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/multi/rapidPipelineEKS/lambda/requirements.txt",
-            "reason": "Ranged requirements of the RapidPipeline EKS Lambda code.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lambda.txt",
-            "reason": "Requirements of the 3D Thumbnail Lambda variant, without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/3dThumbnail/container/requirements.lambda.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/pcPotreeViewer/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/preview/pcPotreeViewer/container/utils/requirements.txt",
-            "reason": "Requirements of the Potree container's utils package; folded into the container's lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/system/genAiMetadata/containers/blender/requirements.txt",
-            "reason": "Input of the container's hashed requirements.lock (uv pip compile), which is not a uv.lock and is not audited by this job.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/system/genAiMetadata/containers/media/requirements.txt",
-            "reason": "Input of the container's hashed requirements.lock (uv pip compile), which is not a uv.lock and is not audited by this job.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/system/genAiMetadata/containers/blender/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/system/genAiMetadata/containers/media/requirements.lock",
-            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the container moves to a uv project.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "backendPipelines/utility/zipArchive/container/requirements.txt",
-            "reason": "CPU pipeline container requirements without a lock.",
-            "plannedIn": "#1741 PR 4: CPU pipeline containers and the pipeline test runner"
-        },
-        {
-            "path": "tools/VamsCLI/pyproject.toml",
-            "reason": "Published package with ranged dependencies by design; gets a development-only uv.lock for audit.",
-            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
-        },
+    "description": "Python dependency files that do not have a sibling uv.lock yet, so the python-dependency-audit CI job does not audit them. infra/test/ci/pythonDependencyLocks.test.ts fails a Python dependency file (pyproject.toml, requirements*.txt/.in/.lock, Pipfile, setup.py with install_requires) the audit does not cover unless it is listed here with a reason and the change that will add the lock. Remove an entry when its uv.lock lands; the test fails an entry whose path is gone or already has a uv.lock. rangedInputs lists the hand-written, ranged files of a published package that sit beside its uv.lock on purpose: the ranges are the published install contract, so they are not uv exports. The audit skips them, the test checks each entry still exists beside a uv.lock, and the lock resolves the same ranges.",
+    "rangedInputs": [
         {
             "path": "tools/VamsCLI/requirements.txt",
-            "reason": "Ranged install requirements of the published VamsCLI package.",
-            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+            "reason": "Ranged install requirements of the published VamsCLI package, mirrored from pyproject.toml and setup.py by tests/test_packaging_manifests.py. They stay ranges because users install the package with them; tools/VamsCLI/uv.lock resolves the same ranges."
         },
         {
             "path": "tools/VamsCLI/requirements-dev.txt",
-            "reason": "Ranged development requirements of VamsCLI.",
-            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
+            "reason": "Ranged development requirements of VamsCLI, the same ranges as the dev extra in pyproject.toml; tools/VamsCLI/uv.lock resolves them."
+        },
+        {
+            "path": "tools/VamsCLI/requirements-build.txt",
+            "reason": "The build tools pyproject.toml's [build-system] requires, ranged as there. They are the build dependency group of tools/VamsCLI/uv.lock, which requirements.lock is exported from."
         },
         {
             "path": "tools/VamsCLI/setup.py",
-            "reason": "setuptools install_requires of the published VamsCLI package, mirroring its ranged pyproject dependencies.",
-            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
-        },
-        {
-            "path": "tools/VamsMCP/pyproject.toml",
-            "reason": "Published package with ranged dependencies by design; gets a development-only uv.lock for audit.",
-            "plannedIn": "#1741 PR 5: VamsCLI and VamsMCP locks for audit"
-        },
+            "reason": "setuptools install_requires of the published VamsCLI package, mirroring its ranged pyproject.toml dependencies; tools/VamsCLI/uv.lock resolves the same ranges."
+        }
+    ],
+    "exemptions": [
         {
             "path": "backendPipelines/genAi/imageTo3d/container/requirements.txt",
-            "reason": "GPU image requirements installed beside upstream repositories; only the VAMS-owned set will be locked.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+            "reason": "Shared by seven model images, most of which install it after the upstream repository's own requirements. A single lock pinning every package would move upstream's pins, so each image needs its own lock (#1726).",
+            "plannedIn": "#1741: with #1726 (per-image hashed locks)"
         },
         {
             "path": "backendPipelines/genAi/imageTo3d/container/vams_utils/requirements.txt",
-            "reason": "Requirements of the imageTo3d utils package; folded into the image's lock.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+            "reason": "Requirements of the imageTo3d utils package, installed with the shared set; locked with it per image (#1726).",
+            "plannedIn": "#1741: with #1726 (per-image hashed locks)"
         },
         {
             "path": "backendPipelines/3dRecon/splatToolbox/container/requirements.txt",
-            "reason": "GPU image requirements without a lock.",
+            "reason": "Upstream-owned: the Splat Toolbox sync copies upstream's container/requirements.txt over this file on every cdk synth, so it cannot be a uv export. The image is upstream's Dockerfile, which does not install it; only the pipeline test runner does.",
+            "plannedIn": "not planned: upstream-owned file (#1741 / #1808)"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-image.txt",
+            "reason": "What the GR00T image installs besides Isaac-GR00T's own dependencies; an input of requirements.lock.",
+            "plannedIn": "#1741: after #1812 merges"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-overrides.txt",
+            "reason": "The versions that replace Isaac-GR00T's own exact pins when requirements.lock is compiled (uv --override); an input of requirements.lock, not installed itself.",
             "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
         },
         {
-            "path": "backendPipelines/3dRecon/splatToolbox/container/vams_utils/requirements.txt",
-            "reason": "Requirements of the splat toolbox utils package; folded into the image's lock.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
+            "plannedIn": "#1741: after #1812 merges"
         },
         {
-            "path": "backendPipelines/simulation/isaacLabTraining/container/requirements.txt",
-            "reason": "Installed into Isaac Sim's bundled Python, which a lock must target explicitly.",
-            "plannedIn": "#1741 PR 6: GPU pipeline images (VAMS-owned requirement sets)"
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-build.txt",
+            "reason": "The build tools the source-only packages of requirements.lock build with; an input of requirements-build.lock.",
+            "plannedIn": "#1741: after #1812 merges"
+        },
+        {
+            "path": "backendPipelines/genAi/nvidia/gr00t/container/requirements-build.lock",
+            "reason": "Hash-locked pip-compile output (`uv pip compile --generate-hashes`) that the Dockerfile installs; it is not a uv.lock, so the CI audit does not read it until the image moves to a uv project.",
+            "plannedIn": "#1741: after #1812 merges"
         }
     ]
 }

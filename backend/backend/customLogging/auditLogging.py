@@ -120,9 +120,11 @@ _created_log_streams: Dict[str, str] = {}
 # The nine audit log groups, resolved once per container at import (Rule 10) rather than on each
 # write. A name absent from SSM is recorded as None instead of raising: this module's contract is
 # that a failed audit write never disrupts the caller, and a hard failure here would turn one
-# unpublished parameter into a cold-start 500 on every request. `_audit_log_group()` retries a name
-# that did not resolve, so a transient SSM failure at import does not silence the container's audit
-# trail for its whole lifetime.
+# unpublished parameter into a cold-start 500 on every request. When the resolver's SSM sweep fails,
+# the keys after the first are refused at once for the resolver's back-off window rather than each
+# sweeping again, so the loop costs at most one bounded sweep. `_audit_log_group()` retries a name
+# that did not resolve on a later write, so a transient SSM failure at import does not silence the
+# container's audit trail for its whole lifetime.
 _AUDIT_LOG_GROUP_KEYS = audit_log_group_resource_keys()
 
 _audit_log_group_names: Dict[str, Optional[str]] = {}
@@ -166,7 +168,8 @@ def _audit_log_group(key) -> Optional[str]:
 
     A hit is a dict lookup, so an audited request makes no SSM call. A name that did not resolve at
     import is retried here and cached on success; the resolver's own negative record bounds the cost
-    of a genuinely unpublished parameter to one sweep per its missing-key window per container.
+    of a genuinely unpublished parameter to one sweep per its missing-key window per container, and
+    its back-off window the cost of an SSM outage to one bounded sweep per window.
     """
     name = _audit_log_group_names.get(key.param_key)
     if name:

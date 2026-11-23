@@ -203,9 +203,9 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     # Why a workstation cannot be connected to: ``DISPLAY_SESSION_ENDED``, EDH reports it running but its remote display
     # session has ended (a stop and a start recover it), returned only while the row is ACTIVE and running and not
     # connectable; ``DESKTOP_ERROR``, EDH reports a workstation that has run in its error state (its Amazon DCV health
-    # check failed; it keeps its state, disk and credential), returned only while the row is ACTIVE, STOPPED or
-    # CREATING and not connectable. Never a stale value a stop, a delete or a later state left on the row; None
-    # otherwise.
+    # check failed; it keeps its state and disk, and the error itself revokes nothing), returned only while the row
+    # is ACTIVE, STOPPED or CREATING and not connectable. Never a stale value a stop, a delete or a later state left
+    # on the row; None otherwise.
     connectionUnavailableReason: Optional[str] = None
     # Launch bookkeeping kept by the launch worker: the generic error code of a definite refusal
     # and the number of launch starts made for the row.
@@ -230,7 +230,8 @@ class WorkstationRecordModel(BaseModel, extra='ignore'):
     # What the workstation is doing between two states (``starting`` or ``stopping``), derived from the row when
     # the record is read, never taken from the row as stored; and what its last start that did not happen
     # recorded, kept beside ``lastError`` while the row stays STOPPED, or, for a start EDH accepted that stalled
-    # (``START_STALLED``), while the row stays CREATING. The stamp of that accepted start is not declared.
+    # (``START_STALLED``) or a new launch EDH has not placed (``LAUNCH_STALLED``), while the row stays CREATING. The
+    # stamp of that accepted start is not declared.
     activity: Optional[str] = None
     startFailure: Optional[Dict[str, str]] = None
     # The image the workstation runs: the EDH image name and, for an image an AMI recipe build produced, the

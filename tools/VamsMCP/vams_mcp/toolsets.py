@@ -241,8 +241,9 @@ COMPLIANCE: FrozenSet[str] = COMPLIANCE_TOOLS | frozenset(
 # never part of `consumer`, `operator` or `admin`, and `all` does not register it either, because a
 # search starts a billable CloudWatch Logs Insights query and audit records may be sensitive. The four
 # tools need no write or destructive gate: three are reads, and `vams_audit_stop` stops only the
-# caller's own search (it removes no data). Audit search is core VAMS with no feature switch, so the set
-# is the only gate; the API's authorizer and per-log-group permission decide what a caller may see.
+# caller's own search (it removes no data). Audit search is core VAMS behind the AUDITLOGSEARCH switch
+# (off in the EU Sovereign template); the set and that switch gate the tools, and the API's authorizer
+# and per-log-group permission decide what a caller may see.
 AUDIT_TOOLS: FrozenSet[str] = frozenset(
     {
         "vams_audit_groups",

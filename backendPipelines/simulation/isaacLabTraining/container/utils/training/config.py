@@ -15,6 +15,18 @@ from typing import Optional
 MODES = ("train", "evaluate")
 RL_LIBRARIES = ("rsl_rl", "rl_games", "skrl")
 
+# The physics engines the pipeline selects (Isaac Lab's ``physics=<preset>`` Hydra override): Newton
+# with the MuJoCo-Warp solver, the default, and PhysX on Isaac Sim, which reproduces what Isaac Lab
+# 2.3.0 ran. Other presets exist (newton_kamino, ovphysx, physx) but depend on the task or cannot
+# share a process with Isaac Sim, so they are not offered. Further copies live in lambda/openPipeline.py
+# and in the two vamsSchema templates; lambda/tests/test_config_precedence.py asserts they agree.
+PHYSICS_ENGINES = ("newton_mjwarp", "isaacsim_physx")
+DEFAULT_PHYSICS = "newton_mjwarp"
+# Set by the open-pipeline Lambda for a task that lists no physics presets: the run leaves the
+# override out. Not an engine an operator can choose, so it is not in PHYSICS_ENGINES.
+TASK_DEFAULT_PHYSICS = "task-default"
+DEFAULT_TASK = "Isaac-Cartpole"
+
 # Ceilings for the operator-supplied counts, each far above any shipped default. They catch a value
 # that cannot be what was meant — a mistyped extra digit — rather than describing capacity, which
 # depends on the task and the GPU: a count inside its ceiling can still exhaust GPU memory. Rejecting
@@ -124,6 +136,25 @@ def _text_field(section: dict, key: str, default: str) -> str:
     return value.strip()
 
 
+def _physics_field(section: dict) -> str:
+    """The physics engine the run names; absent, null or blank means the default (Newton).
+
+    Anything else outside ``PHYSICS_ENGINES`` is rejected naming both values, before Isaac Sim starts.
+    """
+    value = section.get("physics")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return DEFAULT_PHYSICS
+    if isinstance(value, str) and value.strip() == TASK_DEFAULT_PHYSICS:
+        return TASK_DEFAULT_PHYSICS
+    return _choice_field(section, "physics", DEFAULT_PHYSICS, PHYSICS_ENGINES)
+
+
+def _text_or_blank(section: dict, key: str) -> str:
+    """A string the Lambda passes through for the log, or ``""`` (never an error: it is advisory)."""
+    value = section.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
 @dataclass
 class PipelineConfig:
     job_name: str
@@ -135,6 +166,13 @@ class PipelineConfig:
     input_s3_path: str  # Input assets from VAMS (config file location)
     output_s3_path: str  # Output destination in VAMS asset bucket (outputS3AssetFilesPath)
     custom_environment_s3_uri: str = ""  # Custom environment package S3 URI
+
+    # Physics engine for training and for evaluation (Isaac Lab's physics=<preset> override)
+    physics: str = DEFAULT_PHYSICS
+    # Set by the Lambda when an evaluated checkpoint was trained on a different engine
+    physics_note: str = ""
+    # Set by the Lambda when it replaced a saved Isaac Lab 2.x task id with its 3.0 id (the old id)
+    task_id_requested: str = ""
 
     # Training-specific
     num_envs: int = 4096
@@ -161,12 +199,15 @@ class PipelineConfig:
         return cls(
             job_name=_text_field(data, "jobName", "isaaclab-job"),
             mode=mode,
-            task=_text_field(config, "task", "Isaac-Cartpole-v0"),
+            task=_text_field(config, "task", DEFAULT_TASK),
             rl_library=_choice_field(config, "rlLibrary", "rsl_rl", RL_LIBRARIES),
             # VAMS S3 paths - use outputS3AssetFilesPath (asset bucket)
             input_s3_path=data.get("inputS3AssetFilePath", ""),
             output_s3_path=data.get("outputS3AssetFilesPath", ""),
             custom_environment_s3_uri=data.get("customEnvironmentS3Uri", ""),
+            physics=_physics_field(config),
+            physics_note=_text_or_blank(config, "physicsNote"),
+            task_id_requested=_text_or_blank(config, "taskIdRequested"),
             # Training params
             num_envs=_int_field(config, "numEnvs", default_num_envs, maximum=MAX_NUM_ENVS),
             max_iterations=_int_field(config, "maxIterations", 1500,

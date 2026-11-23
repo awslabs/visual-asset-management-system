@@ -5,7 +5,7 @@
             "extraRequirements": {
                 "reason": "The harness runs in the container's environment plus PyYAML for corpus.yaml, as evaluation/README.md describes.",
                 "requirements": [
-                    "-r backendPipelines/genAi/cadStepAgent/container/requirements.txt",
+                    "-r backendPipelines/genAi/cadStepAgent/container/requirements.lock",
                     "pyyaml==6.0.3"
                 ]
             }
@@ -18,7 +18,7 @@
         },
         "backendPipelines/genAi/videoSopBom/lambda/tests": {
             "extraRequirements": {
-                "reason": "jsonschema validates the construct step's document against the container's definition schema; keep it at videoSopBom/container/requirements.txt's pin.",
+                "reason": "jsonschema validates the construct step's document against the container's definition schema; keep it at videoSopBom/container/requirements.lock's pin.",
                 "requirements": ["jsonschema==4.26.0"]
             }
         },
