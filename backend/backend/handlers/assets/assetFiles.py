@@ -5,7 +5,6 @@ import os
 import boto3
 import json
 import re
-from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from common.timestamps import utc_now
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -45,10 +44,11 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations, aux_file_prefix,
+    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations,
     aux_owner_filter, aux_scope, contains,
     fill_location_attributes, folder_listing_prefix, held_objects, in_folder, is_folder_location,
-    is_location_object, names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
+    names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
+    viewer_data_prefix, viewer_data_scope,
 )
 from common.fileAttribution import nested_locations_of_asset
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
@@ -693,25 +693,6 @@ def _list_single_file_location_page(bucket: str, location: str, list_params: Dic
     if 'NextContinuationToken' in folder:
         page['NextContinuationToken'] = folder['NextContinuationToken']
     return page
-
-def _is_location_object(location: str, object_key: str) -> bool:
-    """Whether a key is the object of a single-file location (the location key itself)."""
-    return is_location_object(location, object_key)
-
-def aux_file_base(database_id: str, location: str, object_key: str) -> str:
-    """Auxiliary-bucket prefix of one file's own derived data (``common.assetLocations.aux_file_prefix``)."""
-    return aux_file_prefix(database_id, location, object_key)
-
-def aux_file_bases(source_db: str, source_location: str, source_key: str,
-                   dest_db: str, dest_location: str, dest_key: str) -> Tuple[str, str]:
-    """Source and destination auxiliary prefixes for a copy or move of one file. When either side is
-    the object of a single-file location both stop at ``preview/``, so the data lands in the same
-    layout and no companion entry's data moves with it."""
-    source = aux_bucket_asset_file_base(source_db, source_key)
-    dest = aux_bucket_asset_file_base(dest_db, dest_key)
-    if _is_location_object(source_location, source_key) or _is_location_object(dest_location, dest_key):
-        return source + "preview/", dest + "preview/"
-    return source, dest
 
 def _call_with_keep(operation: Callable, *args, keep: Optional[Callable[[str], bool]] = None):
     """Call an auxiliary-data operation, passing ``keep`` only when there is one (folder assets need none)."""
@@ -2463,30 +2444,18 @@ def _file_record_rows(table, databaseId: str, assetId: str, composite_keys: set)
         query_kwargs['ExclusiveStartKey'] = response['LastEvaluatedKey']
 
 
-def delete_auxiliary_files_of_keys(databaseId: str, location: str, keys: List[str], kept_keys: List[str],
-                                   nested: Optional[NestedLocations] = None) -> None:
-    """Delete the auxiliary data of deleted files, keeping the data of the files that remain.
+def delete_auxiliary_files_of_keys(databaseId: str, keys: List[str]) -> None:
+    """Delete the own viewer data of deleted files (``common.assetLocations.viewer_data_scope``).
 
-    Each file's data sits under its own prefix, scoped by its owner filter (``aux_scope``). A deleted
-    file whose prefix also holds the data of a kept file (a file named like a folder that still holds
-    files) keeps it, and so does the data of a nested asset's files. The deletes run on the S3 worker
-    pool and log their failures.
+    Each file's data sits in its own ``preview/`` folder, so the data of the files that remain, including
+    a kept file or a nested asset's file in a folder named like a deleted file, stays. The deletes run on
+    the S3 worker pool and log their failures.
 
     Args:
         databaseId: The database ID owning the asset
-        location: The asset location key the files belong to
         keys: Full S3 keys of the files whose every version is gone
-        kept_keys: Full S3 keys that still have a version or delete marker
-        nested: The locations of other assets nested in ``location``; their auxiliary data is kept
     """
-    kept_bases = sorted(aux_file_base(databaseId, location, key) for key in kept_keys or [] if not key.endswith('/'))
-
-    def holds_kept_data(prefix):
-        index = bisect_left(kept_bases, prefix)
-        return index < len(kept_bases) and kept_bases[index].startswith(prefix)
-
-    scopes = [aux_scope(databaseId, location, key) for key in keys or [] if not key.endswith('/')]
-    scopes = [(prefix, _keep_aux(keep, nested, databaseId)) for prefix, keep in scopes if not holds_kept_data(prefix)]
+    scopes = [viewer_data_scope(databaseId, key) for key in keys or [] if not key.endswith('/')]
     if not scopes:
         return
 
@@ -2594,9 +2563,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                             keep=_keep_aux(aux_owner_filter(databaseId, base_key, full_key, folder_aux), nested,
                                            databaseId))
         else:
-            removed_files = [key for key in deleted_keys if contains(base_key, key)]
-            delete_auxiliary_files_of_keys(databaseId, base_key, removed_files, incomplete.failed_keys,
-                                           nested=nested)
+            delete_auxiliary_files_of_keys(databaseId, [key for key in deleted_keys if contains(base_key, key)])
         
         # Convert full keys to relative paths and delete the metadata of non-folder files
         for key in deleted_keys:
@@ -2633,9 +2600,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             else:
                 kept_previews.append(preview_file)
         
-        # Delete aux files if they exist
-        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
-        _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
+        # Delete the file's own viewer data; another file's in a folder named like this file stays
+        aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+        delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
         
         affected_files.append(file_path)
         
@@ -3135,11 +3102,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         source_location=source_base_key
     )
 
-    # Copy auxiliary files if they exist
-    source_aux, dest_aux = aux_file_bases(databaseId, source_base_key, source_key,
-                                          effective_dest_db, dest_base_key, dest_key)
-    _call_with_keep(copy_auxiliary_files, source_aux, dest_aux,
-                    keep=aux_owner_filter(databaseId, source_base_key, source_key, source_aux))
+    # Copy the file's own viewer data, not another file's in a folder named like it
+    source_aux, source_keep = viewer_data_scope(databaseId, source_key)
+    copy_auxiliary_files(source_aux, viewer_data_prefix(effective_dest_db, dest_key), keep=source_keep)
 
     # Copy metadata and attributes to the destination (merge with existing)
     source_rel = source_path.lstrip('/')
@@ -3300,10 +3265,9 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         source_location=base_key
     )
     
-    # Move auxiliary files if they exist
-    source_aux, dest_aux = aux_file_bases(databaseId, base_key, source_key, databaseId, base_key, dest_key)
-    _call_with_keep(move_auxiliary_files, source_aux, dest_aux,
-                    keep=aux_owner_filter(databaseId, base_key, source_key, source_aux))
+    # Move the file's own viewer data, not another file's in a folder named like it
+    source_aux, source_keep = viewer_data_scope(databaseId, source_key)
+    move_auxiliary_files(source_aux, viewer_data_prefix(databaseId, dest_key), keep=source_keep)
 
     # Move metadata and attributes: copy to new path (merge), then delete from old path
     source_rel = source_path.lstrip('/')
@@ -3418,9 +3382,9 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         logger.exception(f"Error reverting file version: {e}")
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
-    #Delete aux files for asset as they don't match anymore with the version.
-    aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
-    _call_with_keep(delete_assetAuxiliary_files, aux_prefix, keep=aux_keep)
+    # Delete the file's own viewer data, which no longer matches the reverted version
+    aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
+    delete_assetAuxiliary_files(aux_prefix, keep=aux_keep)
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -5029,8 +4993,13 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     full_key = resolve_asset_file_path(base_key, file_path)
     nested = nested_locations_for(asset, bucket, base_key)
     refuse_nested_key(nested, full_key, "File not found.")
-    aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
-    aux_keep = _keep_aux(aux_keep, nested, databaseId)
+    if full_key.endswith('/'):
+        # A folder: the data of every file in it, except a nested asset's
+        aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+        aux_keep = _keep_aux(aux_keep, nested, databaseId)
+    else:
+        # A file: its own viewer data, not another file's in a folder named like it
+        aux_prefix, aux_keep = viewer_data_scope(databaseId, full_key)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0

@@ -441,6 +441,40 @@ def aux_scope(database_id: Optional[str], location: Optional[str],
     return prefix, aux_owner_filter(database_id, location, object_key, prefix)
 
 
+# The folder of a file's auxiliary base that holds the file's own viewer and preview data
+AUX_VIEWER_DATA_FOLDER = "preview/"
+
+
+def viewer_data_prefix(database_id: Optional[str], object_key: Optional[str]) -> str:
+    """``{databaseId}/{file key}/preview/``, the auxiliary folder of one file's own viewer and preview data.
+
+    Workflows write a file's data there (``common.workflows.executionRecords.aux_preview_file_prefix`` plus the
+    pipeline's viewer subfolder; the Potree pipeline, the one pipeline that writes viewer data, adds
+    ``/PotreeViewer``), and the viewers read it there through the auxiliary stream route (the Potree and VEERUM
+    viewers request ``{file}/preview/PotreeViewer/metadata.json``). The rest of ``{databaseId}/{file key}/``
+    holds the data of other files whose keys start with ``{file key}/``.
+    """
+    return aux_bucket_file_base(database_id, object_key) + AUX_VIEWER_DATA_FOLDER
+
+
+def viewer_data_scope(database_id: Optional[str], object_key: Optional[str]) -> Tuple[str, Callable[[str], bool]]:
+    """``(prefix, keep)`` of one file's own viewer data: ``viewer_data_prefix`` and the keys under it that are
+    the file's.
+
+    Another file's data appears under the prefix only for a file at ``{file key}/preview`` or below
+    ``{file key}/preview/`` (a folder named like the file, in this asset or in an asset nested there), and that
+    file's own folder ends in ``/preview/``. So a key whose path below the prefix has a ``preview`` folder
+    segment is that file's, and every other key is this file's. No pipeline writes a ``preview`` folder inside
+    a file's viewer data, so the file keeps none of its own data.
+    """
+    prefix = viewer_data_prefix(database_id, object_key)
+
+    def keep(aux_key: str) -> bool:
+        key = aux_key or ""
+        return key.startswith(prefix) and "/" + AUX_VIEWER_DATA_FOLDER not in "/" + key[len(prefix):]
+    return prefix, keep
+
+
 LOCATION_INDEX_NAME = "AssetLocationGSI"
 LOCATION_BUCKET_ATTRIBUTE = "locationBucket"
 LOCATION_KEY_ATTRIBUTE = "locationKey"

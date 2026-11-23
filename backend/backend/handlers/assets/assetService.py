@@ -1764,7 +1764,6 @@ def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id
     are removed in batches, not one file at a time.
     """
     location = None
-    nested = None
     removed_keys, kept_keys = [], []
     files_complete, complete = True, True
 
@@ -1803,7 +1802,7 @@ def _delete_asset_objects_for_permanent_deletion(asset, bucket_name, database_id
     delete_files_metadata(database_id, asset_id, removed_paths)
     delete_file_version_records(database_id, asset_id, removed_paths)
     if not files_complete:
-        delete_auxiliary_files_of_keys(database_id, location, removed_files, kept_keys, nested=nested)
+        delete_auxiliary_files_of_keys(database_id, removed_files)
 
     logger.error(f"Permanent delete of asset {asset_id} stopped with the asset kept: {len(removed_keys)} S3 "
                  f"key(s) deleted, {len(kept_keys)} kept, {len(removed_paths)} file record(s) removed")

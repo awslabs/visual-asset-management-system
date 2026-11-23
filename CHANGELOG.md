@@ -792,6 +792,7 @@ All notable changes to this project will be documented in this file. See [standa
 -   **Backend** Fixed a file delete that Amazon S3 refuses removing the file's previews and derived viewer data: the file's own delete is checked first, and the file keeps them when it fails. ([#1783](https://github.com/awslabs/visual-asset-management-system/issues/1783))
 -   **Backend** Fixed a file delete reporting success when a preview of the file could not be listed or deleted: the delete fails with an error that says what to check, a preview listing it cannot read changes nothing, and deleting the file again removes the previews that were kept. ([#1789](https://github.com/awslabs/visual-asset-management-system/issues/1789))
 -   **CLI** `vamscli assets delete` reports a delete the API refuses as a delete error with the API's reason, instead of "Unexpected error", and its `--json-output` names the `error_type`. ([#1782](https://github.com/awslabs/visual-asset-management-system/issues/1782))
+-   **Backend** Fixed a file delete, revert, move, rename or copy, and an asset version revert, also deleting, moving or copying the viewer data of the files in a folder named like the file (for example `scan.e57/` beside `scan.e57`), such as an asset stored in that folder: each acts on the file's own viewer data only, and deleting a file's auxiliary preview data removes its own data instead of answering that none was found. ([#1870](https://github.com/awslabs/visual-asset-management-system/issues/1870))
 
 ### Chores
 

@@ -378,8 +378,8 @@ class TestAssetPermanentDeleteStopsWhenS3KeepsObjects:
         svc.m.delete_file_metadata.assert_not_called()
         svc.m.delete_file_version_records.assert_called_once()
         assert sorted(svc.m.delete_file_version_records.call_args.args[2]) == removed
-        assert _aux_prefixes(svc.aux) == ["db1/proj/a/sub/y.txt/", "db1/proj/a/x.txt.previewFile.png/",
-                                          "db1/proj/a/x.txt/"]
+        assert _aux_prefixes(svc.aux) == ["db1/proj/a/sub/y.txt/preview/", "db1/proj/a/x.txt.previewFile.png/preview/",
+                                          "db1/proj/a/x.txt/preview/"]
 
     def test_a_kept_object_keeps_its_records_and_its_companion_copy_loses_its_own(self, svc):
         """The companion entry named like the object has its own path, /model.glb/model.glb."""
@@ -391,7 +391,7 @@ class TestAssetPermanentDeleteStopsWhenS3KeepsObjects:
 
         assert _keys_under(svc.client, FILE_LOCATION) == [FILE_LOCATION]
         assert _file_metadata_paths(svc.m) == ["/model.glb/model.glb", "/sub/c.obj"]
-        assert _aux_prefixes(svc.aux) == ["db1/p1/model.glb/model.glb/", "db1/p1/model.glb/sub/c.obj/"]
+        assert _aux_prefixes(svc.aux) == ["db1/p1/model.glb/model.glb/preview/", "db1/p1/model.glb/sub/c.obj/preview/"]
 
     def test_a_refused_preview_delete_keeps_the_asset(self, svc):
         svc.asset["previewLocation"] = {"Key": PREVIEW_KEY}
@@ -509,7 +509,7 @@ class TestFilePrefixDeleteStopsWhenS3KeepsObjects:
         assert _prefix_metadata_paths(files) == ["sub/y.txt"]
         files.delete_file_metadata.assert_not_called()
         files.delete_file_version_records.assert_called_once_with("db1", "a1", ["sub/y.txt"])
-        assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/"]
+        assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/preview/"]
         files.send_subscription_email.assert_not_called()
         assert _keys_under(files.client, "proj/a/sub/") == ["proj/a/sub/z.txt"]
 
@@ -556,7 +556,7 @@ class TestSingleFileDeleteChecksTheFileFirst:
 
         assert sorted(response.affectedFiles) == ["/x.txt", "/x.txt.previewFile.png"]
         assert _keys_under(files.client, "proj/a/x.txt") == []
-        assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/"]
+        assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/preview/"]
         files.delete_file_metadata.assert_called_once_with("db1", "a1", "x.txt")
 
 
@@ -698,9 +698,9 @@ NEIGHBOURS = ("p1/model.glb.bak", "p1/model.glbx/part.obj", "p1/model.glb.previe
 # Each held key, its asset-relative path, and its auxiliary prefix
 HELD = {
     FILE_LOCATION: ("/model.glb", "db1/p1/model.glb/preview/"),
-    FILE_PREVIEW: ("/model.glb.previewFile.png", "db1/p1/model.glb.previewFile.png/"),
-    SHADOWED: ("/model.glb/model.glb", "db1/p1/model.glb/model.glb/"),
-    COMPANION: ("/sub/c.obj", "db1/p1/model.glb/sub/c.obj/"),
+    FILE_PREVIEW: ("/model.glb.previewFile.png", "db1/p1/model.glb.previewFile.png/preview/"),
+    SHADOWED: ("/model.glb/model.glb", "db1/p1/model.glb/model.glb/preview/"),
+    COMPANION: ("/sub/c.obj", "db1/p1/model.glb/sub/c.obj/preview/"),
 }
 
 
@@ -765,7 +765,7 @@ class TestSingleFileDeleteKeepsRecordsInStepWithItsPreviews:
         assert _keys_under(files.client, "proj/a/x.txt") == ["proj/a/x.txt.previewFile.png"]
         files.delete_file_metadata.assert_called_once_with("db1", "a1", "x.txt")
         files.delete_file_version_records.assert_called_once_with("db1", "a1", ["/x.txt"])
-        assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/"]
+        assert _aux_prefixes(files.aux) == ["db1/proj/a/x.txt/preview/"]
         files.send_subscription_email.assert_not_called()
 
     def test_deleting_the_file_again_removes_the_kept_preview(self, files):
@@ -879,8 +879,8 @@ class TestTheAssetPermanentDeleteLeavesANestedAssetsKeys:
 
     def test_a_kept_own_key_fails_the_delete_and_only_its_own_deleted_files_lose_their_records(self, svc):
         inner_versions = self._nest(svc)
-        # A file named like the nested folder is this asset's; its auxiliary prefix also holds the nested
-        # asset's viewer data (same database), which stays
+        # A file named like the nested folder is this asset's; its own viewer data goes and the nested
+        # asset's (same database, in the folder named like the file) stays
         svc.client.put_object(Bucket=BUCKET, Key="proj/a/sub", Body=b"own")
         svc.faulty.deny_keys.update({"proj/a/x.txt", "proj/a/sub/z.txt"})
 
@@ -893,10 +893,11 @@ class TestTheAssetPermanentDeleteLeavesANestedAssetsKeys:
         assert _all_versions(svc.client, INNER_KEYS) == inner_versions
         assert _file_metadata_paths(svc.m) == ["/sub", "/x.txt.previewFile.png"]
         assert sorted(svc.m.delete_file_version_records.call_args.args[2]) == ["/sub", "/x.txt.previewFile.png"]
-        assert _aux_prefixes(svc.aux) == ["db1/proj/a/sub/", "db1/proj/a/x.txt.previewFile.png/"]
-        own_call = next(call for call in svc.aux.call_args_list if call.args[0] == "db1/proj/a/sub/")
+        assert _aux_prefixes(svc.aux) == ["db1/proj/a/sub/preview/", "db1/proj/a/x.txt.previewFile.png/preview/"]
+        own_call = next(call for call in svc.aux.call_args_list if call.args[0] == "db1/proj/a/sub/preview/")
         keep = own_call.kwargs.get("keep")
-        assert keep is not None and keep("db1/proj/a/sub/y.txt/preview/t.png") is False
+        assert keep("db1/proj/a/sub/preview/PotreeViewer/metadata.json") is True
+        assert keep("db1/proj/a/sub/preview/n.glb/preview/t.png") is False
 
     def test_a_single_file_asset_leaves_the_asset_in_its_companion_folder(self, svc):
         svc.asset["assetLocation"] = {"Key": FILE_LOCATION}
@@ -912,7 +913,7 @@ class TestTheAssetPermanentDeleteLeavesANestedAssetsKeys:
         assert _keys_under(svc.client, FILE_LOCATION) == [FILE_LOCATION, COMPANION]
         assert _versions(svc.client, COMPANION) == companion_versions
         assert _file_metadata_paths(svc.m) == ["/model.glb/model.glb"]
-        assert _aux_prefixes(svc.aux) == ["db1/p1/model.glb/model.glb/"]
+        assert _aux_prefixes(svc.aux) == ["db1/p1/model.glb/model.glb/preview/"]
 
 
 @pytest.mark.unit
@@ -953,7 +954,7 @@ class TestTheFilePrefixDeleteLeavesANestedAssetsKeys:
         assert _versions(files.client, DEEP_KEY) == deep_versions
         assert _prefix_metadata_paths(files) == ["sub/y.txt"]
         files.delete_file_version_records.assert_called_once_with("db1", "a1", ["sub/y.txt"])
-        assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/"]
+        assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/preview/"]
 
     def test_a_refused_nested_key_is_not_a_failure(self, files):
         deep_versions = self._nest(files)
