@@ -224,11 +224,14 @@ ENGINE_CALL_DEPLOY_DELAYS = (5, 10, 15, 20, 30, 40)
 # Throttling and the other transient refusals a busy account answers with (Lambda concurrency used
 # up, a function still updating, a service-side fault, a throttled table or state machine call).
 # A throttle slows a copy rather than failing it, so callers wait for capacity (TRANSIENT_DELAYS).
+# TransactionConflictException rejects a single-item write that met a transaction in flight on the
+# same item (the output step's batch row writes against count_job_terminal); nothing was written, and
+# botocore does not retry it.
 TRANSIENT_ERROR_CODES = frozenset({
     "TooManyRequestsException", "ThrottlingException", "Throttling", "ThrottledException",
     "EC2ThrottledException", "RequestLimitExceeded", "RequestThrottled", "SlowDown",
     "ProvisionedThroughputExceededException", "ResourceConflictException", "ServiceException",
-    "ServiceUnavailable", "ServiceUnavailableException",
+    "ServiceUnavailable", "ServiceUnavailableException", "TransactionConflictException",
 })
 # The refusal of a call whose grant the deployment is still applying (L1: each caller's role loses
 # its old grant a few seconds before the new one arrives).
@@ -905,6 +908,24 @@ def get_batch(table, batch_id):
     return table.get_item(Key={"jobId": batch_key(batch_id)}, ConsistentRead=True).get("Item") or {}
 
 
+# Attempts of the count transaction when DynamoDB cancels it for a conflicting write: two jobs of one
+# batch counted at the same moment both update the batch row, and one transaction can be cancelled
+# with TransactionConflict. Between attempts a full-jitter wait doubles from
+# COUNT_CONFLICT_BASE_DELAY_SECONDS (at most 1.5 s in all). After the last attempt the error is raised
+# and the copy state machine retries its notify task.
+COUNT_TRANSACTION_ATTEMPTS = 5
+COUNT_CONFLICT_BASE_DELAY_SECONDS = 0.1
+
+
+def _cancellation_codes(error):
+    """The CancellationReasons codes of a TransactionCanceledException, one per action in order ("None"
+    for an action that did not cause the cancellation), or None for any other error."""
+    if error_code(error) != "TransactionCanceledException":
+        return None
+    reasons = (getattr(error, "response", None) or {}).get("CancellationReasons") or []
+    return [str((reason or {}).get("Code") or "None") for reason in reasons]
+
+
 def count_job_terminal(dynamodb_client, table_name, job_id, batch_id, status=None, extra=None):
     """Count a finalized job on its batch, in one transaction, exactly once.
 
@@ -912,7 +933,11 @@ def count_job_terminal(dynamodb_client, table_name, job_id, batch_id, status=Non
     incremented in the same transaction, so a retried notify neither double counts nor loses the
     count. The job's status is not written unless ``status`` is given (finalize_job writes it, so the
     count never changes an outcome). Returns True when this call counted the job, False when it was
-    counted before."""
+    counted before.
+
+    Only a cancellation whose job-row reason is ConditionalCheckFailed means counted before. A
+    cancellation for TransactionConflict alone wrote nothing, so it is tried again (up to
+    COUNT_TRANSACTION_ATTEMPTS); any other error, and a conflict on the last attempt, is raised."""
     values = {"counted": True, "expiresAt": _expires_at()}
     if status:
         values["status"] = status
@@ -940,14 +965,24 @@ def count_job_terminal(dynamodb_client, table_name, job_id, batch_id, status=Non
                     ":one": {"N": "1"}, ":e": {"N": str(_expires_at())}},
             }
         })
-    try:
-        dynamodb_client.transact_write_items(TransactItems=items)
-        return True
-    except ClientError as e:
-        if _is_condition_failure(e):
-            logger.info(f"Copy job {job_id} was already counted on its batch")
-            return False
-        raise
+    import random
+    for attempt in range(COUNT_TRANSACTION_ATTEMPTS):
+        try:
+            dynamodb_client.transact_write_items(TransactItems=items)
+            return True
+        except ClientError as e:
+            codes = _cancellation_codes(e)
+            if codes and codes[0] == "ConditionalCheckFailed":
+                logger.info(f"Copy job {job_id} was already counted on its batch")
+                return False
+            conflict = bool(codes) and "TransactionConflict" in codes and all(
+                code in ("None", "TransactionConflict") for code in codes)
+            if not conflict or attempt + 1 >= COUNT_TRANSACTION_ATTEMPTS:
+                raise
+            delay = COUNT_CONFLICT_BASE_DELAY_SECONDS * (2 ** attempt) * random.random()
+            logger.warning(f"Counting copy job {job_id} on its batch was cancelled for a conflicting "
+                           f"write ({', '.join(codes)}); trying again in {delay:.2f} s")
+            _sleep(delay)
 
 
 def claim_notification(table, batch_id):
