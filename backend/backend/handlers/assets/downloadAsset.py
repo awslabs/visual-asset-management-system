@@ -26,6 +26,7 @@ from common.s3 import (
     validateUnallowedFileExtensionAndContentType,
     list_all_objects,
     presigned_get_object_params,
+    asset_file_paths,
 )
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import (
@@ -258,24 +259,6 @@ def validate_prefix_content_types(bucket, prefix):
                 future.cancel()
     return True
 
-def normalize_s3_path(base_path, relative_path):
-    """
-    Normalize S3 path to ensure there's only a single slash between components.
-    
-    Args:
-        base_path: The base path (prefix)
-        relative_path: The relative path to append
-        
-    Returns:
-        Normalized path with a single slash between components
-    """
-    # Remove trailing slashes from base_path
-    base_path = base_path.rstrip('/')
-    # Remove leading slashes from relative_path
-    relative_path = relative_path.lstrip('/')
-    # Join with a single slash
-    return f"{base_path}/{relative_path}"
-
 #######################
 # Core Download Logic
 #######################
@@ -300,8 +283,12 @@ def get_distributable_asset_context(databaseId, assetId):
     return bucketDetails['bucketName'], asset_location.get('Key')
 
 def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key, raw_key,
-                              version_id=None, asset_version_id=None, asset_version_alias=None):
+                              version_id=None, asset_version_id=None, asset_version_alias=None,
+                              paths=None):
     """Resolve one file key against the asset and generate its presigned URL
+
+    ``paths`` is the location's path mapping for this request (``common.s3.asset_file_paths``),
+    shared by the keys of one bulk request; it is built when omitted.
 
     Returns:
         (downloadUrl, versionId) tuple
@@ -310,26 +297,16 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
         VAMSGeneralErrorResponse for per-file failures (missing, archived, disallowed
         type, key outside the asset's own prefix, resolved key over the S3 key limit)
     """
-    # The asset's own prefix, always slash-terminated. A bucket-root key is only
-    # inside this asset when it sits under '<base>/', so the base 'assets/pfx'
-    # does not cover the sibling prefix 'assets/pfxOTHER/secret.txt'.
-    asset_base_prefix = asset_base_key.rstrip('/')
-    asset_prefix = asset_base_prefix + '/'
+    if paths is None:
+        paths = asset_file_paths(asset_bucket, asset_base_key, client=s3)
 
-    # Determine final S3 key
+    # Determine final S3 key. The location key itself and a key under the location folder are used as
+    # given; a bucket-root key that only shares the location's characters (the base 'assets/pfx' and
+    # 'assets/pfxOTHER/secret.txt') is another asset's object; anything else is asset-relative.
     if raw_key:
-        # Check if the key already starts with the asset base key to avoid duplication
-        if raw_key == asset_base_key or raw_key.startswith(asset_prefix):
-            # Key is the asset's own base key or already includes the base path, use it as-is
-            final_key = raw_key
-        elif not raw_key.startswith('/') and raw_key.startswith(asset_base_prefix):
-            # Bucket-root key that shares the base key's characters without sitting
-            # under the asset prefix - a different asset's or database's object.
-            # Asset-relative keys carry a leading '/' and are never in this shape.
+        final_key = paths.download_key_for(raw_key)
+        if final_key is None:
             raise VAMSGeneralErrorResponse("Requested file is not part of this asset")
-        else:
-            # Key is relative, combine with base path
-            final_key = normalize_s3_path(asset_base_key, raw_key)
     else:
         # If no key provided, use base key directly
         final_key = asset_base_key
@@ -345,12 +322,9 @@ def resolve_and_sign_file_key(databaseId, assetId, asset_bucket, asset_base_key,
     # per-file S3 version from the snapshot; otherwise version_id is either the
     # per-file version passed in or None (latest).
     if asset_version_alias or asset_version_id:
-        # Compute relative key by stripping asset_base_key from final_key
-        # This matches how fileKey is stored in version records (relative to asset prefix)
-        relative_file_key = final_key
-        if relative_file_key.startswith(asset_prefix):
-            relative_file_key = relative_file_key[len(asset_prefix):]
-        relative_file_key = relative_file_key.lstrip('/')
+        # The path the file is listed at, without its leading slash: how fileKey is stored in
+        # version records
+        relative_file_key = (paths.path_for(final_key) or final_key).lstrip('/')
 
         if asset_version_alias:
             resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_alias)
@@ -452,6 +426,7 @@ def download_asset_files_bulk(databaseId, assetId, request_model):
         DownloadAssetResponseModel instance with per-file entries
     """
     asset_bucket, asset_base_key = get_distributable_asset_context(databaseId, assetId)
+    paths = asset_file_paths(asset_bucket, asset_base_key, client=s3)
 
     def _sign_one(entry):
         # entry is {'key': str, 'versionId': Optional[str]} (normalized in the model)
@@ -462,7 +437,8 @@ def download_asset_files_bulk(databaseId, assetId, request_model):
                 databaseId, assetId, asset_bucket, asset_base_key, raw_key,
                 version_id=per_file_version,
                 asset_version_id=request_model.assetVersionId,
-                asset_version_alias=request_model.assetVersionIdAlias
+                asset_version_alias=request_model.assetVersionIdAlias,
+                paths=paths
             )
             return DownloadAssetFileUrlModel(
                 key=raw_key, downloadUrl=url, versionId=version_id, success=True

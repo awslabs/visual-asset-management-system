@@ -227,7 +227,7 @@ Training results are added to the asset the run executed against. Both Isaac Lab
 | `checkpoints/<executionId>/*`     | PyTorch | Model checkpoint files saved during training, named by the RL library (below) |
 | `<executionId>/metrics.csv`       | CSV     | Training metrics exported from TensorBoard event files                        |
 | `<executionId>/*_git_diff.txt`    | Text    | Configuration diff files (converted from `.diff` for VAMS compatibility)      |
-| `<executionId>/train-config.json` | JSON    | Input configuration saved for reference                                       |
+| `<executionId>/train-config.json` | JSON    | The run settings saved for reference                                          |
 
 For example, a run whose execution id is `3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a` writes its last rsl_rl checkpoint to `checkpoints/3f2a9c4e1b7d40a6a8c95e0f1d2b3c4a/model_99.pt`.
 
@@ -286,7 +286,7 @@ Evaluation outputs use the same per-execution folders as training:
 | ------------------------------------ | ------ | -------------------------------------------------------------------- |
 | `<executionId>/metrics.csv`          | CSV    | Evaluation metrics from TensorBoard                                  |
 | `videos/<executionId>/*.mp4`         | MP4    | Evaluation episode recordings, uploaded when `recordVideo` is `true` |
-| `<executionId>/evaluate-config.json` | JSON   | Input configuration saved for reference                              |
+| `<executionId>/evaluate-config.json` | JSON   | The run settings saved for reference                                 |
 
 ## Custom environments
 

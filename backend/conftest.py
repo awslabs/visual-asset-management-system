@@ -226,6 +226,15 @@ def setup_mock_imports():
     )
     sys.modules['common.resourceNames'] = resource_names_module
 
+    # ssmParameters (the bounded, cached single-parameter lookup) is a real module too, loaded fresh
+    # for every test like resourceNames, so a handler a test loads gets an empty cache, no open
+    # back-off window and no client built under another test's patch.
+    ssm_parameters_module = import_module_from_path(
+        'common.ssmParameters',
+        os.path.join(os.path.dirname(__file__), 'backend', 'common', 'ssmParameters.py')
+    )
+    sys.modules['common.ssmParameters'] = ssm_parameters_module
+
     # assetHistory is a real module (asset lifecycle history writer); load it
     asset_history_module = import_module_from_path(
         'common.assetHistory',

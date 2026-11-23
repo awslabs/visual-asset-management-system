@@ -17,7 +17,7 @@ from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_download_streamed
-from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params
+from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params, asset_file_paths
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from handlers.assets.assetVersions import (
     resolve_file_version_from_asset_version,
@@ -114,35 +114,9 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error retrieving asset.")
 
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
-    """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+# The refusal of a stream path that names no file of the asset ('..' segments, or a key outside it)
+FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
+
 
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions
@@ -174,6 +148,9 @@ def handle_head_request(event, claims_and_roles):
         message = "No Asset File Object Key Provided in Path"
         logger.error(message)
         return validation_error(body={'message': message}, event=event)
+
+    # The path as requested: the file routes' own-key form is told apart by its missing leading /
+    requested_key = object_key
 
     # If object_key doesn't start with a /, add it
     if not object_key.startswith('/'):
@@ -246,8 +223,12 @@ def handle_head_request(event, claims_and_roles):
     asset_bucket = bucketDetails['bucketName']
     asset_base_key = asset_location.get('Key')
     
-    # Resolve the full S3 key
-    object_key = resolve_asset_file_path(asset_base_key, object_key)
+    # Resolve the full S3 key (common.assetLocations.AssetFilePaths)
+    paths = asset_file_paths(asset_bucket, asset_base_key, client=s3_client)
+    object_key = paths.request_key_for(requested_key)
+    if object_key is None:
+        logger.error(f"Stream path names no key of asset {databaseId}/{assetId}")
+        return validation_error(body={'message': FILE_PATH_NOT_IN_ASSET_MESSAGE}, event=event)
 
     # The validator bounded the asset-relative part; the resolved key carries the asset prefix as
     # well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
@@ -258,12 +239,8 @@ def handle_head_request(event, claims_and_roles):
 
     # Resolve assetVersionId/alias to S3 versionId
     if asset_version_id_alias or asset_version_id:
-        # Compute relative key by stripping asset_base_key from resolved object_key
-        relative_file_key = object_key
-        normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-        if relative_file_key.startswith(normalized_base):
-            relative_file_key = relative_file_key[len(normalized_base):]
-        relative_file_key = relative_file_key.lstrip('/')
+        # The path the file is listed at, without its leading slash: how version records key it
+        relative_file_key = (paths.path_for(object_key) or object_key).lstrip('/')
 
         if asset_version_id_alias:
             resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_id_alias)
@@ -401,6 +378,9 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             error_response['headers'].update(streaming_headers)
             return error_response
 
+        # The path as requested: the file routes' own-key form is told apart by its missing leading /
+        requested_key = object_key
+
         #If object_key doesn't start with a /, add it
         if not object_key.startswith('/'):
             object_key = '/' + object_key
@@ -496,8 +476,19 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
             asset_bucket = bucketDetails['bucketName']
             asset_base_key = asset_location.get('Key')
 
-            # Resolve the full S3 key
-            object_key = resolve_asset_file_path(asset_base_key, object_key)
+            # Resolve the full S3 key (common.assetLocations.AssetFilePaths)
+            paths = asset_file_paths(asset_bucket, asset_base_key, client=s3_client)
+            object_key = paths.request_key_for(requested_key)
+            if object_key is None:
+                logger.error(f"Stream path names no key of asset {databaseId}/{assetId}")
+                streaming_headers = {
+                    'Access-Control-Allow-Headers': 'Range',
+                    'Access-Control-Allow-Origin': '*',
+                    'Cache-Control': 'no-cache, no-store',
+                }
+                error_response = validation_error(body={'message': FILE_PATH_NOT_IN_ASSET_MESSAGE}, event=event)
+                error_response['headers'].update(streaming_headers)
+                return error_response
 
             # The validator bounded the asset-relative part; the resolved key carries the asset prefix
             # as well and is what S3 measures. Refuse it here so an over-long key never reaches get_object.
@@ -515,12 +506,8 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
             # Resolve assetVersionId/alias to S3 versionId
             if asset_version_id_alias or asset_version_id:
-                # Compute relative key by stripping asset_base_key from resolved object_key
-                relative_file_key = object_key
-                normalized_base = asset_base_key if asset_base_key.endswith('/') else asset_base_key + '/'
-                if relative_file_key.startswith(normalized_base):
-                    relative_file_key = relative_file_key[len(normalized_base):]
-                relative_file_key = relative_file_key.lstrip('/')
+                # The path the file is listed at, without its leading slash: how version records key it
+                relative_file_key = (paths.path_for(object_key) or object_key).lstrip('/')
 
                 if asset_version_id_alias:
                     resolved_asset_version_id = resolve_asset_version_id_from_alias(databaseId, assetId, asset_version_id_alias)

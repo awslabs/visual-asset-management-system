@@ -5,6 +5,7 @@ import os
 import boto3
 import json
 import base64
+from typing import Optional
 from botocore.exceptions import ClientError
 from botocore.config import Config
 from boto3.dynamodb.conditions import Key
@@ -12,6 +13,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate, exceeds_s3_object_key_limit
+from common.assetLocations import AssetFilePaths
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -74,35 +76,18 @@ def get_asset_details(databaseId, assetId):
         logger.exception(f"Error getting asset details: {e}")
         raise VAMSGeneralErrorResponse("Error retrieving asset")
 
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+# The refusal of a path that names nothing in the asset's auxiliary data ('..' segments, or outside it)
+FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
+
+
+def resolve_aux_preview_key(database_id: str, location_key: str, object_key: str) -> Optional[str]:
+    """The auxiliary-bucket key a stream path names under ``{databaseId}/{location key}/``, or None.
+
+    ``common.assetLocations.AssetFilePaths.aux_stream_key_for``. This function reads no asset-bucket
+    object, so the mapping is the one that needs no S3 read.
     """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    return AssetFilePaths(location_key).aux_stream_key_for(database_id, object_key)
+
 
 def handle_head_request(event, claims_and_roles):
     """Handle HEAD requests to check file availability and permissions
@@ -178,7 +163,10 @@ def handle_head_request(event, claims_and_roles):
     # Auxiliary preview objects live under the database-scoped per-file layout
     # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
     # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-    object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+    object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+    if object_key is None:
+        logger.error(f"Auxiliary stream path names no key of asset {databaseId}/{assetId}")
+        return validation_error(body={'message': FILE_PATH_NOT_IN_ASSET_MESSAGE}, event=event)
 
     # The validator bounded the asset-relative part; the resolved key carries the database and asset
     # prefix as well and is what S3 measures. Refuse it here so an over-long key never reaches head_object.
@@ -370,7 +358,17 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
                 # Auxiliary preview objects live under the database-scoped per-file layout
                 # {databaseId}/{assetId}/{relativeFileKey}/preview/... . Scope the resolve to that
                 # {databaseId}/{assetLocationKey} base so a caller cannot fetch files outside this asset.
-                object_key = resolve_asset_file_path(f"{databaseId}/{assetLocationKey}", object_key)
+                object_key = resolve_aux_preview_key(databaseId, assetLocationKey, object_key)
+                if object_key is None:
+                    logger.error(f"Auxiliary stream path names no key of asset {databaseId}/{assetId}")
+                    streaming_headers = {
+                        'Access-Control-Allow-Headers': 'Range',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache, no-store',
+                    }
+                    error_response = validation_error(body={'message': FILE_PATH_NOT_IN_ASSET_MESSAGE}, event=event)
+                    error_response['headers'].update(streaming_headers)
+                    return error_response
 
                 # The validator bounded the asset-relative part; the resolved key carries the database and
                 # asset prefix as well and is what S3 measures. Refuse it here so an over-long key never

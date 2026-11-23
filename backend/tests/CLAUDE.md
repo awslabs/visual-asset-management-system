@@ -216,6 +216,14 @@ Two properties of that guard are load-bearing when you touch it:
     `tests/handlers/pipelines/test_pipelineService_paging.py` does for the two paginator-backed
     pipeline list reads.
 
+### Parameter Store reads: `tests/ssmParametersStub.py`
+
+`common/ssmParameters.py` (the bounded, cached single-parameter lookup) is a real module in tests: `tests/conftest.py` registers it at collection and the root `conftest.py` loads a fresh copy for every test, as it does `common/resourceNames.py`. A handler binds `get_parameter_value` when it is imported, so the helper state it reads (cache, back-off window, lazily built client) belongs to the copy that was registered then. A handler a test loads by path inside the test gets that test's fresh copy; a handler imported at collection shares one copy with every test in the process. So:
+
+-   Give a by-path handler its own copy with `serve_parameters_from(module, client)`, or patch a collection-time handler's `get_parameter_value` with `load_ssm_parameters(client).get_parameter_value` through `patch.object`/`monkeypatch`. `client` is anything with `get_parameter(Name=...)`: a `MagicMock` or `ParameterStoreStub` (named values, scripted errors, a `fault` hook, the names of every call).
+-   Drive the budget, cache and window with `FakeClock` and `install_clock(helper, clock, monkeypatch)`; a helper whose real clock meets a throttling stub sleeps up to `PARAMETER_READ_BUDGET_SECONDS`.
+-   The OpenSearch indexers read their settings on first use: an indexer harness that calls the indexing functions directly calls `module.load_opensearch_settings()` after serving the stub.
+
 ### `xfail` is the ratchet for a test written before its fix
 
 `xfail_strict = true` is set in `pytest.ini`, so a test marked `@pytest.mark.xfail(reason="FIX-### …")`

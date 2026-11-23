@@ -9,6 +9,7 @@ from botocore.exceptions import ClientError
 from common.validators import validate
 from customLogging.logger import safeLogger
 from common.constants import UNALLOWED_MIME_LIST, UNALLOWED_FILE_EXTENSION_LIST
+from common.assetLocations import AssetFilePaths
 
 logger = safeLogger(service_name="S3Common")
 
@@ -136,6 +137,28 @@ def list_all_object_versions(bucket: str, prefix: str, client=None, max_keys: in
             break
 
     return {'Versions': versions, 'DeleteMarkers': delete_markers}
+
+
+def key_has_any_version(bucket: str, key: str, client=None) -> bool:
+    """Whether an exact key has any version or delete marker, from one ListObjectVersions call.
+
+    ``MaxKeys=1`` answers it (backend Rule 14): keys come back ascending, so the queried key's newest
+    entry is the one entry returned whenever the key has any, and an entry for a longer sibling key
+    means the key has none. Errors propagate: a caller that cannot tell must not guess.
+    """
+    s3 = client or s3c
+    response = s3.list_object_versions(Bucket=bucket, Prefix=key, MaxKeys=1)
+    entries = response.get('Versions', []) + response.get('DeleteMarkers', [])
+    return any(entry.get('Key') == key for entry in entries)
+
+
+def asset_file_paths(bucket: str, location, client=None) -> AssetFilePaths:
+    """``common.assetLocations.AssetFilePaths`` for an asset location in ``bucket``, for one request.
+
+    Its one S3 read (does the companion entry named like a single-file location's object exist) is
+    ``key_has_any_version`` with ``client``. A folder location makes no read.
+    """
+    return AssetFilePaths(location, key_exists=lambda key: key_has_any_version(bucket, key, client=client))
 
 
 def list_all_objects(bucket: str, prefix: str, client=None, max_objects: int = None) -> list:

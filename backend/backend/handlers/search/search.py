@@ -20,6 +20,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
 from common.constants import STANDARD_JSON_RESPONSE
 from common.resourceNames import get_table_name, ResourceKeys
+from common.ssmParameters import get_parameter_value
 from common.apiRoutes import API_SEARCH, API_SEARCH_SIMPLE
 from common.validators import validate
 from common.dynamodb import validate_pagination_info
@@ -69,26 +70,27 @@ except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
-# Get SSM parameter values
-def get_ssm_parameter_value(parameter_name: str) -> str:
-    """Get SSM parameter value"""
-    try:
-        ssm_client = boto3.client('ssm', config=retry_config)
-        response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
-    except Exception as e:
-        logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
 
-# Load OpenSearch configuration from SSM
-if opensearch_disabled:
-    opensearch_asset_index = None
-    opensearch_file_index = None
-    opensearch_endpoint = None
-else:
-    opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
-    opensearch_file_index = get_ssm_parameter_value(opensearch_file_index_ssm_param)
-    opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
+class SearchSettingsUnavailable(Exception):
+    """OpenSearch is enabled, but its index names or endpoint could not be read from Parameter Store
+    (throttled, refused or missing). Answered with the handler's internal error; the cause stays in
+    the log."""
+
+
+def opensearch_settings() -> Dict[str, str]:
+    """The three aos/* Parameter Store values, read on first OpenSearch use rather than at import, so
+    init makes no Parameter Store call, through common.ssmParameters, which bounds each read, caches
+    the value per container and backs off after a throttled read. A value that cannot be read raises
+    SearchSettingsUnavailable; the parameter name is logged, never returned to the caller."""
+    try:
+        return {
+            "asset_index": get_parameter_value(opensearch_asset_index_ssm_param),
+            "file_index": get_parameter_value(opensearch_file_index_ssm_param),
+            "endpoint": get_parameter_value(opensearch_endpoint_ssm_param),
+        }
+    except Exception as e:
+        logger.warning(f"OpenSearch settings could not be read from Parameter Store: {type(e).__name__}")
+        raise SearchSettingsUnavailable() from e
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
@@ -155,20 +157,24 @@ class DualIndexSearchManager:
     
     def __init__(self):
         self.client = None
-        self.asset_index = opensearch_asset_index
-        self.file_index = opensearch_file_index
+        self.asset_index = None
+        self.file_index = None
         self._initialize_client()
     
     def _initialize_client(self):
-        """Initialize OpenSearch client; without OpenSearch the client stays None"""
+        """Initialize OpenSearch client; without OpenSearch the client stays None and no setting is
+        read. Raises SearchSettingsUnavailable when the settings cannot be read."""
         if opensearch_disabled:
             logger.info("OpenSearch is not enabled on this deployment; search is unavailable")
             return
+        settings = opensearch_settings()
+        self.asset_index = settings["asset_index"]
+        self.file_index = settings["file_index"]
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
             
             # Create OpenSearch client
-            host = opensearch_endpoint.replace('https://', '').replace('http://', '')
+            host = settings["endpoint"].replace('https://', '').replace('http://', '')
             region = os.environ.get('AWS_REGION', 'us-east-1')
             service = 'aoss' if opensearch_type == 'serverless' else 'es'
             
@@ -2403,6 +2409,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
     except VAMSGeneralErrorResponse as v:
         logger.exception(f"VAMS error: {v}")
         return general_error(body={'message': str(v)}, event=event)
+    except SearchSettingsUnavailable:
+        # The same internal error as any other server-side failure; opensearch_settings() and
+        # common.ssmParameters have logged the cause.
+        return internal_error(event=event)
     except Exception as e:
         logger.exception(f"Internal error: {e}")
         return internal_error(event=event)
