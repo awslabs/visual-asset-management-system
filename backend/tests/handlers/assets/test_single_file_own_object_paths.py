@@ -303,3 +303,52 @@ class TestVersionListingUnchanged:
         request = af.ListAssetFilesRequestModel(assetVersionId="1", basic=False)
         response = af.list_asset_files_from_version("db1", "a1", af.test_holder["asset"], BUCKET, LOCATION, request)
         assert [(i.key, i.versionId) for i in response.items] == [(COMPANION, companion_version)]
+
+
+@pytest.mark.unit
+class TestPrefixOperationsStayInTheCompanionFolder:
+    """D1: a prefix archive or delete is a folder operation; on the own file or its previews it is refused."""
+
+    @pytest.mark.parametrize("path", ["/model.glb", "p1/model.glb", "/model.glb.previewFile.png"])
+    @pytest.mark.parametrize("operation", ["archive", "delete"])
+    def test_a_prefix_operation_on_the_own_file_is_refused_and_changes_nothing(self, af, path, operation):
+        with pytest.raises(VAMSGeneralErrorResponse) as error:
+            if operation == "archive":
+                af.archive_file("db1", "a1", path, True, CLAIMS)
+            else:
+                af.delete_file("db1", "a1", path, True, True, CLAIMS)
+        assert af.OWN_FILE_PREFIX_REFUSAL in str(error.value)
+        for key in (LOCATION, OWN_PREVIEW, COMPANION) + NEIGHBOURS:
+            assert _live(af.test_client, key), key
+        assert af.metadata_deletes == []
+
+    def test_the_prefix_archive_keeps_to_the_location_it_is_given(self, af):
+        archived = af.archive_s3_prefix(BUCKET, LOCATION, "db1", "a1", location=LOCATION)
+        assert sorted(archived) == sorted([LOCATION, OWN_PREVIEW, COMPANION])
+        for key in NEIGHBOURS:
+            assert _live(af.test_client, key), key
+
+    def test_a_prefix_archive_of_a_companion_folder_reports_its_paths(self, af, monkeypatch):
+        history = []
+        monkeypatch.setattr(af, "write_archive_history", lambda db, asset, path, *rest: history.append(path))
+        result = af.archive_file("db1", "a1", "/sub/", True, CLAIMS)
+        assert result.affectedFiles == ["sub/x.obj"] and history == ["sub/x.obj"]
+        assert not _live(af.test_client, COMPANION) and _live(af.test_client, LOCATION)
+
+    def test_a_prefix_delete_of_a_companion_folder_deletes_its_files_metadata_only(self, af):
+        result = af.delete_file("db1", "a1", "/sub/", True, True, CLAIMS)
+        assert result.affectedFiles == ["sub/x.obj"] and af.metadata_deletes == ["sub/x.obj"]
+        assert _live(af.test_client, LOCATION) and _live(af.test_client, OWN_PREVIEW)
+
+    def test_with_a_companion_entry_a_prefix_on_the_file_name_names_the_entry_as_before(self, af):
+        _with_state(af, "companion")
+        af.archive_file("db1", "a1", "/model.glb", True, CLAIMS)
+        assert not _live(af.test_client, COPY) and _live(af.test_client, LOCATION)
+
+    def test_control_a_folder_assets_prefix_delete_is_unchanged(self, af):
+        af.test_client.put_object(Bucket=BUCKET, Key="proj/a/sub/y.txt", Body=b"y")
+        af.test_holder["asset"] = {"databaseId": "db1", "assetId": "a2", "bucketId": "b1",
+                                   "assetLocation": {"Key": FOLDER_LOCATION}}
+        result = af.delete_file("db1", "a2", "/sub/", True, True, CLAIMS)
+        assert result.affectedFiles == ["sub/y.txt"] and af.metadata_deletes == ["sub/y.txt"]
+        assert _live(af.test_client, "proj/a/x.txt")

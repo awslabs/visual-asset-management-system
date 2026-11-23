@@ -291,11 +291,11 @@ This permanently deletes the file and all its versions. Consider using [Archive 
 
 **Error Responses:**
 
-| Status | Description                                                                        |
-| ------ | ---------------------------------------------------------------------------------- |
-| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. |
-| `403`  | Not authorized to delete files in this asset.                                      |
-| `500`  | Internal server error.                                                             |
+| Status | Description                                                                                                                                                                                                                                                                                                                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, `confirmPermanentDelete` not set to `true`, or file not found. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
+| `403`  | Not authorized to delete files in this asset.                                                                                                                                                                                                                                                                                                                  |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                                         |
 
 ---
 
@@ -338,11 +338,11 @@ Soft-deletes a file by creating an S3 delete marker. The file can be restored us
 
 **Error Responses:**
 
-| Status | Description                                                |
-| ------ | ---------------------------------------------------------- |
-| `400`  | Invalid parameters, or file not found or already archived. |
-| `403`  | Not authorized to archive files in this asset.             |
-| `500`  | Internal server error.                                     |
+| Status | Description                                                                                                                                                                                                                                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400`  | Invalid parameters, or file not found or already archived. With `isPrefix` set to `true`, a path that names the file of an asset created from one Amazon S3 object, or one of its previews, is refused: `A prefix operation cannot name the file of a single-file asset or its previews. Use the operation without the prefix option.` |
+| `403`  | Not authorized to archive files in this asset.                                                                                                                                                                                                                                                                                         |
+| `500`  | Internal server error.                                                                                                                                                                                                                                                                                                                 |
 
 ---
 

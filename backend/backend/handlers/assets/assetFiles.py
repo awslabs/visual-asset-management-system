@@ -335,6 +335,10 @@ FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this ass
 OWN_FILE_MOVE_REFUSAL = ("The file of a single-file asset cannot be moved or renamed. "
                          "Copy it to another path instead.")
 
+# A prefix operation in a single-file asset names a folder in its companion folder, never its own file
+OWN_FILE_PREFIX_REFUSAL = ("A prefix operation cannot name the file of a single-file asset or its previews. "
+                           "Use the operation without the prefix option.")
+
 
 def file_paths_for(bucket: str, location: str):
     """The asset-relative path <-> S3 key mapping of one asset location for this request (``common.assetLocations``)."""
@@ -864,7 +868,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
     
     return deleted_files
 
-def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -> Dict[str, str]:
+def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str, location: Optional[str] = None) -> Dict[str, str]:
     """Archive all objects under a prefix
 
     Args:
@@ -872,6 +876,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
         prefix: The S3 key prefix
         databaseId: The database ID
         assetId: The asset ID
+        location: The asset location the archived keys must belong to (``common.assetLocations``)
 
     Returns:
         Dict mapping each archived file key to its new delete-marker VersionId
@@ -885,6 +890,8 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
+                if location is not None and not contains(location, key):
+                    continue
 
                 # Process folder markers separately
                 if key.endswith('/'):
@@ -904,11 +911,12 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str) -
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
         try:
             # Check if the folder marker exists
-            s3_client.head_object(Bucket=bucket, Key=folder_prefix)
-            # Archive the folder marker if it exists
-            marker_version_id = archive_s3_object(bucket, folder_prefix)
-            if marker_version_id is not None:
-                archived_files[folder_prefix] = marker_version_id
+            if location is None or contains(location, folder_prefix):
+                s3_client.head_object(Bucket=bucket, Key=folder_prefix)
+                # Archive the folder marker if it exists
+                marker_version_id = archive_s3_object(bucket, folder_prefix)
+                if marker_version_id is not None:
+                    archived_files[folder_prefix] = marker_version_id
         except ClientError as e:
             # If the folder doesn't exist, that's fine
             if e.response['Error']['Code'] != '404' and e.response['Error']['Code'] != 'NoSuchKey':
@@ -2153,6 +2161,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     bucket, base_key = get_asset_s3_location(asset)
     paths = file_paths_for(bucket, base_key)
     full_key = resolve_asset_file_path(paths, file_path)
+    if is_prefix and paths.is_single_file and not full_key.startswith(paths.location + '/'):
+        raise VAMSGeneralErrorResponse(OWN_FILE_PREFIX_REFUSAL)
     
     # Check if path exists (including archived files)
     try:
@@ -2207,8 +2217,9 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
-            if key.startswith(base_key):
-                relative_path = key[len(base_key):]
+            path = paths.path_for(key)
+            if path is not None:
+                relative_path = path.lstrip('/')
                 affected_files.append(relative_path)
                 
                 # Delete metadata for non-folder files
@@ -2317,6 +2328,8 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     bucket, base_key = get_asset_s3_location(asset)
     paths = file_paths_for(bucket, base_key)
     full_key = resolve_asset_file_path(paths, file_path)
+    if is_prefix and paths.is_single_file and not full_key.startswith(paths.location + '/'):
+        raise VAMSGeneralErrorResponse(OWN_FILE_PREFIX_REFUSAL)
     
     # Check if path exists and if it's already archived
     try:
@@ -2356,12 +2369,13 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     if is_prefix:
         # Archive all files under prefix (maps each archived key -> delete-marker VersionId)
-        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId)
+        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=paths.location)
 
         # Convert full keys to relative paths
         for key, marker_version_id in archived_keys.items():
-            if key.startswith(base_key):
-                relative_path = key[len(base_key):]
+            path = paths.path_for(key)
+            if path is not None:
+                relative_path = path.lstrip('/')
                 affected_files.append(relative_path)
                 # Archive uses a delete marker (no S3 metadata) so sqsBucketSync
                 # cannot derive provenance -- write the history record directly,

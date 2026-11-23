@@ -5,9 +5,10 @@
 
 ``common.assetLocations.AssetFilePaths`` decides what a path names in an asset location: the single-file own
 object at ``/{file name}``, ``..`` refused, and only keys the asset holds. A handler that joins a path onto the
-location key itself would bring back the paths that miss the object, or reach a key outside the asset. This
-test reads the handler sources: each file-route handler uses the shared mapping, and no handler under
-``backend/handlers`` defines its own path-to-key join of the earlier shape. ``createAsset.normalize_s3_path``
+location key itself, or slices a key after it, would bring back the paths that miss the object, or reach a key
+outside the asset. This test reads the handler sources: each file-route handler uses the shared mapping and slices
+no key after the location key, and no handler under ``backend/handlers`` defines its own path-to-key join of the
+earlier shape. ``createAsset.normalize_s3_path``
 joins a ``bucketExistingKey`` under the bucket's base prefix, not a path under an asset location, and is the one
 named exception.
 """
@@ -29,11 +30,15 @@ FILE_PATH_SITES = (
     "assets/assetExportService.py",
     "metadata/metadataService.py",
     "workflows/executeWorkflow.py",
+    "workflows/sfn/workflowTriggerDispatch.py",
 )
 
 # The earlier per-site resolver: "if the path starts with the base key use it, else prepend the base key"
 EARLIER_JOIN = re.compile(r"(file_path|relative_path|rel)\.startswith\((asset_base_key|asset_base_path|root)\)")
 EXCEPTIONS = {"assets/createAsset.py"}
+
+# The earlier per-site key-to-path slicing: "the key after the location key"
+EARLIER_SLICE = re.compile(r"\[len\((base_key|asset_base_key)\):\]")
 
 
 def _source(relative):
@@ -64,3 +69,12 @@ def test_no_handler_defines_its_own_path_to_key_join():
     assert offenders == [], (
         "these handlers join a file path onto an asset location themselves, use "
         f"common.assetLocations.AssetFilePaths instead: {offenders}")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("relative", FILE_PATH_SITES)
+def test_no_file_path_site_slices_a_key_after_the_location_key(relative):
+    offenders = [number for number, line in enumerate(_source(relative).splitlines(), 1) if EARLIER_SLICE.search(line)]
+    assert offenders == [], (
+        f"{relative} slices a key after the location key at lines {offenders}, use "
+        "AssetFilePaths.path_for instead")
