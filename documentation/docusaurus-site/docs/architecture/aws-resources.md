@@ -10,14 +10,14 @@ All tables use a `RETAIN` removal policy, so they and their data survive `cdk de
 
 ### Core Data Tables
 
-| Table                          | Partition Key (PK)   | Sort Key (SK)              | Streams   | GSIs                                                                                                                                                                           | Purpose                                                        |
-| ------------------------------ | -------------------- | -------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| AssetStorageTable              | `databaseId`         | `assetId`                  | NEW_IMAGE | `BucketIdGSI` (PK: bucketId, SK: assetId), `assetIdGSI` (PK: assetId, SK: databaseId), `AssetLocationGSI` (PK: locationBucket, SK: locationKey; INCLUDE bucketId)              | Asset records                                                  |
-| DatabaseStorageTable           | `databaseId`         | --                         | NEW_IMAGE | --                                                                                                                                                                             | Database (collection) records                                  |
-| PipelineStorageTable           | `databaseId`         | `pipelineId`               | --        | --                                                                                                                                                                             | Pipeline definitions (legacy; retained migration source)       |
-| WorkflowStorageTable           | `databaseId`         | `workflowId`               | --        | --                                                                                                                                                                             | Workflow definitions (legacy; retained migration source)       |
-| WorkflowExecutionsStorageTable | `databaseId:assetId` | `executionId`              | --        | `WorkflowLSI` (LSI, SK: workflowDatabaseId:workflowId), `WorkflowGSI` (PK: workflowDatabaseId:workflowId, SK: executionId), `ExecutionIdGSI` (PK: workflowId, SK: executionId) | Workflow execution records (legacy; retained migration source) |
-| CommentStorageTable            | `assetId`            | `assetVersionId:commentId` | --        | --                                                                                                                                                                             | Asset comments                                                 |
+| Table                          | Partition Key (PK)   | Sort Key (SK) | Streams   | GSIs                                                                                                                                                                           | Purpose                                                                                 |
+| ------------------------------ | -------------------- | ------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| AssetStorageTable              | `databaseId`         | `assetId`     | NEW_IMAGE | `BucketIdGSI` (PK: bucketId, SK: assetId), `assetIdGSI` (PK: assetId, SK: databaseId), `AssetLocationGSI` (PK: locationBucket, SK: locationKey; INCLUDE bucketId)              | Asset records                                                                           |
+| DatabaseStorageTable           | `databaseId`         | --            | NEW_IMAGE | --                                                                                                                                                                             | Database (collection) records                                                           |
+| PipelineStorageTable           | `databaseId`         | `pipelineId`  | --        | --                                                                                                                                                                             | Pipeline definitions (legacy; retained migration source)                                |
+| WorkflowStorageTable           | `databaseId`         | `workflowId`  | --        | --                                                                                                                                                                             | Workflow definitions (legacy; retained migration source)                                |
+| WorkflowExecutionsStorageTable | `databaseId:assetId` | `executionId` | --        | `WorkflowLSI` (LSI, SK: workflowDatabaseId:workflowId), `WorkflowGSI` (PK: workflowDatabaseId:workflowId, SK: executionId), `ExecutionIdGSI` (PK: workflowId, SK: executionId) | Workflow execution records (legacy; retained migration source)                          |
+| CommentStorageTableV2          | `databaseId:assetId` | `commentId`   | --        | `AssetVersionIdLSI` (LSI, SK: assetVersionId)                                                                                                                                  | Asset comments; soft-deleted comments sit in the `databaseId:assetId#deleted` partition |
 
 ### Pipeline and Workflow Tables (V2 data model)
 
@@ -131,27 +131,29 @@ The compliance feature deploys unconditionally. `ComplianceEvaluationStorageTabl
 
 These tables are read only by the data-migration tooling, never by a Lambda handler. Their names are published under the `dynamoTables/legacy/` SSM parameter prefix.
 
-| Table                         | Partition Key (PK)       | Sort Key (SK)    | Streams   | GSIs                                                               | Purpose                               |
-| ----------------------------- | ------------------------ | ---------------- | --------- | ------------------------------------------------------------------ | ------------------------------------- |
-| MetadataStorageTable          | `databaseId`             | `assetId`        | NEW_IMAGE | --                                                                 | Asset-level metadata migration source |
-| MetadataSchemaStorageTable    | `databaseId`             | `field`          | --        | --                                                                 | Metadata schema migration source      |
-| AssetVersionsStorageTable     | `assetId`                | `assetVersionId` | --        | --                                                                 | Asset version migration source        |
-| AssetFileVersionsStorageTable | `assetId:assetVersionId` | `fileKey`        | --        | --                                                                 | File version migration source         |
-| AssetLinksStorageTable        | `assetIdFrom`            | `assetIdTo`      | --        | `AssetIdFromGSI` (PK: assetIdFrom), `AssetIdToGSI` (PK: assetIdTo) | Asset relationship migration source   |
-| TagStorageTable               | `tagName`                | --               | --        | --                                                                 | Tag definitions migration source      |
-| TagTypeStorageTable           | `tagTypeName`            | --               | --        | --                                                                 | Tag type definitions migration source |
+| Table                         | Partition Key (PK)       | Sort Key (SK)              | Streams   | GSIs                                                               | Purpose                                            |
+| ----------------------------- | ------------------------ | -------------------------- | --------- | ------------------------------------------------------------------ | -------------------------------------------------- |
+| MetadataStorageTable          | `databaseId`             | `assetId`                  | NEW_IMAGE | --                                                                 | Asset-level metadata migration source              |
+| MetadataSchemaStorageTable    | `databaseId`             | `field`                    | --        | --                                                                 | Metadata schema migration source                   |
+| AssetVersionsStorageTable     | `assetId`                | `assetVersionId`           | --        | --                                                                 | Asset version migration source                     |
+| AssetFileVersionsStorageTable | `assetId:assetVersionId` | `fileKey`                  | --        | --                                                                 | File version migration source                      |
+| AssetLinksStorageTable        | `assetIdFrom`            | `assetIdTo`                | --        | `AssetIdFromGSI` (PK: assetIdFrom), `AssetIdToGSI` (PK: assetIdTo) | Asset relationship migration source                |
+| TagStorageTable               | `tagName`                | --                         | --        | --                                                                 | Tag definitions migration source                   |
+| TagTypeStorageTable           | `tagTypeName`            | --                         | --        | --                                                                 | Tag type definitions migration source              |
+| CommentStorageTable           | `assetId`                | `assetVersionId:commentId` | --        | --                                                                 | Comment migration source (v2.6 asset comments)     |
+| SubscriptionsStorageTable     | `eventName`              | `entityName_entityId`      | --        | --                                                                 | Subscription migration source (v2.6 subscriptions) |
 
 ### Classification and Configuration Tables
 
 Tags and tag types are database-namespaced: the partition key is the `databaseId` (the literal `GLOBAL` for global entries) and the sort key is the name, so `(databaseId, name)` is unique and the same name can exist in different databases. Each table has a name GSI for cross-database name lookups (for example, to detect that a name a new GLOBAL entry is taking is already used by a database, which is allowed but reported as a warning). The former single-key `TagStorageTable`/`TagTypeStorageTable` are retained as legacy migration sources (see [Migration Source Tables](#migration-source-tables)).
 
-| Table                         | Partition Key (PK) | Sort Key (SK)                 | Purpose                                                                   |
-| ----------------------------- | ------------------ | ----------------------------- | ------------------------------------------------------------------------- |
-| TagStorageTableV2             | `databaseId`       | `tagName`                     | Tag definitions (GSI `tagNameIndex`, PK: tagName)                         |
-| TagTypeStorageTableV2         | `databaseId`       | `tagTypeName`                 | Tag type (category) definitions (GSI `tagTypeNameIndex`, PK: tagTypeName) |
-| SubscriptionsStorageTable     | `eventName`        | `entityName_entityId`         | Event notification subscriptions                                          |
-| AppFeatureEnabledStorageTable | `featureName`      | --                            | Enabled feature flags                                                     |
-| S3AssetBucketsStorageTable    | `bucketId`         | `bucketName:baseAssetsPrefix` | Registered asset bucket records (GSI: `bucketNameGSI`)                    |
+| Table                         | Partition Key (PK) | Sort Key (SK)                    | Purpose                                                                   |
+| ----------------------------- | ------------------ | -------------------------------- | ------------------------------------------------------------------------- |
+| TagStorageTableV2             | `databaseId`       | `tagName`                        | Tag definitions (GSI `tagNameIndex`, PK: tagName)                         |
+| TagTypeStorageTableV2         | `databaseId`       | `tagTypeName`                    | Tag type (category) definitions (GSI `tagTypeNameIndex`, PK: tagTypeName) |
+| SubscriptionsStorageTableV2   | `eventName`        | `entityName:databaseId:entityId` | Event notification subscriptions                                          |
+| AppFeatureEnabledStorageTable | `featureName`      | --                               | Enabled feature flags                                                     |
+| S3AssetBucketsStorageTable    | `bucketId`         | `bucketName:baseAssetsPrefix`    | Registered asset bucket records (GSI: `bucketNameGSI`)                    |
 
 ## Amazon S3 Buckets
 

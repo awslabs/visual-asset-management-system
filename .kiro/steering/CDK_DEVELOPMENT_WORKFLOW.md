@@ -181,7 +181,7 @@ interface storageResources {
         syncTrackingOutboundStorageTable;
         assetFileMetadataVersionsStorageTable;
         authEntitiesStorageTable;
-        commentStorageTable;
+        commentStorageTable; // V2: PK databaseId:assetId, SK commentId, LSI AssetVersionIdLSI (SK assetVersionId); the V1 table's name is published for migration tooling only
         constraintsStorageTable;
         databaseStorageTable;
         metadataSchemaStorageTableV2;
@@ -191,7 +191,7 @@ interface storageResources {
         pipelineStorageTable; // V1; name published for migration tooling only
         rolesStorageTable;
         s3AssetBucketsStorageTable;
-        subscriptionsStorageTable;
+        subscriptionsStorageTable; // V2: PK eventName, SK entityName:databaseId:entityId; the V1 table's name is published for migration tooling only
         tagStorageTable;
         tagTypeStorageTable;
         tagStorageTableLegacy; // legacy tag table; name published for migration tooling only
