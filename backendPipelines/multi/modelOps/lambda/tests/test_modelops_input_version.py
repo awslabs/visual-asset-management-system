@@ -187,3 +187,47 @@ class TestTheHandlerReadsTheLaunchVersion:
         assert mod.staged_input_key("", "xidM/b.glb") == "pipelines/modelops.staged-inputs/xidM/b.glb"
         # Every copy lands under the prefix pipelineEnd deletes from and the lifecycle rule expires.
         assert mod.staged_input_key("other/E2", "/xidM/b.glb").startswith(mod.STAGED_INPUT_PREFIX)
+
+
+@pytest.mark.unit
+class TestASingleFileAssetsObjectIsReadFromTheRunsCopy:
+    """A single-file asset (location ``xidM/sub/model.glb``, no trailing ``/``) holds its object and its
+    companion folder ``xidM/sub/model.glb/``, not the other keys of ``xidM/sub/``. The handler is given
+    the folder of the run's own copy of the object, which holds that file only."""
+
+    STAGED = "pipelines/modelops.staged-inputs/modelOps/E1/xidM/sub/model.glb"
+
+    def _run(self, root, root_bucket="abkt", **extra):
+        base = TestTheHandlerReadsTheLaunchVersion()
+        s3 = base._s3(current_version=extra.pop("current_version", "v-current"))
+        event = base._event(inputAssetRootS3Key=root, inputAssetRootBucket=root_bucket, **extra)
+        out = base._handler_output(event, s3)
+        config = json.loads(shlex.split(out["commands"][2].split("|", 1)[0])[-1])
+        return out, config["state"], config["output"], s3
+
+    def test_the_object_is_read_from_the_runs_copy(self):
+        out, state, output, s3 = self._run("xidM/sub/model.glb")
+        s3.copy.assert_called_once_with({"Bucket": "abkt", "Key": "xidM/sub/model.glb"}, "aux", self.STAGED)
+        assert (state["bucket"], state["prefix"], state["name"]) == (
+            "aux", "pipelines/modelops.staged-inputs/modelOps/E1/xidM/sub", "model")
+        # pipelineEnd deletes the copy, and the output is still placed in the asset.
+        assert out["stagedInputS3Uri"] == f"s3://aux/{self.STAGED}"
+        assert output["bucket"] == "abkt"
+
+    def test_the_launch_version_is_the_one_copied(self):
+        _, state, _, s3 = self._run("xidM/sub/model.glb", inputVersionId="v-launch", current_version="v-launch")
+        s3.copy.assert_called_once_with({"Bucket": "abkt", "Key": "xidM/sub/model.glb", "VersionId": "v-launch"},
+                                        "aux", self.STAGED)
+        assert state["bucket"] == "aux"
+
+    @pytest.mark.parametrize("root, root_bucket", [
+        ("xidM/", "abkt"),                    # a folder asset: its own folder is the asset
+        ("xidM/sub/model.glb/", "abkt"),      # a companion-folder root
+        ("xidM/sub/other.glb", "abkt"),       # another object
+        ("xidM/sub/model.glb", "other-bkt"),  # a root in another bucket
+    ])
+    def test_any_other_input_reads_its_own_folder(self, root, root_bucket):
+        out, state, _, s3 = self._run(root, root_bucket)
+        assert (state["bucket"], state["prefix"]) == ("abkt", "xidM/sub")
+        assert out["stagedInputS3Uri"] == ""
+        s3.copy.assert_not_called()

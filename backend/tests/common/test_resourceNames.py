@@ -191,14 +191,14 @@ class TestMissingKeyNegativeCache:
         def flaky():
             if state["fail"]:
                 state["fail"] = False
-                raise RuntimeError("ssm down")
+                raise TimeoutError("ssm did not answer within the sweep budget")
             real_refresh()
 
         monkeypatch.setattr(rn, "_refresh_cache", flaky)
         with pytest.raises(rn.ResourceNameUnavailableError) as failed:
             rn.get_table_name(rn.ResourceKeys.ASSET_STORAGE_TABLE)
         assert not isinstance(failed.value, KeyError)
-        assert isinstance(failed.value.__cause__, RuntimeError)
+        assert isinstance(failed.value.__cause__, TimeoutError)
         assert "dynamoTables/assetStorage" not in rn._missing_keys
 
         clock["now"] += rn.SWEEP_BACKOFF_MAX_SECONDS + 1

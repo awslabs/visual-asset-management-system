@@ -490,8 +490,13 @@ def resolve_inputs_from_manifest(data):
     output_path = output_path or data.get("outputS3AssetFilesPath", "")
     # Where a run that left referenced files out writes conversion-incomplete.json: the execution's
     # results folder (the outputs bucket + its bucket-relative results prefix).
-    global _results_location, _output_path_extension
+    global _results_location, _output_path_extension, _input_asset_root
     _results_location = None
+    # The asset root the manifest recorded for the input (assetRootS3Key, in assetRootBucket, else the
+    # entry's bucket), which confines the files the input references (referenced_files.confinement_root).
+    entry = input_files[0] if input_files else {}
+    root_key = entry.get("assetRootS3Key") or ""
+    _input_asset_root = (entry.get("assetRootBucket") or entry.get("bucket") or "", root_key) if root_key else None
     # The prefix the write-back inserts before each output file's own name (the launch's or the
     # workflow's defaultOutputFileBaseExecutionPathExtension), resolved by the execute handler. A loose
     # USD output names its files by their placed paths (usd_io.placed_reference).
@@ -505,6 +510,8 @@ def resolve_inputs_from_manifest(data):
 
 # (bucket, prefix) of the run's results folder, set by resolve_inputs_from_manifest; None without one.
 _results_location = None
+# (bucket, assetRootS3Key) of the input's asset root, set by resolve_inputs_from_manifest; None without one.
+_input_asset_root = None
 # The run's output path extension from the manifest's outputTarget; None without one.
 _output_path_extension = None
 
@@ -836,12 +843,13 @@ def _uncompressed_escalation(message, name, uncompressed_bytes, input_extension,
 
 
 def convert_input_output(input_path, output_path, output_filetype, relative_subdir="", input_version="", options=None,
-                         allow_escalation=False):
+                         allow_escalation=False, asset_root=None):
     """Convert the input and upload the output; returns the completion message of a run that left
     referenced files out (None otherwise). With ``allow_escalation`` on the Lambda tier, a run the
     function cannot finish (an input over its limits, a worker that ran out of memory or time, a
     referenced file over its limits) raises ``EscalationRequired`` carrying the named result instead of
-    the error."""
+    the error. ``asset_root`` is the manifest's ``(assetRootBucket, assetRootS3Key)`` for the input; it
+    confines the input's references when the input is read from that bucket."""
     escalation_allowed = bool(allow_escalation) and size_check.compute_tier() == size_check.TIER_LAMBDA
     global _peak_worker_memory_mib
     _peak_worker_memory_mib = None
@@ -920,7 +928,9 @@ def convert_input_output(input_path, output_path, output_filetype, relative_subd
         # that cannot be fetched fails the run, and a material library or texture that cannot is
         # skipped with a warning. The loader is given a resolver that serves only the fetched files,
         # so no reference reaches anything else on the local disk.
-        root_key, input_relative_path = referenced_files.confinement_root(input_key, relative_subdir)
+        root_bucket, root_hint = asset_root or ("", "")
+        root_key, input_relative_path = referenced_files.confinement_root(
+            input_key, relative_subdir, root_hint if root_bucket == input_bucket else "")
         temp_file = referenced_files.local_path_for(input_dir, input_relative_path)
         if temp_file is None:
             raise ValueError(f"Input S3 key {input_key} cannot be staged locally")
@@ -1243,6 +1253,8 @@ def convert(data):
 
     # Resolve the input file + output-files paths and the input's asset-relative subdirectory from
     # the workflow manifest (legacy body fields are the fallback for direct/local invocations).
+    global _input_asset_root
+    _input_asset_root = None
     input_path, output_path, relative_subdir, version_id = resolve_inputs_from_manifest(data)
 
     # conversion-run.json is written only by a deployment that has the Batch tier: its state machine
@@ -1255,6 +1267,9 @@ def convert(data):
         # The flag is passed only when the state machine set it, so a deployment without the Batch
         # tier calls the conversion exactly as before.
         extra = {"allow_escalation": True} if conversion_service.allow_escalation(data) else {}
+        # Likewise the asset root, only when the manifest recorded one.
+        if _input_asset_root:
+            extra["asset_root"] = _input_asset_root
         message = convert_input_output(input_path, output_path, output_filetype, relative_subdir, version_id,
                                        options, **extra)
     except conversion_service.EscalationRequired as escalation:
