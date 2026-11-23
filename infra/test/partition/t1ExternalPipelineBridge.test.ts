@@ -401,12 +401,13 @@ describe("SSM integration surface", () => {
         for (const key of required) {
             expect(names.filter((n) => n.endsWith(`/resourceNames/${key}`))).toHaveLength(1);
         }
-        // 76 registry parameters (ResourceNamesBuilder, including the audit log queries table) + the
-        // three late-bound ones here (the workflow role ARN, the import function and the copy engine
-        // function), plus one reindexer name per enabled search engine.
+        // 78 registry parameters (ResourceNamesBuilder, including the audit log queries table and the
+        // two legacy comment and subscription table names) + the three late-bound ones here (the
+        // workflow role ARN, the import function and the copy engine function), plus one reindexer
+        // name per enabled search engine.
         const searchOffCount = searchOff ? 1 : 0;
-        expect(names.length).toBeGreaterThanOrEqual(79 - searchOffCount);
-        expect(names.length).toBeLessThanOrEqual(81 - searchOffCount);
+        expect(names.length).toBeGreaterThanOrEqual(81 - searchOffCount);
+        expect(names.length).toBeLessThanOrEqual(83 - searchOffCount);
     });
 
     test.each(ALL_TEMPLATES)("%s binds the workflow role ARN parameter to the role", (name) => {

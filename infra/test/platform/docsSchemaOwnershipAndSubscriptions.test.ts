@@ -131,12 +131,14 @@ describe("FIX-086: the subscription recipient behaviour is recorded in the devel
         // The removal asymmetry the page records: the update path unsubscribes by RESOLVED address,
         // while `/unsubscribe` matches the value as submitted. If either side changes, the paragraph
         // describing it is wrong.
-        expect(source).toContain('delete_sns_subscriptions(body["entityId"], list(emailsDeleted)');
+        expect(source).toContain(
+            'delete_sns_subscriptions(body["databaseId"], body["entityId"], list(emailsDeleted)'
+        );
         const unsubscribe = readRepo(
             path.join("backend", "backend", "handlers", "subscription", "unsubscribeService.py")
         );
         expect(unsubscribe).toContain(
-            'delete_sns_subscriptions(body["entityId"], list(body["subscribers"])'
+            'delete_sns_subscriptions(body["databaseId"], body["entityId"], list(body["subscribers"])'
         );
     });
 
