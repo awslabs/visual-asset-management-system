@@ -37,6 +37,7 @@ import { RESOURCE_PARAM_KEYS } from "../../common/resourceParamKeys";
 import * as Config from "../../config/config";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import {
+    ASSET_LOCATION_INDEX,
     LARGE_OBJECT_COPY_JOBS_EXECUTION_INDEX,
     PREPARED_DOWNLOADS_PREFIX,
     ZIP_DOWNLOAD_ASSET_INDEX,
@@ -105,6 +106,29 @@ export function buildCreateAssetFunction(
             resources: [assetTopicWildcardArn],
         })
     );
+
+    // An asset created on a bucketExistingKey asks bucket sync to import the files already there: one
+    // message to the created-events queue of the asset's own registration. One statement naming the
+    // deployment's own created-events queues, no wildcard.
+    const syncCreatedQueueArns = Array.from(
+        new Set(
+            s3AssetBuckets
+                .getS3AssetBucketRecords()
+                .map((record) => record.syncCreatedQueueName)
+                .filter((queueName): queueName is string => !!queueName)
+        )
+    ).map(
+        (queueName) =>
+            `arn:${Service.Partition()}:sqs:${config.env.region}:${config.env.account}:${queueName}`
+    );
+    if (syncCreatedQueueArns.length > 0) {
+        fun.addToRolePolicy(
+            new iam.PolicyStatement({
+                actions: ["sqs:SendMessage"],
+                resources: syncCreatedQueueArns,
+            })
+        );
+    }
 
     suppressCdkNagErrorsByGrantReadWrite(scope);
 
@@ -1124,6 +1148,17 @@ export function buildLargeObjectCopyEngine(
             effect: iam.Effect.ALLOW,
             actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
             resources: [storage.dynamo.assetStorageTable.tableArn],
+        })
+    );
+    // That asset type comes from the keys the asset owns: the locations of assets nested in its
+    // location are read from the asset table's location index (#1207).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [
+                `${storage.dynamo.assetStorageTable.tableArn}/index/${ASSET_LOCATION_INDEX}`,
+            ],
         })
     );
     fun.addToRolePolicy(

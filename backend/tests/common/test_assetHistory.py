@@ -55,10 +55,46 @@ class TestWriteAssetHistoryRecord:
         # Must not raise into the calling operation
         m.write_asset_history_record("db1", "a1", m.CHANGE_SOURCE_ARCHIVE, "u", {})
 
-    def test_missing_table_is_swallowed(self, asset_history_module):
+    def test_missing_table_is_swallowed(self, asset_history_module, monkeypatch):
         m = asset_history_module
         m.asset_history_table = None
+
+        def unresolved(key):
+            raise KeyError(key.param_key)
+
+        monkeypatch.setitem(m.write_asset_history_record.__globals__, "get_table_name", unresolved)
         m.write_asset_history_record("db1", "a1", m.CHANGE_SOURCE_ARCHIVE, "u", {})
+
+    def test_a_name_not_resolved_at_import_is_resolved_at_the_next_write(self, asset_history_module, monkeypatch):
+        # The import-time lookup was refused (Parameter Store throttled the cold start). The first
+        # write is refused too; a later write resolves the name and records, and keeps the table.
+        m = asset_history_module
+        m.asset_history_table = None
+        module_globals = m.write_asset_history_record.__globals__
+        answers = [RuntimeError("refused"), "history-table"]
+        lookups = []
+
+        def get_table_name(key):
+            lookups.append(key.param_key)
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        table = MagicMock()
+        resource = MagicMock()
+        resource.Table.return_value = table
+        monkeypatch.setitem(module_globals, "get_table_name", get_table_name)
+        monkeypatch.setitem(module_globals, "dynamodb", resource)
+
+        m.write_asset_history_record("db1", "a1", m.CHANGE_SOURCE_EDIT, "u", {})
+        table.put_item.assert_not_called()
+        m.write_asset_history_record("db1", "a1", m.CHANGE_SOURCE_EDIT, "u", {})
+        m.write_asset_history_record("db1", "a2", m.CHANGE_SOURCE_EDIT, "u", {})
+
+        resource.Table.assert_called_once_with("history-table")
+        assert [c[1]["Item"]["assetId"] for c in table.put_item.call_args_list] == ["a1", "a2"]
+        assert lookups == ["dynamoTables/assetHistoryStorage"] * 2
 
 
 @pytest.mark.unit

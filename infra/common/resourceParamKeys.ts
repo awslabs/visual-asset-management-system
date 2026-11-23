@@ -11,8 +11,9 @@
  * dynamoTablesLegacy, lambdaFunctions and integration categories are consumed by
  * deployment tooling, data-migration tooling and externally owned pipeline bridge stacks
  * (mirrored by infra/deploymentDataMigration/tools/ssm_resource_lookup.py), not through
- * backend/common/resourceNames.py; lambdaFunctions.largeObjectCopyEngine is also read by the
- * workflow output step, by its full parameter name.
+ * backend/common/resourceNames.py; lambdaFunctions.largeObjectCopyEngine is also resolved by the
+ * workflow output step through backend/common/resourceNames.py (the key is
+ * ENGINE_FUNCTION_RESOURCE_KEY in backend/common/largeObjectCopy.py).
  */
 export const RESOURCE_PARAM_KEYS = {
     dynamoTables: {
@@ -94,8 +95,9 @@ export const RESOURCE_PARAM_KEYS = {
         crOsReindexer: "lambdaFunctions/crOsReindexer",
         vectorReindexer: "lambdaFunctions/vectorReindexer",
         importGlobalPipelineWorkflow: "lambdaFunctions/importGlobalPipelineWorkflow",
-        // The large object copy engine, read by the workflow output step (which cannot take the
-        // name as an environment variable: the engine references it).
+        // The large object copy engine, resolved by the workflow output step through the backend
+        // resource-name resolver (it cannot take the name as an environment variable: the engine
+        // references it).
         largeObjectCopyEngine: "lambdaFunctions/largeObjectCopyEngine",
     },
     // Integration surface an externally owned pipeline bridge stack resolves at deploy time

@@ -1,18 +1,11 @@
 # Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Folder markers VAMS writes carry the metadata the bucket-sync handler would stamp (#1060).
+"""Folder markers VAMS writes carry the VAMS stamp metadata (#1060).
 
-The bucket-sync created handler stamps ``databaseid`` / ``assetid`` / ``vams-changesource`` onto any
-object that lacks them by copying the object onto itself. Every folder marker VAMS wrote (the asset
-prefix marker from createAsset, and the folder from ``create_folder``) arrived without them, so each
-one cost a self-copy and a second ObjectCreated event through the same queue. Under parallel load those
-echoes kept Lambda's recursive-loop counter climbing until whole batches were dropped.
-
-The tests cover both writers and the consumer: the bucket-sync ``update_s3_metadata`` must take its
-"metadata already matches" branch on a marker written this way, so no copy is made. A marker written
-before this change (no metadata) must still be stamped, which is the path objects written outside VAMS
-keep using.
+The asset prefix marker from createAsset and the folder from ``create_folder`` are written with
+``databaseid`` / ``assetid`` / ``vams-changesource``, like every other object VAMS writes. Bucket sync
+no longer copies an object onto itself to add them.
 """
 
 from unittest.mock import MagicMock
@@ -78,37 +71,3 @@ class TestCreateFolderMarker:
         kwargs = s3.put_object.call_args.kwargs
         assert kwargs["Metadata"] == folder_marker_metadata(key_length.DATABASE_ID, key_length.ASSET_ID)
         assert kwargs["ACL"] == "bucket-owner-full-control"
-
-
-@pytest.fixture
-def bucket_sync():
-    m = _load_bucket_sync()
-    saved = {name: getattr(m, name) for name in ("s3_client", "s3_resource")}
-    m.s3_client = MagicMock()
-    m.s3_resource = MagicMock()
-    yield m
-    for name, value in saved.items():
-        setattr(m, name, value)
-
-
-@pytest.mark.unit
-class TestBucketSyncStampOnFolderMarker:
-
-    def test_a_marker_written_by_vams_is_not_copied(self, bucket_sync):
-        bucket_sync.s3_client.head_object.return_value = {
-            "Metadata": folder_marker_metadata(DATABASE_ID, ASSET_ID)
-        }
-
-        assert bucket_sync.update_s3_metadata("bucket", f"{ASSET_ID}/", DATABASE_ID, ASSET_ID) is True
-
-        bucket_sync.s3_resource.Object.assert_not_called()
-
-    def test_an_unstamped_marker_is_still_stamped(self, bucket_sync):
-        """Objects written outside VAMS, and markers written before this change, keep the copy."""
-        bucket_sync.s3_client.head_object.return_value = {"Metadata": {}}
-
-        assert bucket_sync.update_s3_metadata("bucket", f"{ASSET_ID}/", DATABASE_ID, ASSET_ID) is True
-
-        copy = bucket_sync.s3_resource.Object.return_value.copy
-        copy.assert_called_once()
-        assert copy.call_args.kwargs["ExtraArgs"]["Metadata"] == EXPECTED

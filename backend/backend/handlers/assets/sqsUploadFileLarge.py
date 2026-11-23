@@ -15,7 +15,8 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import log_file_upload, audited_handler
 from common.dynamodb import to_update_expr
-from common.assetLocations import contains, held_objects
+from common.assetLocations import contains, held_objects, legacy_location_in_key
+from common.fileAttribution import nested_locations_for_asset_type
 from common.s3 import validateS3AssetExtensionsAndContentType, list_all_objects, is_object_version_archived, region_routing_s3_client, region_routing_s3_resource, register_bucket_region
 from common.assetProvenance import asset_change_provenance
 from common.s3MetadataKeys import (
@@ -465,8 +466,13 @@ def update_asset_after_file_processing(asset_id: str, database_id: str, bucket_n
             return
         
         # Determine asset type using the asset's bucket and key location
-        asset_base_key = asset.get('assetLocation', {}).get('Key', f"{asset_id}/")
-        asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key)
+        # A legacy row without a stored location: its folder under the registration prefix, as the
+        # uploaded file's key shows it.
+        asset_base_key = (asset.get('assetLocation') or {}).get('Key') or legacy_location_in_key(final_s3_key, asset_id)
+        # From the keys the asset owns (a nested asset's keys left out)
+        nested = nested_locations_for_asset_type(asset_table, asset, bucket_name, asset_base_key,
+                                                 asset_table_name=asset_storage_table_name)
+        asset_type = determine_asset_type(asset_id, bucket_name, asset_base_key, nested=nested)
         logger.info(f"Asset type determined for asset {asset_id}: {asset_type}")
 
         # Update asset type - ensure we're not overriding with None
@@ -579,7 +585,7 @@ def update_asset_attributes(database_id: str, asset_id: str, updates: Dict[str, 
         logger.exception(f"Error saving asset details: {e}")
         raise VAMSGeneralErrorResponse(f"Error saving asset.")
 
-def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
+def determine_asset_type(asset_id: str, bucket: str, prefix: str, nested=None) -> str:
     """
     Determine the asset type based on S3 contents.
     Simplified version from uploadFile.py for async processing.
@@ -609,8 +615,8 @@ def determine_asset_type(asset_id: str, bucket: str, prefix: str) -> str:
         non_archived_files = []
         file_count = 0
         for item in contents:
-            if item['Key'].endswith('/') or not contains(prefix, item['Key']):
-                # Skip folder markers and keys the location does not hold
+            if item['Key'].endswith('/') or not contains(prefix, item['Key']) or (nested and not nested.keep(item['Key'])):
+                # Skip folder markers, keys the location does not hold and keys a nested asset's location holds
                 continue
                 
             try:

@@ -305,5 +305,5 @@ class TestUnattributedRecordLogging:
         assert outcome.ok and outcome.action == "ignore"
         assert indexer.vector_store.calls == []
         assert self._messages(log.warning) == [
-            "assetId a1 resolves to 2 databases for bucket assets/prefix-a/; cannot attribute the file"]
+            "S3 record for assets/prefix-a/a1/models/part.glb is claimed by more than one asset; cannot attribute the file"]
         assert GONE_LINE not in self._messages(log.info)

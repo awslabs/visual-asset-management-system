@@ -78,45 +78,53 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_V
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# Every Python package of this image is installed from locks/stable3dgen, hashed exports of its uv.lock
+# (#1726): the same versions, from the same files, on every build. The lock holds the image's whole set, so
+# nothing is resolved at build time and no later step can move a version. pip and the build tools come first
+# from their own lock, then the rest with --require-hashes --no-deps: pip refuses a file whose hash is not in
+# the lock and installs nothing the lock does not name.
+COPY locks/stable3dgen/requirements-build.lock locks/stable3dgen/requirements.lock locks/stable3dgen/requirements-gpl.lock locks/stable3dgen/out-of-lock.json /opt/locks/stable3dgen/
+COPY locks/stable3dgen/upstream /opt/locks/stable3dgen/upstream
+COPY locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/stable3dgen/requirements-build.lock
 
-# torch, torchvision and xformers are installed together from the CUDA 12.8 index so all three come
-# from one set of CUDA-enabled builds. The versions are pinned as a pair: xformers 0.0.34 declares
-# torch==2.10.0 exactly, and resolving xformers from PyPI instead would pull its own CPU-only torch
-# over this one. xformers is not optional -- the sparse attention module accepts only 'xformers' or
-# 'flash_attn' and raises at import for anything else, so unlike the dense path it has no sdpa
-# fallback, and flash_attn would mean the source compile this image exists to avoid.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
-    torch==2.10.0 torchvision==0.25.0 xformers==0.0.34
+# torch, torchvision and xformers are the CUDA 12.8 builds from the PyTorch index (the lock pins torch to
+# 2.10.0+cu128 and the hashes are those files'); every other package comes from the default index. The versions
+# are pinned as a set: xformers 0.0.34 declares torch==2.10.0 exactly, and xformers is not optional -- the
+# sparse attention module accepts only 'xformers' or 'flash_attn' and raises at import for anything else, so
+# unlike the dense path it has no sdpa fallback, and flash_attn would mean the source compile this image exists
+# to avoid.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -r /opt/locks/stable3dgen/requirements.lock
 
-# Shared pipeline dependencies
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
+# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
+# carries them; only a hand-run build that sets it to false leaves them out.
+RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
+        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/stable3dgen/requirements-gpl.lock; \
+    else \
+        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
+    fi
 
-# Clone Stable3DGen and install its dependency stack. Everything it declares is a plain wheel.
+# Clone Stable3DGen at its pinned commit. Its dependency stack is already installed from the lock; the check
+# after the clone fails the build when the upstream requirements.txt differs from the copy the lock was
+# resolved from, which is what a moved STABLE3DGEN_COMMIT without a re-lock looks like.
 RUN git clone https://github.com/Stable-X/Stable3DGen.git /opt/stable3dgen && \
     cd /opt/stable3dgen && \
     git checkout --detach ${STABLE3DGEN_COMMIT} && \
     test "$(git rev-parse HEAD)" = "${STABLE3DGEN_COMMIT}" && \
-    git rev-parse HEAD > /opt/stable3dgen/VAMS_UPSTREAM_COMMIT
+    git rev-parse HEAD > /opt/stable3dgen/VAMS_UPSTREAM_COMMIT && \
+    python /opt/locks/tools/check_upstream_requirements.py \
+        --recorded /opt/locks/stable3dgen/upstream --clone /opt/stable3dgen requirements.txt
 WORKDIR /opt/stable3dgen
 # No CUDA extension is compiled in this image, so this list only affects any wheel that consults it.
 # Ampere (8.6) covers g5 / A10G, Ada (8.9) covers g6 / L4 and g6e / L40S, Hopper (9.0) covers H100.
 ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Upstream pins transformers exactly but leaves diffusers unbounded, and the two have diverged:
-# diffusers 0.37 added an autoencoder whose module imports Dinov2WithRegistersConfig from
-# transformers, a name the pinned transformers does not carry. The autoencoders package imports that
-# module eagerly, so the failure hits any diffusers.models import -- which is the first thing the
-# normal predictor does. pip cannot see the conflict because diffusers declares transformers only as
-# a test extra, so the bound is applied here rather than left to resolution.
-RUN pip install --no-cache-dir "diffusers<0.37"
-
-# The sparse convolution backend. spconv-cu126 is the newest variant publishing a cp312 wheel --
-# spconv-cu120 has none, so naming it here would fail the build on this image's Python. A cu126 build
-# runs against the CUDA 12.8 runtime through minor version compatibility.
-RUN pip install --no-cache-dir spconv-cu126
+# The diffusers bound and the sparse convolution backend the image used to install by hand are in the lock: upstream
+# pins transformers exactly but leaves diffusers unbounded, and diffusers 0.37 imports a name the pinned
+# transformers lacks (the lock keeps diffusers below it); spconv-cu126 is the newest variant publishing a cp312
+# wheel, and runs against the CUDA 12.8 runtime through minor version compatibility.
 
 # The normal predictor is loaded with torch.hub source='local', which expects the checkout under the
 # hub directory named the way torch.hub names a GitHub repo: {owner}_{repo}_{branch}.
@@ -171,23 +179,14 @@ RUN mkdir -p /opt/torchhome/hub/checkpoints && \
 # its working directory; adding it to PYTHONPATH keeps the import working from anywhere.
 ENV PYTHONPATH="/opt/stable3dgen:${PYTHONPATH}"
 
-# GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
-# carries them; only a hand-run build that sets it to false leaves them out.
-RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
-        echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
-    else \
-        echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
-    fi
-
-# A model repo's own requirements are installed after the shared ones and can pull a shared
-# dependency backwards -- Stable3DGen pins numpy 1.26.4, and the pipeline's own code is written
-# against the versions in the shared file. Reasserting the shared constraint here restores them, and
-# the import check confirms the torch stack survived it.
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt && \
-    python -c "import trimesh, manifold3d, torch; \
-assert torch.version.cuda, 'the shared requirements displaced the CUDA torch build'; \
+# The installed set is exactly the lock: this fails the build on any package that is missing, extra or at
+# another version than locks/stable3dgen names (the GPL pair only when it was requested), and pip check
+# confirms the declared dependencies of what is installed. The import check confirms the CUDA torch build
+# survived and the repair stack the pipeline's own code is written against is present.
+RUN python /opt/locks/tools/check_installed_set.py --dir /opt/locks/stable3dgen --gpl "$ENABLE_GPL_MESH_REPAIR" && \
+    pip check
+RUN python -c "import trimesh, manifold3d, torch; \
+assert torch.version.cuda, 'the locked install displaced the CUDA torch build'; \
 print('trimesh', trimesh.__version__, 'torch', torch.__version__)"
 
 # rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
@@ -225,6 +224,24 @@ RUN chgrp vams /opt/stable3dgen && chmod 1775 /opt/stable3dgen && chown -R vams:
 # at build time, so an image whose huggingface_hub lacks what the guard wraps fails here rather than
 # on its first run.
 RUN cd /opt/ml/code && python -c "from hfguard import hf_pins; assert hf_pins.install(), 'huggingface_hub is missing'"
+# The modules a Stable3DGen job runs import with the locked set alone. The lock leaves gradio out (only the
+# upstream demo apps import it), so this loads the pipeline's entry module without running it, the modules its
+# code imports inside functions, the Stable3DGen pipeline, the StableNormal predictor the driver loads through
+# torch.hub and the DINOv2 hub the predictor loads in turn (by file, because StableNormal's is already `hubconf`),
+# and fails the build on a module that needs a package the lock does not hold. The entry module creates its S3
+# client at import; with the instance metadata lookup off, that reaches no network during the build.
+RUN cd /opt/ml/code && AWS_EC2_METADATA_DISABLED=true python -c "import importlib, importlib.util, sys; \
+assert importlib.util.find_spec('gradio') is None, 'gradio is installed, but the lock leaves it out'; \
+spec = importlib.util.spec_from_file_location('job_entry', '__main__.py'); \
+spec.loader.exec_module(importlib.util.module_from_spec(spec)); \
+[importlib.import_module(m) for m in ('framing', 'models.stable3dgen', 'rembg', 'onnxruntime', 'manifold3d', \
+'xatlas', 'scipy', 'torchvision', 'transformers', 'huggingface_hub')]; \
+from hi3dgen.pipelines import Hi3DGenPipeline; \
+sys.path.insert(0, '/opt/torchhome/hub/hugoycj_StableNormal_main'); import hubconf; \
+sys.path.insert(0, '/opt/torchhome/hub/facebookresearch_dinov2_main'); \
+dino = importlib.util.spec_from_file_location('dinov2_hubconf', '/opt/torchhome/hub/facebookresearch_dinov2_main/hubconf.py'); \
+dino.loader.exec_module(importlib.util.module_from_spec(dino)); \
+print('Stable3DGen job modules import')"
 
 WORKDIR /opt/ml/code
 USER 10000:10000

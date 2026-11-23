@@ -18,11 +18,13 @@ from botocore.exceptions import ClientError
 from botocore.config import Config
 from aws_lambda_powertools.utilities.typing import LambdaContext
 from aws_lambda_powertools.utilities.parser import parse, ValidationError
+from common.assetLocations import normalize_base_prefix
 from common.constants import STANDARD_JSON_RESPONSE
 from common.validators import validate
 from common.batchItemFailures import failed_records_log_line
 from common.eventLogSummary import event_log_summary, exception_log_summary
 from common.resourceNames import get_table_name, ResourceKeys
+from common.ssmParameters import get_parameter_value
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -63,20 +65,22 @@ except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
 
-# Get SSM parameter values
-def get_ssm_parameter_value(parameter_name: str) -> str:
-    """Get SSM parameter value"""
-    try:
-        ssm_client = boto3.client('ssm', config=retry_config)
-        response = ssm_client.get_parameter(Name=parameter_name)
-        return response['Parameter']['Value']
-    except Exception as e:
-        logger.exception(f"Error getting SSM parameter {parameter_name}: {e}")
-        raise VAMSGeneralErrorResponse(f"Error getting configuration parameter: {parameter_name}")
+# The asset index name and the OpenSearch endpoint. Read on first use (load_opensearch_settings), not at
+# import, which runs inside Lambda's 10-second init limit.
+opensearch_asset_index: Optional[str] = None
+opensearch_endpoint: Optional[str] = None
 
-# Load OpenSearch configuration from SSM
-opensearch_asset_index = get_ssm_parameter_value(opensearch_asset_index_ssm_param)
-opensearch_endpoint = get_ssm_parameter_value(opensearch_endpoint_ssm_param)
+
+def load_opensearch_settings() -> None:
+    """Read the asset index name and the OpenSearch endpoint into the module globals the indexing
+    functions use, through common.ssmParameters: each read is bounded, cached per container and backs
+    off after a throttled read. The handler calls it before it handles any record, so a value that
+    cannot be read fails the batch before anything is written, and every record of the batch is
+    reported failed for redelivery."""
+    global opensearch_asset_index, opensearch_endpoint
+    opensearch_asset_index = get_parameter_value(opensearch_asset_index_ssm_param)
+    opensearch_endpoint = get_parameter_value(opensearch_endpoint_ssm_param)
+
 
 # Initialize DynamoDB tables
 asset_storage_table = dynamodb.Table(asset_storage_table_name)
@@ -101,13 +105,15 @@ class AssetIndexOpenSearchManager:
         return cls._instance
     
     def __init__(self):
-        if self._client is None:
-            self._initialize_client()
+        # The client is created on first use (get_client, is_available), since it needs the endpoint.
+        pass
     
     def _initialize_client(self):
         """Initialize OpenSearch client with connection pooling"""
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+
+            load_opensearch_settings()
             
             # Create OpenSearch client
             host = opensearch_endpoint.replace('https://', '').replace('http://', '')
@@ -142,7 +148,12 @@ class AssetIndexOpenSearchManager:
         return self._client
     
     def is_available(self) -> bool:
-        """Check if OpenSearch client is available"""
+        """Check if OpenSearch client is available, creating it on first use"""
+        if self._client is None:
+            try:
+                self._initialize_client()
+            except VAMSGeneralErrorResponse:
+                return False
         return self._client is not None
 
 # Global client manager instance
@@ -343,20 +354,12 @@ def get_bucket_details(bucket_id: str) -> Optional[Dict[str, Any]]:
             
         bucket = items[0]
         bucket_name = bucket.get('bucketName')
-        base_assets_prefix = bucket.get('baseAssetsPrefix', '/')
-        
+        base_assets_prefix = normalize_base_prefix(bucket.get('baseAssetsPrefix', '/'))
+
         if not bucket_name:
             logger.error(f"Bucket name missing for bucketId: {bucket_id}")
             return None
-        
-        # Ensure prefix ends with slash
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-        
-        # Remove leading slash
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
-        
+
         return {
             'bucketId': bucket_id,
             'bucketName': bucket_name,
@@ -1202,6 +1205,10 @@ def lambda_handler(event, context: LambdaContext) -> APIGatewayProxyResponseV2:
 
     try:
         logger.info(f"Processing asset indexing event: {event_log_summary(event)}")
+
+        # Before any record: a setting that cannot be read fails the batch here, with nothing written,
+        # and the handler below reports every record of it for redelivery.
+        load_opensearch_settings()
 
         results = []
         batch_item_failures: List[Dict[str, str]] = []

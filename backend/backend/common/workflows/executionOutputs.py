@@ -241,7 +241,11 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
         step in the same invocation lists the identical set), so the listing is not repeated.
 
     output_bucket_region: the output bucket's Region, carried as bucketRegion on every entry that
-        points into it (shadowed inputs and new output files); an original input keeps its own."""
+        points into it (shadowed inputs and new output files); an original input keeps its own.
+
+    excludeLocations (a folder input's nested-asset locations) is carried on both branches: the locations are
+        keys in the asset's own bucket under its root, which shadowing does not change (it replaces only the
+        entry's bucket, key and version). A new output file carries none."""
     output_files = (current_output_files if current_output_files is not None
                     else list_current_output_files(s3_client, output_bucket, output_files_prefix))
     output_by_rel = {}
@@ -273,7 +277,8 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
                 asset_root_s3_key=entry.get("assetRootS3Key", ""),
                 asset_root_bucket=entry.get("assetRootBucket") or entry.get("bucket", ""),
                 aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
-                bucket_region=output_bucket_region))
+                bucket_region=output_bucket_region,
+                exclude_locations=entry.get("excludeLocations")))
         else:
             resolved.append(er.build_manifest_entry(
                 rel, entry.get("bucket", ""), entry.get("key", ""), entry.get("versionId", ""),
@@ -282,7 +287,8 @@ def resolve_manifest_input_files(s3_client, original_inputs, output_bucket, outp
                 asset_root_bucket=entry.get("assetRootBucket", ""),
                 aux_preview_prefix=entry.get("auxPreviewPrefix", ""),
                 bucket_region=entry.get("bucketRegion", ""),
-                bucket_account_id=entry.get("bucketAccountId", "")))
+                bucket_account_id=entry.get("bucketAccountId", ""),
+                exclude_locations=entry.get("excludeLocations")))
 
     # New output files (no matching original input path) become additional inputs, located in
     # the output bucket (no originating asset identity).

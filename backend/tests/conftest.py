@@ -161,6 +161,27 @@ _alc_module = _s3mk_importlib_util.module_from_spec(_alc_spec)
 _alc_spec.loader.exec_module(_alc_module)
 sys.modules['common.assetLocations'] = _alc_module
 sys.modules['common'].assetLocations = _alc_module
+# fileAttribution decides which asset an S3 object belongs to from the record's binding, the location
+# index and, before the index is ready, the stamp and the first folder. It builds no client (callers pass
+# their table handles), so load the REAL module by path, after assetLocations, which it imports.
+_fat_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.fileAttribution',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'fileAttribution.py')
+)
+_fat_module = _s3mk_importlib_util.module_from_spec(_fat_spec)
+_fat_spec.loader.exec_module(_fat_module)
+sys.modules['common.fileAttribution'] = _fat_module
+sys.modules['common'].fileAttribution = _fat_module
+# vamsObjectTags writes the two VAMS object tags through the S3 client its caller passes and builds no
+# client of its own, so load the REAL module by path.
+_vot_spec = _s3mk_importlib_util.spec_from_file_location(
+    'common.vamsObjectTags',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'vamsObjectTags.py')
+)
+_vot_module = _s3mk_importlib_util.module_from_spec(_vot_spec)
+_vot_spec.loader.exec_module(_vot_module)
+sys.modules['common.vamsObjectTags'] = _vot_module
+sys.modules['common'].vamsObjectTags = _vot_module
 # validators is pure (re + json + common.s3PathPatterns, registered above; no AWS
 # deps), so load the REAL module by path. Its regex pattern CONSTANTS must be real
 # strings: models (e.g. assetsV3) pass them to pydantic v1 Field(regex=...), which
@@ -569,6 +590,19 @@ sys.modules['common.largeObjectCopy'] = _loc_module
 _loc_spec.loader.exec_module(_loc_module)
 sys.modules['common'].largeObjectCopy = _loc_module
 
+# ssmParameters is the bounded, cached single-parameter lookup that search, the indexers and the
+# secure-config handler import at module level. Its SSM client is built on first read, so the REAL
+# module loads with no AWS access; tests that read through it give it a fake client
+# (tests/ssmParametersStub.py). Loaded after customLogging (it builds a safeLogger at import).
+_ssmp_spec = _importlib_util.spec_from_file_location(
+    'common.ssmParameters',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'ssmParameters.py')
+)
+_ssmp_module = _importlib_util.module_from_spec(_ssmp_spec)
+sys.modules['common.ssmParameters'] = _ssmp_module
+_ssmp_spec.loader.exec_module(_ssmp_module)
+sys.modules['common'].ssmParameters = _ssmp_module
+
 # uploadStatus (an upload's asynchronously ingested files) likewise takes its table as an argument, so
 # the REAL module is loaded and bound the same way.
 _us_spec = _importlib_util.spec_from_file_location(
@@ -660,6 +694,9 @@ os.environ["DATABASE_METADATA_STORAGE_TABLE_NAME"] = "databaseMetadataTable"
 os.environ["ASSET_FILE_METADATA_STORAGE_TABLE_NAME"] = "assetFileMetadataTable"
 os.environ["FILE_ATTRIBUTE_STORAGE_TABLE_NAME"] = "fileAttributeTable"
 os.environ["METADATA_SCHEMA_STORAGE_TABLE_V2_NAME"] = "metadataSchemaTableV2"
+
+# File version history (the sync ledger): bucket sync writes it, the file indexer records indexedAt
+os.environ.setdefault("ASSET_FILE_VERSION_HISTORY_STORAGE_TABLE_NAME", "assetFileVersionHistoryTable")
 
 # Vector search + workflow coordination tables
 os.environ["VECTOR_EMBEDDINGS_STORAGE_TABLE_NAME"] = "vectorEmbeddingsStorageTable"

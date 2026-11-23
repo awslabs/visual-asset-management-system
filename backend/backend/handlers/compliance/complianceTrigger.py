@@ -121,6 +121,13 @@ from common.compliance.assetAccess import asset_is_archived, names_an_asset
 from common.compliance.cascadeAuditSummary import opened_details
 from models.compliance import EvaluationVerdict
 from common.dynamodb import query_all_items
+from common.fileAttribution import (
+    AMBIGUOUS,
+    RegistrationUnavailableError,
+    attribute_object,
+    binding_of,
+    read_asset_row,
+)
 from common.indexerEvents import s3_records_from_indexer_message
 from common.resourceNames import ResourceKeys, get_table_name
 from common.s3 import region_routing_s3_client
@@ -251,7 +258,8 @@ def is_infrastructure_error(error):
     condition did not hold is an answer, not a failure."""
     if isinstance(error, ClientError):
         return (error.response or {}).get("Error", {}).get("Code") != CONDITIONAL_CHECK_FAILED
-    return isinstance(error, BotoCoreError)
+    # A bucket registration the file event's attribution depends on could not be read.
+    return isinstance(error, (BotoCoreError, RegistrationUnavailableError))
 
 
 def message_from_queue_record(record):
@@ -282,7 +290,7 @@ class TriggerBatch:
     and the reads shared between them.
 
     `collect` reads a message into candidates without evaluating anything; `evaluate_all` then
-    judges them in order. A database row (`database_item`), an asset's row (`file_event_target`)
+    judges them in order. A database row (`database_item`), an asset's row (`asset_row`)
     and an asset's evaluation target (`evaluation_target`) are read once per batch, and an asset
     evaluated once (`evaluated`) is not evaluated again in the batch. `run` runs one step for one
     queue record and records the record as failed when the step raised an infrastructure error."""
@@ -295,7 +303,8 @@ class TriggerBatch:
         self._database_items = {}
         self._binding_applies = {}
         self._targets = {}
-        self._file_targets = {}
+        self._asset_rows = {}
+        self._asset_queries = {}
         self._link_endpoints = {}
         # Per queue record: (receipt handle, ApproximateReceiveCount), for `defer`.
         self._receipts = {}
@@ -463,13 +472,47 @@ class TriggerBatch:
             self._targets[key] = _evaluation_target(database_id, asset_id, batch=self)
         return self._targets[key]
 
-    def file_event_target(self, asset_id, bucket="", object_key="", prefix=""):
-        """`_file_event_target`, read once per asset id, bucket and bucket prefix: the same asset
-        id under another bucket or prefix may be another database's asset."""
-        key = (asset_id, bucket, prefix)
-        if key not in self._file_targets:
-            self._file_targets[key] = _file_event_target(asset_id, bucket, object_key, batch=self)
-        return self._file_targets[key]
+    def asset_index(self):
+        """The asset table, with each query answered once per batch: the records of an N-file
+        upload attribute through the same asset-id index page."""
+        return _BatchQueries(asset_table, self._asset_queries)
+
+    def asset_row(self, database_id, asset_id, include_archived):
+        """`(row, archived)` of an asset, read strongly consistent once per batch
+        (`fileAttribution.read_asset_row`); the attribution of a file event checks the asset its
+        `vamsBinding` names with it."""
+        key = (database_id, asset_id, include_archived)
+        if key not in self._asset_rows:
+            self._asset_rows[key] = read_asset_row(asset_table, database_id, asset_id, include_archived)
+        return self._asset_rows[key]
+
+
+def _query_key(value):
+    """A comparable form of a query argument; boto3 condition objects compare by identity."""
+    if hasattr(value, "get_expression"):
+        expression = value.get_expression()
+        return (expression["operator"], tuple(_query_key(v) for v in expression["values"]))
+    if type(value).__module__ == "boto3.dynamodb.conditions" and hasattr(value, "name"):
+        return ("attribute", value.name)
+    return repr(value)
+
+
+class _BatchQueries:
+    """A table whose `query` answers repeat once per batch (`TriggerBatch.asset_index`); every other
+    attribute is the table's own."""
+
+    def __init__(self, table, answers):
+        self._table = table
+        self._answers = answers
+
+    def __getattr__(self, name):
+        return getattr(self._table, name)
+
+    def query(self, **kwargs):
+        key = tuple(sorted((name, _query_key(value)) for name, value in kwargs.items()))
+        if key not in self._answers:
+            self._answers[key] = self._table.query(**kwargs)
+        return self._answers[key]
 
 
 @audited_handler
@@ -1029,22 +1072,16 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
     HEAD. For an asset that is, the object's provenance is read and a record naming an object a
     workflow execution wrote is skipped."""
     batch = batch if batch is not None else TriggerBatch()
-    prefix = message.get("ASSET_BUCKET_PREFIX", "")
     s3_info = s3_record.get("s3") or {}
     object_key = (s3_info.get("object") or {}).get("key", "")
     change_time = parse_event_time(s3_record.get("eventTime"))
-
-    asset_id = _extract_asset_id_from_key(object_key, prefix)
-    if not asset_id:
-        logger.info("Could not extract an assetId from the object key")
-        return
-
     bucket = (s3_info.get("bucket") or {}).get("name") or message.get("ASSET_BUCKET_NAME", "")
-    resolved = batch.file_event_target(asset_id, bucket, object_key, prefix)
-    if resolved is None or asset_id in decided:
+
+    resolved = _file_event_target(s3_record, bucket, object_key, batch=batch)
+    if resolved is None:
         return
-    database_id, asset_row, target = resolved
-    if (database_id, asset_id) in batch.evaluated:
+    database_id, asset_id, asset_row, target = resolved
+    if (database_id, asset_id) in decided or (database_id, asset_id) in batch.evaluated:
         return
 
     change_source = object_change_source(s3_info, message)
@@ -1057,7 +1094,7 @@ def _evaluate_file_record(s3_record, message, decided, batch=None):
                     "write of the same key; skipping compliance evaluation")
         return
 
-    decided.add(asset_id)
+    decided.add((database_id, asset_id))
     # The object is not a workflow execution's (those were skipped above), so it belongs to a
     # user upload's completion, to an asset-version revert's stamp, or to a direct write.
     stamp_attribute, completion_time = file_event_completion_stamp(asset_row)
@@ -1181,37 +1218,34 @@ def file_event_completion_stamp(asset_row):
     return latest_attribute, latest_instant
 
 
-def _file_event_target(asset_id, bucket="", object_key="", batch=None):
-    """`(database_id, asset row, evaluation target)` for the asset whose files hold the object a
-    file event names (`bucket`, `object_key`), or None (logged) when the asset has no live row, no
-    single live row holds the object (`asset_row_holds_object`), or its database or binding does not
-    evaluate it. An asset id is unique within a database only, so several live rows are told apart
-    by their location first; a single row is checked after its evaluation target, so a file event
-    of a database that evaluates nothing costs no bucket read."""
+def _file_event_target(s3_record, bucket, object_key, batch=None):
+    """`(database_id, asset_id, asset row, evaluation target)` for the live asset that holds the
+    object a file event names, or None (logged) when no live asset holds it, several do, or its
+    database or binding does not evaluate it.
+
+    The asset is the one whose stored location contains the key, in the event's bucket
+    (`fileAttribution.attribute_object`): the record's `vamsBinding`, then the location index, and
+    before the index is ready the first folder under a registered prefix, each with the bucket and
+    containment checks. The object's own metadata is not read for it, so a file event of a database
+    that evaluates nothing costs no bucket read. Event keys arrive form-encoded; the decoded key is
+    attributed."""
     batch = batch if batch is not None else TriggerBatch()
-    rows = _resolve_asset_rows(asset_id)
-    if len(rows) > 1:
-        rows = [row for row in rows if asset_row_holds_object(row, bucket, object_key)]
-        if len(rows) != 1:
-            logger.info(f"Asset {asset_id}: {len(rows)} live rows of several databases hold the "
-                        "event's object; skipping compliance evaluation")
-            return None
-        verified = True
-    else:
-        verified = False
-    asset_row = rows[0] if rows else {}
-    database_id = asset_row.get("databaseId") or None
-    if not database_id:
-        logger.info(f"Could not resolve a databaseId for asset {asset_id}")
+    key = urllib.parse.unquote_plus(object_key or "")
+    attribution = attribute_object(
+        bucket, key, asset_table=batch.asset_index(), buckets_table=store.s3_asset_buckets_table,
+        binding=binding_of(s3_record), asset_table_name=store.asset_table_name,
+        get_row=batch.asset_row)
+    if attribution.status == AMBIGUOUS:
+        logger.info("Several live assets hold the event's object; skipping compliance evaluation")
         return None
+    if not attribution.attributed or not attribution.database_id:
+        logger.info("No live asset holds the event's object; skipping compliance evaluation")
+        return None
+    database_id, asset_id = attribution.database_id, attribution.asset_id
     target = batch.evaluation_target(database_id, asset_id)
     if target is None:
         return None
-    if not verified and not asset_row_holds_object(asset_row, bucket, object_key):
-        logger.info(f"Asset {asset_id} of database {database_id} does not hold the event's object; "
-                    "skipping compliance evaluation")
-        return None
-    return database_id, asset_row, target
+    return database_id, asset_id, attribution.asset_row or {}, target
 
 
 def object_change_source(s3_info, message):
@@ -1241,61 +1275,6 @@ def object_change_source(s3_info, message):
             continue
         return (head.get("Metadata") or {}).get(VAMS_CHANGE_SOURCE_METADATA_KEY, "") or ""
     return ""
-
-
-def _extract_asset_id_from_key(object_key, prefix):
-    """The assetId segment of an S3 key under the bucket's asset prefix."""
-    if prefix and prefix != "/":
-        if not prefix.endswith("/"):
-            prefix = prefix + "/"
-        if object_key.startswith(prefix):
-            object_key = object_key[len(prefix):]
-    parts = object_key.split("/")
-    return parts[0] if parts and parts[0] else None
-
-
-def _resolve_asset_rows(asset_id):
-    """The live rows of an asset id, read through the assetIdGSI to exhaustion, each carrying its
-    `databaseId` and its change-provenance stamps (`lastUploadAt`, `lastAssetVersionAt`,
-    `lastChangeSource`, `lastChangeAt`); an asset id is unique within a database only, so there may
-    be several. A row under an archived partition is left out, so an archived asset is not
-    evaluated. A failed read is raised when it is an infrastructure error, so the queue record is
-    redelivered, and logged as an unresolved asset (no rows) otherwise."""
-    try:
-        items = query_all_items(
-            asset_table,
-            IndexName="assetIdGSI",
-            KeyConditionExpression=Key("assetId").eq(asset_id),
-        )
-    except Exception as e:
-        if is_infrastructure_error(e):
-            raise
-        logger.exception(f"Error resolving the database for asset {asset_id}: {e}")
-        return []
-    live = [item for item in items if item.get("databaseId")
-            and not item["databaseId"].endswith(ARCHIVED_DATABASE_SUFFIX)]
-    if items and not live:
-        logger.info(f"Asset {asset_id} is archived; skipping compliance evaluation")
-    return live
-
-
-def asset_row_holds_object(asset_row, bucket, object_key):
-    """Whether an asset row's files location holds the object a file event names: the bucket its
-    `bucketId` registers is the event's bucket and the object key lies under its
-    `assetLocation.Key` (`complianceEvaluationStore.asset_s3_location`). The key is compared as the
-    event carries it (form-encoded) and decoded. A row whose location cannot be resolved, or an
-    event naming no bucket or key, does not match."""
-    if not bucket or not object_key:
-        return False
-    location = store.asset_s3_location(asset_row)
-    if location is None:
-        return False
-    row_bucket, row_prefix = location
-    if row_bucket != bucket:
-        return False
-    row_prefix = row_prefix.lstrip("/")
-    return any(key.lstrip("/").startswith(row_prefix)
-               for key in (object_key, urllib.parse.unquote_plus(object_key)))
 
 
 def _database_item(database_id):

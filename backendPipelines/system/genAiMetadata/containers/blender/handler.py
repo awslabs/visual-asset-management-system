@@ -251,7 +251,8 @@ def dependency_deadline(context):
     return time.monotonic() + max(MIN_DEPENDENCY_SECONDS, seconds)
 
 
-def discover_dependencies(bucket, root_key, input_rel, local_path, local_root, extension, options, context):
+def discover_dependencies(bucket, root_key, input_rel, local_path, local_root, extension, options, context,
+                          input_key=None):
     """The resolver after its discovery phase (documents downloaded, every other file sized and its version
     pinned), or None when the format references nothing or discovery faulted (a warning: the input alone
     renders)."""
@@ -261,7 +262,7 @@ def discover_dependencies(bucket, root_key, input_rel, local_path, local_root, e
         scene_dependencies.ClientStore(client_for_bucket(bucket), bucket, log=logger), root_key, local_root,
         dependency_limits(options), deadline=dependency_deadline(context), log=logger)
     try:
-        resolver.discover(input_rel, local_path, extension)
+        resolver.discover(input_rel, local_path, extension, input_key)
     except Exception as error:  # the walk never fails the render
         logger.warning({"message": "Referenced-file discovery failed", "error": f"{type(error).__name__}: {error}"})
         return None
@@ -625,7 +626,7 @@ def lambda_handler(event, context):
         resolver = None
         if options[RESOLVE_DEPENDENCIES_KEY]:
             resolver = discover_dependencies(input_bucket, root_key, input_rel, local_path, local_root, extension,
-                                             options, context)
+                                             options, context, input_key=input_key)
         if overflows_to_fargate(resolver):
             input_region = event.get("inputBucketRegion", "") or ""
             if fargate_reads_region(input_region):

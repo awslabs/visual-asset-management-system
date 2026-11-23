@@ -891,8 +891,8 @@ describe("the container images that clone an upstream repository pin its revisio
             "image to 3d sam3d=2",
             // Stable3DGen, StableNormal, DINOv2
             "image to 3d stable3dgen=3",
-            // Step1X-3D, nvdiffrast
-            "image to 3d step1x3d=2",
+            // Step1X-3D, nvdiffrast, pytorch3d
+            "image to 3d step1x3d=3",
             // TRELLIS.2, CuMesh, FlexGEMM, nvdiffrast
             "image to 3d trellis2=4",
             // TripoSR, torchmcubes

@@ -304,6 +304,25 @@ python reindex_utility.py \
 | `ModuleNotFoundError` / import error (direct mode) | Backend source not found or direct-mode libraries missing                                    | Verify `--backend-path` points at the `backend/backend` directory and install the direct-mode libraries (`pip install boto3 botocore urllib3 aws-lambda-powertools opensearch-py`).                                                   |
 | Failed items in results                            | Individual record indexing errors                                                            | Check Amazon CloudWatch Logs for the reindexer Lambda function (lambda mode) or the local console output (direct mode) for detailed error messages per record. Common causes include malformed records or OpenSearch capacity limits. |
 
+## Tag objects that carry VAMS metadata (`--tag-synced`)
+
+Bucket sync writes two object tags on every file version it syncs, `VAMS:databaseId` and `VAMS:assetId`; it does not copy the object onto itself. Objects synced before bucket sync wrote tags carry `databaseid` / `assetid` metadata instead, and no tags. `--tag-synced` tags the current version of each of them, with the values, encoding and skip rules bucket sync uses. It is never run automatically and replaces the reindex for that run.
+
+```bash
+# See what would be tagged (reads each object's tags, writes none)
+python reindex_utility.py --tag-synced --dry-run \
+    --resource-names-ssm-param-prefix /vams-prod-us-east-1/resourceNames --region us-east-1
+
+# Tag them
+python reindex_utility.py --tag-synced \
+    --resource-names-ssm-param-prefix /vams-prod-us-east-1/resourceNames --region us-east-1
+```
+
+-   **Prerequisite:** the `assetLocationIndex` migration step has completed (it writes the index's completion marker). The run is refused until then, because the asset location index decides which asset holds each object; the object's own metadata is not read.
+-   **Inputs:** `--resource-names-ssm-param-prefix` is the core stack output `ResourceNamesSSMParamPrefixOutput`; the asset and bucket table names are read under it (`--asset-storage-table-name` and `--s3-asset-buckets-storage-table-name` override them). It runs locally with the backend source (`--backend-path`) and its Python libraries, like direct mode, using your AWS credentials, which need `dynamodb:Scan` on the bucket table, `dynamodb:Query` on the asset table's `AssetLocationGSI`, `ssm:GetParameter(s)ByPath` under the prefix, and `s3:ListBucket`, `s3:GetObjectTagging` and `s3:PutObjectTagging` on each asset bucket.
+-   **What it tags:** every object of every bucket registration whose `tagSyncedObjects` is not `false`, held by a live asset (the asset whose stored location is the deepest one holding the object; an object whose deepest owner is archived is `notAttributed`, also inside a live asset's location), except folder markers and VAMS system folders. Customer tags are kept and only the two `VAMS:` keys change; an object whose own tags leave no room for both (more than 8 customer tags) is skipped (`tagLimit`). Each object costs one `GetObjectTagging` and, when the VAMS tags are missing or name another asset, one `PutObjectTagging`. A tag write creates no object version, changes no ETag or LastModified, and raises no event bucket sync processes; a bucket with Amazon EventBridge notifications on sends "Object Tags Added" events to its own rules.
+-   **Report:** every object it did not tag (or, in a dry run, would tag) is a line in `tagSynced-<dryRun|run>-report.jsonl` (`--report-file` to change it), with the reason: `notAttributed`, `ambiguous` (two assets claim the location), `systemKey`, `tagLimit`, `accessDenied`. An access-denied bucket is reported once and its remaining objects are not attempted; the exit code is then `1`. A second run writes nothing for objects already tagged. `--limit` bounds the number of objects read.
+
 ## Vector Index Reindex
 
 The `vectorReindexer` AWS Lambda function rebuilds the vector embeddings table when `app.vectorSearch.enabled` is set. It exists whenever the SYSTEM GenAI metadata pipeline is on and registers its workflow; with vector search off it accepts only `enqueue`, which analyzes the existing files without embedding them, and refuses `clear` and `both`. It is invoked directly with a JSON payload, or during a deployment when `app.vectorSearch.reindexOnCdkDeploy` is `true` with vector search on, which runs the `both` operation as an AWS CloudFormation custom resource (see [Reindexing on deploy](../../concepts/vector-search.md#reindexing-on-deploy)). Its name is published to AWS Systems Manager Parameter Store at `/<name>-<baseStackName>-<region>/resourceNames/lambdaFunctions/vectorReindexer`.
