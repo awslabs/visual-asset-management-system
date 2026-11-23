@@ -3241,7 +3241,12 @@ def handle_asset_metadata_delete(event):
 #######################
 
 def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_type: str, query_params: dict, claims_and_roles: dict):
-    """Get metadata or attributes for a file - Returns one page of records"""
+    """Get metadata or attributes for a file - Returns one page of records
+
+    Returns:
+        (page, record path): the GetFileMetadataResponseModel and the path the records were read
+        under (file_record_path of the request path), which the caller audits
+    """
     # Check if querying a specific version
     asset_version_id = query_params.get('assetVersionId')
     if asset_version_id:
@@ -3343,7 +3348,7 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
             NextToken=next_token
         )
 
-        return result
+        return result, file_path
     except PermissionError as p:
         raise p
     except VAMSGeneralErrorResponse:
@@ -3356,7 +3361,11 @@ def get_file_metadata(database_id: str, asset_id: str, file_path: str, metadata_
 def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: str,
                                    metadata_type: str, asset_version_id: str,
                                    query_params: dict, claims_and_roles: dict):
-    """Get file metadata/attributes from a specific version snapshot"""
+    """Get file metadata/attributes from a specific version snapshot
+
+    Returns:
+        (page, record path), as get_file_metadata
+    """
     try:
         asset = authorize_asset_read(database_id, asset_id, claims_and_roles,
                                      "Not authorized to view metadata for this file",
@@ -3373,7 +3382,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             return GetFileMetadataResponseModel(
                 metadata=[],
                 restrictMetadataOutsideSchemas=False
-            )
+            ), file_path
 
         # Filter for this specific file and type
         file_metadata = [
@@ -3432,7 +3441,7 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
             metadata=page,
             restrictMetadataOutsideSchemas=restrict_metadata_outside_schemas,
             NextToken=next_token
-        )
+        ), file_path
 
     except PermissionError as p:
         raise p
@@ -4265,11 +4274,10 @@ def handle_file_metadata_get(event):
         # Parse query parameters - validation handled in model (adds leading slash)
         query_request_model = parse(query_parameters, model=GetFileMetadataRequestModel)
         
-        # The path as requested; get_file_metadata keys it by the path the file is listed at
-        file_path = query_request_model.filePath
-        
         query_params = {'maxItems': query_request_model.maxItems, 'pageSize': query_request_model.pageSize, 'startingToken': query_request_model.startingToken, 'assetVersionId': query_request_model.assetVersionId, 'showArchived': query_request_model.showArchived}
-        response = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, file_path, query_request_model.type, query_params, claims_and_roles)
+        # The read keys the requested path by the path the file is listed at and returns it, so the
+        # record names the records read, as the writes do
+        response, file_path = get_file_metadata(path_request_model.databaseId, path_request_model.assetId, query_request_model.filePath, query_request_model.type, query_params, claims_and_roles)
         log_action(event, "metadataGet", database_id=path_request_model.databaseId,
                    asset_id=path_request_model.assetId, file_path=file_path, item_count=_returned_count(response),
                    request_parameters={**query_params, 'type': query_request_model.type})

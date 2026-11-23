@@ -10,6 +10,8 @@ created from one object, an asset on an existing folder, a bucket with a base pr
 and wrote different records, and the web's create and update on a custom location answered "File not
 found in S3". Each route now keys both forms by the listed path. An asset at ``{assetId}/`` is the control:
 the dropped segment already gave its listed path.
+
+The read records the keyed path on its action record, as the writes do, without another read.
 """
 
 import json
@@ -75,8 +77,10 @@ def _paths_in(value, found):
 class _Table:
     def __init__(self, *rows):
         self.rows = {(row["databaseId"], row["assetId"]): dict(row) for row in rows}
+        self.reads = 0
 
     def get_item(self, Key):
+        self.reads += 1
         row = self.rows.get((Key["databaseId"], Key["assetId"]))
         return {"Item": dict(row)} if row else {}
 
@@ -92,10 +96,15 @@ class _RecordTable:
 
 
 class _Harness:
-    """Runs lambda_handler with the asset table, S3, the metadata tables and authorization stubbed."""
+    """Runs lambda_handler with the asset table, S3, the metadata tables and authorization stubbed.
 
-    def __init__(self, asset, existing_keys=(), snapshot=(), nested_location=None, stored=None):
+    ``allowed`` is the Tier-2 verdict on the asset; the route check (Tier 1) always passes.
+    """
+
+    def __init__(self, asset, existing_keys=(), snapshot=(), nested_location=None, stored=None, allowed=True):
         self.table = _Table(asset)
+        self.allowed = allowed
+        self.log_action = MagicMock()
         self.existing_keys = set(existing_keys)
         self.snapshot = list(snapshot)
         self.nested_location = nested_location
@@ -129,6 +138,7 @@ class _Harness:
     def call(self, method, query=None, body=None):
         enforcer = MagicMock()
         enforcer.return_value.enforceAPI.return_value = True
+        enforcer.return_value.enforce.return_value = self.allowed
         nested = MagicMock()
         nested.holder.side_effect = lambda key: self.nested_location if (
             self.nested_location and key.startswith(self.nested_location)) else None
@@ -140,7 +150,8 @@ class _Harness:
         }
         with patch.object(metadataService, "asset_storage_table", self.table), \
                 patch.object(metadataService, "CasbinEnforcer", enforcer), \
-                patch.object(metadataService, "check_entity_authorization", return_value=True), \
+                patch.object(metadataService, "check_entity_authorization", return_value=self.allowed), \
+                patch.object(metadataService, "log_action", self.log_action), \
                 patch.object(metadataService, "dynamodb_client", self.client), \
                 patch.object(metadataService, "asset_file_metadata_table", _RecordTable(self.stored)), \
                 patch.object(metadataService, "file_attribute_table", _RecordTable(self.stored)), \
@@ -166,6 +177,11 @@ class _Harness:
 
     def checked_keys(self):
         return [call.kwargs["Key"] for call in self.s3.head_object.call_args_list]
+
+    def logged_paths(self, action):
+        """The file_path of every action record the request wrote for ``action``."""
+        return [call.kwargs.get("file_path") for call in self.log_action.call_args_list
+                if len(call.args) > 1 and call.args[1] == action]
 
 
 def _status(response):
@@ -262,6 +278,51 @@ class TestRefusalsStay:
         response = harness.call("GET", {"filePath": "/projects/site-a/../x.obj", "type": "metadata"})
         assert response["statusCode"] == 400
         assert harness.queries == []
+
+
+# (case, asset location, request path, the path the file list shows it at)
+READ_FORMS = [
+    ("custom location, full key", "projects/site-a/", "/projects/site-a/sub/x.obj", "/sub/x.obj"),
+    ("custom location, asset id segment", "projects/site-a/", f"/{_ASSET}/sub/x.obj", "/sub/x.obj"),
+    ("asset id location, full key", f"{_ASSET}/", f"/{_ASSET}/sub/x.obj", "/sub/x.obj"),
+    ("single-file asset, full key", "projects/model.glb", "/projects/model.glb", "/model.glb"),
+    ("listed path", "projects/site-a/", "/sub/x.obj", "/sub/x.obj"),
+]
+
+
+@pytest.mark.unit
+class TestTheReadRecordsTheListedPath:
+    """The read's action record names the path its records are keyed by, as the writes' records do."""
+
+    @pytest.mark.parametrize("read", ["current", "version snapshot", "showArchived"])
+    @pytest.mark.parametrize("case,location,path,listed", READ_FORMS, ids=[form[0] for form in READ_FORMS])
+    def test_the_read_records_the_listed_path(self, read, case, location, path, listed):
+        query = {"filePath": path, "type": "metadata"}
+        if read == "version snapshot":
+            query["assetVersionId"] = "1"
+        if read == "showArchived":
+            query["showArchived"] = "true"
+        row = SimpleNamespace(filePath=listed, type="metadata", metadataKey="k", metadataValue="v",
+                              metadataValueType="string")
+        harness = _Harness(_asset(location, archived=read == "showArchived"), snapshot=[row],
+                           stored={_record(listed): [_stored_row(listed)]})
+        response = harness.call("GET", query)
+        assert response["statusCode"] == 200, response
+        assert harness.logged_paths("metadataGet") == [listed]
+        assert [item["filePath"] for item in json.loads(response["body"])["metadata"]] == [listed]
+
+    @pytest.mark.parametrize("show_archived", [False, True], ids=["current", "showArchived"])
+    def test_recording_the_listed_path_adds_no_read(self, show_archived):
+        query = {"filePath": "/projects/site-a/sub/x.obj", "type": "metadata"}
+        if show_archived:
+            query["showArchived"] = "true"
+        harness = _Harness(_asset("projects/site-a/", archived=show_archived))
+        response = harness.call("GET", query)
+        assert response["statusCode"] == 200, response
+        # One asset read (the archived one also reads the live partition first), one records query, no S3
+        assert harness.table.reads == (2 if show_archived else 1)
+        assert len(harness.queries) == 1
+        harness.s3.head_object.assert_not_called()
 
 
 @pytest.mark.unit
