@@ -2997,27 +2997,6 @@
             "reviewBy": "2027-02-28"
         },
         {
-            "id": "GHSA-xmj3-9gf7-h52w",
-            "package": "setuptools",
-            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
-            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
-            "reviewBy": "2027-02-28"
-        },
-        {
-            "id": "PYSEC-2025-49",
-            "package": "setuptools",
-            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
-            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
-            "reviewBy": "2027-02-28"
-        },
-        {
-            "id": "PYSEC-2026-3447",
-            "package": "setuptools",
-            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
-            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
-            "reviewBy": "2027-02-28"
-        },
-        {
             "id": "PYSEC-2026-161",
             "package": "starlette",
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
@@ -3050,13 +3029,6 @@
             "package": "starlette",
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
             "reason": "starlette 0.52.1 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 1.3.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
-            "reviewBy": "2027-02-28"
-        },
-        {
-            "id": "PYSEC-2025-194",
-            "package": "torch",
-            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
-            "reason": "torch 2.11.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
         },
         {
@@ -3223,29 +3195,57 @@
         {
             "id": "GHSA-xmj3-9gf7-h52w",
             "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-49",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2026-3447",
+            "package": "setuptools",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "setuptools 78.1.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "PYSEC-2025-194",
+            "package": "torch",
+            "projects": ["backendPipelines/genAi/imageTo3d/container/locks/step1x3d"],
+            "reason": "torch 2.11.0 is the version the Step1X-3D image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.8 builds, and the extensions the image compiles link against them. #TBD-step1x3d tracks the version bumps for the Step1X-3D image; this entry is removed with it.",
+            "reviewBy": "2027-02-28"
+        },
+        {
+            "id": "GHSA-xmj3-9gf7-h52w",
+            "package": "setuptools",
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
-            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 84.1.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
         },
         {
             "id": "PYSEC-2025-49",
             "package": "setuptools",
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
-            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. It arrives as a dependency of another package of the image. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 78.1.1) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
         },
         {
             "id": "PYSEC-2026-3447",
             "package": "setuptools",
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
-            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. It arrives as a dependency of another package of the image. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reason": "setuptools 78.1.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 83.0.0) is not taken here. setuptools is a build tool: the source builds run with build isolation off, so they use the one the lock installs. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
         },
         {
             "id": "PYSEC-2025-194",
             "package": "torch",
             "projects": ["backendPipelines/genAi/imageTo3d/container/locks/hunyuan3d"],
-            "reason": "torch 2.11.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. Hunyuan3D-2's requirements.txt does not pin torch; the baseline build resolved it to this version. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
+            "reason": "torch 2.11.0 is the version the Hunyuan3D-2 image installs today. #1726 locks the installed set exactly as built, so a rebuild ships the same code and the fix (newest listed: 2.13.0) is not taken here. The Dockerfile pins torch and torchvision to the CUDA 12.8 builds, and the extensions the image compiles link against them. #TBD-hunyuan3d tracks the version bumps for the Hunyuan3D-2 image; this entry is removed with it.",
             "reviewBy": "2027-02-28"
         }
     ]
