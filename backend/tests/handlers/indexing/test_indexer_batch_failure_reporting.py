@@ -37,6 +37,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.tests.ssmParametersStub import serve_parameters_from
+
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
 os.environ.setdefault("ASSET_FILE_METADATA_STORAGE_TABLE_NAME", "test-file-metadata-table")
 os.environ.setdefault("FILE_ATTRIBUTE_STORAGE_TABLE_NAME", "test-file-attr-table")
@@ -85,6 +87,9 @@ def _load_indexer(module_name):
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The index name and endpoint are read on first use through common.ssmParameters: from the stub.
+    serve_parameters_from(module, _ssm_stub)
+    module.load_opensearch_settings()
     return module
 
 

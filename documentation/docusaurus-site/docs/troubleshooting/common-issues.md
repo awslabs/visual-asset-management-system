@@ -403,10 +403,12 @@ Each VAMS AWS Lambda function reads its resource names from AWS Systems Manager 
 -   API requests fail or time out for a short time after the deployment was idle
 -   Workflow runs fail with an error that names `GetParametersByPath` and `ThrottlingException`, or with `ResourceNameUnavailableError` and "Resource name not resolved while SSM sweeps back off after a failure" or "Resource name parameters could not be read from SSM"
 -   Function logs in Amazon CloudWatch show `Resource name sweep failed (ThrottlingException)` lines
+-   Search requests fail with an internal server error for a short time, the web application starts slowly or shows no map until the page is reloaded, or new files appear in search results later than usual
+-   Function logs show `Parameter Store read failed (ThrottlingException)` lines
 
 **Behavior:**
 
-A function retries a throttled read for up to 4 seconds. If the read still fails, the function does not read Parameter Store again for a short back-off window (about 2 seconds, doubling up to 30 seconds while the reads keep failing), and a lookup of a name the function has not cached fails without reading again. A cold API request that meets this fails within about 15 seconds instead of waiting out the API's 29-second limit. Requests succeed again once Parameter Store answers.
+A function retries a throttled read for up to 4 seconds. The same limit and back-off apply to the other settings VAMS reads from Parameter Store: the search endpoint and index names, the web application URL and the ARN of the map API key. Each function reads them on first use and keeps them for a while (an hour for the search settings, five minutes for the web application URL and the map API key ARN). While the reads fail, search requests fail with an internal server error, the web application starts without the map until a later reload, and the indexers hand their batch back to the queue, which delivers it again about 16 minutes later. If the read still fails, the function does not read Parameter Store again for a short back-off window (about 2 seconds, doubling up to 30 seconds while the reads keep failing), and a lookup of a name the function has not cached fails without reading again. A cold API request that meets this fails within about 15 seconds instead of waiting out the API's 29-second limit. Requests succeed again once Parameter Store answers.
 
 **Resolution:**
 

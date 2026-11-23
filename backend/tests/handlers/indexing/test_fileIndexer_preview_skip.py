@@ -18,9 +18,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# fileIndexer reads several env vars and calls SSM at import time. Set the env
-# here, and stub boto3 (SSM get_parameter, DynamoDB, S3, OpenSearch) in the
-# `fileIndexer` fixture below so import succeeds deterministically without
+from backend.tests.ssmParametersStub import serve_parameters_from
+
+# fileIndexer reads several env vars at import time and its OpenSearch settings from SSM
+# on first use. Set the env here, and stub boto3 (SSM get_parameter, DynamoDB, S3,
+# OpenSearch) in the `fileIndexer` fixture below so import succeeds deterministically without
 # network/AWS access. The import is deferred into the fixture (rather than at
 # module load) so the root conftest autouse fixture has already registered the
 # mock `common`/`common.indexing` packages in sys.modules first.
@@ -87,6 +89,9 @@ def fileIndexer():
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The index name and endpoint are read on first use through common.ssmParameters: from the stub.
+    serve_parameters_from(module, _ssm_stub)
+    module.load_opensearch_settings()
     return module
 
 
