@@ -259,8 +259,9 @@ def main():
 
     if args.reference:
         from PIL import Image
+        from preprocess import INPUT_IMAGE_FORMATS
 
-        image = Image.open(args.reference)
+        image = Image.open(args.reference, formats=INPUT_IMAGE_FORMATS)
         reference = texturing.prune_detached_debris(texturing.subject_mask(image))
         points = texturing.surface_points(mesh)
         front = texturing._normalised(texturing._silhouette(points, texturing._view_frame(FRONT_AZIMUTH, 0)))
