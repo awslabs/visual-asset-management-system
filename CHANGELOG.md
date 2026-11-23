@@ -43,6 +43,7 @@ All notable changes to this project will be documented in this file. See [standa
     -   Note: while the reads fail, search requests answer an internal server error, the web application starts without the map until a later reload, and the indexers return their batch to the queue, which delivers it again about 16 minutes later. ([#1820](https://github.com/awslabs/visual-asset-management-system/issues/1820))
 -   **Backend** Creating an asset with an asset ID that another asset already uses, in any database and including an archived asset, is refused with the `400` `Asset with specified ID already exists` that an ID taken in the same database gets. Generated asset IDs are unaffected. ([#1862](https://github.com/awslabs/visual-asset-management-system/pull/1862))
     -   Note: Bucket sync creates no asset for a new top-level folder whose name is the asset ID of an asset stored under another registered bucket, live or archived, and logs an error that names the object key. Rename the folder to import it. A folder named like an asset stored in the same bucket keeps its earlier behaviour. ([#1862](https://github.com/awslabs/visual-asset-management-system/pull/1862))
+-   **Backend** Fixed bucket sync bringing back an asset permanently deleted less than a minute before a file was written directly under its folder: the restore re-reads the archived record and restores only one that still exists. With no record left, the file is handled like any file with no asset. ([#1799](https://github.com/awslabs/visual-asset-management-system/issues/1799))
 
 ### Chores
 
