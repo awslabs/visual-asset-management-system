@@ -182,7 +182,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/createAssetResponse"
                 "400":
-                    description: Invalid parameters or validation error.
+                    description: Invalid parameters or validation error, including a bucketExistingKey inside a folder VAMS reserves for system use ("The specified bucketExistingKey is inside a folder VAMS reserves for system use. Choose another location.") and an assetId equal to the name of such a folder ("The specified assetId is the name of a folder VAMS reserves for system use. Choose another asset ID.").
                     content:
                         application/json:
                             schema:
@@ -9262,7 +9262,7 @@ components:
                     description: "Whether the asset can be downloaded."
                 assetId:
                     $ref: '#/components/schemas/asset_id_regex'
-                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation."
+                    description: "Explicit asset identifier (2-255 characters). ASCII characters only, and cannot contain forward slashes. Auto-generated when omitted. The ASCII rule applies where a caller names a new asset; an identifier already stored stays valid on every other operation. An identifier equal to a folder name VAMS reserves for system use (pipeline, pipelines, preview, previews, temp-upload, temp-uploads, workspace, workspaces) is refused with 400."
                 tags:
                     type: array
                     items:
@@ -9272,7 +9272,7 @@ components:
                 bucketExistingKey:
                     type: string
                     maxLength: 1024
-                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset."
+                    description: "Existing key in the database default Amazon S3 bucket to associate with the new asset. A key ending in `/` is a folder; any other key is one object, the asset's file, with its companion folder `{key}/` and its previews. A key with a VAMS system folder (`pipeline`, `pipelines`, `preview`, `previews`, `temp-upload`, `temp-uploads`, `workspace` or `workspaces`) as any path segment under the bucket's base prefix is refused with 400."
             required:
                 - databaseId
                 - assetName
