@@ -351,10 +351,17 @@ def join_asset_location_key(location_key: str, relative_path: str) -> str:
         relative_path: The asset-relative file path, with or without its leading ``/``.
 
     Returns:
-        str: The location folder and the path joined by exactly one ``/``. An empty
-        location key yields the path without its leading ``/``.
+        str: The key ``common.assetLocations.object_key_for`` names: in a folder location,
+        the folder and the path joined by exactly one ``/``; in a single-file location, the
+        object itself for its own file name, an own preview, or an entry of its companion
+        folder ``{file key}/`` for any other path. ``/`` in a single-file location names the
+        asset as a whole and yields the object's key. An empty location key yields the path
+        without its leading ``/``.
     """
-    base = location_key or ""
-    if base and not base.endswith("/"):
-        base += "/"
-    return base + (relative_path or "").lstrip("/")
+    # Imported here: assetLocations imports this module at load.
+    from common.assetLocations import normalize_location, object_key_for
+
+    if not normalize_location(location_key):
+        return (relative_path or "").lstrip("/")
+    key = object_key_for(location_key, relative_path)
+    return key if key is not None else normalize_location(location_key)

@@ -53,6 +53,15 @@ def _stream_record(event_name):
             "dynamodb": {"Keys": key, "NewImage": key}}
 
 
+
+def _no_location_index(m):
+    """The S3 path asks the location index first; these tests run before it is ready and hold no
+    index rows, so the stamp and the first folder decide."""
+    import sys
+    from tests.common.fileAttributionFakes import AttributionAssetTable
+    return [patch.object(m, "asset_storage_table", AttributionAssetTable([])),
+            patch.object(sys.modules["common.fileAttribution"], "index_ready", lambda name: False)]
+
 def _lookup_patches(m, include_s3_client, send_ok):
     """Stub every lookup the handlers make, leaving the sync-record path real."""
     patches = [
@@ -75,6 +84,7 @@ def _lookup_patches(m, include_s3_client, send_ok):
             "VersionId": "v7",
         }
         patches.append(patch.object(m, "s3_client", s3_client))
+        patches.extend(_no_location_index(m))
     return patches
 
 

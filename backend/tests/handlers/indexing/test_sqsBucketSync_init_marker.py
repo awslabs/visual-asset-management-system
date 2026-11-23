@@ -27,7 +27,7 @@ _PATCHED_ATTRS = (
     "asset_bucket_name", "asset_bucket_prefix", "RESERVED_S3_PREFIX_FOLDERS",
     "get_bucket_id", "validate_asset_id", "lookup_asset", "lookup_archived_asset",
     "restore_archived_asset", "get_or_create_database_for_bucket", "object_still_exists",
-    "create_new_asset", "is_versioning_enabled", "delete_s3_object", "update_s3_metadata",
+    "create_new_asset", "is_versioning_enabled", "delete_s3_object", "tag_version",
     "update_asset_type", "write_file_version_history", "s3_client", "parse_event",
     "publish_to_file_indexer_sns", "publish_to_orchestration_bus",
     "is_object_permanently_deleted", "delete_file_metadata_on_s3_delete",
@@ -46,6 +46,11 @@ INIT_SUFFIX_FILES = [
     f"{_PREFIX}a1/terrain_init",
     f"{_PREFIX}a1/x/init.txt",
 ]
+
+
+def _tagged(m):
+    """(bucket, key, databaseId, assetId) of each VAMS tag write bucket sync asked for."""
+    return [(c.args[1], c.args[2], c.args[4], c.args[5]) for c in m.tag_version.call_args_list]
 
 
 @pytest.fixture(autouse=True)
@@ -129,7 +134,7 @@ def _wire_created(m, live_asset=False, archived_asset=None):
     m.create_new_asset = MagicMock(return_value="a1")
     m.is_versioning_enabled = MagicMock(return_value=True)
     m.delete_s3_object = MagicMock(return_value=True)
-    m.update_s3_metadata = MagicMock(return_value=True)
+    m.tag_version = MagicMock(return_value=None)
     m.update_asset_type = MagicMock(return_value=True)
     m.write_file_version_history = MagicMock()
     m.s3_client = MagicMock()
@@ -193,16 +198,19 @@ class TestIsInitMarker:
 
 @pytest.mark.unit
 class TestMarkerImportOnCreatedPath:
-    """A marker creates, restores or finds its folder's asset and is then deleted, and nothing else
-    runs for it: no stamp, no asset-type update, no history row, nothing forwarded or published."""
+    """A marker creates, restores or finds its folder's asset and is then deleted. The marker itself is
+    not tagged, recorded, forwarded or published; the asset's type is set from the files already in
+    its folder, which are queued for import (test_sqsBucketSync_folder_import.py)."""
 
     def _assert_marker_only_deleted(self, m, key, result):
         m.delete_s3_object.assert_called_once_with(_BUCKET, key, True)
-        m.update_s3_metadata.assert_not_called()
-        m.update_asset_type.assert_not_called()
+        m.tag_version.assert_not_called()
+        m.update_asset_type.assert_called_once()
+        assert m.update_asset_type.call_args.args[1] == "a1"
         m.write_file_version_history.assert_not_called()
         m.s3_client.head_object.assert_not_called()
-        assert result == (True, False, f"Deleted init object {key}")
+        assert result[:2] == (True, False)
+        assert result[2].startswith(f"Deleted init object {key}; queued ")
 
     @pytest.mark.parametrize("key", MARKER_KEYS)
     def test_new_folder_creates_asset_and_deletes_marker(self, key):
@@ -260,7 +268,7 @@ class TestInitSuffixFilesAreOrdinaryFiles:
         result = m.process_s3_record(_created_record(key))
 
         m.delete_s3_object.assert_not_called()
-        m.update_s3_metadata.assert_called_once_with(_BUCKET, key, "db1", "a1")
+        assert _tagged(m) == [(_BUCKET, key, "db1", "a1")]
         m.update_asset_type.assert_called_once()
         assert result == (True, True, f"Successfully processed {key}")
 
@@ -272,7 +280,8 @@ class TestInitSuffixFilesAreOrdinaryFiles:
         result = m.process_s3_record(_created_record(key))
 
         m.delete_s3_object.assert_not_called()
-        m.update_s3_metadata.assert_called_once_with(_BUCKET, key, "db1", "a1")
+        # A folder marker is not a file version: it is neither tagged nor recorded.
+        m.tag_version.assert_not_called()
         assert result == (True, False, f"Processed folder marker {key}")
 
     def test_deleted_file_is_cleaned_up_and_forwarded(self):
@@ -285,7 +294,8 @@ class TestInitSuffixFilesAreOrdinaryFiles:
         forwarded = m.publish_to_file_indexer_sns.call_args.args[0]["Records"]
         assert [r["s3"]["object"]["key"] for r in forwarded] == INIT_SUFFIX_FILES
         cleaned = [c.args[2] for c in m.delete_file_metadata_on_s3_delete.call_args_list]
-        assert cleaned == ["postinit", "config.init", "terrain_init", "x/init.txt"]
+        # Asset-relative paths with one leading `/`, the form the metadata rows key them by.
+        assert cleaned == ["/postinit", "/config.init", "/terrain_init", "/x/init.txt"]
         assert m.update_asset_type.call_count == len(INIT_SUFFIX_FILES)
 
 

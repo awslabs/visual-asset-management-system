@@ -362,8 +362,8 @@ class TestS3NotificationPath:
         head_object = MagicMock(
             return_value={
                 "Metadata": {
-                    fileIndexer.ASSET_ID_METADATA_KEY: ASSET_ID,
-                    fileIndexer.DATABASE_ID_METADATA_KEY: DATABASE_ID,
+                    sys.modules['common.s3MetadataKeys'].ASSET_ID_METADATA_KEY: ASSET_ID,
+                    sys.modules['common.s3MetadataKeys'].DATABASE_ID_METADATA_KEY: DATABASE_ID,
                 }
             }
         )

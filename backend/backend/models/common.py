@@ -260,6 +260,16 @@ class VAMSGeneralErrorResponse(VAMSGeneralError):
         self.user_message = message
 
 
+class AssetLocationInUseError(VAMSGeneralErrorResponse):
+    """An asset create refused because another asset's stored location shares a key with the new
+    asset's location. `owner` names the asset that holds it (`databaseId:assetId at location`), for
+    logs only; the message the caller sees is unchanged."""
+
+    def __init__(self, message, owner=""):
+        super().__init__(message)
+        self.owner = owner
+
+
 class VAMSAuthorizationDeniedResponse(VAMSGeneralErrorResponse):
     """An object-level (Tier 2) authorization refusal.
 

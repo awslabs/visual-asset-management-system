@@ -158,6 +158,9 @@ SSM_CLIENTS_KEPT = {
     # Deploy-time custom resource (15-minute timeout) that must read the values the schema-deploy
     # resource has just written, so it neither caches nor gives up early.
     "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
+    # Deploy-time custom resource that writes and deletes the location index marker (PutParameter,
+    # DeleteParameter); it reads no parameter, and the shared lookups only read.
+    "handlers/indexing/crAssetLocationIndexMarker.py": "deploy-time writer of the location index marker",
     # EDH add-on lane: AWS- and EDH-owned parameters, moved onto common/ssmParameters.py in its own step.
     "handlers/addon/edh/common/edhCapacityReservations.py": "EDH add-on lane, follow-up step",
     "handlers/addon/edh/common/edhImageBuilder.py": "EDH add-on lane, follow-up step",

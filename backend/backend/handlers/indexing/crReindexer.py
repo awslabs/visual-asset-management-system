@@ -86,6 +86,12 @@ from common.indexing.fileEnumeration import (
     resolve_live_database_id,
     scan_bucket_registrations,
 )
+from common.assetLocations import (
+    RESOLVED_FOUND,
+    index_ready,
+    load_bucket_locations,
+    relative_path_in,
+)
 from customLogging.logger import safeLogger
 from customLogging.auditLogging import audited_handler, log_action
 
@@ -1082,6 +1088,13 @@ class ReindexUtility:
             current_timestamp = datetime.now(timezone.utc).isoformat()
 
             base_prefix = normalize_base_prefix(base_prefix)
+            # Once the location index is ready, the bucket's index partition is read once and each
+            # key is attributed in memory to the asset (live, else archived) whose stored location
+            # holds it, with no HeadObject. Before that, the first folder and the stamp decide.
+            bucket_locations = None
+            if index_ready(self.asset_table_name):
+                bucket_locations = load_bucket_locations(
+                    dynamodb_resource.Table(self.asset_table_name), bucket_name)
             
             # List all objects in the bucket recursively
             paginator = s3_client.get_paginator('list_objects_v2')
@@ -1116,6 +1129,34 @@ class ReindexUtility:
                         break
                     
                     try:
+                        if bucket_locations is not None:
+                            resolution = bucket_locations.owner(s3_key, include_archived=True)
+                            if resolution.status != RESOLVED_FOUND:
+                                logger.info(f"Skipping {s3_key}: no asset location holds it ({resolution.status})")
+                                results['skipped_no_asset'] += 1
+                                continue
+                            entry = resolution.entry
+                            live_database_id = entry.database_id[:-len('#deleted')] \
+                                if entry.database_id.endswith('#deleted') else entry.database_id
+                            files_batch.append({
+                                'databaseId': live_database_id,
+                                'assetId': entry.asset_id,
+                                'original_asset_id': entry.asset_id,
+                                'relative_path': relative_path_in(entry.location, s3_key),
+                            })
+                            results['total'] += 1
+                            if len(files_batch) >= self.memory_batch_size:
+                                if dry_run:
+                                    results['success'] += len(files_batch)
+                                else:
+                                    batch_results = self._update_files_in_metadata_table(
+                                        files_batch, current_timestamp)
+                                    results['success'] += batch_results['success']
+                                    results['failed'] += batch_results['failed']
+                                    results['errors'].extend(batch_results['errors'])
+                                files_batch = []
+                            continue
+
                         # Resolve the asset context from the key first: the assetId is
                         # the first path segment beneath the base prefix and the
                         # databaseId is looked up (and cached) from the asset table, as

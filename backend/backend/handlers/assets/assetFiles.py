@@ -44,9 +44,12 @@ from common.s3PathPatterns import (
     select_newest_preview_file,
 )
 from common.assetLocations import (
-    aux_file_prefix, aux_owner_filter, aux_scope, contains, fill_location_attributes, folder_listing_prefix,
-    in_folder, is_folder_location, is_location_object, names_own_object, object_key_for, relative_path_in,
+    NESTED_PATH_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, SHARED_PATH_REFUSAL, NestedLocations, aux_file_prefix,
+    aux_owner_filter, aux_scope, contains,
+    fill_location_attributes, folder_listing_prefix, in_folder, is_folder_location, is_location_object,
+    names_own_object, normalize_base_prefix, object_key_for, relative_path_in,
 )
+from common.fileAttribution import nested_locations_of_asset
 from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, region_routing_s3_client, region_routing_s3_resource, bucket_region_fields
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
@@ -296,13 +299,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -382,8 +379,46 @@ def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
+def nested_locations_for(asset: Dict, bucket: str, base_key: str, destructive: bool = False,
+                         include_shared: bool = False) -> NestedLocations:
+    """The stored locations of other assets nested in this asset's location: the files they hold belong to
+    those assets, so this asset's file operations leave them alone (``fileAttribution.nested_locations_of_asset``;
+    ``destructive`` for a delete, archive or move, ``include_shared`` for a write, which also names another live
+    asset on the same location)."""
+    return nested_locations_of_asset(asset_table, buckets_table, asset, bucket, base_key, destructive=destructive,
+                                     include_shared=include_shared, asset_table_name=asset_database_table_name)
+
+
+def refuse_nested_key(nested: Optional[NestedLocations], key: str, message: str,
+                      shared_message: str = SHARED_PATH_REFUSAL) -> None:
+    """Answer a path that resolves to a nested asset's file as the operation answers a missing file, and an
+    operation on a key another live asset's location also holds with `shared_message` (SHARED_PATH_REFUSAL for
+    a destructive operation, SHARED_LOCATION_WRITE_REFUSAL for a write)."""
+    if nested is None or nested.holder(key) is None:
+        return
+    if nested.is_shared_key(key):
+        raise VAMSGeneralErrorResponse(shared_message)
+    raise VAMSGeneralErrorResponse(message)
+
+
+def refuse_unwritable_key(asset: Dict, bucket: str, base_key: str, key: str, message: str) -> None:
+    """Refuse a write of `key` through this asset before anything is written: a nested asset's key with
+    `message`, a key of a location another live asset also holds with SHARED_LOCATION_WRITE_REFUSAL (bucket
+    sync could not attribute the written file to either asset)."""
+    refuse_nested_key(nested_locations_for(asset, bucket, base_key, include_shared=True), key, message,
+                      shared_message=SHARED_LOCATION_WRITE_REFUSAL)
+
+
+def _keep_aux(keep: Optional[Callable[[str], bool]], nested: Optional[NestedLocations],
+              database_id: str) -> Optional[Callable[[str], bool]]:
+    """An auxiliary-key filter that also leaves out the auxiliary data of a nested asset of the same database."""
+    if not nested:
+        return keep
+    return lambda aux_key: (keep is None or keep(aux_key)) and nested.keep_aux(database_id, aux_key)
+
+
 def _prefix_holds_folder_entry(bucket: str, prefix: str, location: str, folder: Optional[str],
-                               versions: bool = False) -> bool:
+                               versions: bool = False, nested: Optional[NestedLocations] = None) -> bool:
     """Whether a listing of ``prefix`` returns a key held in ``folder``: a current object, or with ``versions``
     any version or delete marker. Without a single-file folder the first key decides. A single-file folder
     named like the file is listed without its trailing ``/``, where keys that only start with its name
@@ -393,18 +428,22 @@ def _prefix_holds_folder_entry(bucket: str, prefix: str, location: str, folder: 
         response = getattr(s3_client, operation)(Bucket=bucket, Prefix=prefix, MaxKeys=1)
         entries = (response.get('Versions', []) + response.get('DeleteMarkers', [])) if versions \
             else response.get('Contents', [])
-        return any(_held_in_folder(location, None, entry['Key']) for entry in entries)
+        if any(_held_in_folder(location, None, entry['Key'], nested) for entry in entries):
+            return True
+        if not nested or response.get('IsTruncated') is not True:
+            return False
     for page in s3_client.get_paginator(operation).paginate(Bucket=bucket, Prefix=prefix):
         entries = (page.get('Versions', []) + page.get('DeleteMarkers', [])) if versions else page.get('Contents', [])
-        if any(_held_in_folder(location, folder, entry['Key']) for entry in entries):
+        if any(_held_in_folder(location, folder, entry['Key'], nested) for entry in entries):
             return True
     return False
 
-def _held_in_folder(location: str, folder: Optional[str], key: str) -> bool:
-    """Whether the location holds a key, under an asset-relative folder path when one is given."""
-    if folder is None:
-        return contains(location, key)
-    return in_folder(location, folder, key)
+def _held_in_folder(location: str, folder: Optional[str], key: str,
+                    nested: Optional[NestedLocations] = None) -> bool:
+    """Whether the location holds a key, under an asset-relative folder path when one is given, and no
+    location nested in it does."""
+    held = contains(location, key) if folder is None else in_folder(location, folder, key)
+    return held and (not nested or nested.keep(key))
 
 def _relative_to_location(base_key: str, key: str) -> str:
     """The asset-relative path ('/...') of an S3 key in an asset's location."""
@@ -926,7 +965,8 @@ def delete_s3_prefix(bucket: str, prefix: str) -> List[str]:
     return deleted_files
 
 def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[str] = None,
-                                  folder: Optional[str] = None) -> List[str]:
+                                  folder: Optional[str] = None,
+                                  nested: Optional[NestedLocations] = None) -> List[str]:
     """Permanently delete all objects and their versions under a prefix
     
     Args:
@@ -934,6 +974,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         prefix: The S3 key prefix
         location: The asset location the deleted keys must belong to (``common.assetLocations``)
         folder: An asset-relative folder path of the location the deleted keys must sit under
+        nested: The locations of other assets nested in ``location``; their keys are not deleted
         
     Returns:
         List of deleted file keys
@@ -951,7 +992,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for entry in page.get('Versions', []) + page.get('DeleteMarkers', []):
                 key = entry['Key']
-                if location is not None and not _held_in_folder(location, folder, key):
+                if location is not None and not _held_in_folder(location, folder, key, nested):
                     continue
                 if key not in processed_keys:
                     processed_keys.add(key)
@@ -970,7 +1011,7 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
         # Check if the prefix folder itself exists and delete it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or _held_in_folder(location, folder, folder_prefix):
+        if location is None or _held_in_folder(location, folder, folder_prefix, nested):
             try:
                 # Check if the folder marker exists
                 s3_client.head_object(Bucket=bucket, Key=folder_prefix)
@@ -988,7 +1029,8 @@ def delete_s3_prefix_all_versions(bucket: str, prefix: str, location: Optional[s
     return deleted_files
 
 def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
-                      location: Optional[str] = None, folder: Optional[str] = None) -> Dict[str, str]:
+                      location: Optional[str] = None, folder: Optional[str] = None,
+                      nested: Optional[NestedLocations] = None) -> Dict[str, str]:
     """Archive all objects under a prefix
 
     Args:
@@ -998,6 +1040,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         assetId: The asset ID
         location: The asset location the archived keys must belong to (``common.assetLocations``)
         folder: An asset-relative folder path of the location the archived keys must sit under
+        nested: The locations of other assets nested in ``location``; their keys are not archived
 
     Returns:
         Dict mapping each archived file key to its new delete-marker VersionId
@@ -1011,7 +1054,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get('Contents', []):
                 key = obj['Key']
-                if location is not None and not _held_in_folder(location, folder, key):
+                if location is not None and not _held_in_folder(location, folder, key, nested):
                     continue
 
                 # Process folder markers separately
@@ -1030,7 +1073,7 @@ def archive_s3_prefix(bucket: str, prefix: str, databaseId: str, assetId: str,
         # Check if the prefix folder itself exists and archive it if it does
         # Ensure the prefix ends with a slash for folder check
         folder_prefix = prefix if prefix.endswith('/') else prefix + '/'
-        if location is None or _held_in_folder(location, folder, folder_prefix):
+        if location is None or _held_in_folder(location, folder, folder_prefix, nested):
             try:
                 # Check if the folder marker exists
                 s3_client.head_object(Bucket=bucket, Key=folder_prefix)
@@ -1426,7 +1469,8 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                 raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
         raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
 
-def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False, basic_mode: bool = False) -> Dict:
+def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False,
+                                        basic_mode: bool = False, nested: Optional[NestedLocations] = None) -> Dict:
     """List S3 objects with pagination and archive status
     
     Args:
@@ -1435,6 +1479,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         query_params: Dictionary containing pagination parameters
         include_archived: Whether to include archived files
         basic_mode: If True, skip expensive head_object calls and return only S3 list data
+        nested: The locations of other assets nested in the asset's location; their files are not listed
         
     Returns:
         Dictionary containing the list of files and pagination token if applicable
@@ -1449,6 +1494,8 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     single_object_filter = (query_params.get('prefix') or '').lstrip('/')
 
     def _listed(key):
+        if nested and not nested.keep(key):
+            return False
         if not single_object:
             return True
         return (contains(location, key)
@@ -2301,6 +2348,11 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         folder = relative_path_in(base_key, full_key) or file_path
         full_key = folder_listing_prefix(base_key, folder)
     
+    # A path a nested asset's location holds is that asset's file, not this asset's; a key another live
+    # asset's location also holds is left alone (destructive lookup)
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
+    refuse_nested_key(nested, full_key, "No files found under prefix." if is_prefix else "File not found.")
+
     # Check if path exists (including archived files)
     try:
         if not is_prefix:
@@ -2320,8 +2372,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
                 raise VAMSGeneralErrorResponse(f"File not found.")
         else:
             # For prefix, check if at least one object exists, then for archived objects
-            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder) and \
-                    not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, versions=True):
+            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, nested=nested) and \
+                    not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, versions=True, nested=nested):
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         logger.exception(f"Error checking file existence: {e}")
@@ -2332,12 +2384,14 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     if is_prefix:
         # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder)
+        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=base_key, folder=folder,
+                                                     nested=nested)
 
         # Delete aux files under prefix if they exist
         folder_aux = aux_bucket_asset_file_base(databaseId, full_key)
         _call_with_keep(delete_assetAuxiliary_files, folder_aux,
-                        keep=aux_owner_filter(databaseId, base_key, full_key, folder_aux))
+                        keep=_keep_aux(aux_owner_filter(databaseId, base_key, full_key, folder_aux), nested,
+                                       databaseId))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2355,7 +2409,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
             
         # For base files, also delete any associated preview files the asset holds
         preview_files = [preview_file for preview_file in find_preview_files_for_base(bucket, full_key)
-                         if contains(base_key, preview_file)]
+                         if contains(base_key, preview_file) and nested.keep(preview_file)]
         for preview_file in preview_files:
             if delete_s3_object_all_versions(bucket, preview_file):
                 # Get relative path for reporting
@@ -2466,6 +2520,11 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         folder = relative_path_in(base_key, full_key) or file_path
         full_key = folder_listing_prefix(base_key, folder)
     
+    # A path a nested asset's location holds is that asset's file, not this asset's; a key another live
+    # asset's location also holds is left alone (destructive lookup)
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
+    refuse_nested_key(nested, full_key, "No files found under prefix." if is_prefix else "File not found.")
+
     # Check if path exists and if it's already archived
     try:
         if not is_prefix:
@@ -2484,7 +2543,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
                 raise e
         else:
             # For prefix, check if at least one object exists
-            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder):
+            if not _prefix_holds_folder_entry(bucket, full_key, base_key, folder, nested=nested):
                 raise VAMSGeneralErrorResponse(f"No files found under prefix.")
     except ClientError as e:
         if _is_missing_object_error(e):
@@ -2499,7 +2558,8 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
 
     if is_prefix:
         # Archive all files under prefix (maps each archived key -> delete-marker VersionId)
-        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key, folder=folder)
+        archived_keys = archive_s3_prefix(bucket, full_key, databaseId, assetId, location=base_key, folder=folder,
+                                          nested=nested)
 
         # Convert full keys to relative paths
         for key, marker_version_id in archived_keys.items():
@@ -2518,7 +2578,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         if not is_preview_file(file_path):
             # For base files, also archive any associated preview files the asset holds
             preview_files = [preview_file for preview_file in find_preview_files_for_base(bucket, full_key)
-                             if contains(base_key, preview_file)]
+                             if contains(base_key, preview_file) and nested.keep(preview_file)]
             for preview_file in preview_files:
                 if delete_s3_object(bucket, preview_file):
                     # Get relative path for reporting
@@ -2574,6 +2634,8 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    nested = nested_locations_for(asset, bucket, base_key, include_shared=True)
+    refuse_nested_key(nested, full_key, "File not found.", shared_message=SHARED_LOCATION_WRITE_REFUSAL)
     
     # Find the delete marker and the most recent content version to restore.
     # S3 returns versions newest-first per key, so the latest delete marker and
@@ -2649,7 +2711,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
             # Find preview files for this base file, including archived ones
             logger.info(f"Looking for preview files (including archived) for base file: {full_key}")
             preview_files_info = [info for info in find_preview_files_for_base_including_archived(bucket, full_key)
-                                  if contains(base_key, info['key'])]
+                                  if contains(base_key, info['key']) and nested.keep(info['key'])]
             
             logger.info(f"Found {len(preview_files_info)} preview files (including archived)")
             
@@ -2796,6 +2858,9 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Use smart path resolution to avoid duplication for both source and destination
     source_key = resolve_asset_file_path(source_base_key, source_path)
     dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+    refuse_nested_key(nested_locations_for(source_asset, source_bucket, source_base_key), source_key,
+                      "Source file not found.")
+    refuse_unwritable_key(dest_asset, dest_bucket, dest_base_key, dest_key, NESTED_PATH_REFUSAL)
 
     # The request model bounded destinationPath; the resolved key carries the destination asset's prefix
     # as well and is what S3 measures. Refuse it here, before the source is even looked up, so an
@@ -2916,6 +2981,10 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     # Use smart path resolution to avoid duplication
     source_key = resolve_asset_file_path(base_key, source_path)
     dest_key = resolve_asset_file_path(base_key, dest_path)
+    # Moving deletes the source, so a source key another live asset also holds is left alone
+    nested = nested_locations_for(asset, bucket, base_key, destructive=True)
+    refuse_nested_key(nested, source_key, "Source file not found.")
+    refuse_nested_key(nested, dest_key, NESTED_PATH_REFUSAL)
 
     # A single-file asset's own object stays at the key its location names
     if names_own_object(base_key, source_path):
@@ -3065,6 +3134,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found.")
     
     # Check if file exists
     try:
@@ -3174,6 +3244,8 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    nested = nested_locations_for(asset, bucket, base_key)
+    refuse_nested_key(nested, full_key, "File not found.")
 
     # Get the relative path for comparison with fileKey in version records.
     # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
@@ -3328,7 +3400,7 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     if not is_preview_file(file_path) and not metadata.get('isFolder', False):
         # The newest preview file with an allowed extension, when the asset holds it
         top_preview_file = find_newest_preview_file_for_base(bucket, full_key)
-        if top_preview_file and not contains(base_key, top_preview_file):
+        if top_preview_file and not (contains(base_key, top_preview_file) and nested.keep(top_preview_file)):
             top_preview_file = None
         
         if top_preview_file:
@@ -3363,6 +3435,7 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
 
     # Normalize the path by combining asset base key with the relative folder path
     normalized_key_path = resolve_asset_file_path(asset_base_key, request_model.relativeKey)
+    refuse_unwritable_key(asset, asset_bucket, asset_base_key, normalized_key_path, NESTED_PATH_REFUSAL)
 
     # The request model bounded relativeKey; the resolved key carries the asset prefix as well and is
     # what S3 measures. Refuse it here, before put_object, so an over-long folder key is a plain 400
@@ -3420,6 +3493,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    refuse_unwritable_key(asset, bucket, base_key, full_key, "File not found")
     
     # Check if file exists and is not archived
     try:
@@ -3555,13 +3629,15 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
         'prefix': request_model.prefix
     }
 
-    # List files with archive status, passing basic_mode flag
+    # List files with archive status, passing basic_mode flag. The files of an asset nested in this
+    # asset's location are that asset's and are not listed.
     result = list_s3_objects_with_archive_status(
         bucket,
         key,
         resolved_query_params,
         request_model.includeArchived,
-        basic_mode=request_model.basic
+        basic_mode=request_model.basic,
+        nested=nested_locations_for(asset, bucket, key)
     )
 
     # Convert to response model
@@ -3719,7 +3795,10 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
         logger.info(f"No files found in version {asset_version_id}")
         return ListAssetFilesResponseModel(items=[], NextToken=None)
 
-    versioned_files = asset_file_versions.get('files', [])
+    # A snapshot taken before nested assets were left out can name a nested asset's files; they are not listed
+    nested = nested_locations_for(asset, bucket, key)
+    versioned_files = [file_info for file_info in asset_file_versions.get('files', [])
+                       if not nested or nested.keep(object_key_for(key, file_info.get('relativeKey', '')) or '')]
     logger.info(f"Found {len(versioned_files)} files in version snapshot")
 
     if request_model.basic:
@@ -3796,7 +3875,8 @@ def list_asset_files_from_version(databaseId: str, assetId: str, asset: Dict,
             s3_result = list_s3_objects_with_archive_status(
                 bucket, key, resolved_query_params,
                 include_archived=True,
-                basic_mode=False
+                basic_mode=False,
+                nested=nested
             )
 
             all_s3_items.extend(s3_result.get('items', []))
@@ -4732,7 +4812,10 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Use smart path resolution to avoid duplication
     full_key = resolve_asset_file_path(base_key, file_path)
+    nested = nested_locations_for(asset, bucket, base_key)
+    refuse_nested_key(nested, full_key, "File not found.")
     aux_prefix, aux_keep = aux_scope(databaseId, base_key, full_key)
+    aux_keep = _keep_aux(aux_keep, nested, databaseId)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0

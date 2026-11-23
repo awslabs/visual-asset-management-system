@@ -13,6 +13,7 @@ evaluated again while a later change is."""
 
 import itertools
 import json
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -25,11 +26,47 @@ from backend.tests.common.test_indexerEvents import (
     indexer_message, nested_indexer_message, s3_event_record, sns_envelope, sqs_record)
 from backend.tests.handlers.compliance._harness import (
     ASSET, DB, SCHEMA, FakeAssetStateTable, put_items)
-from backend.tests.handlers.compliance.test_complianceEvaluationStore import Tables
+from backend.tests.handlers.compliance.test_complianceEvaluationStore import BUCKET_ID, Tables
+from common import assetLocations as asset_locations
+from common import fileAttribution as file_attribution
 from handlers.compliance import complianceTrigger as trigger
 
 MOD = "handlers.compliance.complianceTrigger"
 STORE = "handlers.compliance.complianceEvaluationStore"
+ATTRIBUTION = "common.fileAttribution"
+# The test bucket's registration: assets of this suite sit at `{assetId}/` under the bucket root.
+REGISTRATION = {"bucketId": BUCKET_ID, "bucketName": "asset-bucket", "baseAssetsPrefix": "/"}
+
+
+@contextmanager
+def attribution_stubs(registrations=(REGISTRATION,), index_ready=False, resolution=None):
+    """The bucket registrations a file event is attributed in, the location index (by default before
+    its backfill: empty, not ready), and a cleared registration cache."""
+    buckets_table = MagicMock(name="s3_asset_buckets_table")
+
+    def query(**kwargs):
+        # A query on `bucketNameGSI` names a bucket; any other names a bucketId.
+        field = "bucketName" if kwargs.get("IndexName") == "bucketNameGSI" else "bucketId"
+        value = kwargs["KeyConditionExpression"]._values[1]
+        return {"Items": [dict(r) for r in registrations if r.get(field) == value]}
+
+    buckets_table.query.side_effect = query
+    file_attribution.clear_registration_cache()
+    try:
+        with patch(f"{STORE}.s3_asset_buckets_table", buckets_table), \
+                patch(f"{ATTRIBUTION}.index_ready", return_value=index_ready), \
+                patch(f"{ATTRIBUTION}.resolve_owner", return_value=resolution or asset_locations.Resolution(
+                    asset_locations.RESOLVED_NOT_FOUND)):
+            yield buckets_table
+    finally:
+        file_attribution.clear_registration_cache()
+
+
+def _in_registration(rows):
+    """Asset rows as the assetIdGSI returns them, in the test bucket's registration unless a row
+    names another."""
+    return [{"bucketId": BUCKET_ID, **row} for row in rows]
+
 
 EVALUATION = {"evaluationId": "eval-1", "verdict": "compliant", "complianceState": "compliant",
               "ruleResults": [], "pipelineRulesPending": 0}
@@ -98,16 +135,19 @@ def _s3_head(change_source=None):
 def _run(event, database_item=None, compliance_record=None, children=(), asset_rows=None,
          evaluation=EVALUATION, evaluation_rows=None, head=None, cascade_table=None,
          compliance_records=None, run_evaluation_effect=None, database_effect=None,
-         asset_query_effect=None, asset_item=None, real_location_check=False):
+         asset_query_effect=None, asset_item=None, registrations=(REGISTRATION,), index_ready=False,
+         resolution=None, buckets_effect=None):
     """Run the handler against stand-ins. `asset_rows` answers every assetIdGSI query; a dict maps an
     assetId to its own rows. `compliance_records` maps `databaseId:assetId` to a state row and
     takes precedence over `compliance_record`. `cascade_table` replaces the MagicMock cascade table
     (a moto-backed table for the dedup tests). `run_evaluation_effect` / `database_effect` become
     the side effect of `run_evaluation` / the database row read (an exception to raise, or a
     callable), `asset_query_effect` that of the assetIdGSI query. `asset_item`, when given, is the
-    asset row a strongly consistent read by key returns. Every asset row holds the file event's
-    object (`asset_row_holds_object`) unless `real_location_check` runs the real check. The
-    handler's response is returned under `response`."""
+    asset row a strongly consistent read by key returns. A file event is attributed in
+    `registrations` (`attribution_stubs`), and an asset row without a `bucketId` is in the test
+    bucket's registration; `index_ready`, `resolution` and `buckets_effect` set the location index's
+    readiness and answer and the registration read's side effect. The handler's response is
+    returned under `response`."""
     database_table = MagicMock(name="database_table")
     database_table.get_item.return_value = {"Item": database_item} if database_item else {}
     if database_effect is not None:
@@ -119,9 +159,9 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
     asset_table = MagicMock(name="asset_table")
     if isinstance(asset_rows, dict):
         asset_table.query.side_effect = lambda **kwargs: {
-            "Items": list(asset_rows.get(kwargs["KeyConditionExpression"]._values[1], []))}
+            "Items": _in_registration(asset_rows.get(kwargs["KeyConditionExpression"]._values[1], []))}
     else:
-        asset_table.query.return_value = {"Items": list(asset_rows or [])}
+        asset_table.query.return_value = {"Items": _in_registration(asset_rows or [])}
     if asset_query_effect is not None:
         asset_table.query.side_effect = asset_query_effect
     if asset_item is not None:
@@ -152,11 +192,8 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             return compliance_records.get(f"{database_id}:{asset_id}")
         return compliance_record
 
-    holds_object = (patch(f"{MOD}.asset_row_holds_object", wraps=trigger.asset_row_holds_object)
-                    if real_location_check
-                    else patch(f"{MOD}.asset_row_holds_object", return_value=True))
     with patch(f"{MOD}.database_table", database_table), \
-            holds_object, \
+            attribution_stubs(registrations, index_ready, resolution) as buckets_table, \
             patch(f"{MOD}.cascade_table", cascade_table), \
             patch(f"{MOD}.asset_state_table", state_table), \
             patch(f"{STORE}.asset_state_table", state_table), \
@@ -173,6 +210,8 @@ def _run(event, database_item=None, compliance_record=None, children=(), asset_r
             patch(f"{STORE}.EVALUATION_CLAIM_STALE_SECONDS", 10 ** 9):
         # The records' fixed timestamps are months old, so no pending claim is judged stale here
         # (`claim_orphaned` is tested in test_complianceEvaluationRetriesAndFences).
+        if buckets_effect is not None:
+            buckets_table.query.side_effect = buckets_effect
         response = trigger.lambda_handler(event, MagicMock())
     return {"database": database_table, "cascade": cascade_table, "state": state_table,
             "asset": asset_table, "s3": s3_client, "get_evaluation": get_evaluation,
@@ -225,25 +264,28 @@ class TestMessageShapes:
         mocks["run_evaluation"].assert_not_called()
 
     def test_a_file_event_resolves_the_asset_through_the_asset_id_index(self):
-        message = {"s3": {"object": {"key": f"prefix/{ASSET}/model/part.glb"}},
+        message = {"s3": {"bucket": {"name": "asset-bucket"},
+                          "object": {"key": f"prefix/{ASSET}/model/part.glb"}},
                    "ASSET_BUCKET_PREFIX": "prefix"}
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA},
-                     asset_rows=[{"databaseId": DB, "assetId": ASSET}])
+                     asset_rows=[{"databaseId": DB, "assetId": ASSET}],
+                     registrations=[{**REGISTRATION, "baseAssetsPrefix": "prefix"}])
         query = mocks["asset"].query.call_args.kwargs
         assert query["IndexName"] == "assetIdGSI"
         assert query["KeyConditionExpression"]._values[1] == ASSET
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
     def test_a_file_event_wrapped_in_records_is_unwrapped(self):
-        message = {"Records": [{"s3": {"object": {"key": f"{ASSET}/file.glb"}}}]}
+        message = {"Records": [{"s3": {"bucket": {"name": "asset-bucket"},
+                                       "object": {"key": f"{ASSET}/file.glb"}}}]}
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA},
                      asset_rows=[{"databaseId": DB, "assetId": ASSET}])
         mocks["run_evaluation"].assert_called_once()
 
     def test_a_file_event_for_an_archived_asset_is_skipped(self):
-        message = {"s3": {"object": {"key": f"{ASSET}/file.glb"}}}
+        message = {"s3": {"bucket": {"name": "asset-bucket"}, "object": {"key": f"{ASSET}/file.glb"}}}
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA},
                      asset_rows=[{"databaseId": f"{DB}#deleted", "assetId": ASSET}])
@@ -251,7 +293,7 @@ class TestMessageShapes:
         mocks["database"].get_item.assert_not_called()
 
     def test_a_file_event_for_an_unknown_asset_is_skipped(self):
-        message = {"s3": {"object": {"key": f"{ASSET}/file.glb"}}}
+        message = {"s3": {"bucket": {"name": "asset-bucket"}, "object": {"key": f"{ASSET}/file.glb"}}}
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB)
         mocks["run_evaluation"].assert_not_called()
         mocks["database"].get_item.assert_not_called()
@@ -272,13 +314,6 @@ class TestMessageShapes:
         mocks = _run(event, database_item=AUTO_EVAL_DB, compliance_record={"schemaName": SCHEMA})
         mocks["run_evaluation"].assert_called_once()
 
-    @pytest.mark.parametrize("key,prefix,expected", [
-        ("a1/file.glb", "", "a1"), ("p/a1/file.glb", "p", "a1"), ("p/a1/file.glb", "p/", "a1"),
-        ("a1/file.glb", "/", "a1"), ("", "", None), ("other/a1/x", "p", "other"),
-    ])
-    def test_asset_id_extraction_from_an_object_key(self, key, prefix, expected):
-        assert trigger._extract_asset_id_from_key(key, prefix) == expected
-
 
 @pytest.mark.unit
 class TestIndexerMessagesAreUnwrapped:
@@ -297,7 +332,8 @@ class TestIndexerMessagesAreUnwrapped:
     def test_the_bucket_prefix_on_the_message_scopes_the_asset_id(self):
         message = indexer_message(s3_event_record(f"prefix-a/{ASSET}/model.stl"), prefix="prefix-a/")
         mocks = _run(_sns_event(message), database_item=AUTO_EVAL_DB,
-                     compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS)
+                     compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
+                     registrations=[{**REGISTRATION, "baseAssetsPrefix": "prefix-a/"}])
         assert mocks["asset"].query.call_args.kwargs["KeyConditionExpression"]._values[1] == ASSET
         mocks["run_evaluation"].assert_called_once_with(DB, ASSET, SCHEMA, "SYSTEM_USER")
 
@@ -598,11 +634,11 @@ class TestWorkflowWrittenObjectsAreSkipped:
         mocks["s3"].head_object.assert_not_called()
 
     def test_the_provenance_is_read_from_the_events_object_version(self):
-        mocks = _run(_sns_event(_file_message(key="a%20b/x.glb", version_id="v7")),
+        mocks = _run(_sns_event(_file_message(key=f"{ASSET}/a%20b.glb", version_id="v7")),
                      database_item=AUTO_EVAL_DB, compliance_record={"schemaName": SCHEMA},
                      asset_rows=ASSET_ROWS)
         head = mocks["s3"].head_object.call_args.kwargs
-        assert head == {"Bucket": "asset-bucket", "Key": "a b/x.glb", "VersionId": "v7"}
+        assert head == {"Bucket": "asset-bucket", "Key": f"{ASSET}/a b.glb", "VersionId": "v7"}
 
     def test_an_unversioned_event_heads_the_current_object(self):
         mocks = _run(_sns_event(_file_message(version_id="null")), database_item=AUTO_EVAL_DB,
@@ -612,11 +648,11 @@ class TestWorkflowWrittenObjectsAreSkipped:
     def test_a_key_the_decoded_form_does_not_name_falls_back_to_the_raw_key(self):
         """A literal '+' in a key decodes to a space that names no object; the raw key is tried next."""
         not_found = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
-        mocks = _run(_sns_event(_file_message(key="A+B/x.glb")), database_item=AUTO_EVAL_DB,
+        mocks = _run(_sns_event(_file_message(key=f"{ASSET}/A+B.glb")), database_item=AUTO_EVAL_DB,
                      compliance_record={"schemaName": SCHEMA}, asset_rows=ASSET_ROWS,
                      head=[not_found, _s3_head("workflowExecution")])
         keys = [c.kwargs["Key"] for c in mocks["s3"].head_object.call_args_list]
-        assert keys == ["A B/x.glb", "A+B/x.glb"]
+        assert keys == [f"{ASSET}/A B.glb", f"{ASSET}/A+B.glb"]
         mocks["run_evaluation"].assert_not_called()
 
     # An upload's object is judged by its completion stamp instead (TestAnUploadIsEvaluatedOnceAt
@@ -1061,7 +1097,7 @@ def _stamped_rows(last_upload_at, last_change_at=None, change_source="upload"):
     """The asset's row as the assetIdGSI returns it, carrying the last upload completion's stamp
     (`lastUploadAt`) and the latest change of either kind (`lastChangeAt`, the same instant unless
     a workflow execution's output write landed since)."""
-    return [{"databaseId": DB, "assetId": ASSET, "lastUploadAt": last_upload_at,
+    return [{"databaseId": DB, "assetId": ASSET, "bucketId": BUCKET_ID, "lastUploadAt": last_upload_at,
              "lastChangeAt": last_change_at or last_upload_at, "lastChangeSource": change_source}]
 
 
@@ -1524,7 +1560,7 @@ class TestAnInvocationOverlappingARunningEvaluation:
         stream = _sns_event(_stream_message(change_source="upload", change_at=COLD_UPLOAD_STAMP))
         with patch(f"{MOD}.database_table", database_table), \
                 patch(f"{MOD}.asset_table", asset_table), \
-                patch(f"{MOD}.asset_row_holds_object", return_value=True), \
+                attribution_stubs(), \
                 patch(f"{MOD}.cascade_table", MagicMock(name="cascade_table")), \
                 patch(f"{MOD}.s3_client", s3_client), \
                 patch(f"{MOD}.logger", logger), \

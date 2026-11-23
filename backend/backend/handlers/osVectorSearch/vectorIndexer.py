@@ -62,7 +62,6 @@ from common.batchItemFailures import (
     batch_item_identifier,
     with_batch_item_failures,
 )
-from common.dynamodb import query_all_items
 from common.indexing.documentIds import (
     SEGMENT_KEY_MAX_BYTES,
     SEGMENT_KINDS,
@@ -73,11 +72,11 @@ from common.indexing.documentIds import (
 from common.resourceNames import ResourceKeys, get_bucket_name, get_table_name
 from common.s3 import bucket_region_fields, list_all_object_versions, list_all_objects, region_routing_s3_client
 from common.s3MetadataKeys import (
-    ASSET_ID_METADATA_KEY,
-    DATABASE_ID_METADATA_KEY,
     VAMS_CHANGE_SOURCE_METADATA_KEY,
     VAMS_CHANGE_SOURCE_RESTORE_VALUES,
 )
+from common.assetLocations import object_key_for
+from common.fileAttribution import AMBIGUOUS, attribute_object, binding_of, stored_location
 from common.s3PathPatterns import (
     AUXILIARY_PREPARED_DOWNLOADS_PREFIX, PREVIEW_FILE_PATTERN, key_has_reserved_segment,
     select_newest_preview_file,
@@ -287,18 +286,6 @@ def _get_bucket_record(bucket_id: str) -> Optional[Dict[str, Any]]:
     return {**items[0], **bucket_region_fields(items[0])}
 
 
-def _normalize_prefix(prefix: Optional[str]) -> str:
-    """A registered prefix as it appears in object keys: `prefix-a/`, or '' for a bucket rooted at `/`."""
-    text = (prefix or '').strip('/')
-    return f"{text}/" if text else ''
-
-
-def _asset_base_key(asset_row: Optional[Dict[str, Any]], base_prefix: str, asset_id: str) -> str:
-    location = ((asset_row or {}).get('assetLocation') or {}).get('Key') if asset_row else None
-    base = location or f"{base_prefix}{asset_id}/"
-    return base if base.endswith('/') else base + '/'
-
-
 def _file_ext(declared: Any, file_path: str) -> str:
     text = str(declared or '').strip().lower().lstrip('.')
     if not text:
@@ -460,8 +447,10 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
         logger.error(f"bucketId {bucket_id} has no registration row")
         return Outcome(False, 'error', 'bucket registration not found')
     bucket_name = bucket_record['bucketName']
-    base_prefix = _normalize_prefix(bucket_record.get('baseAssetsPrefix'))
-    object_key = _asset_base_key(asset_row, base_prefix, asset_id) + file_path.lstrip('/')
+    object_key = object_key_for(stored_location({**asset_row, 'assetId': asset_id}, bucket_record), file_path)
+    if not object_key:
+        logger.warning(f"embedding.ready for {database_id}:{asset_id}{file_path} names no file of the asset; dropping")
+        return Outcome(True, 'drop', 'the file path names no file of the asset')
 
     state = resolve_key_state(bucket_name, object_key)
     if not state.exists:
@@ -550,92 +539,52 @@ def handle_embedding_ready(detail: Dict[str, Any]) -> Outcome:
 
 # --- S3 lifecycle rules ------------------------------------------------------------------------------
 
-def _split_asset_key(key: str, base_prefix: str) -> Tuple[Optional[str], Optional[str]]:
-    """(assetId, asset-relative path) for a key under a registered prefix, or (None, None) when the key
-    has no path below the asset folder. The remainder after the prefix is split, never the raw key."""
-    remainder = key[len(base_prefix):] if base_prefix and key.startswith(base_prefix) else key
-    parts = remainder.lstrip('/').split('/')
-    if len(parts) < 2 or not parts[0]:
-        return None, None
-    return parts[0], '/' + '/'.join(parts[1:])
-
-
-def _lookup_database_id(asset_id: str, bucket_name: str, base_prefix: str) -> Tuple[Optional[str], int]:
-    """(databaseId, number of matching databases) for the one asset with this id whose bucket registration
-    is the event's bucket and prefix; the databaseId is None unless exactly one database matches. assetId
-    is not unique across databases, so an unverified match would attribute the file to another database's
-    asset. Only the ambiguous case is logged here: zero matches is the normal state after a permanent
-    delete, and the caller knows whether the object is gone."""
-    rows = query_all_items(asset_storage_table, IndexName='assetIdGSI',
-                           KeyConditionExpression=Key('assetId').eq(asset_id))
-    matches = set()
-    for row in rows:
-        bucket_record = _get_bucket_record(str(row.get('bucketId') or ''))
-        if not bucket_record:
-            continue
-        if bucket_record.get('bucketName') == bucket_name and \
-                _normalize_prefix(bucket_record.get('baseAssetsPrefix')) == base_prefix:
-            database_id = str(row.get('databaseId') or '')
-            if database_id.endswith(ARCHIVED_PARTITION_SUFFIX):
-                database_id = database_id[:-len(ARCHIVED_PARTITION_SUFFIX)]
-            if database_id:
-                matches.add(database_id)
-    if len(matches) > 1:
-        logger.warning(f"assetId {asset_id} resolves to {len(matches)} databases for bucket "
-                       f"{bucket_name}/{base_prefix}; cannot attribute the file")
-    if len(matches) != 1:
-        return None, len(matches)
-    return matches.pop(), 1
-
-
 UNRESOLVED_GONE = 'gone'
 UNRESOLVED_AMBIGUOUS = 'ambiguous'
 UNRESOLVED_NO_ASSET = 'no-asset'
 
 
-def _resolve_file_identity(bucket_name: str, key: str, prefix: Optional[str]
+def _resolve_file_identity(bucket_name: str, key: str, record: Optional[Dict[str, Any]] = None
                            ) -> Tuple[Optional[Tuple[str, str, str, str]], Optional[str]]:
-    """(databaseId, assetId, filePath, changeSource) for an object key: from the object's own metadata
-    while the object is readable, else from the key and assetIdGSI (the object is gone on a permanent
-    delete). ``changeSource`` is the object's ``vams-changesource`` provenance, '' when the object is
-    unreadable or carries none; it comes from the same HEAD, so no second read is made.
+    """(databaseId, assetId, filePath, changeSource) for an object key: the asset whose stored location
+    holds the key in this bucket, live or archived (`common.fileAttribution`: the record's binding, the
+    location index, then before the index is ready the object's stamp and the first folder). The object
+    may be gone (archive, permanent delete); attribution does not need it. ``changeSource`` is the
+    object's ``vams-changesource`` provenance, '' when the object is unreadable or carries none; it comes
+    from one HEAD, which also serves the stamp fallback, and never decides attribution.
 
     Returns (identity, None), or (None, reason) when the file cannot be attributed: UNRESOLVED_GONE when
-    the object is unreadable and no asset row matches (the asset was permanently deleted and its items
-    are removed by the asset-level rule), UNRESOLVED_AMBIGUOUS when more than one database matches, and
+    the object is unreadable and no asset holds it (the asset was permanently deleted and its items are
+    removed by the asset-level rule), UNRESOLVED_AMBIGUOUS when several assets claim its location, and
     UNRESOLVED_NO_ASSET otherwise."""
-    database_id = asset_id = None
+    metadata: Dict[str, Any] = {}
     object_readable = False
     change_source = ''
     try:
         metadata = s3_client.head_object(Bucket=bucket_name, Key=key).get('Metadata', {}) or {}
-        database_id = metadata.get(DATABASE_ID_METADATA_KEY)
-        asset_id = metadata.get(ASSET_ID_METADATA_KEY)
         change_source = str(metadata.get(VAMS_CHANGE_SOURCE_METADATA_KEY) or '')
         object_readable = True
     except ClientError as e:
         if not _is_not_found(e):
             raise
-    base_prefix = _normalize_prefix(prefix)
-    key_asset_id, key_relative = _split_asset_key(key, base_prefix)
-    asset_id = asset_id or key_asset_id
-    if not asset_id:
-        return None, UNRESOLVED_NO_ASSET
-    if not database_id:
-        database_id, match_count = _lookup_database_id(asset_id, bucket_name, base_prefix)
-        if match_count > 1:
-            return None, UNRESOLVED_AMBIGUOUS
-        if not database_id:
-            return None, (UNRESOLVED_NO_ASSET if object_readable else UNRESOLVED_GONE)
-    asset_row, _ = _get_asset_row(database_id, asset_id)
-    location = ((asset_row or {}).get('assetLocation') or {}).get('Key') if asset_row else None
-    if location and key.startswith(location):
-        file_path = '/' + key[len(location):].lstrip('/')
-    else:
-        file_path = key_relative or ''
+    attribution = attribute_object(
+        bucket_name, key,
+        asset_table=asset_storage_table,
+        buckets_table=s3_asset_buckets_table,
+        binding=binding_of(record),
+        include_archived=True,
+        read_stamp=lambda: metadata if object_readable else None,
+        asset_table_name=asset_storage_table_name,
+        get_registration=_get_bucket_record,
+    )
+    if attribution.status == AMBIGUOUS:
+        return None, UNRESOLVED_AMBIGUOUS
+    if not attribution.attributed:
+        return None, (UNRESOLVED_NO_ASSET if object_readable else UNRESOLVED_GONE)
+    file_path = attribution.relative_path
     if file_path in ('', '/'):
         return None, UNRESOLVED_NO_ASSET
-    return (database_id, asset_id, file_path, change_source), None
+    return (attribution.database_id, attribution.asset_id, file_path, change_source), None
 
 
 def run_object_created(pk: str, key_path: str, time_left: Callable[[], int]) -> Outcome:
@@ -726,12 +675,15 @@ def handle_s3_record(record: Dict[str, Any], bucket_name_hint: Optional[str],
     if PREVIEW_FILE_PATTERN in key:
         return Outcome(True, 'ignore', 'preview file')
 
-    identity, unresolved = _resolve_file_identity(bucket_name, key, prefix)
+    identity, unresolved = _resolve_file_identity(bucket_name, key, record)
     if identity is None:
         if unresolved == UNRESOLVED_GONE:
             logger.info(f"S3 record for {bucket_name}/{key}: the object and its asset are gone, nothing to update")
         elif unresolved == UNRESOLVED_NO_ASSET:
             logger.warning(f"S3 record for {bucket_name}/{key} resolves to no asset; nothing to update")
+        elif unresolved == UNRESOLVED_AMBIGUOUS:
+            logger.warning(f"S3 record for {bucket_name}/{key} is claimed by more than one asset; "
+                           "cannot attribute the file")
         return Outcome(True, 'ignore', 'file identity unresolved')
     database_id, asset_id, file_path, change_source = identity
     pk = f"{database_id}:{asset_id}"

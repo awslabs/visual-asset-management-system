@@ -422,6 +422,28 @@ def list_all_object_versions(bucket, prefix, client=None, max_keys=None,
     }
 
 
+def list_key_versions_to_newest_version(bucket, key, client=None):
+    """Mock with the real helper's logic: page the provided client's list_object_versions with
+    Prefix=key until a page holds a version of the key, an entry of another key, or IsTruncated is
+    not True; return only the key's own entries. Without a client, empty."""
+    if client is None:
+        return {"Versions": [], "DeleteMarkers": []}
+    versions, delete_markers = [], []
+    list_kwargs = {"Bucket": bucket, "Prefix": key, "MaxKeys": S3_VERSIONS_PAGE_SIZE}
+    while True:
+        response = client.list_object_versions(**list_kwargs)
+        page_versions = response.get("Versions", []) or []
+        page_markers = response.get("DeleteMarkers", []) or []
+        own_versions = [v for v in page_versions if v.get("Key") == key]
+        versions.extend(own_versions)
+        delete_markers.extend(m for m in page_markers if m.get("Key") == key)
+        other_key_seen = any(e.get("Key") != key for e in list(page_versions) + list(page_markers))
+        if own_versions or other_key_seen or response.get("IsTruncated") is not True:
+            return {"Versions": versions, "DeleteMarkers": delete_markers}
+        list_kwargs["KeyMarker"] = response.get("NextKeyMarker")
+        list_kwargs["VersionIdMarker"] = response.get("NextVersionIdMarker")
+
+
 def list_all_objects(bucket, prefix, client=None, max_objects=None):
     """Mock: return objects under a prefix via the provided client, or empty.
 
