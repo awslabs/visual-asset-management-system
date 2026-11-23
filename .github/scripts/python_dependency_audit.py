@@ -14,7 +14,9 @@ hand-kept list) it:
    fixes it). A requirements file without the header fails: a hand-written file beside a lock would
    otherwise be installed without being checked or audited;
 3. audits each export with pip-audit and fails on every advisory that is not on the allowlist
-   `.github/python-audit-allowlist.json`.
+   `.github/python-audit-allowlist.json`. pip-audit cannot read a `name @ <URL>` requirement, so a
+   prebuilt wheel in an export (flash-attn in the GR00T image) is audited as `name==<version>`, the
+   version read from the wheel's file name; any other direct URL fails the run (see `pin_direct_urls`).
 
 The allowlist is validated first: every entry needs `id`, `package`, `reason`, a `reviewBy` date
 (ISO, not in the past) and `projects`, the uv project directories it applies to (each one a directory
@@ -392,9 +394,60 @@ def check_ranged_inputs(root, tracked, lock_dirs):
     return paths
 
 
+DIRECT_URL_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[^\]]*\])?\s+@\s+(?P<url>\S+)(?P<rest>.*)$")
+WHEEL_URL_FILE = re.compile(r"^(?P<dist>[A-Za-z0-9_.]+)-(?P<version>[0-9][A-Za-z0-9_.!+]*)-[^/]+\.whl$")
+
+
+def pin_direct_urls(text, source):
+    """The requirements text with each `name @ <wheel URL>` line rewritten to `name==<version>`.
+
+    pip-audit cannot read a URL requirement ("URL requirements cannot be pinned to a specific package
+    version"), so a prebuilt wheel such as flash-attn would fail the run, and skipping it would leave
+    the package unaudited. The version is read from the wheel file's own name (`name-version-tags.whl`,
+    a local version such as `+cu12torch2.8` dropped, since advisories name the public release) after
+    checking the file's distribution name is the requirement's, and pip-audit then checks that
+    name and version like any other pin. Anything else behind an `@` (a git source, an archive, a
+    file that is not a wheel) fails the run: its version cannot be read, so it must not pass unaudited.
+    Hash and continuation lines are kept as they are."""
+    lines = []
+    for line in text.split("\n"):
+        match = DIRECT_URL_LINE.match(line)
+        if not match:
+            lines.append(line)
+            continue
+        name, url = match.group("name"), match.group("url")
+        wheel = WHEEL_URL_FILE.match(url.split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1])
+        if not url.startswith("https://") or not wheel or canonical_name(wheel.group("dist")) != canonical_name(name):
+            raise AuditError(
+                f"{source}: `{name} @ {url}` is a direct URL requirement the audit cannot read a version "
+                f"from (only an https wheel URL named for the package is supported); pip-audit would "
+                f"skip it, so it must not stay in an exported lock unaudited"
+            )
+        version = wheel.group("version").split("+", 1)[0]
+        lines.append(f"{name}=={version}{match.group('rest')}")
+    return "\n".join(lines)
+
+
 def audit_export(root, rel_path, pip_audit):
     """Findings for one requirements file: list of (package, version, [ids])."""
-    command = pip_audit + ["-r", rel_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
+    source = os.path.join(root, rel_path)
+    with open(source, encoding="utf-8") as handle:
+        text = handle.read()
+    pinned = pin_direct_urls(text, rel_path)
+    if pinned != text:
+        # pip-audit reads a copy in which each wheel-URL requirement is a name==version pin.
+        handle, copy = tempfile.mkstemp(prefix="uv-export-pinned-", suffix=".txt")
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(pinned)
+        try:
+            return _audit_file(root, copy, rel_path, pip_audit)
+        finally:
+            os.unlink(copy)
+    return _audit_file(root, rel_path, rel_path, pip_audit)
+
+
+def _audit_file(root, read_path, rel_path, pip_audit):
+    command = pip_audit + ["-r", read_path, "-f", "json"] + PIP_AUDIT_STRICT_ARGS
     result = run(command, root, check=False)
     try:
         report = json.loads(result.stdout)

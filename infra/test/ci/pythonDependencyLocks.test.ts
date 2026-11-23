@@ -845,3 +845,57 @@ describe("Python audit allowlist", () => {
         }
     );
 });
+
+/**
+ * Runs the audit script's `pin_direct_urls` on an export's text: what pip-audit reads in place of a
+ * `name @ <wheel URL>` requirement. Returns the rewritten text, or the audit's error message.
+ */
+function pinDirectUrls(text: string): { text?: string; error?: string } {
+    const code = [
+        "import json, sys",
+        `sys.path.insert(0, ${JSON.stringify(path.join(REPO_ROOT, ".github", "scripts"))})`,
+        "import python_dependency_audit as m",
+        "try:",
+        "    print(json.dumps({'text': m.pin_direct_urls(sys.stdin.read(), 'requirements.lock')}))",
+        "except m.AuditError as exc:",
+        "    print(json.dumps({'error': str(exc)}))",
+    ].join("\n");
+    return JSON.parse(execFileSync("python3", ["-c", code], { encoding: "utf8", input: text }));
+}
+
+(hasPython ? describe : describe.skip)("Python audit of a prebuilt wheel URL requirement", () => {
+    const wheel =
+        "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl";
+    const hash = `    --hash=sha256:${"a".repeat(64)}`;
+
+    test("a wheel URL requirement is audited as its name and public version, hashes kept", () => {
+        const text = `einops==0.8.1 ; sys_platform == 'linux' \\\n${hash}\nflash-attn @ ${wheel} ; sys_platform == 'linux' \\\n${hash}\n`;
+        expect(pinDirectUrls(text).text).toBe(
+            `einops==0.8.1 ; sys_platform == 'linux' \\\n${hash}\nflash-attn==2.8.3 ; sys_platform == 'linux' \\\n${hash}\n`
+        );
+    });
+
+    test("a text without a URL requirement is returned unchanged", () => {
+        const text = `einops==0.8.1 \\\n${hash}\n`;
+        expect(pinDirectUrls(text).text).toBe(text);
+    });
+
+    test.each([
+        ["a git source", "gr00t @ git+https://github.com/NVIDIA/Isaac-GR00T@db107f03"],
+        ["a wheel named for another package", `torch @ ${wheel}`],
+        ["a source archive", "flash-attn @ https://example.com/flash_attn-2.8.3.tar.gz"],
+        ["a non-https wheel URL", `flash-attn @ ${wheel.replace("https://", "http://")}`],
+    ])("%s fails the run instead of passing unaudited", (_label, line) => {
+        const result = pinDirectUrls(`${line} ; sys_platform == 'linux'\n`);
+        expect(result.text).toBeUndefined();
+        expect(result.error).toContain("direct URL requirement");
+    });
+
+    test("the committed GR00T export keeps flash-attn as a wheel URL the audit can pin", () => {
+        const lock = read("backendPipelines/genAi/nvidia/gr00t/container/requirements.lock");
+        const pinned = pinDirectUrls(lock);
+        expect(pinned.error).toBeUndefined();
+        expect(pinned.text).toMatch(/^flash-attn==2\.8\.3 ; /m);
+        expect(pinned.text).not.toMatch(/^\S+ @ /m);
+    });
+});
