@@ -396,6 +396,9 @@ class TestReadWithoutCache:
         helper = make_helper(stub)
         with pytest.raises(helper.ParameterNotFoundError):
             helper.read_parameter_value(NAME)
+        # A value written after deployment may not exist yet: an answer for the caller to judge.
+        assert helper.logger.at("warning", "error") == []
+        assert len(helper.logger.at("info")) == 1
         stub.values[NAME] = "now-published"
         assert helper.get_parameter_value(NAME) == "now-published"
 
