@@ -173,12 +173,13 @@ class TestFileInfo:
         assert info.key == COPY
         assert info.relativePath == "/model.glb"
 
-    def test_the_objects_version_history_is_listed(self, af):
+    def test_the_objects_version_history_is_listed(self, af, monkeypatch):
         af.test_client.put_object(Bucket=BUCKET, Key=LOCATION, Body=b"v2")
-        af.asset_version_files_table = MagicMock()
-        af.asset_version_files_table.query.return_value = {"Items": []}
-        af.get_all_asset_versions = MagicMock(return_value=[])
-        af.query_asset_version_history_map = MagicMock(return_value={})
+        versions_table = MagicMock()
+        versions_table.query.return_value = {"Items": []}
+        monkeypatch.setattr(af, "asset_version_files_table", versions_table)
+        monkeypatch.setattr(af, "get_all_asset_versions", MagicMock(return_value=[]))
+        monkeypatch.setattr(af, "query_asset_version_history_map", MagicMock(return_value={}))
         info = af.get_file_info("db1", "a1", "/model.glb", True, CLAIMS)
         assert len(info.versions) == 2
 
@@ -293,12 +294,12 @@ class TestMoveCopyRevertPrimary:
 
 @pytest.mark.unit
 class TestVersionListingUnchanged:
-    def test_a_snapshot_still_lists_its_companion_entries_only(self, af):
+    def test_a_snapshot_still_lists_its_companion_entries_only(self, af, monkeypatch):
         companion_version = _versions(af.test_client, COMPANION)[0]["VersionId"]
-        af.validate_asset_version_exists = MagicMock()
-        af.get_asset_file_versions = MagicMock(return_value={"files": [
+        monkeypatch.setattr(af, "validate_asset_version_exists", MagicMock())
+        monkeypatch.setattr(af, "get_asset_file_versions", MagicMock(return_value={"files": [
             {"relativeKey": "sub/x.obj", "versionId": companion_version, "size": 1, "lastModified": "x"},
-        ]})
+        ]}))
         request = af.ListAssetFilesRequestModel(assetVersionId="1", basic=False)
         response = af.list_asset_files_from_version("db1", "a1", af.test_holder["asset"], BUCKET, LOCATION, request)
         assert [(i.key, i.versionId) for i in response.items] == [(COMPANION, companion_version)]
