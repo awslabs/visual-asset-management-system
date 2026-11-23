@@ -377,6 +377,20 @@ else:
     sys.modules['customLogging'] = MagicMock()
     sys.modules['customLogging.logger'] = MagicMock()
     sys.modules['customLogging.logger'].safeLogger = mock_safe_logger
+
+# ssmParameters is the bounded, cached single-parameter lookup that search, the indexers and the
+# secure-config handler import at module level. Its SSM client is built on first read, so the REAL
+# module loads with no AWS access; tests that read through it give it a fake client
+# (tests/ssmParametersStub.py). Loaded after customLogging (it builds a safeLogger at import).
+_ssmp_spec = _importlib_util.spec_from_file_location(
+    'common.ssmParameters',
+    os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backend', 'common', 'ssmParameters.py')
+)
+_ssmp_module = _importlib_util.module_from_spec(_ssmp_spec)
+sys.modules['common.ssmParameters'] = _ssmp_module
+_ssmp_spec.loader.exec_module(_ssmp_module)
+sys.modules['common'].ssmParameters = _ssmp_module
+
 sys.modules['customConfigCommon'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'] = MagicMock()
 sys.modules['customConfigCommon.customAuthClaimsCheck'].customAuthClaimsCheckOverride = lambda claims_and_roles, request: claims_and_roles

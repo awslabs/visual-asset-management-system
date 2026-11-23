@@ -103,6 +103,21 @@ DELIBERATE_DEPARTURES = {
     # no botocore retries, because the sweep's page loop retries under its own SWEEP_BUDGET_SECONDS and
     # a botocore back-off sleep would run past it.
     ("common/resourceNames.py", "sweep_client_config"),
+    # The single-parameter lookup (search, the indexers, the secure-config handler) runs inside an API
+    # request or a batch: short timeouts and no botocore retries, because its read loop retries under
+    # PARAMETER_READ_BUDGET_SECONDS and a botocore back-off sleep would run past it (#1820).
+    ("common/ssmParameters.py", "parameter_client_config"),
+}
+
+# Where a Parameter Store client may be built. Every other module reads resource names through
+# common/resourceNames.py and any other parameter through common/ssmParameters.py, so a handler does
+# not build an SSM client with Rule 6's five adaptive attempts, which wait out about 30 s under
+# throttling (#1820). The modules listed with a reason keep their own client for now.
+SSM_CLIENT_MODULES = {"common/resourceNames.py", "common/ssmParameters.py"}
+SSM_CLIENTS_KEPT = {
+    # Deploy-time custom resource (15-minute timeout) that must read the values the schema-deploy
+    # resource has just written, so it neither caches nor gives up early.
+    "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
 }
 
 
@@ -555,3 +570,40 @@ class TestTheWiderGapIsPinned:
                         if "config" not in keywords:
                             bare.append(relative)
         return sorted(bare)
+
+
+class TestParameterStoreReadsAreBounded:
+    """No handler builds its own Parameter Store client (#1820).
+
+    Search, both OpenSearch indexers and the secure-config handler built one with Rule 6's dict, so a
+    throttled read waited out five adaptive retries: search's and the indexers' reads at import pushed
+    init toward its 10 s limit, and the web app's start waited about 19 s. They now read through
+    common/ssmParameters.py, whose client is the bounded departure above, as resource names read
+    through common/resourceNames.py. Pure AST over the source.
+    """
+
+    MOVED = ("handlers/search/search.py", "handlers/config/configService.py",
+             "handlers/indexing/assetIndexer.py", "handlers/indexing/fileIndexer.py")
+
+    @staticmethod
+    def _ssm_client_modules():
+        return {relative_path for relative_path, tree in _source_files()
+                for _, service, _ in _client_sites(tree) if service == "ssm"}
+
+    def test_only_the_shared_lookups_and_the_kept_modules_build_an_ssm_client(self):
+        building = self._ssm_client_modules()
+        assert SSM_CLIENT_MODULES <= building, "a shared lookup no longer builds its client, so this proves nothing"
+        unexpected = building - SSM_CLIENT_MODULES - set(SSM_CLIENTS_KEPT)
+        assert unexpected == set(), (
+            f"{sorted(unexpected)} build their own SSM client. Read resource names with "
+            f"common.resourceNames.get_resource_name() and other parameters with "
+            f"common.ssmParameters.get_parameter_value()")
+
+    @pytest.mark.parametrize("relative_path", MOVED)
+    def test_the_moved_handlers_build_none(self, relative_path):
+        assert relative_path not in self._ssm_client_modules()
+
+    def test_every_kept_module_still_builds_one(self):
+        """Anti-rot: a kept module that moved to the shared lookup leaves the list."""
+        stale = set(SSM_CLIENTS_KEPT) - self._ssm_client_modules()
+        assert stale == set(), f"SSM_CLIENTS_KEPT names modules that build no SSM client any more: {sorted(stale)}"
