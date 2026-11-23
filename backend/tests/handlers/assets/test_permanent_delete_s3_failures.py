@@ -667,6 +667,51 @@ class TestASingleFileLocationIsListedByItsOwnPrefixes:
         assert _keys_under(svc.client, FILE_LOCATION) == ["p1/model.glb.bak"]
 
 
+FILE_PREVIEW = FILE_LOCATION + ".previewFile.png"
+# Keys that share the single-file location's characters and are not part of the asset
+NEIGHBOURS = ("p1/model.glb.bak", "p1/model.glbx/part.obj", "p1/model.glb.previewFile/nested.png")
+# Each held key, its asset-relative path, and its auxiliary prefix
+HELD = {
+    FILE_LOCATION: ("/model.glb", "db1/p1/model.glb/preview/"),
+    FILE_PREVIEW: ("/model.glb.previewFile.png", "db1/p1/model.glb.previewFile.png/"),
+    SHADOWED: ("/model.glb/model.glb", "db1/p1/model.glb/model.glb/"),
+    COMPANION: ("/sub/c.obj", "db1/p1/model.glb/sub/c.obj/"),
+}
+
+
+@pytest.mark.unit
+class TestASingleFileAssetDeleteThatKeepsAVersionStopsAtItsOwnKeys:
+    """A version S3 keeps of one held key fails the delete; keys that only share the location's characters
+    are never deleted, and their records and derived data are not touched."""
+
+    @pytest.mark.parametrize("kept_key", [FILE_LOCATION, FILE_PREVIEW, COMPANION],
+                             ids=["the object", "its preview", "a companion entry"])
+    def test_a_kept_version_fails_the_delete_and_leaves_the_neighbours(self, svc, kept_key):
+        svc.asset["assetLocation"] = {"Key": FILE_LOCATION}
+        svc.client.put_object(Bucket=BUCKET, Key=FILE_PREVIEW, Body=b"preview")
+        for key in NEIGHBOURS:
+            svc.client.put_object(Bucket=BUCKET, Key=key, Body=b"neighbour v1")
+            svc.client.put_object(Bucket=BUCKET, Key=key, Body=b"neighbour v2")
+        neighbour_versions = {key: _versions(svc.client, key) for key in NEIGHBOURS}
+        svc.client.put_object(Bucket=BUCKET, Key=kept_key, Body=b"v2")
+        oldest = _versions(svc.client, kept_key)[-1]
+        svc.faulty.deny_versions.add((kept_key, oldest))
+
+        with pytest.raises(svc.m.VAMSGeneralErrorResponse) as raised:
+            _delete_permanently(svc)
+
+        assert str(raised.value).endswith(ASSET_MESSAGE)
+        _assert_asset_kept(svc.m)
+        assert _versions(svc.client, kept_key) == [oldest]
+        assert _keys_under(svc.client, FILE_LOCATION) == sorted((kept_key,) + NEIGHBOURS)
+        assert {key: _versions(svc.client, key) for key in NEIGHBOURS} == neighbour_versions
+        removed = {key: held for key, held in HELD.items() if key != kept_key}
+        assert _file_metadata_paths(svc.m) == sorted(path for path, _ in removed.values())
+        assert sorted(svc.m.delete_file_version_records.call_args.args[2]) == \
+            sorted(path for path, _ in removed.values())
+        assert _aux_prefixes(svc.aux) == sorted(prefix for _, prefix in removed.values())
+
+
 @pytest.mark.unit
 class TestSingleFileDeleteKeepsRecordsInStepWithItsPreviews:
     """#1789: a single-file delete reports a preview it could not list or delete."""
