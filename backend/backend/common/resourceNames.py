@@ -309,14 +309,16 @@ class _ChunksUnusable(Exception):
     unreadable JSON, or a non-retryable error); the refresh reads the prefix instead."""
 
 
-def _call_within_budget(call, deadline: float, counter: list):
+def _call_within_budget(call, deadline: float, counter: list, first_call_past_deadline: bool = False):
     """Run one SSM call, retrying a retryable error after the sweep's jittered sleep until
     ``deadline``. Counts every call in ``counter[0]``. Raises a non-retryable error at once, and
-    the last retryable error (or TimeoutError) when no further call or sleep fits the budget."""
+    the last retryable error (or TimeoutError) when no further call or sleep fits the budget. With
+    ``first_call_past_deadline`` the first call is made even when the deadline has already passed;
+    it stays bounded by the client's timeouts and is not retried."""
     retries = 0
     last_error = None
     while True:
-        if _monotonic() >= deadline:
+        if _monotonic() >= deadline and (last_error is not None or not first_call_past_deadline):
             raise last_error or TimeoutError(
                 f"Resource name read did not finish within {SWEEP_BUDGET_SECONDS}s")
         counter[0] += 1
@@ -442,7 +444,8 @@ def _read_one(key: ResourceParamKey, deadline: float = None):
     """One GetParameter for a key the chunk-loaded cache does not carry (a parameter created under
     the prefix outside the registry, for example), inside ``deadline`` (the _monotonic() time a
     refresh that has just run passes in, so one lookup spends one budget) or else a fresh
-    SWEEP_BUDGET_SECONDS. The name is added to the cache, which keeps the cache's timestamp, and the
+    SWEEP_BUDGET_SECONDS. A refresh whose last call ended past that deadline still leaves one call,
+    bounded by the client's timeouts and not retried. The name is added to the cache, which keeps the cache's timestamp, and the
     failure count is reset; ParameterNotFound goes into the negative record and raises KeyError.
     A transient failure (throttling, a service fault, a timeout or a connection failure) counts as a
     failed sweep for the back-off window and raises ResourceNameUnavailableError; any other error
@@ -455,7 +458,8 @@ def _read_one(key: ResourceParamKey, deadline: float = None):
         deadline = _monotonic() + SWEEP_BUDGET_SECONDS
     try:
         response = _call_within_budget(
-            lambda: client.get_parameter(Name=f"{prefix}/{key.param_key}"), deadline, calls)
+            lambda: client.get_parameter(Name=f"{prefix}/{key.param_key}"), deadline, calls,
+            first_call_past_deadline=True)
     except Exception as e:
         code = _error_code(e)
         if code == "ParameterNotFound":
@@ -555,7 +559,8 @@ def get_resource_name(key: ResourceParamKey) -> str:
     single-key GetParameter is split the same way: a transient failure opens the window and raises
     ResourceNameUnavailableError, any other raises ResourceNameAccessError. The GetParameter that
     follows a refresh has only what remains of the refresh's budget, so one lookup spends one
-    budget. A cache hit takes no lock and reads no SSM."""
+    budget; when the refresh's last call ended past it, the GetParameter still gets one call,
+    bounded by the client's timeouts. A cache hit takes no lock and reads no SSM."""
     for env_name in key.env_var_names:
         value = os.environ.get(env_name)
         if value:

@@ -19,10 +19,11 @@ AWS Secrets Manager, never through this module, so nothing it caches is a secret
 Under throttling a read costs what a resource-name lookup costs, never Rule 6's five adaptive
 attempts (about 30 s):
 
-* One read retries throttling, 5xx responses, and connection and read timeouts with jittered sleeps
-  inside ``PARAMETER_READ_BUDGET_SECONDS``; no call starts and no sleep runs past the budget. The
-  client has short timeouts and no botocore retries, so one call adds at most its own timeout. The
-  error classification is the resolver's (``common.resourceNames``), so both treat an error alike.
+* One read retries throttling, 5xx responses, and the transport failures the resolver retries, with
+  jittered sleeps inside ``PARAMETER_READ_BUDGET_SECONDS``; no call starts and no sleep runs past
+  the budget. The client has short timeouts and no botocore retries, so one call adds at most its
+  own timeout. The error classification is the resolver's (``common.resourceNames``), so both treat
+  an error alike.
 * A read that fails on a retryable error opens a back-off window for the whole container (a
   throttle is account- and Region-wide): no parameter is read until it passes, a cached value is
   served, stale or not, and a parameter not cached is refused with ``ParameterUnavailableError``

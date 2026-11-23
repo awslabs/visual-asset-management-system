@@ -525,6 +525,39 @@ class TestFailureClassesOnTheChunkPath:
         assert clock.now - 1000.0 <= rn.SWEEP_BUDGET_SECONDS
         assert rn._failed_sweeps == 1
 
+    @pytest.mark.parametrize("single_throttled", [False, True])
+    def test_a_refresh_that_ends_past_its_budget_still_leaves_one_getparameter(
+            self, rn, monkeypatch, single_throttled):
+        names = published_names(rn)
+        chunk_names = {k: v for k, v in names.items() if k != DATABASE}
+        clock = rn.test_clock
+
+        def slow_last_chunk_call(operation, call):
+            # The chunk read is throttled until 3.4 s; its successful call then takes 0.6 s and
+            # ends at 4.1 s, past the 4 s budget.
+            if operation == "get_parameters":
+                if clock.now < 1003.4:
+                    raise client_error("ThrottlingException")
+                clock.now += 0.6
+            if operation == "get_parameter" and single_throttled:
+                raise client_error("ThrottlingException", "GetParameter")
+
+        fake = install(rn, monkeypatch, FakeSsm(chunks=chunked(chunk_names, 2), parameters=names,
+                                                fault=slow_last_chunk_call))
+        if single_throttled:
+            with pytest.raises(rn.ResourceNameUnavailableError):
+                rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
+            assert rn._failed_sweeps == 1
+        else:
+            assert rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE) == names[DATABASE]
+            assert rn._failed_sweeps == 0
+
+        assert clock.now - 1000.0 > rn.SWEEP_BUDGET_SECONDS
+        # One call even though the budget had run out, and no retry or sleep after it.
+        assert fake.count("get_parameter") == 1
+        assert fake.calls[-1] == ("get_parameter", f"{PREFIX}/{DATABASE}")
+        assert clock.now == pytest.approx(1004.1)
+
     def test_a_successful_getparameter_resets_the_failure_count(self, rn, monkeypatch):
         names = published_names(rn)
         chunk_names = {k: v for k, v in names.items() if k not in (DATABASE, COMMENT)}
