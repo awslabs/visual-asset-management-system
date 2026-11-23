@@ -31,6 +31,12 @@ export interface S3AssetBucketRecord {
     // S3 Transfer Acceleration is requested for this bucket (#1610). The table populator writes it
     // to the row and verifies the bucket has acceleration enabled.
     isAccelerated: boolean;
+    // Bucket sync writes the two VAMS object tags on the file versions it syncs from this record.
+    tagSyncedObjects: boolean;
+    // This record's bucket-sync created-events queue, set when the storage stack creates it: the queue
+    // name (a literal, for ARNs in other stacks) and its URL (written onto the registration row).
+    syncCreatedQueueName?: string;
+    syncCreatedQueueUrl?: string;
 }
 
 // Global array to store bucket records
@@ -45,7 +51,8 @@ export function addS3AssetBucket(
     kmsKeyArn?: string,
     isDefault?: boolean,
     region?: string,
-    isAccelerated?: boolean
+    isAccelerated?: boolean,
+    tagSyncedObjects?: boolean
 ): void {
     s3AssetBucketRecords.push({
         bucket,
@@ -58,6 +65,8 @@ export function addS3AssetBucket(
         kmsKeyArn,
         isDefault: !!isDefault,
         isAccelerated: !!isAccelerated,
+        // Missing means true.
+        tagSyncedObjects: tagSyncedObjects !== false,
     });
 }
 

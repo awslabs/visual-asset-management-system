@@ -498,7 +498,7 @@ def file_sync(monkeypatch):
         monkeypatch.setattr(
             physnaFileSync,
             "_resolve_asset_from_s3_key_without_metadata",
-            lambda bucket, key: {
+            lambda bucket, key, record=None: {
                 "databaseId": DB,
                 "assetId": ASSET,
                 "relativePath": "/" + key[len(ASSET_BASE_KEY):],
@@ -835,7 +835,7 @@ class TestFileSyncObjectRemovedIsNotAnArchiveDelete:
         with patch.object(
             physnaFileSync,
             "_resolve_asset_from_s3_event",
-            lambda bucket, key: {
+            lambda bucket, key, record=None: {
                 "databaseId": DB,
                 "assetId": ASSET,
                 "relativePath": "/fresh.step",

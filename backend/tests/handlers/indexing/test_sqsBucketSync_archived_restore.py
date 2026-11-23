@@ -20,7 +20,7 @@ _PATCHED_ATTRS = (
     "get_bucket_id", "extract_asset_id_from_key", "validate_asset_id",
     "lookup_asset", "lookup_archived_asset", "restore_archived_asset",
     "get_or_create_database_for_bucket", "create_new_asset",
-    "object_still_exists", "update_s3_metadata", "update_asset_type",
+    "object_still_exists", "tag_version", "update_asset_type",
     "dynamodb", "update_asset_count", "asset_cache",
     "write_file_version_history", "write_asset_history_record",
 )
@@ -45,7 +45,9 @@ def _archived_asset():
         "archivedAt": "2026-07-01T00:00:00",
         "archivedBy": "someone",
         "archivedReason": "old",
-        "assetLocation": {"Key": "x-asset-1/"},
+        # The folder createAsset stores for the registration prefix `db/`: an archived asset is restored only
+        # for a key its stored location holds (#1207 D12).
+        "assetLocation": {"Key": "db/x-asset-1/"},
     }
 
 
@@ -64,7 +66,7 @@ def _wire(m):
     m.lookup_asset = MagicMock(return_value=None)  # no live record
     m.lookup_archived_asset = MagicMock(return_value=_archived_asset())
     m.object_still_exists = MagicMock(return_value=True)
-    m.update_s3_metadata = MagicMock(return_value=True)
+    m.tag_version = MagicMock(return_value=None)
     m.update_asset_type = MagicMock(return_value=True)
     m.create_new_asset = MagicMock()
     m.get_or_create_database_for_bucket = MagicMock()
@@ -87,8 +89,8 @@ class TestProcessRecordRestoresArchivedAsset:
         m.create_new_asset.assert_not_called()
         m.get_or_create_database_for_bucket.assert_not_called()
         # Downstream processing continued with the live database id
-        m.update_s3_metadata.assert_called_once()
-        assert m.update_s3_metadata.call_args.args[2] == "db1"
+        m.tag_version.assert_called_once()
+        assert m.tag_version.call_args.args[4] == "db1"
 
     def test_stale_event_does_not_restore(self):
         m = _load()
@@ -124,7 +126,9 @@ class TestProcessRecordRestoresArchivedAsset:
         table.delete_item.assert_not_called()
         m.write_asset_history_record.assert_not_called()
         assert m.create_new_asset.call_args.args == ("bucket-1", "bucket-db", "x-asset-1")
-        assert m.update_s3_metadata.call_args.args[2] == "bucket-db"
+        # The new asset's version is tagged with the bucket's database (bucket sync no longer copies it).
+        m.tag_version.assert_called_once()
+        assert m.tag_version.call_args.args[4:] == ("bucket-db", "x-asset-1")
 
     def test_restore_failure_reports_error_but_forwards(self):
         m = _load()

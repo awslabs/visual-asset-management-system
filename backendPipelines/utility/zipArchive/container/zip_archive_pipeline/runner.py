@@ -407,7 +407,8 @@ class Job:
             # The request manifest records the value the API chose when the job was created.
             members, empty_dirs = expand_selection(self.clients.for_bucket(bucket), bucket, base_key,
                                                    manifest.get("entries"), manifest.get("pinnedFiles"),
-                                                   include_preview_files(manifest))
+                                                   include_preview_files(manifest),
+                                                   exclude_locations=manifest.get("excludeLocations"))
             check_members(self.clients.for_bucket, members,
                           tuple(manifest.get("blockedExtensions") or CORE_BLOCKED_EXTENSIONS),
                           tuple(manifest.get("blockedContentTypes") or CORE_BLOCKED_CONTENT_TYPES),
@@ -496,8 +497,10 @@ class Job:
         client = self.clients.for_bucket(location["bucket"])
         manifest = json.loads(client.get_object(Bucket=location["bucket"], Key=location["key"])["Body"].read())
         asset_id = spec.get("assetId", "")
-        bucket, base_key, inputs = None, None, []
+        bucket, base_key, inputs, exclude = None, None, [], set()
         for entry in manifest.get("inputFiles") or []:
+            # Locations of other assets nested in a folder input: their keys are those assets' files
+            exclude.update(loc for loc in entry.get("excludeLocations") or [] if isinstance(loc, str) and loc)
             key = entry.get("key", "")
             entry_base = input_asset_root(entry, asset_id)
             if entry_base is None:
@@ -511,7 +514,8 @@ class Job:
         if not inputs:
             raise Refusal("The run has no input files")
         return {"assetBucket": bucket, "assetBaseKey": base_key, "inputs": inputs,
-                "assetId": asset_id, "databaseId": spec.get("databaseId", "")}
+                "assetId": asset_id, "databaseId": spec.get("databaseId", ""),
+                "excludeLocations": sorted(exclude)}
 
     def run_archive(self):
         spec = self.definition["archiveRun"]
@@ -535,7 +539,8 @@ class Job:
             include_previews = include_preview_files(config)
             if config.get("assetVersionId"):
                 pinned = self._pinned_members(run, str(config["assetVersionId"]))
-                members, empty_dirs = expand_selection(client, bucket, base_key, [], pinned, include_previews)
+                members, empty_dirs = expand_selection(client, bucket, base_key, [], pinned, include_previews,
+                                                       exclude_locations=run.get("excludeLocations"))
             else:
                 entries = []
                 for entry in run["inputs"]:
@@ -545,7 +550,8 @@ class Job:
                     else:
                         entries.append({"type": "file", "key": key, "versionId": entry.get("versionId")})
                 members, empty_dirs = expand_selection(client, bucket, base_key, entries,
-                                                       include_preview_files=include_previews)
+                                                       include_preview_files=include_previews,
+                                                       exclude_locations=run.get("excludeLocations"))
             members = filter_patterns(members, config.get("includePatterns"), config.get("excludePatterns"))
             check_members(self.clients.for_bucket, members, CORE_BLOCKED_EXTENSIONS,
                           CORE_BLOCKED_CONTENT_TYPES, empty_dirs)

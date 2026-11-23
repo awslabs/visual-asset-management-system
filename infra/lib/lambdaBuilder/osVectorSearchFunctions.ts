@@ -81,7 +81,7 @@ const backendCode = () => lambda.Code.fromAsset(path.join(__dirname, `../../../b
  * reaches the cap.
  *
  * Set in the partitions that have the detection, where it is on by default: commercial (`aws`) and the AWS
- * European Sovereign Cloud (`aws-eusc`), as for the bucket-sync function in `indexingFunctions.ts`. The AWS
+ * European Sovereign Cloud (`aws-eusc`), as for the compliance job in `complianceFunctions.ts`. The AWS
  * GovCloud (US) user guide lists it as not available, so `aws-us-gov` and any other partition omit the
  * property and the function template stays unchanged there.
  */

@@ -667,6 +667,24 @@ describe.each(CELLS)("large object copy engine ($name)", (cell) => {
         expect(invokesEngine({ Statement: statements })).toBe(false);
     });
 
+    // #1207: the asset type set after a file lands leaves out the keys of assets nested in the asset's
+    // location, which the engine reads from the location index; without the grant the read is denied
+    // and the type is classified from every key.
+    test("the engine may query the asset table's location index and no other asset table index", () => {
+        const statements = roleDocsOf(roleIdOf(engineFunction)).flatMap(
+            (d: any) => d.Statement as any[]
+        );
+        const indexQueries = statements.filter(
+            (s) =>
+                [s.Action].flat().includes("dynamodb:Query") &&
+                JSON.stringify(s.Resource).includes("AssetStorageTable")
+        );
+        expect(indexQueries).toHaveLength(1);
+        const resource = JSON.stringify(indexQueries[0].Resource);
+        expect(resource).toContain("/index/AssetLocationGSI");
+        expect(resource).not.toContain("/index/*");
+    });
+
     test("the engine can stop its own executions and reconcile them (the output step's cancel)", () => {
         const roleId = roleIdOf(engineFunction);
         const stops = roleDocsOf(roleId)

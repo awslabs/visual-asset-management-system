@@ -13,6 +13,7 @@ import { Duration, Names } from "aws-cdk-lib";
 import { addIamNagSuppressions, suppressCdkNagErrorsByGrantReadWrite } from "../helper/security";
 import {
     storageResources,
+    ASSET_LOCATION_INDEX,
     METADATA_SCHEMA_DATABASE_ENTITY_TYPE_INDEX,
     WORKFLOW_EXECUTION_LOCKS_HOLDER_INDEX,
 } from "../nestedStacks/storage/storageBuilder-nestedStack";
@@ -333,8 +334,9 @@ export function executionPermanentDeleteDynamoStatements(
  * Every DynamoDB call the execute handler makes, each table named once with only the actions it
  * receives, on table ARNs and the one index the handler queries:
  * - the launch inputs: the workflow and pipeline definitions by key, the assets and their bucket rows
- *   by key, the default bucket by a filtered scan, the template rows by key and by pipeline, and the
- *   tag schema by its template index;
+ *   by key, the locations of assets nested in an input's asset by the asset table's location index (a
+ *   nested asset's files are not the input asset's), the default bucket by a filtered scan, the template
+ *   rows by key and by pipeline, and the tag schema by its template index;
  * - the execution records: the main row (and its UpdateItem, which the skip record of a launch refused
  *   by a concurrency restriction is written with), the workflow input and configuration rows, the
  *   pipeline rows and their configuration snapshots, and the input-metadata rows through a batch writer.
@@ -355,6 +357,7 @@ export function executeWorkflowDynamoStatements(
             ["Query"],
             [
                 dynamo.assetStorageTable.tableArn,
+                `${dynamo.assetStorageTable.tableArn}/index/${ASSET_LOCATION_INDEX}`,
                 `${dynamo.pipelineTemplateTagSchemaStorageTable.tableArn}/index/${TAG_SCHEMA_BY_TEMPLATE_INDEX}`,
             ]
         ),
@@ -1155,6 +1158,17 @@ export function buildInterimPipelineTrackingFunction(
     storageResources.dynamo.pipelineExecutionOutputFilesStorageTable.grantReadWriteData(fun);
     storageResources.dynamo.workflowExecutionInputsStorageTable.grantReadData(fun);
     storageResources.dynamo.pipelineExecutionInputConfigurationStorageTable.grantReadData(fun);
+    // A folder input of the next step leaves out the files of assets nested in it, whose locations are
+    // read from the asset table's location index, that index only (#1207 D9).
+    fun.addToRolePolicy(
+        new iam.PolicyStatement({
+            effect: iam.Effect.ALLOW,
+            actions: ["dynamodb:Query"],
+            resources: [
+                `${storageResources.dynamo.assetStorageTable.tableArn}/index/${ASSET_LOCATION_INDEX}`,
+            ],
+        })
+    );
     // The Region-routing S3 client resolves a bucket name's Region through the buckets table.
     storageResources.dynamo.s3AssetBucketsStorageTable.grantReadData(fun);
     // Reads original input files + output-files folder, and writes the next pipeline's
@@ -1518,6 +1532,8 @@ export function buildWorkflowTriggerDispatchFunction(
                 target: fun,
                 batchSize: 10,
                 maxBatchingWindow: Duration.seconds(3),
+                // A message whose bucket registration could not be read is reported for redrive.
+                reportBatchItemFailures: true,
             }
         );
         const cfnEsmDispatch = esmDispatch.node.defaultChild as lambda.CfnEventSourceMapping;
@@ -1527,6 +1543,8 @@ export function buildWorkflowTriggerDispatchFunction(
             new eventsources.SqsEventSource(dispatchQueue, {
                 batchSize: 10,
                 maxBatchingWindow: Duration.seconds(3),
+                // A message whose bucket registration could not be read is reported for redrive.
+                reportBatchItemFailures: true,
             })
         );
     }

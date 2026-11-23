@@ -364,6 +364,14 @@ const CORE_FIELDS: FieldMeta[] = [
             getByPath(c, "app.assetBuckets.useS3TransferAcceleration") === true,
     },
     {
+        path: "app.assetBuckets.tagSyncedObjects",
+        label: "Tag synced objects",
+        input: "boolean",
+        section: "essentials",
+        advanced: true,
+        help: "Bucket sync writes the VAMS:databaseId and VAMS:assetId object tags on every file version it syncs from the VAMS-created bucket, keeping the object's own tags. The tags are a marker for your own tools; VAMS never reads them. Imported buckets set the same key on their entry. Default on.",
+    },
+    {
         path: "app.assetBuckets.presignedUrlNetworkRestrictions",
         label: "Presigned URL network restrictions",
         input: "presigned-url-restrictions",

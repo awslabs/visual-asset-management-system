@@ -670,6 +670,21 @@ const ISAAC_LAB_UNSUPPORTED_FAMILIES: Record<string, string> = {
     p5en: "its NVIDIA H200 GPU has no RT cores, which Isaac Sim needs",
 };
 
+// The instance families in GPU_COUNT_BY_INSTANCE_TYPE whose GPU has 24 GB of memory or less, with that
+// GPU. A family outside that table (for example the fractional-GPU g6f and gr6f) is not checked.
+// A GR00T-N1.5-3B fine-tune job reserves one GPU, and the default fine-tune (loraRank 0, projector and
+// diffusion model tuned, AdamW) runs out of memory at step 0 on a 24 GB A10G even at batch size 2:
+// PyTorch had 21.29 GiB allocated of the 22.06 GiB usable. It runs on a 48 GB L40S (g6e). VAMS has not
+// measured a GPU between those sizes (V100 32 GB in p3dn, A100 40 GB in p4d), so those families are
+// not listed.
+export const GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES: Record<string, string> = {
+    g4dn: "NVIDIA T4, 16 GB",
+    g5: "NVIDIA A10G, 24 GB",
+    g6: "NVIDIA L4, 24 GB",
+    gr6: "NVIDIA L4, 24 GB",
+    p3: "NVIDIA V100, 16 GB",
+};
+
 /** Strings a CDK context value or environment variable may use to mean true. */
 const TRUTHY_STRINGS = ["true", "1", "yes", "on"];
 /** Strings that mean false. Listed rather than inferred, so anything else can be reported. */
@@ -2494,7 +2509,7 @@ export function getConfig(app: cdk.App): Config {
                 gr00tN1_5_3B: {
                     enabled: false,
                     autoRegisterWithVAMS: true,
-                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge", "g5.12xlarge"],
+                    instanceTypes: ["g6e.4xlarge", "g6e.12xlarge"],
                     maxVCpus: 192,
                 },
             },
@@ -2861,6 +2876,10 @@ export function getConfig(app: cdk.App): Config {
 
     if (config.app.assetBuckets.createNewBucket == undefined) {
         config.app.assetBuckets.createNewBucket = true;
+    }
+
+    if (config.app.assetBuckets.tagSyncedObjects == undefined) {
+        config.app.assetBuckets.tagSyncedObjects = true;
     }
 
     // Null/omitted restriction lists mean no restrictions (no bucket policy statement).
@@ -3708,11 +3727,35 @@ export function getConfig(app: cdk.App): Config {
 
         if (
             gr00tModels.gr00tN1_5_3B.enabled &&
-            (!gr00tModels.gr00tN1_5_3B.instanceTypes ||
+            (!Array.isArray(gr00tModels.gr00tN1_5_3B.instanceTypes) ||
                 gr00tModels.gr00tN1_5_3B.instanceTypes.length === 0)
         ) {
             throw new Error(
                 "Configuration Error: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes must be a non-empty array."
+            );
+        }
+
+        // A warning, not an error: a run with LoRA or a smaller set of tuned components may fit a
+        // 24 GB GPU, and a configuration that names one on purpose must keep deploying.
+        const undersized = gr00tModels.gr00tN1_5_3B.enabled
+            ? gr00tModels.gr00tN1_5_3B.instanceTypes.filter(
+                  (t) =>
+                      typeof t === "string" &&
+                      GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES[t.split(".")[0]] !== undefined
+              )
+            : [];
+        if (undersized.length > 0) {
+            const named = undersized
+                .map((t) => `${t} (${GR00T_FINETUNE_UNDERSIZED_GPU_FAMILIES[t.split(".")[0]]})`)
+                .join(", ");
+            console.warn(
+                `Configuration Warning: useNvidiaGr00t.modelsFinetune.gr00tN1_5_3B.instanceTypes ` +
+                    `includes ${named}. Each fine-tune job uses one GPU, and the default fine-tune ` +
+                    `(loraRank 0, projector and diffusion model tuned) runs out of GPU memory at step 0 ` +
+                    `on a 24 GB GPU, even at batch size 2. AWS Batch (BEST_FIT_PROGRESSIVE) can place ` +
+                    `a job on any listed type, and it prefers the type with the lowest cost per vCPU, ` +
+                    `which can be one of these. Remove them and use GPUs with 48 GB (for example ` +
+                    `g6e.4xlarge), unless you have checked that your fine-tune settings fit.`
             );
         }
     }
@@ -4328,6 +4371,7 @@ export function getConfig(app: cdk.App): Config {
 
     //Validate S3 Transfer Acceleration (#1610)
     validateS3TransferAcceleration(config.app.assetBuckets, config.env.partition);
+    validateTagSyncedObjects(config.app.assetBuckets);
 
     if (
         config.app.useGlobalVpc.enabled &&
@@ -6336,6 +6380,39 @@ export function validateS3TransferAcceleration(
     }
 }
 
+/**
+ * Validates app.assetBuckets.tagSyncedObjects and the same key on each external bucket: each is a
+ * real boolean when set. A string such as "false" would otherwise read as true.
+ */
+export function validateTagSyncedObjects(assetBuckets: {
+    tagSyncedObjects?: boolean;
+    externalAssetBuckets?: ConfigPublicAssetS3Buckets[] | null;
+}): void {
+    const problems: string[] = [];
+    if (
+        assetBuckets.tagSyncedObjects !== undefined &&
+        typeof assetBuckets.tagSyncedObjects !== "boolean"
+    ) {
+        problems.push("app.assetBuckets.tagSyncedObjects");
+    }
+    (assetBuckets.externalAssetBuckets || []).forEach((bucketConfig, index) => {
+        if (
+            bucketConfig &&
+            bucketConfig.tagSyncedObjects !== undefined &&
+            typeof bucketConfig.tagSyncedObjects !== "boolean"
+        ) {
+            problems.push(`app.assetBuckets.externalAssetBuckets[${index}].tagSyncedObjects`);
+        }
+    });
+    if (problems.length > 0) {
+        throw new Error(
+            `Configuration Error: ${problems.join(
+                ", "
+            )} must be a boolean (true or false, not a string).`
+        );
+    }
+}
+
 export interface ConfigPresignedUrlNetworkRestrictions {
     allowedIpRanges: string[];
     allowedVpceIds: string[];
@@ -6364,6 +6441,9 @@ export interface ConfigPublicAssetS3Buckets {
     // before deployment and the deployment fails, naming the bucket, when it is not enabled.
     // Commercial partition only; missing means false. Entries for one bucket ARN must agree.
     useS3TransferAcceleration?: boolean;
+    // Bucket sync writes the VAMS:databaseId and VAMS:assetId object tags on every file version it
+    // syncs from this registration. Missing means true.
+    tagSyncedObjects?: boolean;
 }
 
 /**
@@ -6480,6 +6560,9 @@ export interface ConfigPublic {
             // S3 Transfer Acceleration for the VAMS-created default asset bucket and, together
             // with it, the auxiliary bucket (#1610). Commercial partition only. Default false.
             useS3TransferAcceleration: boolean;
+            // Bucket sync tags every file version it syncs from the VAMS-created bucket with
+            // VAMS:databaseId and VAMS:assetId. Default true.
+            tagSyncedObjects: boolean;
             externalAssetBuckets: [ConfigPublicAssetS3Buckets];
         };
         adminUserId: string;

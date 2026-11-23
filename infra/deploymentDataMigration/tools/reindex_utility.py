@@ -42,6 +42,10 @@ Usage (direct mode — runs the backend handler locally, no 15-minute limit):
         --opensearch-type provisioned \
         --region us-east-1
 
+Usage (tag objects synced by earlier releases with the VAMS object tags; see tag_synced_objects.py):
+    python reindex_utility.py --tag-synced --dry-run \
+        --resource-names-ssm-param-prefix /vams-prod-us-east-1/resourceNames --region us-east-1
+
 Requirements:
     - Python 3.6+
     - lambda mode:  boto3; AWS credentials with lambda:InvokeFunction permission
@@ -539,6 +543,39 @@ def exit_code_for_result(result: Dict) -> int:
     return EXIT_SUCCESS
 
 
+def run_tag_synced(args, parser) -> int:
+    """`--tag-synced`: tag the objects earlier releases synced (tag_synced_objects.py)."""
+    if not args.resource_names_ssm_param_prefix:
+        parser.error("--tag-synced requires --resource-names-ssm-param-prefix")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ssm_resource_lookup import ResourceParamKeys, SsmResourceLookup
+    from tag_synced_objects import tag_synced_objects
+
+    session_kwargs = {}
+    if args.profile:
+        session_kwargs['profile_name'] = args.profile
+    if args.region:
+        session_kwargs['region_name'] = args.region
+    session = boto3.Session(**session_kwargs)
+    lookup = SsmResourceLookup(args.resource_names_ssm_param_prefix, profile=args.profile, region=args.region)
+    try:
+        asset_table = lookup.resolve_with_override(args.asset_storage_table_name,
+                                                   ResourceParamKeys.ASSET_STORAGE_TABLE)
+        buckets_table = lookup.resolve_with_override(args.s3_asset_buckets_storage_table_name,
+                                                     ResourceParamKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)
+    except KeyError as e:
+        logger.error(str(e))
+        return EXIT_FAILED
+    report = args.report_file or f"tagSynced-{'dryRun' if args.dry_run else 'run'}-report.jsonl"
+    summary = tag_synced_objects(session, args.resource_names_ssm_param_prefix, asset_table, buckets_table,
+                                 args.backend_path, dry_run=args.dry_run, limit=args.limit, report_path=report)
+    if summary.get('error'):
+        logger.error(summary['error'])
+        return EXIT_FAILED
+    logger.info(f"Tag synced objects: {json.dumps(summary, sort_keys=True)}")
+    return EXIT_FAILED if summary.get('accessDeniedBuckets') else EXIT_SUCCESS
+
+
 def main():
     """
     Main function for standalone execution.
@@ -592,6 +629,10 @@ Notes:
   - The required table names and SSM parameter names are available in the CDK stack outputs / SSM;
     they match the environment variables configured on the reindexer Lambda.
   - Dry run mode allows testing without making actual changes (both modes).
+  - --tag-synced (never automatic) tags the objects earlier releases synced with VAMS:databaseId and
+    VAMS:assetId, runs locally instead of a reindex, and needs the location index backfill done:
+      python reindex_utility.py --tag-synced --dry-run \\
+          --resource-names-ssm-param-prefix /vams-prod-us-east-1/resourceNames --region us-east-1
         """
     )
 
@@ -614,6 +655,20 @@ Notes:
                         help='AWS region (direct mode also uses this as the handler AWS_REGION)')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], default='INFO',
                         help='Logging level (default: INFO)')
+
+    # Tagging of objects synced by earlier releases (runs locally, instead of a reindex)
+    tag_group = parser.add_argument_group('tag synced objects')
+    tag_group.add_argument('--tag-synced', action='store_true',
+                           help='Tag the current version of every object an asset holds with VAMS:databaseId and '
+                                'VAMS:assetId, as bucket sync does for new versions, instead of reindexing. '
+                                'Never automatic; needs the location index backfill done. Honors --dry-run, '
+                                '--limit, --profile and --region.')
+    tag_group.add_argument('--resource-names-ssm-param-prefix',
+                           help="The deployment's resource-name SSM prefix (core stack output "
+                                "ResourceNamesSSMParamPrefixOutput). Required with --tag-synced.")
+    tag_group.add_argument('--report-file',
+                           help='JSON Lines report of every object --tag-synced did not tag (default: '
+                                'tagSynced-<dryRun|run>-report.jsonl in the current directory).')
 
     # Lambda-mode options
     lambda_group = parser.add_argument_group('lambda mode')
@@ -653,6 +708,9 @@ Notes:
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
+
+    if args.tag_synced:
+        return run_tag_synced(args, parser)
 
     if args.mode == 'direct':
         # Validate the inputs the backend handler requires. --backend-path defaults to the backend

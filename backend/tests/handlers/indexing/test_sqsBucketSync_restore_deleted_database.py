@@ -66,7 +66,7 @@ def _wire_process_record(m, monkeypatch):
     monkeypatch.setattr(m, "lookup_asset", MagicMock(return_value=None))
     monkeypatch.setattr(m, "lookup_archived_asset", MagicMock(return_value=_archived_asset()))
     monkeypatch.setattr(m, "object_still_exists", MagicMock(return_value=True))
-    monkeypatch.setattr(m, "update_s3_metadata", MagicMock(return_value=True))
+    monkeypatch.setattr(m, "tag_version", MagicMock(return_value=None))
     monkeypatch.setattr(m, "update_asset_type", MagicMock(return_value=True))
     monkeypatch.setattr(m, "create_new_asset", MagicMock())
     monkeypatch.setattr(m, "get_or_create_database_for_bucket", MagicMock())
@@ -118,7 +118,7 @@ class TestRestoreIntoADeletedDatabaseIsRefused:
         assert success is False and should_index is True
         assert message.startswith("Failed to restore archived asset"), message
         table.put_item.assert_not_called()
-        m.update_s3_metadata.assert_not_called()
+        m.tag_version.assert_not_called()
         m.create_new_asset.assert_not_called()
         m.get_or_create_database_for_bucket.assert_not_called()
 
