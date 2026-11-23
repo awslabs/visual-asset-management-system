@@ -32,6 +32,8 @@ import {
     RESOURCE_NAME_CHUNK_MAX_CHARS,
     arnMaxLength,
     EVENT_BUS_ARN_MAX_LENGTH,
+    HTTPS_HOST_URL_MAX_LENGTH,
+    LOCATION_API_KEY_ARN_MAX_LENGTH,
     TOKEN_MAX_LENGTH_BY_CATEGORY,
     TOKEN_MAX_LENGTH_BY_KEY,
     UNKNOWN_TOKEN_MAX_LENGTH,
@@ -40,7 +42,6 @@ import {
 import { enableEdh } from "../addon/edh/support/edhSynth";
 import {
     actionsOf,
-    resolveReference,
     resourcesOf,
     SynthResult,
     synthTemplate,
@@ -60,6 +61,7 @@ import {
     rootStackKey,
     SynthChunk,
     sourceOf,
+    valueTargetOf,
 } from "./support/resourceNameChunkSynth";
 
 jest.setTimeout(1_200_000);
@@ -83,17 +85,58 @@ describe("planResourceNameChunks", () => {
         expect(worstCaseValueChars({ key: "integration/a", value: 'a"b' })).toBe(
             JSON.stringify('a"b').length
         );
+        expect(worstCaseValueChars({ key: "lambdaFunctions/a", value: t })).toBe(64 + 2);
         expect(TOKEN_MAX_LENGTH_BY_CATEGORY).toEqual({
             dynamoTables: 255,
             s3Buckets: 63,
             cloudwatchLogGroups: 512,
+            lambdaFunctions: 64,
         });
+    });
+
+    test("sizes the deploy-time URLs and the map key ARN by their own bounds", () => {
+        const t = tokenValue(stack(), "Url");
+        // https:// and a DNS name at its 253-character limit.
+        expect(HTTPS_HOST_URL_MAX_LENGTH).toBe(261);
+        // arn: + partition (16) + : + geo + : + Region (25) + : + account (12) + : + api-key/ + a
+        // 100-character key name.
+        expect(LOCATION_API_KEY_ARN_MAX_LENGTH).toBe(172);
+        expect(arnMaxLength("geo", "api-key/", 100)).toBe(172);
+        const longestKeyArn = `arn:aws-us-gov:geo:eusc-de-east-1:123456789012:api-key/${"k".repeat(
+            100
+        )}`;
+        expect(longestKeyArn.length).toBeLessThanOrEqual(LOCATION_API_KEY_ARN_MAX_LENGTH);
+        const longestUrl = `https://${"h".repeat(253)}`;
+        expect(longestUrl.length).toBe(HTTPS_HOST_URL_MAX_LENGTH);
+        for (const key of [
+            RESOURCE_PARAM_KEYS.openSearch.endpoint,
+            RESOURCE_PARAM_KEYS.web.deployedUrl,
+        ]) {
+            expect(worstCaseValueChars({ key, value: t })).toBe(261 + 2);
+            // A provisioned domain's endpoint is "https://" joined with a deploy-time name.
+            expect(worstCaseValueChars({ key, value: `https://${t}` })).toBe(261 + 2);
+        }
+        expect(worstCaseValueChars({ key: RESOURCE_PARAM_KEYS.location.apiKeyArn, value: t })).toBe(
+            172 + 2
+        );
+        // The index names are literals, sized by their own length.
+        expect(
+            worstCaseValueChars({
+                key: RESOURCE_PARAM_KEYS.openSearch.assetIndexName,
+                value: "vams-assets-v3",
+            })
+        ).toBe('"vams-assets-v3"'.length);
     });
 
     test("sizes an ARN-valued key by its own bound, not the 2,048 of an unknown category", () => {
         const t = tokenValue(stack(), "Bus");
         const busKey = RESOURCE_PARAM_KEYS.integration.orchestrationBusArn;
-        expect(TOKEN_MAX_LENGTH_BY_KEY).toEqual({ [busKey]: EVENT_BUS_ARN_MAX_LENGTH });
+        expect(TOKEN_MAX_LENGTH_BY_KEY).toEqual({
+            [busKey]: EVENT_BUS_ARN_MAX_LENGTH,
+            [RESOURCE_PARAM_KEYS.openSearch.endpoint]: HTTPS_HOST_URL_MAX_LENGTH,
+            [RESOURCE_PARAM_KEYS.web.deployedUrl]: HTTPS_HOST_URL_MAX_LENGTH,
+            [RESOURCE_PARAM_KEYS.location.apiKeyArn]: LOCATION_API_KEY_ARN_MAX_LENGTH,
+        });
         expect(worstCaseValueChars({ key: busKey, value: t })).toBe(EVENT_BUS_ARN_MAX_LENGTH + 2);
         // arn: + partition (16) + : + events + : + Region (25) + : + account (12) + : + event-bus/ +
         // a 256-character name.
@@ -382,21 +425,17 @@ function perKeyParametersOf(s: SynthResult): Map<string, { stack: string; value:
     return out;
 }
 
-/** A value as a comparable target: the literal itself, or the resource a reference resolves to. */
-function targetOf(s: SynthResult, stack: string, value: unknown): string {
-    if (typeof value === "string") return `literal:${value}`;
-    const resource = resolveReference(s, stack, value);
-    return resource
-        ? `${resource.stack}/${resource.logicalId}`
-        : `unresolved:${JSON.stringify(value)}`;
-}
+/** A value as a comparable target (literal parts and the resource attributes references name). */
+const targetOf = valueTargetOf;
 
-/** Keys published per key but deliberately outside the registry and the lane helpers. */
+/**
+ * Keys published per key but deliberately outside the registry, the late core publisher and the
+ * lane helpers: tooling-only names no Lambda reads at runtime.
+ */
 const LATE_BOUND_KEYS = new Set<string>([
     RESOURCE_PARAM_KEYS.lambdaFunctions.crOsReindexer,
     RESOURCE_PARAM_KEYS.lambdaFunctions.vectorReindexer,
     RESOURCE_PARAM_KEYS.lambdaFunctions.importGlobalPipelineWorkflow,
-    RESOURCE_PARAM_KEYS.lambdaFunctions.largeObjectCopyEngine,
     RESOURCE_PARAM_KEYS.integration.workflowExecutionRoleArn,
 ]);
 const isLateBound = (key: string) => LATE_BOUND_KEYS.has(key) || key.startsWith("securityGroups/");
@@ -569,44 +608,102 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
     const namesPerChunk = (s: SynthResult) =>
         chunksOf(s).map((c) => Object.keys(c.parsed.m).length);
 
+    const unhashed = (ids: string[]) => ids.map((id) => id.replace(/[0-9A-F]{8}$/, "")).sort();
+    const nestedStack = (id: string) => `${id}NestedStack${id}NestedStackResource`;
+
+    // The late core names in publication order: ApiBuilder2 (the copy engine) is built before
+    // SearchBuilder, StaticWeb and LocationService.
+    const LATE_CORE_ORDER = [
+        RESOURCE_PARAM_KEYS.lambdaFunctions.largeObjectCopyEngine,
+        RESOURCE_PARAM_KEYS.openSearch.endpoint,
+        RESOURCE_PARAM_KEYS.openSearch.assetIndexName,
+        RESOURCE_PARAM_KEYS.openSearch.fileIndexName,
+        RESOURCE_PARAM_KEYS.web.deployedUrl,
+        RESOURCE_PARAM_KEYS.location.apiKeyArn,
+    ];
+
+    /** The core chunks hold the registry names, then the late core names, in that order. */
+    function expectLateCoreNamesLast(s: SynthResult, late: string[]): void {
+        const coreKeys = chunksOf(s)
+            .filter((c) => sourceOf(c) === "core")
+            .flatMap((c) => Object.keys(c.parsed.m));
+        const lateCore = new Set<string>(LATE_CORE_ORDER);
+        expect(coreKeys.slice(coreKeys.length - late.length)).toEqual(late);
+        expect(coreKeys.filter((k) => lateCore.has(k))).toEqual(late);
+    }
+
     test("commercial template, add-ons off", () => {
         const s = synthFor("commercial", false);
         expect(layout(s)).toEqual({
             chunks: 7,
-            names: 76,
+            names: 82,
             perSource: { core: 7 },
             stacks: ["root"],
         });
-        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 5]);
+        // The six late core names fill the last core chunk's spare room: no chunk is added.
+        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 11]);
+        expectLateCoreNamesLast(s, LATE_CORE_ORDER);
+        // Every chunk waits for storage and for each stack a late core name is read from. With
+        // CloudFront's own domain the web URL is a deploy-time value, so StaticWeb is one of them.
+        for (const chunk of chunksOf(s)) {
+            expect(unhashed(dependsOnOf(chunk))).toEqual(
+                [
+                    "ApiBuilder2",
+                    "LocationService",
+                    "SearchBuilder",
+                    "StaticWeb",
+                    "StorageResourcesBuilder",
+                ].map(nestedStack)
+            );
+        }
     });
 
     test("commercial template, every add-on on", () => {
         const s = synthFor("commercial", true);
         expect(layout(s)).toEqual({
             chunks: 8,
-            names: 78,
+            names: 84,
             perSource: { core: 7, addon: 1 },
             stacks: ["root"],
         });
-        // The add-on's names are packed after the core's, in a chunk of their own.
+        // The add-on's names are packed after the core's, late core names included, in a chunk of
+        // their own.
         const edhKeys = Object.values(ADDON_RESOURCE_PARAM_KEYS.dynamoTables);
         const edhChunks = chunksOf(s).filter((c) => edhKeys.some((k) => k in c.parsed.m));
         expect(edhChunks.map((c) => c.index)).toEqual([7]);
-        // Every chunk, the core ones included, waits for the add-on stack as well as storage.
-        const unhashed = (ids: string[]) => ids.map((id) => id.replace(/[0-9A-F]{8}$/, "")).sort();
+        expectLateCoreNamesLast(s, LATE_CORE_ORDER);
+        // Every chunk, the core ones included, waits for the add-on stack as well.
         for (const chunk of chunksOf(s)) {
-            expect(unhashed(dependsOnOf(chunk))).toEqual([
-                "AddonBuilderNestedStackAddonBuilderNestedStackResource",
-                "StorageResourcesBuilderNestedStackStorageResourcesBuilderNestedStackResource",
-            ]);
+            expect(unhashed(dependsOnOf(chunk))).toEqual(
+                [
+                    "AddonBuilder",
+                    "ApiBuilder2",
+                    "LocationService",
+                    "SearchBuilder",
+                    "StaticWeb",
+                    "StorageResourcesBuilder",
+                ].map(nestedStack)
+            );
         }
     });
 
     test.each([
-        ["govcloud", [13, 13, 13, 13, 10, 9, 5]],
-        ["eusovereign", [13, 13, 13, 13, 10, 10, 3]],
+        ["govcloud", [13, 13, 13, 13, 10, 9, 10]],
+        ["eusovereign", [13, 13, 13, 13, 10, 10, 8]],
     ] as [TemplateName, number[]][])("%s template", (name, perChunk) => {
-        expect(namesPerChunk(synthFor(name, false))).toEqual(perChunk);
+        const s = synthFor(name, false);
+        expect(namesPerChunk(s)).toEqual(perChunk);
+        // Provisioned OpenSearch, an ALB with a configured domain (a literal web URL, read from no
+        // stack) and no Amazon Location Service.
+        expectLateCoreNamesLast(
+            s,
+            LATE_CORE_ORDER.filter((k) => k !== RESOURCE_PARAM_KEYS.location.apiKeyArn)
+        );
+        for (const chunk of chunksOf(s)) {
+            expect(unhashed(dependsOnOf(chunk))).toEqual(
+                ["ApiBuilder2", "SearchBuilder", "StorageResourcesBuilder"].map(nestedStack)
+            );
+        }
     });
 
     test("one GetParameters call reads every chunk in each shipped template", () => {
