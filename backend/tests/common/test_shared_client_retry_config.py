@@ -159,8 +159,6 @@ SSM_CLIENTS_KEPT = {
     # resource has just written, so it neither caches nor gives up early.
     "handlers/indexing/crReindexer.py": "deploy-time reader of freshly written values",
     # Moving to common/ssmParameters.py and common/resourceNames.py in this change (#1820).
-    "handlers/osSemanticSearch/osAssetIndexer.py": "moves to the shared lookup",
-    "handlers/osSemanticSearch/osFileIndexer.py": "moves to the shared lookup",
     "handlers/workflows/sfn/processWorkflowExecutionOutput.py": "moves to the shared lookup",
     # EDH add-on lane: AWS- and EDH-owned parameters, moved onto common/ssmParameters.py in its own step.
     "handlers/addon/edh/common/edhCapacityReservations.py": "EDH add-on lane, follow-up step",
@@ -631,7 +629,8 @@ class TestParameterStoreReadsAreBounded:
     common/ssmParameters.py, whose clients are the bounded departures above. Pure AST over the source.
     """
 
-    MOVED = ("handlers/osSemanticSearch/search.py", "handlers/config/configService.py")
+    MOVED = ("handlers/osSemanticSearch/search.py", "handlers/osSemanticSearch/osAssetIndexer.py",
+             "handlers/osSemanticSearch/osFileIndexer.py", "handlers/config/configService.py")
 
     @staticmethod
     def _ssm_client_modules():
