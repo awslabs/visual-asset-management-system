@@ -179,9 +179,12 @@ uv export --frozen --no-hashes --no-emit-project --group dev --no-annotate -o re
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.txt
 uv export --frozen --no-emit-project --only-group step --no-annotate -o requirements-step.txt
 
-# Five pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
-# coordinate transform, Potree): the same hashed export, written to that name
+# Six pipeline containers install `requirements.lock` (zip archive, video SOP BOM, CAD STEP agent,
+# coordinate transform, Potree, Isaac Lab training): the same hashed export, written to that name
 uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements.lock
+
+# Cosmos Transfer installs the same hashed export of its NCCL wheel as `requirements-nccl.lock`
+uv export --frozen --no-emit-project --no-dev --no-annotate -o requirements-nccl.lock
 ```
 
 4. Commit `pyproject.toml`, `uv.lock` and the exported file(s) in the same commit, and list each version change in the pull request.
@@ -222,12 +225,16 @@ PIP_AUDIT_VERSION=2.10.1 python3 .github/scripts/python_dependency_audit.py
 
 The script regenerates stale exports in place, so `git diff` afterwards shows the fix to commit. `PIP_AUDIT_VERSION` is the version the workflow sets.
 
+pip-audit cannot read a `name @ <URL>` requirement. The audit therefore accepts one only as a wheel whose file name is the package's and whose URL starts with an allowed prefix (today the flash-attn release assets used by the GR00T image), checks it as `name==<version>` with the version read from the file name, and fails the run on any other direct URL: a git source, an archive, or a wheel on another host. After the prefix the URL must be one `v<tag>/<file>.whl`: a dot segment, percent-encoding, query or fragment fails the run. A new prebuilt wheel needs its prefix added to `ALLOWED_DIRECT_URL_PREFIXES` in `.github/scripts/python_dependency_audit.py`, with a test.
+
+The GR00T image build also checks the copy of Isaac-GR00T's own dependency lists. `backendPipelines/genAi/nvidia/gr00t/container/pyproject.toml` repeats the `dependencies` and `base` extra of Isaac-GR00T's `pyproject.toml` at the Dockerfile's `STABLE_COMMIT`, and `upstream-requirements.json` in the same directory records the lists and the commit. Right after the clone, before any install, the Dockerfile runs `check_upstream_requirements.py`, which compares the cloned file with the record and stops the build, naming the differing entries, when any entry or the order differs; it reads both with the standard library only, because the image's Python 3.10 has no `tomllib` and nothing is installed yet. A jest test holds the literal lists, the record and `pyproject.toml` equal, so a hand edit fails in CI. To move `STABLE_COMMIT`, copy the new commit's two lists into `upstream-requirements.json` and the first lines of `pyproject.toml`, update the commit in both and the literal lists in `infra/test/pipelines/pipelineImageLocks.test.ts`, run `uv lock`, and re-export `requirements.lock` and `requirements-build.lock` with the commands in their headers.
+
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
 -   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;
 -   the Potree PDAL image's conda build environment (`pdal-build.explicit.txt`, pinned by build and SHA-256 but not read by the audit), and the Jupyter packages that open3d's Linux wheels require but its macOS wheels do not declare: the coordinate transform and 3D thumbnail projects name `ipywidgets` themselves so the lock keeps what the images always carried;
--   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos and GR00T images and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, only Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment) is locked. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), GR00T (after PR #1812 merges), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`);
--   packages that come with a container base image or the Lambda runtime, including the Isaac Lab base image's own Python packages (the Isaac Lab training image's lock covers only what it adds, and keeps the base image's versions);
+-   packages a Dockerfile installs inline with `pip install` (for example the NVIDIA Cosmos image and the per-model image-to-3D Dockerfiles), and packages installed from an upstream repository's own requirements inside GPU images. Of the GPU images, Cosmos Transfer's NCCL wheel (`requirements-nccl.lock`, a hashed export installed on top of upstream's environment), the Isaac Lab training image and the GR00T image (`requirements.lock` and `requirements-build.lock`, with Isaac-GR00T's dependency lists copied into its `pyproject.toml`) are locked; the audit reads the GR00T image's prebuilt flash-attn wheel by its name and version. Left on their own requirement files until each is locked: Image to 3D (per-image hashed locks, #1726, because a shared lock installed after an upstream repository's requirements would move upstream's pins), and Splat Toolbox (its `container/requirements.txt` is upstream's file, overwritten at every `cdk synth`);
+-   packages that come with a container base image or the Lambda runtime and are not in a lock, including the Isaac Lab base image's other Python packages (the Isaac Lab training image's lock lists the packages the image adds and the base-image packages those need, at the base image's versions, and the audit reads all of them);
 -   a dependency group with no committed export, except where the project has no export at all (then the whole lock is audited).
 
 The release-time image scan remains the record for a full container image.
@@ -253,7 +260,7 @@ Fix an advisory by moving the package to a fixed version (steps above). A securi
 
 Do not pass `--exclude-newer-package` on the `uv lock` command line instead: the override is then recorded in `uv.lock` but not in `pyproject.toml`, and the next `uv lock --check`, which the CI audit runs, fails.
 
-Allowlist an advisory only when no fixed release exists, or when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime). Add an entry to `.github/python-audit-allowlist.json`:
+Allowlist an advisory only when no fixed release exists, when the fixed release breaks the runtime the project pins (for example a fix that needs Pydantic v2 or a newer Python than the Lambda runtime), or when a vendor base image ships the package and the image's lock keeps the base image's version (the Isaac Lab training image, whose fixes arrive with the next base image digest). Add an entry to `.github/python-audit-allowlist.json`:
 
 ```json
 {
@@ -261,6 +268,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
         {
             "id": "PYSEC-2026-0000",
             "package": "examplepkg",
+            "projects": ["backend"],
             "reason": "No fixed release yet; the affected function is not called by VAMS.",
             "reviewBy": "2027-01-31"
         }
@@ -268,7 +276,7 @@ Allowlist an advisory only when no fixed release exists, or when the fixed relea
 }
 ```
 
-`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. CI fails an entry with no reason, a `reviewBy` in the past, or an id that no longer matches a finding, so entries are removed once the package moves. An entry matches on the advisory id and the package only, not on the project or the version, so it also covers any other project that locks the same package.
+`id` is the advisory id (a PYSEC, GHSA or CVE id pip-audit prints for the finding), `package` is the package name (compared case-insensitively, with `-`, `_` and `.` treated alike), `projects` lists the project directories the entry applies to (each a directory with a tracked `uv.lock`, written as the audit prints it, for example `backendPipelines/simulation/isaacLabTraining/container`), `reason` says why the package cannot move yet, and `reviewBy` is the date by which someone re-checks it. An entry matches on the advisory id, the package and the project, not on the version, so the same advisory in a project the entry does not name still fails the build. CI fails an entry with no reason, no projects, a project without a tracked `uv.lock`, or a `reviewBy` in the past, and fails each project where the entry's id no longer matches a finding, so a project is removed from an entry once the package moves there, and the entry once it names no project.
 
 ## Infrastructure Setup
 

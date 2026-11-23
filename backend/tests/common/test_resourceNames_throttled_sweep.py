@@ -92,6 +92,11 @@ class FakeSsm:
             page["NextToken"] = str(start + MaxResults)
         return page
 
+    def get_parameters(self, Names, **_):
+        """A deployment without resource-name chunk parameters: every name is reported invalid, so
+        each refresh falls back to the sweep these tests drive. Not counted in ``tokens``."""
+        return {"Parameters": [], "InvalidParameters": list(Names)}
+
     def get_paginator(self, operation):
         assert operation == "get_parameters_by_path"
         fake = self
@@ -130,6 +135,13 @@ class RecordingLogger:
 
     def at(self, *levels):
         return [message for level, message in self.lines if level in levels]
+
+    def fallbacks(self):
+        """The one WARNING each refresh logs when no chunk parameters are published."""
+        return [m for m in self.at("warning") if m.startswith("Resource name chunk parameters not used")]
+
+    def window_warnings(self):
+        return [m for m in self.at("warning") if m not in self.fallbacks()]
 
 
 class CountingLock:
@@ -186,7 +198,7 @@ def rn(monkeypatch):
     # Through monkeypatch, so the module state these tests set (here or in a test body) is restored.
     for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
                         ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
-                        ("_window_logged_for", None)):
+                        ("_window_logged_for", None), ("_cache_complete", True)):
         monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 
@@ -540,7 +552,11 @@ class TestSweepLogging:
         assert len(infos) == 1, f"a completed sweep logged {infos}"
         for count in ("12", "2 pages", "2 calls"):
             assert count in infos[0]
-        assert not recorder.at("warning", "error", "exception")
+        assert not recorder.at("error", "exception")
+        assert recorder.fallbacks() == [
+            "Resource name chunk parameters not used (chunk 0 is not published), "
+            "reading every parameter under the prefix"]
+        assert not recorder.window_warnings()
         logged = " ".join(message for _, message in recorder.lines)
         assert "value-marker" not in logged
         assert "table0" not in logged
@@ -559,14 +575,16 @@ class TestSweepLogging:
         assert len(errors) == 1
         for detail in ("ThrottlingException", "0 pages", "7 calls"):
             assert detail in errors[0]
-        assert len(recorder.at("warning")) == 1
+        assert len(recorder.window_warnings()) == 1
+        assert len(recorder.fallbacks()) == 1
 
         clock.advance(window_left(rn, clock) + 0.01)
         fail_one_sweep(rn)
         with pytest.raises(rn.ResourceNameUnavailableError):
             rn.get_resource_name(rn.ResourceKeys.DATABASE_STORAGE_TABLE)
         assert len(recorder.at("error", "exception")) == 2
-        assert len(recorder.at("warning")) == 2
+        assert len(recorder.window_warnings()) == 2
+        assert len(recorder.fallbacks()) == 2
         assert "Rate exceeded" not in " ".join(message for _, message in recorder.lines)
 
 

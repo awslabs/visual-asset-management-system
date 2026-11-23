@@ -189,7 +189,7 @@ Paths are relative to `/workspace/isaaclab`.
 | `numEpisodes`     | int  | 50              | Number of episodes to evaluate                                          |
 | `stepsPerEpisode` | int  | 1000            | Simulation steps per episode (task-dependent)                           |
 
-The uploaded `train-config.json` and `evaluate-config.json` carry the resolved `physics`, the `isaacLabVersion` of the image and the `gpuDriverVersion` the run saw.
+The uploaded `train-config.json` and `evaluate-config.json` carry the resolved `physics`, the `isaacLabVersion` of the image and the `gpuDriverVersion` the run saw. The files keep the run's settings (`jobName`, `trainingConfig`, `customEnvironmentS3Uri` and `stageAssetFiles`) and leave out the workflow's callback, location and bucket fields.
 
 ### GPU driver
 

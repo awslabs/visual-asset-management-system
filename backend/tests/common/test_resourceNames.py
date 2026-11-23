@@ -35,7 +35,7 @@ def rn(monkeypatch):
     # because a failed sweep would otherwise refuse the next test's lookups for its window.
     for name, value in (("_cache", {}), ("_cache_fetched_at", 0.0), ("_ssm_client", None),
                         ("_missing_keys", {}), ("_failed_sweeps", 0), ("_sweep_retry_after", 0.0),
-                        ("_window_logged_for", None)):
+                        ("_window_logged_for", None), ("_cache_complete", True)):
         monkeypatch.setattr(resourceNames, name, value, raising=False)
     return resourceNames
 

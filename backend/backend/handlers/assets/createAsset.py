@@ -28,7 +28,9 @@ from common.tagScope import GLOBAL_SCOPE
 from common.s3 import region_routing_s3_client, bucket_region_fields
 from common.snsTopicNames import asset_sns_topic_name
 from common.s3MetadataKeys import folder_marker_metadata
-from common.assetLocations import locations_share_key
+# normalize_base_prefix: the one normalization of a registration's baseAssetsPrefix ("assets",
+# "assets/" and "/assets/" are one prefix) that every prefix comparison here goes through.
+from common.assetLocations import derive_location, location_attributes, locations_share_key, normalize_base_prefix
 from common.s3PathPatterns import AUXILIARY_PREPARED_DOWNLOADS_PREFIX, RESERVED_S3_PREFIX_FOLDERS
 from models.common import APIGatewayProxyResponseV2, internal_error, success, validation_error, general_error, authorization_error, VAMSGeneralErrorResponse, validation_error_message
 from models.assetsV3 import CreateAssetRequestModel, CreateAssetResponseModel, validate_ascii_asset_id
@@ -104,23 +106,6 @@ def normalize_s3_path(asset_base_key, file_path):
         logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
         return resolved_path
 
-def normalize_base_assets_prefix(base_assets_prefix):
-    """Normalize a bucket record's baseAssetsPrefix to its canonical S3 form.
-
-    Bucket records can spell the same physical prefix root several ways
-    ("assets", "assets/", "/assets/"), so every comparison of one bucket record
-    against another goes through this single normalization: trailing slash
-    present, no leading slash.
-    """
-    if not base_assets_prefix:
-        return ''
-    if not base_assets_prefix.endswith('/'):
-        base_assets_prefix += '/'
-    if base_assets_prefix.startswith('/'):
-        base_assets_prefix = base_assets_prefix[1:]
-    return base_assets_prefix
-
-
 def get_default_bucket_details(databaseId):
     """Get default S3 bucket details from database default bucket DynamoDB"""
     try:
@@ -145,7 +130,7 @@ def get_default_bucket_details(databaseId):
         if not bucket_name or not base_assets_prefix:
             raise VAMSGeneralErrorResponse(f"Error getting database default bucket details.")
 
-        base_assets_prefix = normalize_base_assets_prefix(base_assets_prefix)
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,
@@ -311,7 +296,9 @@ def check_s3_prefix_exists(bucket_name, prefix):
     appends the slash and reads the very same objects. Widening the probe alone
     would match a sibling such as `<base>legacy-other/`, so each returned key is
     accepted only when it equals the bare form or sits under the slash-bearing
-    one — the same containment rule keys_conflict() applies.
+    one. This asks whether objects occupy one location in S3; whether two asset
+    locations overlap is a different question, which keys_conflict() answers with
+    common.assetLocations.locations_share_key.
 
     Args:
         bucket_name: S3 bucket name
@@ -422,8 +409,8 @@ def prefix_roots_overlap(prefix_a, prefix_b):
     an asset registered under either can occupy a key the other's assets reach.
     An empty prefix is the bucket root, which contains every prefix in it.
     """
-    prefix_a = normalize_base_assets_prefix(prefix_a)
-    prefix_b = normalize_base_assets_prefix(prefix_b)
+    prefix_a = normalize_base_prefix(prefix_a)
+    prefix_b = normalize_base_prefix(prefix_b)
     return (prefix_a == prefix_b
             or prefix_a.startswith(prefix_b)
             or prefix_b.startswith(prefix_a))
@@ -511,9 +498,12 @@ def assert_existing_key_not_owned(bucket_ids, resolved_s3_key):
     Because multiple databases can share one bucket and prefix root, an asset's
     S3 location is only unambiguously owned when a single asset record maps to it.
     We query all assets in the colocated buckets (via the BucketIdGSI) and reject
-    if any existing asset's assetLocation.Key equals, is a parent of, or is a
-    child of the resolved key, so a new asset cannot be bound onto a location
-    another asset owns.
+    if any existing asset's location holds a key that the resolved location also
+    holds (keys_conflict(), through common.assetLocations.locations_share_key), so
+    a new asset cannot be bound onto a location another asset owns. That is more
+    than one location equal to, inside or around the other: a single file
+    `p/model.glb` and `p/model.glb.previewFile` share preview keys that neither
+    location key names, and are refused too.
 
     A caller-supplied bucketExistingKey is an arbitrary key, so every record in
     the partition has to be compared: this walks the full BucketIdGSI partition.
@@ -838,12 +828,12 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         resolved_as_prefix = normalize_location_key(s3_key)
         if resolved_as_prefix and not resolved_as_prefix.endswith('/'):
             resolved_as_prefix += '/'
-        if resolved_as_prefix == normalize_base_assets_prefix(s3_bucket_prefix):
+        if resolved_as_prefix == normalize_base_prefix(s3_bucket_prefix):
             error_msg = ("The specified bucketExistingKey is the S3 bucket location root for this "
                          "database. An asset must be located in a folder beneath it.")
             logger.error(
                 f"{error_msg}: resolved {s3_key} equals base prefix root "
-                f"{normalize_base_assets_prefix(s3_bucket_prefix)!r}")
+                f"{normalize_base_prefix(s3_bucket_prefix)!r}")
             raise VAMSGeneralErrorResponse(error_msg)
 
         # A key inside a VAMS system folder holds system data, never an asset's files. Refused before any
@@ -865,7 +855,7 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         logger.info(f"Using existing S3 key: {s3_key} in bucket: {s3_bucket}")
     else:
         # Create a new prefix folder
-        s3_key = s3_bucket_prefix + assetId + '/'
+        s3_key = derive_location(bucketDetails, databaseId, assetId)
         logger.info(f"Validating new prefix uniqueness: {s3_key} in bucket: {s3_bucket}")
 
         # Two layers guard this location, each covering the other's blind spot. The
@@ -923,7 +913,8 @@ def create_asset(request_model: CreateAssetRequestModel, claims_and_roles, s3Ext
         'bucketId': s3_bucket_id,
         'assetLocation' : {
             'Key': s3_key,
-        }
+        },
+        **location_attributes(s3_bucket, s3_key),
     }
     
     # Save asset to DynamoDB
