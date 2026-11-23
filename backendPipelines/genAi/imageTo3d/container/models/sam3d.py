@@ -579,7 +579,7 @@ if settings["solid_interior"]:
 
 inference = Inference(settings["config_path"], compile=False)
 
-image = Image.open(image_path)
+image = Image.open(image_path, formats=("PNG", "JPEG"))
 if image.mode != "RGBA":
     image = image.convert("RGBA")
 

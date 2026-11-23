@@ -90,7 +90,7 @@ normal_predictor = torch.hub.load(
     local_cache_dir=weights_dir,
 )
 
-image = Image.open(image_path)
+image = Image.open(image_path, formats=("PNG", "JPEG"))
 if image.mode != "RGBA":
     image = image.convert("RGBA")
 

@@ -1,0 +1,10 @@
+{
+    "packages": [
+        {
+            "name": "torchmcubes",
+            "version": "0.1.0",
+            "source": "git https://github.com/tatsy/torchmcubes.git, built in the Dockerfile at TORCHMCUBES_COMMIT with its C++ standard lowered to 17",
+            "commit": "879926d0ef58e6ce0ac2630fdecb5e53af7ed3ff"
+        }
+    ]
+}
