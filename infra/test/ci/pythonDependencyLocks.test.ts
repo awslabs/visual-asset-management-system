@@ -924,3 +924,41 @@ function pinDirectUrls(text: string): { text?: string; error?: string } {
         expect(pinned.text).not.toMatch(/^\S+ @ /m);
     });
 });
+
+/** Runs the audit script's `drop_local_versions` on an export's text and returns what pip-audit reads. */
+function dropLocalVersions(text: string): string {
+    const code = [
+        "import json, sys",
+        `sys.path.insert(0, ${JSON.stringify(path.join(REPO_ROOT, ".github", "scripts"))})`,
+        "import python_dependency_audit as m",
+        "print(json.dumps({'text': m.drop_local_versions(sys.stdin.read())}))",
+    ].join("\n");
+    return JSON.parse(execFileSync("python3", ["-c", code], { encoding: "utf8", input: text }))
+        .text;
+}
+
+(hasPython ? describe : describe.skip)("Python audit of a pin with a local version label", () => {
+    const hash = `    --hash=sha256:${"a".repeat(64)}`;
+    const marker = "platform_machine == 'x86_64' and sys_platform == 'linux'";
+
+    test("a CUDA build label is dropped, so PyPI knows the version; marker and hashes are kept", () => {
+        const text = `torch==2.10.0+cu128 ; ${marker} \\\n${hash}\nxformers==0.0.34 ; ${marker} \\\n${hash}\n`;
+        expect(dropLocalVersions(text)).toBe(
+            `torch==2.10.0 ; ${marker} \\\n${hash}\nxformers==0.0.34 ; ${marker} \\\n${hash}\n`
+        );
+    });
+
+    test("a pin without a label, a comment and a hash line are returned unchanged", () => {
+        const text = `# torch==2.10.0+cu128 in a comment\nnumpy==2.5.5 ; ${marker} \\\n${hash}\n`;
+        expect(dropLocalVersions(text)).toBe(text);
+    });
+
+    test("the committed Image to 3D exports carry labels the audit can read once they are dropped", () => {
+        const lock = read(
+            "backendPipelines/genAi/imageTo3d/container/locks/stable3dgen/requirements.lock"
+        );
+        expect(lock).toMatch(/^torch==2\.10\.0\+cu128 ; /m);
+        expect(dropLocalVersions(lock)).toMatch(/^torch==2\.10\.0 ; /m);
+        expect(dropLocalVersions(lock)).not.toMatch(/^\S+==\S*\+\S+ /m);
+    });
+});
