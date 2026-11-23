@@ -72,6 +72,7 @@ from common.assetLocations import (
     index_ready,
     normalize_base_prefix,
     nested_locations_in_rows,
+    nested_locations_of,
     normalize_location,
     relative_path_in,
     resolve_owner,
@@ -303,6 +304,22 @@ def resolve_by_location(asset_table, bucket_name: str, object_key: str, include_
         logger.warning(f"The location index cannot resolve {object_key} in bucket {bucket_name}: {e}")
         return None
     return None if resolution.status == RESOLVED_TOO_DEEP else resolution
+
+
+def held_by_another_location(asset_table, bucket_name: str, asset_row: Dict, location: str, object_key: str,
+                             use_cache: bool = True) -> bool:
+    """Whether a stored location other than `asset_row`'s own holds `object_key`: the location of another
+    asset nested in `location` (live or archived), or another live asset stored at `location` itself. The
+    deepest stored location that contains a key owns it, so the first-folder fast path then does not decide
+    and the location index names the owner (D10). One location-index query on `location`, reused for a few
+    seconds in this container (`use_cache` False reads it fresh). It is read at any time, as bucket sync reads
+    the index for every key: a hit counts before the backfill marker exists too, and a miss before it proves
+    nothing, so the first folder decides as before. A location the index cannot list within its page limit
+    counts as held elsewhere, and the owner lookup, which reads a bounded set of candidates, decides."""
+    owner = (str(asset_row.get('databaseId') or ''), str(asset_row.get('assetId') or ''))
+    nested = nested_locations_of(asset_table, bucket_name, location, asset_table_name=asset_table_name,
+                                 owner=owner, include_shared=True, index_hits_any_time=True, use_cache=use_cache)
+    return nested.source != "index" or nested.holder(object_key) is not None
 
 
 def folder_holds_other_objects(bucket_name: str, folder: str, object_key: str) -> bool:
@@ -2279,62 +2296,64 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
         use_index_cache = not (receive_count and receive_count > 1)
 
         # 2.a Fast path: the first folder under the prefix names the asset (BucketIdGSI). A hit counts
-        # only when that asset's stored location holds the key.
+        # only when that asset's stored location holds the key and no other stored location does: the
+        # location of another asset nested in it, or another live asset at the same location (D10).
         resolved_by = RESOLVED_BY_FAST_PATH
         owner_asset_id = asset_id
         owner_bucket_id = bucket_id
         asset_data = lookup_asset(bucket_id, asset_id) if first_folder_valid else None
-        if asset_data and not contains(asset_location_of(asset_data, base_prefix, asset_id), object_key):
-            logger.info(f"Asset {asset_id} does not hold {object_key} at its stored location; resolving by location")
-            asset_data = None
+        fast_path_row = None
+        if asset_data:
+            fast_path_location = asset_location_of(asset_data, base_prefix, asset_id)
+            if not contains(fast_path_location, object_key):
+                logger.info(f"Asset {asset_id} does not hold {object_key} at its stored location; "
+                            "resolving by location")
+                asset_data = None
+            elif held_by_another_location(asset_table, bucket_name, asset_data, fast_path_location, object_key,
+                                          use_cache=use_index_cache):
+                logger.info(f"Another stored location inside {fast_path_location} holds {object_key}; "
+                            "resolving by location")
+                fast_path_row, asset_data = asset_data, None
 
-        # 2.b On a miss: the live asset whose stored location contains the key (location index).
-        # Two live assets on one location attribute nothing; the record goes to the rejected queue.
-        # A key the index cannot answer for is attributed as before the index (first folder only).
+        # 2.b Otherwise the location index names the owner: the asset whose stored location is the deepest
+        # that contains the key, live or archived (a live row wins over an archived one at one location).
+        # An index hit counts at any time, an archived owner's included: that asset is restored from it
+        # before the backfill marker exists exactly as after, so bucket sync and the indexers, which read
+        # the same index, give the record one answer. Two live assets on one location attribute nothing;
+        # the record goes to the rejected queue. A key the index cannot answer for is attributed as before
+        # the index (first folder only).
         index_usable = True
+        archived_asset = None
         if not asset_data:
-            resolution = resolve_by_location(asset_table, bucket_name, object_key, use_cache=use_index_cache)
+            resolution = resolve_by_location(asset_table, bucket_name, object_key, include_archived=True,
+                                             use_cache=use_index_cache)
             if resolution is None:
                 index_usable = False
             elif resolution.status == RESOLVED_AMBIGUOUS:
                 return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
                                      resolution.candidates)
             elif resolution.status == RESOLVED_FOUND:
-                asset_data = resolution.row
                 resolved_by = RESOLVED_BY_LOCATION_INDEX
                 owner_asset_id = resolution.entry.asset_id
                 owner_bucket_id = resolution.entry.bucket_id or bucket_id
+                if resolution.entry.archived:
+                    archived_asset = resolution.row
+                else:
+                    asset_data = resolution.row
+            if fast_path_row is not None and not asset_data and not archived_asset:
+                # The deeper row the index listed is gone, or the index cannot answer for the key: the
+                # first folder decides, as before.
+                asset_data = fast_path_row
 
         database_id_to_use = None
-        archived_asset = None
         if asset_data:
             logger.info(f"Asset {owner_asset_id} found in bucket {owner_bucket_id} ({resolved_by})")
             database_id_to_use = asset_data.get('databaseId')
         else:
-            # 2.c No live owner. An index hit counts at any time, an archived owner's included: the
-            # asset whose stored location holds the key is restored from it before the backfill marker
-            # exists exactly as after, so bucket sync and the indexers, which read the same index, give
-            # the record one answer. Only a miss waits for readiness: until then the first folder
-            # decides as before. Once it is ready, an auto-created asset may not overlap any asset's
-            # location.
+            # 2.c No live owner. Only a miss waits for readiness: until then the first folder decides as
+            # before. Once it is ready, an auto-created asset may not overlap any asset's location.
             index_is_ready = index_usable and index_ready(asset_table_name)
-            archived = (resolve_by_location(asset_table, bucket_name, object_key, include_archived=True,
-                                            use_cache=use_index_cache) if index_usable else None)
-            if archived is None:
-                index_is_ready = False
-            elif archived.status == RESOLVED_AMBIGUOUS:
-                return reject_record(record, bucket_name, object_key, REJECTED_REASON_AMBIGUOUS,
-                                     archived.candidates)
-            elif archived.status == RESOLVED_FOUND:
-                resolved_by = RESOLVED_BY_LOCATION_INDEX
-                owner_asset_id = archived.entry.asset_id
-                owner_bucket_id = archived.entry.bucket_id or bucket_id
-                if archived.entry.archived:
-                    archived_asset = archived.row
-                else:
-                    asset_data = archived.row
-                    database_id_to_use = asset_data.get('databaseId')
-            if not asset_data and not archived_asset and not index_is_ready and first_folder_valid:
+            if not archived_asset and not index_is_ready and first_folder_valid:
                 archived_asset = lookup_archived_asset(bucket_id, asset_id)
 
             if asset_data:
@@ -2375,6 +2394,10 @@ def process_s3_record(record: Dict, binding_out: Optional[Dict] = None,
                     )
                     archived_asset = None
                     resolved_by, owner_asset_id, owner_bucket_id = RESOLVED_BY_FAST_PATH, asset_id, bucket_id
+                    if fast_path_row is not None:
+                        # A nested archived owner gone since the lookup: the containing asset holds the key
+                        asset_data = fast_path_row
+                        database_id_to_use = asset_data.get('databaseId')
                 elif not restored_database_id:
                     logger.error(f"Failed to restore archived asset {owner_asset_id}")
                     return False, True, f"Failed to restore archived asset {owner_asset_id}"
@@ -3052,8 +3075,15 @@ def lambda_handler_deleted(event, context):
                     resolved_by = RESOLVED_BY_FAST_PATH
                     owner_asset_id, owner_bucket_id = asset_id, bucket_id
                     asset_data = lookup_asset(bucket_id, asset_id) if first_folder_valid else None
-                    if asset_data and not contains(asset_location_of(asset_data, base_prefix, asset_id), object_key):
-                        asset_data = None
+                    fast_path_row = None
+                    if asset_data:
+                        fast_path_location = asset_location_of(asset_data, base_prefix, asset_id)
+                        if not contains(fast_path_location, object_key):
+                            asset_data = None
+                        elif held_by_another_location(dynamodb.Table(asset_table_name), bucket_name, asset_data,
+                                                      fast_path_location, object_key):
+                            # The deepest stored location that contains the key owns it (D10)
+                            fast_path_row, asset_data = asset_data, None
                     if not asset_data:
                         resolution = resolve_by_location(dynamodb.Table(asset_table_name), bucket_name,
                                                          object_key, include_archived=True)
@@ -3062,6 +3092,9 @@ def lambda_handler_deleted(event, context):
                             resolved_by = RESOLVED_BY_LOCATION_INDEX
                             owner_asset_id = resolution.entry.asset_id
                             owner_bucket_id = resolution.entry.bucket_id or bucket_id
+                        elif fast_path_row is not None and (resolution is None
+                                                            or resolution.status != RESOLVED_AMBIGUOUS):
+                            asset_data = fast_path_row
                     if not asset_data:
                         # The asset record may already be gone (asset-level delete); the record is
                         # still forwarded so the indexers can clean up.

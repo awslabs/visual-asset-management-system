@@ -1112,6 +1112,7 @@ def clear_nested_locations_cache() -> None:
 def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_table_name: Optional[str] = None,
                         destructive: bool = False, bucket_ids: Iterable[str] = (),
                         owner: Optional[Tuple[str, str]] = None, include_shared: bool = False,
+                        index_hits_any_time: bool = False, use_cache: bool = True,
                         clock: Callable[[], float] = time.monotonic) -> NestedLocations:
     """The locations of other assets nested in one asset's ``location`` in ``bucket``: the keys they hold are
     not that asset's files.
@@ -1123,8 +1124,12 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     pre-index rule. A destructive answer also names the other live assets stored at the same location
     (``shared``; ``owner`` identifies the asset itself), whose keys it leaves alone. A write into the asset's
     location asks for those too with ``include_shared`` (a read: once the index is ready, from the index only).
-    A non-destructive answer is reused for NESTED_LOCATIONS_TTL_SECONDS in this container; a destructive one is
-    always read fresh.
+    With ``index_hits_any_time`` a read asks the location index before it is ready too, as bucket sync does
+    for every key: a location found there counts at any time, and a miss before readiness proves nothing (the
+    caller keeps its pre-index rule); readiness is not read then.
+    A non-destructive answer is reused for NESTED_LOCATIONS_TTL_SECONDS in this container (``use_cache`` False
+    reads it fresh); a destructive one is always read fresh. ``source`` on the answer is ``index`` when the
+    location index listed it.
     Other read errors are raised.
 
     The lookup has two backends, the location index and the registration walk, and the rule (``NestedLocations``)
@@ -1134,12 +1139,13 @@ def nested_locations_of(table, bucket: str, location: Optional[str], *, asset_ta
     if not bucket or not loc:
         return NestedLocations(loc)
     table_name = asset_table_name or getattr(table, 'name', '')
-    ready = index_ready(table_name)
+    any_time = index_hits_any_time and not destructive
+    ready = True if any_time else index_ready(table_name)
     if not ready and not (destructive and bucket_ids):
         return NestedLocations(loc)
     shared = (destructive or include_shared) and owner is not None
     cache_key = (table_name, bucket, loc, owner if shared else None)
-    if not destructive:
+    if not destructive and use_cache:
         with _nested_cache_lock:
             cached = _nested_cache.get(cache_key)
         if cached and clock() - cached[0] < NESTED_LOCATIONS_TTL_SECONDS:

@@ -244,7 +244,7 @@ class TestCustomRootLocation:
     def test_an_init_marker_restoring_a_first_level_asset_through_the_index_is_still_deleted(self):
         m = _load()
         archived = _entry(database_id="db1#deleted", asset_id="a1", location="a1/")
-        _wire(m, resolve=[NOT_FOUND, _found(archived)], ready=True)
+        _wire(m, resolve=[_found(archived)], ready=True)
         assert m.process_s3_record(_record("a1/init"), binding_out={}) == (
             True, False, "Deleted init object a1/init; queued 0 existing files")
         assert m.restore_archived_asset.called
@@ -253,10 +253,11 @@ class TestCustomRootLocation:
     def test_an_archived_owner_is_restored_by_location_once_ready(self):
         m = _load()
         archived = _entry(database_id="db1#deleted")
-        _wire(m, resolve=[NOT_FOUND, _found(archived)], ready=True)
+        _wire(m, resolve=[_found(archived)], ready=True)
         binding = {}
         m.process_s3_record(_record(self.KEY), binding_out=binding)
-        assert m.resolve_owner.call_args_list[1].kwargs["include_archived"] is True
+        # One owner lookup, live and archived rows (the deepest stored location that contains the key)
+        assert m.resolve_owner.call_args_list[0].kwargs["include_archived"] is True
         restore = m.restore_archived_asset.call_args.args
         assert restore[:2] == ("bucket-1", "owner-1")
         m.lookup_archived_asset.assert_not_called()
@@ -536,7 +537,7 @@ class TestAnArchivedOwnerGoneSinceTheLookup:
     def test_the_key_falls_back_to_its_first_folder(self):
         m = _load()
         gone = _entry(database_id="db1#deleted", asset_id="owner-1", location="projects/alpha/")
-        _wire(m, resolve=[NOT_FOUND, _found(gone)], ready=True)
+        _wire(m, resolve=[_found(gone)], ready=True)
         m.restore_archived_asset = MagicMock(return_value=m.ARCHIVED_RECORD_GONE)
         response = m.lambda_handler_created({"Records": [_sqs("msg-1", _record("projects/alpha/x.glb"), 2)]},
                                             MagicMock())
@@ -557,7 +558,7 @@ class TestAnArchivedOwnerHitBeforeTheIndexIsReady:
     def test_the_archived_custom_root_asset_is_restored_and_the_file_recorded(self):
         m = _load()
         archived = _entry(database_id="db1#deleted", asset_id="owner-1", location="projects/alpha/")
-        _wire(m, resolve=[NOT_FOUND, _found(archived)], ready=False)
+        _wire(m, resolve=[_found(archived)], ready=False)
         response = m.lambda_handler_created({"Records": [_sqs("msg-1", _record("projects/alpha/x.glb"))]},
                                             MagicMock())
         assert response["batchItemFailures"] == []

@@ -172,7 +172,7 @@ class TestBucketSyncDoesNotRestoreIt:
 
     def _run(self, rows, ready=True):
         m = bs._load()
-        bs._wire(m, resolve=[bs.NOT_FOUND, bs._found(self.ARCHIVED_ENTRY)], ready=ready)
+        bs._wire(m, resolve=[bs._found(self.ARCHIVED_ENTRY)], ready=ready)
         archived_row = asset_row("db1", "owner-1", "bucket-1", "projects/alpha/", bs.BUCKET, archived=True)
         m.dynamodb.Table.return_value = _SyncTable([archived_row, *rows])
         response = m.lambda_handler_created({"Records": [bs._sqs("msg-1", bs._record("projects/alpha/x.glb"))]},
