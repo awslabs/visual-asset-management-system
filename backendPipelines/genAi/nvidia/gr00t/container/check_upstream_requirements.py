@@ -46,13 +46,35 @@ def read_list(lines, header, key):
     raise SystemExit(f"`{key}` in [{header}] not found, or not closed, in the upstream pyproject.toml")
 
 
+def load_record(path):
+    """The recorded lists, or a SystemExit with one line saying what is wrong with the record."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            recorded = json.load(handle)
+    except OSError as exc:
+        raise SystemExit(f"cannot read the record {path}: {exc.strerror or exc}")
+    except ValueError as exc:
+        raise SystemExit(f"the record {path} is not valid JSON: {exc}")
+    if not isinstance(recorded, dict):
+        raise SystemExit(f"the record {path} is not a JSON object")
+    for key in ("dependencies", "base"):
+        value = recorded.get(key)
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise SystemExit(f"the record {path} has no `{key}` list of requirement strings")
+    if not isinstance(recorded.get("commit"), str):
+        raise SystemExit(f"the record {path} has no `commit`")
+    return recorded
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-    with open(sys.argv[2], encoding="utf-8") as handle:
-        recorded = json.load(handle)
+    try:
+        with open(sys.argv[1], encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"cannot read the upstream pyproject.toml {sys.argv[1]}: {getattr(exc, 'strerror', None) or exc}")
+    recorded = load_record(sys.argv[2])
     upstream = {
         "dependencies": read_list(lines, "project", "dependencies"),
         "base": read_list(lines, "project.optional-dependencies", "base"),
