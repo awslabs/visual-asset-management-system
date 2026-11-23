@@ -206,7 +206,8 @@ def staged_input_key(auxiliary_files_key, input_key):
     return "/".join(part for part in parts if part)
 
 
-def stage_input_version(input_bucket, input_key, version_id, auxiliary_bucket, auxiliary_files_key):
+def stage_input_version(input_bucket, input_key, version_id, auxiliary_bucket, auxiliary_files_key,
+                        always_copy=False):
     """The bucket and key the ModelOps handler reads the input from.
 
     The ModelOps image reads Amazon S3 itself, by bucket and key, and cannot take a version. When the
@@ -214,31 +215,49 @@ def stage_input_version(input_bucket, input_key, version_id, auxiliary_bucket, a
     version to honour, the handler reads the original object. Otherwise that version is copied into
     the run's auxiliary working prefix and the handler reads the copy. A version deleted after launch
     fails the run rather than reading the current object.
+
+    ``always_copy`` stages the copy in every case (``single_file_asset_object``): the handler is
+    pointed at the copy's folder, which holds only that file, rather than at the object's own folder.
     """
-    if not version_id:
+    if not version_id and not always_copy:
         return input_bucket, input_key
-    try:
-        head = s3.head_object(Bucket=input_bucket, Key=input_key, VersionId=version_id)
-        current = s3.head_object(Bucket=input_bucket, Key=input_key)
-    except ClientError as e:
-        if str(e.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
-            raise _missing_version(input_bucket, input_key, version_id) from e
-        raise
-    # A response without a VersionId (an unversioned bucket) cannot name a different version, so
-    # it reads the original object.
-    if not current.get("VersionId") or current.get("VersionId") == head.get("VersionId", version_id):
-        return input_bucket, input_key
+    source = {"Bucket": input_bucket, "Key": input_key}
+    if version_id:
+        try:
+            head = s3.head_object(Bucket=input_bucket, Key=input_key, VersionId=version_id)
+            current = s3.head_object(Bucket=input_bucket, Key=input_key)
+        except ClientError as e:
+            if str(e.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
+                raise _missing_version(input_bucket, input_key, version_id) from e
+            raise
+        # A response without a VersionId (an unversioned bucket) cannot name a different version, so
+        # it reads the original object.
+        if not current.get("VersionId") or current.get("VersionId") == head.get("VersionId", version_id):
+            if not always_copy:
+                return input_bucket, input_key
+        if current.get("VersionId"):
+            source["VersionId"] = version_id
 
     staged_key = staged_input_key(auxiliary_files_key, input_key)
     try:
-        s3.copy({"Bucket": input_bucket, "Key": input_key, "VersionId": version_id},
-                auxiliary_bucket, staged_key)
+        s3.copy(source, auxiliary_bucket, staged_key)
     except ClientError as e:
         if str(e.response.get("Error", {}).get("Code", "")) in MISSING_VERSION_ERROR_CODES:
             raise _missing_version(input_bucket, input_key, version_id) from e
         raise
-    logger.info(f"Staged input version {version_id} of {input_key} at s3://{auxiliary_bucket}/{staged_key}")
+    staged = f"version {source['VersionId']} of {input_key}" if "VersionId" in source else input_key
+    logger.info(f"Staged input {staged} at s3://{auxiliary_bucket}/{staged_key}")
     return auxiliary_bucket, staged_key
+
+
+def single_file_asset_object(event, input_bucket, input_key):
+    """Whether the input is the object of a single-file asset: the manifest's asset root
+    (``inputAssetRootS3Key``) has no trailing ``/``, names the input key itself, and is in the input's
+    bucket (``inputAssetRootBucket``, the input's bucket when not named). That asset holds the object and
+    its companion folder ``{key}/``, not the other keys of the object's own folder."""
+    root = (event.get("inputAssetRootS3Key") or "").lstrip("/")
+    root_bucket = event.get("inputAssetRootBucket") or input_bucket
+    return bool(root) and not root.endswith("/") and root == input_key.lstrip("/") and root_bucket == input_bucket
 
 
 def construct_modelops_definition(event):
@@ -291,10 +310,13 @@ def construct_modelops_definition(event):
         state = config.setdefault("state", {})
         state["name"] = input_s3_asset_file_filename
         # The handler reads the input at the version the run recorded at launch: the original
-        # object when that is current, a staged copy of that version otherwise.
+        # object when that is current, a staged copy of that version otherwise. A single-file
+        # asset's object is always read from the run's own copy, so the folder the handler is given
+        # holds that file only.
         read_bucket, read_key = stage_input_version(
             input_s3_asset_file_bucket, input_s3_asset_file_key, event.get("inputVersionId") or "",
-            inputOutput_s3_assetAuxiliary_files_bucket, inputOutput_s3_assetAuxiliary_files_key)
+            inputOutput_s3_assetAuxiliary_files_bucket, inputOutput_s3_assetAuxiliary_files_key,
+            always_copy=single_file_asset_object(event, input_s3_asset_file_bucket, input_s3_asset_file_key))
         if (read_bucket, read_key) != (input_s3_asset_file_bucket, input_s3_asset_file_key):
             staged_input_uri = f"s3://{read_bucket}/{read_key}"
         state["bucket"] = read_bucket
