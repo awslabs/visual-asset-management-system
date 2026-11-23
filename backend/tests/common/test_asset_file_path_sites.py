@@ -27,7 +27,6 @@ FILE_PATH_SITES = (
     "assets/streamAsset.py",
     "assets/streamAuxiliaryPreviewAsset.py",
     "assets/uploadFile.py",
-    "assets/assetExportService.py",
     "metadata/metadataService.py",
     "workflows/executeWorkflow.py",
     "workflows/sfn/workflowTriggerDispatch.py",

@@ -262,18 +262,6 @@ class TestFolderLocationUnchanged:
 
 
 @pytest.mark.unit
-class TestListingPrefix:
-    def test_without_a_companion_entry_the_whole_location_is_listed(self):
-        assert _paths()[0].listing_prefix() == LOCATION
-
-    def test_with_a_companion_entry_only_the_companion_folder_is_listed_as_before(self):
-        assert _paths(existing=[COPY])[0].listing_prefix() == LOCATION + "/"
-
-    def test_a_folder_is_listed_whole(self):
-        assert _paths(FOLDER)[0].listing_prefix() == FOLDER
-
-
-@pytest.mark.unit
 class TestAuxStreamKey:
     def test_the_own_key_names_the_objects_own_viewer_data(self):
         paths = al.AssetFilePaths(LOCATION)

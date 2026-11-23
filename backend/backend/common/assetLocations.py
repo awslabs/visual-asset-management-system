@@ -234,12 +234,6 @@ class AssetFilePaths:
         """Whether a key is a single-file location's object (the location key itself)."""
         return self.is_single_file and key == self.location
 
-    def listing_prefix(self) -> str:
-        """The S3 ``Prefix`` listing the keys that have a path (filter with ``contains``)."""
-        if self.is_single_file and not self.object_listed():
-            return self.location + "/"
-        return self.location
-
     def aux_stream_key_for(self, database_id: Optional[str], value: Optional[str]) -> Optional[str]:
         """The auxiliary key a stream path names under ``{databaseId}/{location}/`` (relative, or already under
         it); ``{file key}/preview/...`` names a single-file object's own viewer data."""
