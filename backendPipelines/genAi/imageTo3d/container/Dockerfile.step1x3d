@@ -31,7 +31,7 @@ ARG STEP1X3D_COMMIT=cb5ac944709c6c913109070c7b90c3447f57f3d4
 # be moved, so the commit is what is checked.
 ARG NVDIFFRAST_COMMIT=253ac4fcea7de5f396371124af597e6cc957bfae
 # pytorch3d at the commit the upstream manifest's `git+...pytorch3d.git@stable` pointed to when the lock was made.
-# `stable` is a branch that moves, so it is the commit that is pinned and checked, not the branch.
+# `stable` is a tag upstream, and a tag can be moved, so it is the commit that is pinned and checked, not the tag.
 # pragma: allowlist nextline secret
 ARG PYTORCH3D_COMMIT=75ebeeaea0908c5527e7b1e305fbc7681382db47
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
@@ -132,7 +132,7 @@ RUN git clone https://github.com/NVlabs/nvdiffrast.git /tmp/nvdiffrast && \
     cd / && rm -rf /tmp/nvdiffrast && \
     python -c "import nvdiffrast; print('nvdiffrast imported')"
 
-# pytorch3d: upstream's manifest names it as a git requirement on the moving `stable` branch, so it is built here
+# pytorch3d: upstream's manifest names it as a git requirement on the `stable` tag, which can be moved, so it is built here
 # from a clone at PYTORCH3D_COMMIT, which is checked.
 #
 # FORCE_CUDA=1 is required, not optional: pytorch3d decides at build time whether to compile its CUDA

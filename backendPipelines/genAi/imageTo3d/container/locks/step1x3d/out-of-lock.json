@@ -9,7 +9,7 @@
         {
             "name": "pytorch3d",
             "version": "0.7.8",
-            "source": "git https://github.com/facebookresearch/pytorch3d.git, built in the Dockerfile at PYTORCH3D_COMMIT (upstream's requirements name the moving branch `stable`; the commit is the one the baseline build resolved it to)",
+            "source": "git https://github.com/facebookresearch/pytorch3d.git, built in the Dockerfile at PYTORCH3D_COMMIT (upstream's requirements name the `stable` tag, which can be moved; the commit is the one the baseline build resolved it to)",
             "commit": "75ebeeaea0908c5527e7b1e305fbc7681382db47"
         },
         {
