@@ -169,10 +169,12 @@ def confinement_root(input_key: str, relative_subdir: str = "", asset_root: str 
     single_file = (asset_root or "").lstrip("/")
     if single_file and not single_file.endswith("/"):
         folder = single_file + "/"
-        if input_key == single_file:
-            return folder, name
-        if input_key.startswith(folder) and len(input_key) > len(folder):
-            return folder, input_key[len(folder):]
+        lead = input_key[:len(input_key) - len(input_key.lstrip("/"))]
+        key = input_key[len(lead):]
+        if key == single_file:
+            return lead + folder, name
+        if key.startswith(folder) and len(key) > len(folder):
+            return lead + folder, key[len(folder):]
     own_directory = input_key[:len(input_key) - len(name)]
     subdir = (relative_subdir or "").strip("/")
     if subdir:

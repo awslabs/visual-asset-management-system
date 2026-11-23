@@ -468,8 +468,7 @@ def lambda_handler(event, context):
     _input_asset_root = None
     input_path, output_path, relative_subdir = resolve_inputs_from_manifest(data)
 
-    # The asset root is passed only when the manifest recorded one, so a run without it calls the
-    # conversion exactly as before.
+    # The asset root is passed only when the manifest recorded one.
     extra = {"asset_root": _input_asset_root} if _input_asset_root else {}
     convert_input_output(input_path, output_path, output_filetype, relative_subdir, **extra)
 

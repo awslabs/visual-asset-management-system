@@ -151,6 +151,14 @@ class TestConfinementRoot:
     def test_a_single_file_asset_is_confined_to_its_companion_folder(self, key, subdir, expected):
         assert rf.confinement_root(key, subdir, "scans/model.obj") == expected
 
+    @pytest.mark.parametrize("key, root, expected", [
+        ("/scans/model.obj", "/scans/model.obj", ("/scans/model.obj/", "model.obj")),
+        ("/scans/model.obj", "scans/model.obj", ("/scans/model.obj/", "model.obj")),
+        ("/scans/model.obj/parts/a.obj", "/scans/model.obj", ("/scans/model.obj/", "parts/a.obj")),
+    ])
+    def test_a_leading_slash_on_the_key_or_root_is_confined_the_same_way(self, key, root, expected):
+        assert rf.confinement_root(key, "", root) == expected
+
     def test_a_folder_asset_root_leaves_the_rule_as_it_was(self):
         assert rf.confinement_root("scans/model.obj", "", "scans/") == ("scans/", "model.obj")
 

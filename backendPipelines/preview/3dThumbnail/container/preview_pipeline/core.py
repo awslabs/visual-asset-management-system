@@ -276,6 +276,7 @@ def _run_preview_pipeline(
                 stage_input.bucketName,
                 stage_input.objectKey,
                 local_input_dir,
+                stage_input.assetRootS3Key,
             )
         except Exception as e:
             logger.warning(f"Failed to download some GLTF dependencies: {e}")
@@ -546,18 +547,42 @@ def _heuristic_up_axis(pv_data, ext: str):
     return pv_data
 
 
-def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: str):
+def _gltf_dependency_dir(object_key: str, asset_root: str = "") -> str:
+    """The S3 directory a .gltf input's relative resource URIs resolve in: the input's own directory,
+    or, for the object of a single-file asset (an asset root without a trailing ``/`` that names the
+    input key itself), the asset's companion folder ``{key}/``. The object's own directory holds keys
+    the asset does not hold; the object sits at its file name beside the companion folder's files."""
+    key = (object_key or "").lstrip("/")
+    root = (asset_root or "").lstrip("/")
+    if root and not root.endswith("/") and root == key:
+        return key
+    return os.path.dirname(object_key)
+
+
+def _passes_through_file(local_dir: str, local_path: str) -> bool:
+    """Whether a folder on the way from local_dir to local_path is already a file there (the
+    downloaded .gltf sits at its file name, while ``{file name}/x`` names a companion folder file)."""
+    base = os.path.realpath(local_dir)
+    parent = os.path.dirname(local_path)
+    while parent.startswith(base + os.sep):
+        if os.path.exists(parent) and not os.path.isdir(parent):
+            return True
+        parent = os.path.dirname(parent)
+    return False
+
+
+def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: str, asset_root: str = ""):
     """
     Parse a .gltf file and download external resources (buffers, images/textures)
-    from the same S3 directory so trimesh can resolve them at load time.
+    from the input's S3 directory (``_gltf_dependency_dir``) so trimesh can resolve them at load time.
     """
     local_gltf = os.path.join(local_dir, os.path.basename(object_key))
 
     with open(local_gltf, "r") as f:
         gltf = json.load(f)
 
-    # S3 directory containing the .gltf file
-    s3_dir = os.path.dirname(object_key)
+    # S3 directory the .gltf file's relative URIs resolve in
+    s3_dir = _gltf_dependency_dir(object_key, asset_root)
 
     # Collect all external URIs (skip embedded data URIs)
     uris = set()
@@ -582,6 +607,9 @@ def _download_gltf_dependencies(bucket_name: str, object_key: str, local_dir: st
                            f"directory: {uri}")
             continue
         relative_path, local_path = resolved
+        if _passes_through_file(local_dir, local_path):
+            logger.warning(f"  Skipping GLTF resource, its local path runs through a downloaded file: {uri}")
+            continue
         s3_key = f"{s3_dir}/{relative_path}" if s3_dir else relative_path
         # Create subdirectories if the URI has path components
         parent = os.path.dirname(local_path)

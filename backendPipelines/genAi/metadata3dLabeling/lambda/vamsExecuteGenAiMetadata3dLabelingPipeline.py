@@ -25,9 +25,22 @@ lambda_client = boto3.client('lambda', config=retry_config)
 s3_client = boto3.client('s3', config=retry_config)
 sfn_client = boto3.client('stepfunctions', region_name=os.environ.get('AWS_REGION', 'us-east-1'), config=retry_config)
 
+def input_asset_root(resolved):
+    """The manifest's ``assetRootS3Key`` for the input file, or ``""``: read from the first input file
+    entry only when that entry is the input the run reads."""
+    input_files = (resolved or {}).get("inputFiles") or []
+    first = (input_files[0] or {}) if input_files else {}
+    if not first.get("bucket") or not first.get("key"):
+        return ""
+    if f"s3://{first['bucket']}/{first['key']}" != (resolved or {}).get("inputS3AssetFilePath"):
+        return ""
+    return first.get("assetRootS3Key") or ""
+
+
 def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, output_s3_asset_preview_path, output_s3_asset_metadata_path
                                         , inputOutput_s3_assetAuxiliary_files_path, input_metadata_s3_location, input_configuration_s3_location, external_task_token
-                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""):
+                                        , executing_userName, executing_requestContext, orchestration_event_prefix=""
+                                        , asset_root_s3_key=""):
 
     # Create the object message to be sent
     messagePayload = {
@@ -41,7 +54,9 @@ def execute_pipeline(input_s3_asset_file_path, output_s3_asset_files_path, outpu
         "sfnExternalTaskToken": external_task_token,
         "executingUserName": executing_userName,
         "executingRequestContext": executing_requestContext,
-        "orchestrationEventPrefix": orchestration_event_prefix
+        "orchestrationEventPrefix": orchestration_event_prefix,
+        # The input's asset root from the manifest; the container lists the input's files against it.
+        "assetRootS3Key": asset_root_s3_key
     }
 
     # Invoke the pipeline construct pipeline lambda
@@ -145,7 +160,8 @@ def lambda_handler(event, context):
             external_task_token,
             executing_userName,
             executing_requestContext,
-            resolved['orchestrationEventPrefix']
+            resolved['orchestrationEventPrefix'],
+            input_asset_root(resolved)
         )
 
         return {
