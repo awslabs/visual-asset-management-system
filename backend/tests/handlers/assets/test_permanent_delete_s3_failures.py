@@ -845,3 +845,123 @@ class TestTheRoutesAnswerTheRefusedDelete:
         assert json.loads(response["body"])["message"].endswith(PREFIX_MESSAGE)
         assert _failed_records(real_audit.recorder) == [("fileDelete", "failed", "validation")]
 
+
+INNER_LOCATION = "proj/a/sub/"
+INNER_KEYS = ("proj/a/sub/y.txt", "proj/a/sub/z.txt")
+DEEP_LOCATION = "proj/a/sub/deep/"
+DEEP_KEY = "proj/a/sub/deep/n.txt"
+
+
+def _all_versions(client, keys):
+    return {key: _versions(client, key) for key in keys}
+
+
+@pytest.mark.unit
+class TestTheAssetPermanentDeleteLeavesANestedAssetsKeys:
+    """A nested asset's keys are not this asset's: they are not deleted, and S3 refusing one is no failure."""
+
+    def _nest(self, svc, database_id="db1"):
+        svc.rows.append(asset_row(database_id, "inner", "b1", INNER_LOCATION, BUCKET))
+        svc.client.put_object(Bucket=BUCKET, Key="proj/a/sub/z.txt", Body=b"v2")
+        return _all_versions(svc.client, INNER_KEYS)
+
+    def test_a_refused_nested_key_is_not_a_failure_and_every_nested_version_stays(self, svc):
+        inner_versions = self._nest(svc)
+        svc.faulty.deny_keys.add("proj/a/sub/z.txt")
+
+        assert _delete_permanently(svc).success is True
+
+        assert _keys_under(svc.client, FOLDER_LOCATION) == sorted(INNER_KEYS)
+        assert _all_versions(svc.client, INNER_KEYS) == inner_versions
+        nested = svc.m.delete_assetAuxiliary_files.call_args.kwargs["nested"]
+        assert nested.holder("proj/a/sub/y.txt") == INNER_LOCATION and nested.keep("proj/a/x.txt")
+        _no_file_records_removed(svc.m)
+
+    def test_a_kept_own_key_fails_the_delete_and_only_its_own_deleted_files_lose_their_records(self, svc):
+        inner_versions = self._nest(svc)
+        # A file named like the nested folder is this asset's; its auxiliary prefix also holds the nested
+        # asset's viewer data (same database), which stays
+        svc.client.put_object(Bucket=BUCKET, Key="proj/a/sub", Body=b"own")
+        svc.faulty.deny_keys.update({"proj/a/x.txt", "proj/a/sub/z.txt"})
+
+        with pytest.raises(svc.m.VAMSGeneralErrorResponse) as raised:
+            _delete_permanently(svc)
+
+        assert str(raised.value).endswith(ASSET_MESSAGE)
+        _assert_asset_kept(svc.m)
+        assert _keys_under(svc.client, FOLDER_LOCATION) == sorted(("proj/a/x.txt",) + INNER_KEYS)
+        assert _all_versions(svc.client, INNER_KEYS) == inner_versions
+        assert _file_metadata_paths(svc.m) == ["/sub", "/x.txt.previewFile.png"]
+        assert sorted(svc.m.delete_file_version_records.call_args.args[2]) == ["/sub", "/x.txt.previewFile.png"]
+        assert _aux_prefixes(svc.aux) == ["db1/proj/a/sub/", "db1/proj/a/x.txt.previewFile.png/"]
+        own_call = next(call for call in svc.aux.call_args_list if call.args[0] == "db1/proj/a/sub/")
+        keep = own_call.kwargs.get("keep")
+        assert keep is not None and keep("db1/proj/a/sub/y.txt/preview/t.png") is False
+
+    def test_a_single_file_asset_leaves_the_asset_in_its_companion_folder(self, svc):
+        svc.asset["assetLocation"] = {"Key": FILE_LOCATION}
+        svc.rows.append(asset_row("db2", "companion", "b1", FILE_LOCATION + "/sub/", BUCKET))
+        svc.client.put_object(Bucket=BUCKET, Key=COMPANION, Body=b"v2")
+        companion_versions = _versions(svc.client, COMPANION)
+        svc.faulty.deny_keys.add(FILE_LOCATION)
+
+        with pytest.raises(svc.m.VAMSGeneralErrorResponse):
+            _delete_permanently(svc)
+
+        _assert_asset_kept(svc.m)
+        assert _keys_under(svc.client, FILE_LOCATION) == [FILE_LOCATION, COMPANION]
+        assert _versions(svc.client, COMPANION) == companion_versions
+        assert _file_metadata_paths(svc.m) == ["/model.glb/model.glb"]
+        assert _aux_prefixes(svc.aux) == ["db1/p1/model.glb/model.glb/"]
+
+
+@pytest.mark.unit
+class TestTheAssetPermanentDeleteOfASharedLocation:
+    """Another live asset stored at the same location keeps every key: none is deleted or reported."""
+
+    def test_the_other_asset_keeps_every_version_and_the_delete_completes(self, svc):
+        svc.rows.append(asset_row("db2", "b", "b1", FOLDER_LOCATION, BUCKET))
+        svc.faulty.deny_keys.add("proj/a/sub/z.txt")
+        before = _all_versions(svc.client, FOLDER_KEYS)
+
+        assert _delete_permanently(svc).success is True
+
+        assert _all_versions(svc.client, FOLDER_KEYS) == before
+        _no_file_records_removed(svc.m)
+        svc.aux.assert_not_called()
+        nested = svc.m.delete_assetAuxiliary_files.call_args.kwargs["nested"]
+        assert [entry.asset_id for entry in nested.shared] == ["b"]
+
+
+@pytest.mark.unit
+class TestTheFilePrefixDeleteLeavesANestedAssetsKeys:
+    def _nest(self, files):
+        files.rows.append(asset_row("db2", "deep", "b1", DEEP_LOCATION, BUCKET))
+        files.client.put_object(Bucket=BUCKET, Key=DEEP_KEY, Body=b"v1")
+        files.client.put_object(Bucket=BUCKET, Key=DEEP_KEY, Body=b"v2")
+        return _versions(files.client, DEEP_KEY)
+
+    def test_a_kept_own_file_fails_the_delete_and_the_nested_key_stays(self, files):
+        deep_versions = self._nest(files)
+        files.faulty.deny_keys.add("proj/a/sub/z.txt")
+
+        with pytest.raises(af.VAMSGeneralErrorResponse) as raised:
+            af.delete_file("db1", "a1", "/sub/", True, True, CLAIMS)
+
+        assert str(raised.value).endswith(PREFIX_MESSAGE)
+        assert _keys_under(files.client, "proj/a/sub/") == [DEEP_KEY, "proj/a/sub/z.txt"]
+        assert _versions(files.client, DEEP_KEY) == deep_versions
+        assert _prefix_metadata_paths(files) == ["sub/y.txt"]
+        files.delete_file_version_records.assert_called_once_with("db1", "a1", ["sub/y.txt"])
+        assert _aux_prefixes(files.aux) == ["db1/proj/a/sub/y.txt/"]
+
+    def test_a_refused_nested_key_is_not_a_failure(self, files):
+        deep_versions = self._nest(files)
+        files.faulty.deny_keys.add(DEEP_KEY)
+
+        response = af.delete_file("db1", "a1", "/sub/", True, True, CLAIMS)
+
+        assert response.success is True
+        assert sorted(response.affectedFiles) == ["sub/y.txt", "sub/z.txt"]
+        assert _keys_under(files.client, "proj/a/sub/") == [DEEP_KEY]
+        assert _versions(files.client, DEEP_KEY) == deep_versions
