@@ -72,22 +72,36 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_V
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# Every Python package of this image is installed from locks/hunyuan3d, hashed exports of its uv.lock (#1726): the
+# same versions, from the same files, on every build. The lock holds the image's whole set, so nothing is resolved
+# at build time and no later step can move a version. pip and the build tools come first from their own lock, then
+# the rest with --require-hashes --no-deps: pip refuses a file whose hash is not in the lock and installs nothing the
+# lock does not name. The two extensions built from source below compile AFTER this install, against the numpy and
+# torch the image ships, and nothing installs a package after them.
+COPY locks/hunyuan3d/requirements-build.lock locks/hunyuan3d/requirements.lock locks/hunyuan3d/requirements-gpl.lock locks/hunyuan3d/out-of-lock.json /opt/locks/hunyuan3d/
+COPY locks/hunyuan3d/upstream /opt/locks/hunyuan3d/upstream
+COPY locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/hunyuan3d/requirements-build.lock
 
-# CUDA 12.8 torch stack, at fixed versions. The texture stage's extensions compile against this torch, so
-# it comes first.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
-    torch==2.11.0 torchvision==0.26.0
+# CUDA 12.8 torch stack, at fixed versions, and the shared and upstream packages: torch and torchvision are the
+# CUDA 12.8 builds from the PyTorch index (the lock pins them to 2.11.0+cu128 and the hashes are those files'),
+# every other package comes from the default index. The upstream manifest declares no versions at all, so the lock
+# is what fixes them; torch and torchvision are not taken from it (they are already pinned) and neither are
+# pymeshlab (a GPL package, installed by its own step below) and the demo-only gradio, fastapi and uvicorn.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -r /opt/locks/hunyuan3d/requirements.lock
 
-# Shared pipeline dependencies
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
-
+# Clone Hunyuan3D-2 at its pinned commit. Its dependency stack is already installed from the lock; the check after
+# the clone fails the build when the upstream requirements.txt differs from the copy the lock was resolved from,
+# which is what a moved HUNYUAN3D_COMMIT without a re-lock looks like.
 RUN git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git /opt/hunyuan3d && \
     cd /opt/hunyuan3d && \
     git checkout --detach ${HUNYUAN3D_COMMIT} && \
     test "$(git rev-parse HEAD)" = "${HUNYUAN3D_COMMIT}" && \
-    git rev-parse HEAD > /opt/hunyuan3d/VAMS_UPSTREAM_COMMIT
+    git rev-parse HEAD > /opt/hunyuan3d/VAMS_UPSTREAM_COMMIT && \
+    python /opt/locks/tools/check_upstream_requirements.py \
+        --recorded /opt/locks/hunyuan3d/upstream --clone /opt/hunyuan3d requirements.txt
 WORKDIR /opt/hunyuan3d
 
 # Every GPU family the pipeline can schedule onto has to be in this list, or an extension compiles for the
@@ -97,26 +111,6 @@ ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
 # nvcc parallelism, capped as the peers that also compile from source cap it: an uncapped job count
 # exhausts the CodeBuild container's memory and the compile is killed rather than failing.
 ENV MAX_JOBS=2
-
-# The upstream manifest declares NO versions at all -- every line is a bare package name, including torch
-# and torchvision -- so installing it as written replaces the CUDA 12.8 torch above with whatever the
-# default PyPI index resolves to, and every extension compiled below then links against a torch the runtime
-# does not have. Four names are therefore filtered out, each for its own reason:
-#
-#   torch, torchvision   already installed from the CUDA 12.8 index; an unpinned reinstall downgrades them
-#   pymeshlab            GPL-3.0, and this pipeline gates the GPL repair rungs behind
-#                        ENABLE_GPL_MESH_REPAIR below -- letting the manifest pull it unconditionally would
-#                        put a GPL dependency in an image built with the flag off
-#   gradio, fastapi,     the manifest's own "Demo only" section; the adapter drives the model through a
-#   uvicorn              script and never serves an app
-#
-# The filter is asserted rather than assumed: a rename upstream would silently stop excluding a package,
-# so the torch build tag is re-checked after the install.
-RUN set -eux; \
-    grep -vE '^(torch|torchvision|pymeshlab|gradio|fastapi|uvicorn)\s*$' requirements.txt > /tmp/req.txt; \
-    pip install --no-cache-dir -r /tmp/req.txt; \
-    rm -f /tmp/req.txt; \
-    python -c "import torch; assert '+cu' in torch.__version__, torch.__version__; print('torch', torch.__version__)"
 
 # The paint stage's diffusion pipeline lives in the repo at hy3dgen/texgen/hunyuanpaint rather than in
 # diffusers, and current diffusers refuses to execute a custom pipeline without trust_remote_code=True.
@@ -132,16 +126,16 @@ RUN python /opt/ml/code/patches/hunyuan3d_trust_remote_code.py \
 # them silently would push an image whose texture stage fails at run time on a GPU instance. If a later
 # commit moves them, the build fails here naming the path, which is where that belongs.
 RUN set -eux; \
-    pip install --no-cache-dir --no-build-isolation \
+    pip install --no-cache-dir --no-build-isolation --no-deps \
         /opt/hunyuan3d/hy3dgen/texgen/custom_rasterizer; \
-    pip install --no-cache-dir --no-build-isolation \
+    pip install --no-cache-dir --no-build-isolation --no-deps \
         /opt/hunyuan3d/hy3dgen/texgen/differentiable_renderer
 
 # GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/hunyuan3d/requirements-gpl.lock; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -150,11 +144,15 @@ RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
 # working directory; adding it to PYTHONPATH keeps the imports working from anywhere.
 ENV PYTHONPATH="/opt/hunyuan3d:${PYTHONPATH}"
 
-# A model repo's own requirements are installed after the shared ones and can pull a shared dependency
-# backwards -- reasserting the shared constraint here restores the version the pipeline's own code is
-# written against.
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt && python -c "import trimesh, manifold3d; print('trimesh', trimesh.__version__)"
+# The installed set is exactly the lock plus the two extensions built above: this fails the build on any package that
+# is missing, extra or at another version than locks/hunyuan3d names (the GPL pair only when it was requested), and
+# pip check confirms the declared dependencies of what is installed. The import check confirms the CUDA torch build
+# survived and the repair stack the pipeline's own code is written against is present.
+RUN python /opt/locks/tools/check_installed_set.py --dir /opt/locks/hunyuan3d --gpl "$ENABLE_GPL_MESH_REPAIR" && \
+    pip check
+RUN python -c "import trimesh, manifold3d, torch; \
+assert '+cu' in torch.__version__, torch.__version__; \
+print('trimesh', trimesh.__version__, 'torch', torch.__version__)"
 
 # rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use, defaulting to a
 # home directory nothing carries between jobs. Pointing the variable at a baked-in copy removes the
