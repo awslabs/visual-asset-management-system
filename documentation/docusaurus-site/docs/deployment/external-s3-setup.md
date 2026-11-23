@@ -1139,7 +1139,7 @@ When bucket sync attributes a file version to an asset, it writes two object tag
 -   **Files synced by earlier releases** carry the `databaseid` / `assetid` metadata those releases copied onto them, and no tags. `reindex_utility.py --tag-synced` tags them; see [Tag objects synced by earlier releases](../developer/utilities/reindex.md#tag-objects-synced-by-earlier-releases---tag-synced).
 -   **Race.** S3 has no conditional tagging write, so a tag change you make in the milliseconds between VAMS reading and writing a new version's tags is lost.
 
-A write into a location that two assets claim is attributed to neither: bucket sync sends it to the deployment's rejected-record queue and its alarm fires. So does a write into a top-level folder named by the ID of an existing asset stored somewhere else, which would otherwise become a second asset with that ID. See the troubleshooting guide for how to resolve the overlap and redrive the queue.
+A write into a location that two assets claim is attributed to neither: bucket sync sends it to the deployment's rejected-record queue and its alarm fires. So does a write into a top-level folder named by the ID of an existing asset stored somewhere else, which would otherwise become a second asset with that ID. That includes an asset in another registered bucket: when two buckets hold top-level folders with the same name, the second one is not auto-created as an asset; create the asset with `bucketExistingKey` on that folder instead. See the troubleshooting guide for how to resolve the overlap and redrive the queue.
 
 ## Related resources
 
