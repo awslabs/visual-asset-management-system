@@ -161,7 +161,7 @@ class TestProcessS3RecordCreateGuard:
         m.create_new_asset = MagicMock(return_value="x-asset-1")
         m.object_still_exists = MagicMock(return_value=object_exists)
         # Neutralize post-create work so the test focuses on the guard.
-        m.update_s3_metadata = MagicMock(return_value=True)
+        m.tag_version = MagicMock(return_value=None)
         m.update_asset_type = MagicMock(return_value=True)
 
     def test_skips_creation_when_object_gone(self):

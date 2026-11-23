@@ -14,6 +14,7 @@ unit-testable and free of module-level AWS/environment coupling: callers resolve
 `get_table_name(ResourceKeys.S3_ASSET_BUCKETS_STORAGE_TABLE)` and hand it in.
 """
 
+from common.assetLocations import normalize_base_prefix
 from boto3.dynamodb.conditions import Attr
 
 from customLogging.logger import safeLogger
@@ -43,11 +44,10 @@ def default_bucket_key(default_bucket, key: str) -> str:
 
     `default_bucket` is a row from resolve_default_bucket (or the prefix string itself).
     """
-    prefix = (default_bucket if isinstance(default_bucket, str)
-              else (default_bucket or {}).get("baseAssetsPrefix") or "")
-    prefix = prefix.strip("/")
+    prefix = normalize_base_prefix(default_bucket if isinstance(default_bucket, str)
+                                   else (default_bucket or {}).get("baseAssetsPrefix"))
     body = (key or "").lstrip("/")
-    return f"{prefix}/{body}" if prefix else body
+    return f"{prefix}{body}"
 
 
 def resolve_default_bucket(buckets_table) -> dict:
@@ -80,7 +80,7 @@ def resolve_default_bucket(buckets_table) -> dict:
     # Prefer the bucket-root row when a default bucket is registered under multiple prefixes;
     # bucketName keeps the order total so the winner never depends on scan order.
     def _prefix_rank(item):
-        prefix = (item.get("baseAssetsPrefix") or "").strip("/")
+        prefix = normalize_base_prefix(item.get("baseAssetsPrefix")).rstrip("/")
         return (0 if prefix == "" else 1, prefix, item.get("bucketName") or "")
 
     # Several flagged buckets is unresolvable, not a tie to break: the deployment only ever marks one,

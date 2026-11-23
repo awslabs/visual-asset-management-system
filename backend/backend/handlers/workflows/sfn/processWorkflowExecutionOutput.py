@@ -13,8 +13,12 @@ from datetime import datetime, timedelta, timezone
 from common.timestamps import utc_now
 from boto3.dynamodb.conditions import Key
 from common.validators import validate, normalize_userid
-from common.assetLocations import OWN_FILE_OUTPUT_REFUSAL, is_folder_location, object_key_for
-from common.resourceNames import get_table_name, ResourceKeys, ResourceNameUnavailableError
+from common.assetLocations import (
+    NESTED_PATH_REFUSAL, OWN_FILE_OUTPUT_REFUSAL, SHARED_LOCATION_WRITE_REFUSAL, is_folder_location,
+    normalize_base_prefix, object_key_for,
+)
+from common.resourceNames import get_resource_name, get_table_name, ResourceKeys, ResourceNameUnavailableError
+from common.ssmParameters import read_parameter_value
 from common.s3MetadataKeys import (
     ASSET_ID_METADATA_KEY,
     COPY_PRESERVED_HEADER_FIELDS,
@@ -113,9 +117,11 @@ FILE_WRITE_BACK_FAILURE = "The asset file write-back failed."
 MAX_FILES_PER_COMPLETION_CALL = MAX_FILES_PER_UPLOAD_REQUEST
 # Output files a failed write-back names in the run's error; the rest are counted.
 MAX_NAMED_WRITE_BACK_FAILURES = 20
-# Per-file refusals of the file ingestion that the user can act on. The run's error repeats one by its
-# fixed text after the file it refused; any other per-file error stays in the log.
-USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL})
+# Per-file refusals of the file ingestion that the user can act on (a shared location: through the
+# troubleshooting section the text names). The run's error repeats one by its fixed text after the file it
+# refused; any other per-file error stays in the log.
+USER_CORRECTABLE_WRITE_BACK_REFUSALS = frozenset({OWN_FILE_OUTPUT_REFUSAL, NESTED_PATH_REFUSAL,
+                                                  SHARED_LOCATION_WRITE_REFUSAL})
 # Generic write-back failure summary recorded on the execution when a metadata/attribute file
 # cannot be read, parsed, or applied (specifics go to the log).
 METADATA_WRITE_BACK_FAILURE = "The asset metadata write-back failed."
@@ -182,6 +188,15 @@ try:
     # the event is skipped when the bus ARN is unset).
     orchestration_bus_arn = os.environ.get("ORCHESTRATION_BUS_ARN", "")
     orchestration_event_source_prefix = os.environ.get("ORCHESTRATION_EVENT_SOURCE_PREFIX", "")
+    # The copy engine function name, a resource name this function cannot take as an environment
+    # variable (the engine references this function). Resolved here like the table names, so a lookup
+    # Parameter Store refuses fails init with ResourceNameUnavailableError, which the workflow retries.
+    # "" while the deployment has not published it; _copy_engine_function_name reads it again then,
+    # from the parameter itself, since the resolver remembers the miss for five minutes.
+    try:
+        copy_engine_function_name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
+    except KeyError:
+        copy_engine_function_name = ""
 except Exception as e:
     logger.exception("Failed loading environment variables or resolving resource names")
     raise e
@@ -223,18 +238,43 @@ engine_invoke_config = Config(retries={'max_attempts': 5, 'mode': 'adaptive'}, r
                               connect_timeout=10)
 engine_invoke_client = boto3.client('lambda', config=engine_invoke_config)
 
-_ssm = None
 # The current invocation's context, for the remaining-time bound of an engine call's retries.
 _invocation_context = None
 
 
-def _ssm_client():
-    """SSM client for the copy engine function name parameter (under the deployment's resource-name
-    prefix, which this function may already read), built on first use."""
-    global _ssm
-    if _ssm is None:
-        _ssm = boto3.client('ssm', config=retry_config)
-    return _ssm
+def _copy_engine_name_parameter():
+    """The full name of the copy engine name parameter: the one CDK sets on this function, else the
+    resource-name prefix plus the key (the same parameter). "" when neither is known."""
+    parameter = os.environ.get(loc.ENV_ENGINE_FUNCTION_NAME_PARAMETER, "")
+    if parameter:
+        return parameter
+    prefix = os.environ.get("VAMS_RESOURCE_PARAM_PREFIX", "").rstrip("/")
+    return f"{prefix}/{loc.ENGINE_FUNCTION_RESOURCE_KEY.param_key}" if prefix else ""
+
+
+def _copy_engine_function_name():
+    """The copy engine function name for loc.call_engine: the one resolved at import, or, when the
+    deployment had not published it then (it may still be applying), the name read again now.
+
+    The resolver remembers a key it found missing for MISSING_KEY_TTL_SECONDS (5 minutes), longer than
+    call_engine waits for a name (ENGINE_CALL_DEPLOY_WAIT_SECONDS), so on a KeyError the parameter is
+    read directly with common.ssmParameters.read_parameter_value(), uncached and bounded. Any failure
+    here answers "", which call_engine waits out for its deploy window before it fails."""
+    global copy_engine_function_name
+    if not copy_engine_function_name:
+        try:
+            try:
+                name = get_resource_name(loc.ENGINE_FUNCTION_RESOURCE_KEY)
+            except KeyError:
+                parameter = _copy_engine_name_parameter()
+                if not parameter:
+                    raise
+                name = read_parameter_value(parameter)
+            copy_engine_function_name = name or ""
+        except Exception as e:
+            logger.warning(f"The copy engine function name could not be resolved yet ({type(e).__name__})")
+            return ""
+    return copy_engine_function_name
 
 
 def _engine(operation, **fields):
@@ -246,8 +286,7 @@ def _engine(operation, **fields):
     context = _invocation_context
     remaining = getattr(context, "get_remaining_time_in_millis", None)
     try:
-        return loc.call_engine(engine_invoke_client,
-                               lambda: loc.engine_function_name(ssm_client=_ssm_client()),
+        return loc.call_engine(engine_invoke_client, _copy_engine_function_name,
                                operation, remaining_ms=remaining, **fields)
     except loc.EngineCallFailed as e:
         if getattr(e, "error_type", "") == RESOURCE_NAME_UNAVAILABLE_ERROR:
@@ -331,13 +370,7 @@ def get_default_bucket_details(bucketId):
         if not bucket_name or not base_assets_prefix:
             raise Exception(f"Error getting database default bucket details: missing bucket_name or base_assets_prefix")
         
-        #Make sure we end in a slash for the path
-        if not base_assets_prefix.endswith('/'):
-            base_assets_prefix += '/'
-
-        # Remove leading slash from file path if present
-        if base_assets_prefix.startswith('/'):
-            base_assets_prefix = base_assets_prefix[1:]
+        base_assets_prefix = normalize_base_prefix(base_assets_prefix)
 
         return {
             'bucketId': bucket_id,

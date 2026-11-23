@@ -63,6 +63,26 @@ s3://vams-assets-bucket/assets/scan-001/
 
 An asset created from a single object key (a `bucketExistingKey` with no trailing `/`) holds that object at `/{file name}`, its companion folder `{key}/` and its previews; see [Files](../api/files.md#list-files).
 
+A file belongs to the deepest stored location that contains it. Earlier releases could create an asset whose
+location sits inside another asset's folder (VAMS now refuses such a location when an asset is created). The
+files under that inner location are the inner asset's, whatever its database: the containing asset does not
+list, show, download, zip, archive, unarchive, delete, version, move or overwrite them, does not serve their
+viewer data, and does not count them in its asset type. A Zip Archive workflow run over a folder of the
+containing asset leaves them out too, and a path of the containing asset that leads into the inner location
+answers as a file the containing asset does not have. Each asset's own permissions decide who may act on its
+files.
+
+Earlier releases could also leave two assets on exactly the same location. Archiving or permanently deleting
+one of them leaves the shared files, and every version of them, to the other asset, and deleting, archiving
+or moving one of those files through either asset is refused. No file is written into such a location: an
+upload, a workflow output, a new folder, a copy into either asset, and a revert, unarchive or primary-file change
+of a file there are refused until one of the assets is archived (see "Bucket Sync Rejected-Record Queue Holds
+Messages" in the troubleshooting guide). An archived asset is not unarchived, through the API or by a file
+written into its folder, while another live asset is stored at exactly its location, so the location is not
+shared again; an asset nested in another asset's folder, or holding one, is unarchived as usual. Until the `assetLocationIndex` migration step
+has run after an upgrade, only archiving, unarchiving and permanently deleting an asset, and deleting,
+archiving or moving a file or folder, look for nested or shared assets; writes behave as before.
+
 ## Updating an asset
 
 After creation, the following asset fields can be updated:

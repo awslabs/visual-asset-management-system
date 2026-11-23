@@ -5,9 +5,14 @@
 
 Walks every row of the S3 asset buckets table with ``list_objects_v2`` (current versions only, so a
 file behind a delete marker is never listed), skips folder markers, reserved system folders and
-``.previewFile.`` objects, derives the asset id from the first key segment beneath the bucket's base
-prefix, and resolves the live database id through the asset table's ``BucketIdGSI`` -- a row in a
-``{databaseId}#deleted`` partition does not resolve, so files of archived assets are excluded.
+``.previewFile.`` objects, and attributes each key to the live asset whose stored location contains it.
+Once the location index is ready (``assetLocations.index_ready``), each bucket's index partition is read
+once and every key is matched in memory (longest match), so files in any stored location are found. The
+deepest stored location that holds a key owns it, live or archived, and the key is kept only when that
+owner is live: a file of an archived asset nested in a live asset's location is enumerated for nobody,
+never for the containing asset. Before that, the asset id is the first key segment beneath the bucket's
+base prefix and the live database id comes from the asset table's ``BucketIdGSI``. Either way a row in a
+``{databaseId}#deleted`` partition does not count, so files of archived assets are excluded.
 
 The OpenSearch reindexer and the vector reindexer both walk the buckets this way; these helpers are
 the single definition of "what is an asset file" for both.
@@ -19,6 +24,14 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 
+from common.assetLocations import (
+    RESOLVED_FOUND,
+    BucketLocations,
+    index_ready,
+    load_bucket_locations,
+    relative_path_in,
+)
+from common.assetLocations import normalize_base_prefix as _normalize_registration_prefix
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, RESERVED_S3_PREFIX_FOLDERS
 from common.validators import validate
 from customLogging.logger import safeLogger
@@ -47,9 +60,9 @@ class FileRef:
 
 
 def normalize_base_prefix(base_prefix: Optional[str]) -> str:
-    """The bucket's base prefix without a leading slash (``''`` when unset)."""
-    prefix = base_prefix or ""
-    return prefix[1:] if prefix.startswith("/") else prefix
+    """The bucket's base prefix in canonical form (``assetLocations.normalize_base_prefix``): a
+    trailing slash, no leading slash, ``''`` for the bucket root."""
+    return _normalize_registration_prefix(base_prefix)
 
 
 def is_folder_marker(s3_key: str) -> bool:
@@ -178,6 +191,8 @@ def enumerate_latest_live_files(
     )
     resolved: Dict[Tuple[str, str], Optional[str]] = {}
     refs: List[FileRef] = []
+    by_index = index_ready(getattr(asset_table, "name", "") or "")
+    locations_by_bucket: Dict[str, BucketLocations] = {}
 
     def out_of_time() -> bool:
         return time_remaining_fn is not None and time_remaining_fn() < min_remaining_ms
@@ -205,6 +220,27 @@ def enumerate_latest_live_files(
                 s3_key = obj["Key"]
                 last_key = s3_key
                 if is_folder_marker(s3_key) or is_excluded_s3_key(s3_key):
+                    continue
+                if by_index:
+                    if bucket_name not in locations_by_bucket:
+                        locations_by_bucket[bucket_name] = load_bucket_locations(asset_table, bucket_name)
+                    # The deepest owner decides, live or archived; an archived one keeps the key from
+                    # every asset, so it is not handed to a live asset whose location contains it.
+                    resolution = locations_by_bucket[bucket_name].owner(s3_key, include_archived=True)
+                    if resolution.status != RESOLVED_FOUND or resolution.entry.archived:
+                        continue
+                    entry = resolution.entry
+                    if database_id is not None and entry.database_id != database_id:
+                        continue
+                    refs.append(FileRef(
+                        database_id=entry.database_id,
+                        asset_id=entry.asset_id,
+                        relative_file_key=relative_path_in(entry.location, s3_key),
+                        bucket_name=bucket_name,
+                        base_assets_prefix=base_prefix,
+                        s3_key=s3_key,
+                        bucket_id=entry.bucket_id or bucket_id or "",
+                    ))
                     continue
                 asset_id = extract_asset_id_from_key(s3_key, base_prefix)
                 if not asset_id or not is_valid_asset_id(asset_id):

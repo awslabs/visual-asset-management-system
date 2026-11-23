@@ -14,12 +14,17 @@ by tests/conftest.py.
 import json
 import sys
 import threading
+import types
 from unittest.mock import MagicMock
 
+import boto3
+import botocore.session
 import pytest
-from botocore.exceptions import ClientError
 
 from backend.tests.pagingStub import Pager
+from backend.tests.ssmParametersStub import (
+    FakeClock, ParameterStoreStub, always, client_error, install_clock, load_ssm_parameters,
+)
 from tests.handlers.assets.test_createAsset_conditional_put import _load as _load_create_asset
 
 al = sys.modules['common.assetLocations']
@@ -980,6 +985,21 @@ class TestFindConflicts:
         assert keys_conflict("projects/model.glb", "projects/model.glb.previewFile.png")
 
 
+class RecordingLogger:
+    """Records (level, message) for every call, at every level safeLogger exposes."""
+
+    def __init__(self):
+        self.lines = []
+
+    def __getattr__(self, level):
+        if level in ("debug", "info", "warning", "warn", "error", "critical", "exception"):
+            return lambda message, *args, **kwargs: self.lines.append((level, str(message)))
+        raise AttributeError(level)
+
+    def at(self, *levels):
+        return [message for level, message in self.lines if level in levels]
+
+
 @pytest.mark.unit
 class TestIndexReady:
     PREFIX = "/vams-test/resourceNames"
@@ -990,14 +1010,17 @@ class TestIndexReady:
     def _prefix(self, monkeypatch):
         monkeypatch.setenv("VAMS_RESOURCE_PARAM_PREFIX", self.PREFIX)
 
-    @staticmethod
-    def _ssm(value=None, error_code=None):
-        ssm = MagicMock()
-        if error_code:
-            ssm.get_parameter.side_effect = ClientError({"Error": {"Code": error_code}}, "GetParameter")
-        else:
-            ssm.get_parameter.return_value = {"Parameter": {"Value": value}}
-        return ssm
+    def _ssm(self, value=None, error_code=None):
+        """A reader for index_ready: a private copy of common.ssmParameters' uncached read on a fake
+        clock, over a stub Parameter Store that answers `value` for the marker or raises `error_code`
+        on every call. The stub is the reader's `stub` attribute."""
+        stub = ParameterStoreStub(
+            {} if value is None else {self.NAME: value},
+            fault=always(lambda: client_error(error_code)) if error_code else None)
+        helper = load_ssm_parameters(stub)
+        install_clock(helper, FakeClock())
+        read = helper.read_parameter_value
+        return types.SimpleNamespace(read=read, stub=stub)
 
     def _complete(self, **extra):
         return json.dumps({"version": 1, "status": "complete", "assetTable": self.TABLE,
@@ -1010,13 +1033,13 @@ class TestIndexReady:
 
     def test_complete_marker_for_this_table_is_ready(self):
         ssm = self._ssm(self._complete())
-        assert al.index_ready(self.TABLE, ssm_client=ssm) is True
-        assert {c.kwargs["Name"] for c in ssm.get_parameter.call_args_list} == {self.NAME}
+        assert al.index_ready(self.TABLE, read_parameter=ssm.read) is True
+        assert set(ssm.stub.calls) == {self.NAME}
 
     def test_marker_of_another_table_is_not_ready(self):
         # A deployment removed and created again under the same names keeps the old parameter.
         assert al.index_ready("vams-core-AssetStorageTable-NEW999",
-                              ssm_client=self._ssm(self._complete())) is False
+                              read_parameter=self._ssm(self._complete()).read) is False
 
     @pytest.mark.parametrize("value", [
         json.dumps({"version": 1, "status": "running", "assetTable": TABLE}),
@@ -1027,31 +1050,117 @@ class TestIndexReady:
         "",
     ])
     def test_anything_else_is_not_ready(self, value):
-        assert al.index_ready(self.TABLE, ssm_client=self._ssm(value)) is False
+        assert al.index_ready(self.TABLE, read_parameter=self._ssm(value).read) is False
 
     @pytest.mark.parametrize("code", ["ParameterNotFound", "AccessDeniedException", "ThrottlingException"])
-    def test_an_unreadable_marker_is_not_ready(self, code):
-        assert al.index_ready(self.TABLE, ssm_client=self._ssm(error_code=code)) is False
+    def test_an_unreadable_marker_is_not_ready(self, code, monkeypatch):
+        logged = RecordingLogger()
+        monkeypatch.setattr(al, "logger", logged)
+        assert al.index_ready(self.TABLE, read_parameter=self._ssm(error_code=code).read) is False
+        expected = [] if code == "ParameterNotFound" else [
+            f"Location index marker {self.NAME} could not be read ({code})" "; the index is treated as not ready"]
+        assert logged.at("warning") == expected
 
     def test_no_prefix_or_no_table_is_not_ready(self, monkeypatch):
         ssm = self._ssm(self._complete())
-        assert al.index_ready("", ssm_client=ssm) is False
+        assert al.index_ready("", read_parameter=ssm.read) is False
         monkeypatch.delenv("VAMS_RESOURCE_PARAM_PREFIX")
-        assert al.index_ready(self.TABLE, ssm_client=ssm) is False
-        ssm.get_parameter.assert_not_called()
+        assert al.index_ready(self.TABLE, read_parameter=ssm.read) is False
+        assert ssm.stub.calls == []
 
     def test_answer_is_cached_both_ways(self):
         now = {"t": 100.0}
         missing = self._ssm(error_code="ParameterNotFound")
-        assert al.index_ready(self.TABLE, ssm_client=missing, clock=lambda: now["t"]) is False
+        assert al.index_ready(self.TABLE, read_parameter=missing.read, clock=lambda: now["t"]) is False
         complete = self._ssm(self._complete())
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS - 1
-        assert al.index_ready(self.TABLE, ssm_client=complete, clock=lambda: now["t"]) is False
-        complete.get_parameter.assert_not_called()
+        assert al.index_ready(self.TABLE, read_parameter=complete.read, clock=lambda: now["t"]) is False
+        assert complete.stub.calls == []
         now["t"] += 2
-        assert al.index_ready(self.TABLE, ssm_client=complete, clock=lambda: now["t"]) is True
+        assert al.index_ready(self.TABLE, read_parameter=complete.read, clock=lambda: now["t"]) is True
         now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS - 1
-        assert al.index_ready(self.TABLE, ssm_client=missing, clock=lambda: now["t"]) is True
+        assert al.index_ready(self.TABLE, read_parameter=missing.read, clock=lambda: now["t"]) is True
+
+
+@pytest.mark.unit
+class TestIndexReadyReadsThroughTheBoundedLookup:
+    """#1820: the marker is read with common.ssmParameters.read_parameter_value(), the bounded,
+    uncached read, not a client of this module's own with five adaptive attempts (about 30 s under
+    throttling). Driven through the default reader, with boto3.client recorded, so the client the
+    read actually used is what is checked."""
+
+    NAME = TestIndexReady.NAME
+    TABLE = TestIndexReady.TABLE
+
+    @pytest.fixture
+    def parameter_store(self, monkeypatch):
+        """Records every SSM client built (with its config) and serves `stub`; the helper this test's
+        index_ready reads through runs on a fake clock and logs to a recorder."""
+        monkeypatch.setenv("VAMS_RESOURCE_PARAM_PREFIX", TestIndexReady.PREFIX)
+        # A client a previous index_ready of this module copy may have cached (the code before #1820).
+        monkeypatch.setattr(al, "_ssm_client", None, raising=False)
+        helper = sys.modules["common.ssmParameters"]
+        clock = install_clock(helper, FakeClock(), monkeypatch)
+        state = types.SimpleNamespace(stub=ParameterStoreStub(), configs=[], clock=clock, helper=helper,
+                                      al_logger=RecordingLogger(), helper_logger=RecordingLogger())
+
+        def client(service, *args, **kwargs):
+            if service != "ssm":
+                return MagicMock()
+            state.configs.append(kwargs.get("config"))
+            return state.stub
+
+        monkeypatch.setattr(boto3, "client", client)
+        monkeypatch.setattr(al, "logger", state.al_logger)
+        monkeypatch.setattr(helper, "logger", state.helper_logger)
+        return state
+
+    def test_a_throttled_marker_read_answers_false_within_the_read_budget(self, parameter_store):
+        state = parameter_store
+        state.stub.fault = always(lambda: client_error("ThrottlingException"))
+        started = state.clock.now
+
+        assert al.index_ready(self.TABLE) is False
+
+        assert len(state.configs) == 1, f"{len(state.configs)} SSM clients built for one read"
+        resolved = botocore.session.get_session().create_client(
+            "ssm", region_name="us-east-1", config=state.configs[0]).meta.config
+        assert (resolved.connect_timeout, resolved.read_timeout, resolved.retries.get("total_max_attempts")) == (
+            1, 2, 1), "the marker was read with a client of its own (five adaptive attempts, 60 s timeouts)"
+        assert len(state.stub.calls) > 1, "the throttled read was never retried"
+        assert state.clock.now - started <= state.helper.PARAMETER_READ_BUDGET_SECONDS
+        assert state.al_logger.at("warning") == [
+            f"Location index marker {self.NAME} could not be read (ThrottlingException)"
+            "; the index is treated as not ready"]
+
+        # The container now backs off: another table's check reads nothing and answers False.
+        calls = len(state.stub.calls)
+        assert al.index_ready("vams-core-AssetStorageTable-OTHER") is False
+        assert len(state.stub.calls) <= calls, "a check inside the back-off window read Parameter Store"
+
+    def test_a_missing_marker_answers_false_with_no_warning(self, parameter_store):
+        state = parameter_store
+
+        assert al.index_ready(self.TABLE) is False
+
+        assert set(state.stub.calls) == {self.NAME}
+        assert len(state.stub.calls) <= 1, "a missing marker was read more than once"
+        assert state.al_logger.at("warning", "error") == []
+        assert state.helper_logger.at("warning", "error") == [], "a marker not written yet is logged as a problem"
+        # Answered from this module's 300 s cache: no second read.
+        assert al.index_ready(self.TABLE) is False
+        assert len(state.stub.calls) <= 1, "the cached answer was read again"
+
+    def test_the_marker_is_read_uncached_once_the_answer_expires(self, parameter_store):
+        state = parameter_store
+        state.stub.values[self.NAME] = json.dumps({"version": 1, "status": "running", "assetTable": self.TABLE})
+        now = {"t": 100.0}
+        assert al.index_ready(self.TABLE, clock=lambda: now["t"]) is False
+        state.stub.values[self.NAME] = json.dumps({"version": 1, "status": "complete", "assetTable": self.TABLE})
+        now["t"] += al.INDEX_READY_CACHE_TTL_SECONDS + 1
+        assert al.index_ready(self.TABLE, clock=lambda: now["t"]) is True
+        assert set(state.stub.calls) == {self.NAME}
+        assert 1 < len(state.stub.calls) <= 2, "the expired answer was not read again exactly once"
 
 
 @pytest.mark.unit

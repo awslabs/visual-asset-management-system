@@ -504,7 +504,11 @@ Four behaviors are worth knowing:
     preview prefix (`auxPreviewPrefix`); `bucketId`, the asset bucket's registration id; and the
     bucket's placement -- `bucketRegion`, the Region the bucket is in (`""` for the deployment
     Region), and `bucketAccountId`, its owning account when that is not the deployment account
-    (`""` otherwise). Read S3 with `bucket`, through a client for `bucketRegion`
+    (`""` otherwise). A folder input (a `key` ending in `/`, or the whole asset) whose asset holds the
+    location of another asset inside it also carries `excludeLocations`, those stored locations, in every step's manifest: their
+    keys are the other assets' files, so a pipeline that lists the folder leaves out every key one of
+    them holds (a folder location holds every key under it; a single-file location its own key, the keys
+    under `{key}/` and its previews). Read S3 with `bucket`, through a client for `bucketRegion`
     (`manifestHelper.s3_client_for_region`); the resolved inputs expose the first file's Region as
     `inputBucketRegion` and the output bucket's as `outputBucketRegion`. From the second step of a
     workflow on, an input that an earlier step rewrote is read from the run's output bucket, so its

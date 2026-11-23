@@ -1023,20 +1023,45 @@ class TestResolveAssetFromS3KeyWithoutMetadata:
         bucket_details=None,
         database_id=None,
     ):
-        from backend.backend.handlers.addon.physna import physnaFileSync
+        """The real resolver over in-memory tables: `bucket_details` is the bucket's one registration
+        (none when None); with `database_id`, every asset id is an asset of that database at its
+        folder under the registration's prefix (none when None). The location index is not ready, so
+        the first folder decides, with the bucket and containment checks."""
+        import sys
+        from backend.backend.handlers.addon.physna import physnaCommon, physnaFileSync
+        from tests.common.fileAttributionFakes import (
+            AttributionAssetTable, AttributionBucketsTable, asset_row, registration)
 
-        monkeypatch.setattr(
-            physnaFileSync, "get_bucket_details_by_name", lambda n: bucket_details
-        )
-        # The resolver now passes bucket_name + base_assets_prefix for
-        # disambiguation. Accept them as kwargs without caring what they
-        # are — we just want the mock to return the test's scripted
-        # databaseId regardless of disambiguation state.
-        monkeypatch.setattr(
-            physnaFileSync,
-            "get_database_id_for_asset_id",
-            lambda a, bucket_name=None, base_assets_prefix=None: database_id,
-        )
+        fa = sys.modules["common.fileAttribution"]
+        fa.clear_registration_cache()
+        sys.modules["common.assetLocations"].clear_location_cache()
+        monkeypatch.setattr(fa, "index_ready", lambda name: False)
+        registrations = []
+        if bucket_details:
+            registrations.append(registration(bucket_details["bucketId"], bucket_details["bucketName"],
+                                              bucket_details["baseAssetsPrefix"] or "/"))
+
+        class _EveryAssetTable(AttributionAssetTable):
+            """Any asset id the resolver asks for is an asset of `database_id` in the registration."""
+
+            def _row(self, asset_id):
+                prefix = (bucket_details or {}).get("baseAssetsPrefix") or ""
+                return asset_row(database_id, asset_id, (bucket_details or {}).get("bucketId"),
+                                 f"{prefix}{asset_id}/", indexed=False)
+
+            def get_item(self, Key, **kwargs):
+                if database_id and Key["databaseId"] == database_id:
+                    return {"Item": self._row(Key["assetId"])}
+                return {}
+
+            def query(self, **kwargs):
+                if not database_id:
+                    return {"Items": []}
+                _, asset_id = kwargs["KeyConditionExpression"].get_expression()["values"]
+                return {"Items": [self._row(asset_id)]}
+
+        monkeypatch.setattr(physnaCommon, "asset_storage_table", _EveryAssetTable([]))
+        monkeypatch.setattr(physnaCommon, "s3_asset_buckets_table", AttributionBucketsTable(registrations))
         return physnaFileSync
 
     def test_resolves_when_bucket_has_no_prefix(self, monkeypatch):
@@ -1161,7 +1186,7 @@ class TestObjectRemovedSkipsHeadObject:
 
     @staticmethod
     def _resolver(relative):
-        def _resolve(bucket, key):
+        def _resolve(bucket, key, record=None):
             return {
                 "databaseId": "db-1",
                 "assetId": "xABC",
@@ -1232,7 +1257,7 @@ class TestObjectRemovedSkipsHeadObject:
 
         resolved = {"count": 0}
 
-        def resolver(bucket, key):
+        def resolver(bucket, key, record=None):
             resolved["count"] += 1
             return self._resolver("/archived.glb")(bucket, key)
 
@@ -1373,11 +1398,11 @@ class TestObjectRemovedSkipsHeadObject:
 
         called = {"metadata_free": 0, "metadata_backed": 0}
 
-        def metadata_free_resolver(b, k):
+        def metadata_free_resolver(b, k, record=None):
             called["metadata_free"] += 1
             return None
 
-        def metadata_backed_resolver(b, k):
+        def metadata_backed_resolver(b, k, record=None):
             called["metadata_backed"] += 1
             return None  # trigger early exit; we just want to see which one runs
 
@@ -1446,7 +1471,7 @@ class TestVersionProbeAbsenceIsConclusive:
         monkeypatch.setattr(
             physnaFileSync,
             "_resolve_asset_from_s3_key_without_metadata",
-            lambda bucket, s3_key: {
+            lambda bucket, s3_key, record=None: {
                 "databaseId": "db-1",
                 "assetId": "xABC",
                 "relativePath": "/PART A.glb",

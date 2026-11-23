@@ -351,6 +351,20 @@ describe("interimPipelineTracking least privilege", () => {
         expect(writeRefs).toContain(logicalIdOf("pipelineExecutionsStorageTable"));
     });
 
+    // #1207 D9: a later step's folder input leaves out the files of assets nested in it, read from the
+    // asset table's location index; the role queries that index and reads nothing else of the table.
+    test("queries the asset table's location index and holds no other asset table access", () => {
+        const { template, logicalIdOf } = synthed();
+        const queries = resourcesForAction(template, "interimPipelineTracking", "dynamodb:Query");
+        expect(queries).toContain(logicalIdOf("assetStorageTable"));
+        expect(queries).toContain("/index/AssetLocationGSI");
+        for (const action of ["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:PutItem"]) {
+            expect(resourcesForAction(template, "interimPipelineTracking", action)).not.toContain(
+                logicalIdOf("assetStorageTable")
+            );
+        }
+    });
+
     // The handler reads no log group ARN from its environment.
     test("sets no workflow log group ARN in the environment", () => {
         const env = environmentOf(synthed().template, "interimPipelineTracking.lambda_handler");

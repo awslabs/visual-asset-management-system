@@ -11,8 +11,9 @@ returns one page, capped by ``MaxKeys``, with a key's entries newest first, and 
 version id on a key whose current version is already a delete marker adds another marker. A key
 can therefore carry more delete markers above its newest version than a ten-entry page holds, and
 a branch that reads only such a page takes an archived file for a permanently deleted one and
-removes its document. The listing belongs to ``common.s3.list_all_object_versions``, capped at one
-``S3_VERSIONS_PAGE_SIZE`` page (backend/CLAUDE.md Rule 14).
+removes its document. The listing belongs to ``common.s3.list_key_versions_to_newest_version``, which
+pages ``S3_VERSIONS_PAGE_SIZE`` entries at a time until it reaches the key's newest version, another key
+or the end (backend/CLAUDE.md Rule 14).
 
 ``index_file_document`` replaces the stored document, so the archived document keeps the file's
 searchable S3 metadata (``MD_.s3_*``, including the primary type ``s3_vams-primarytype``) only when
@@ -35,6 +36,8 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+
+from backend.tests.ssmParametersStub import serve_parameters_from
 from botocore.exceptions import ClientError
 
 os.environ.setdefault("ASSET_STORAGE_TABLE_NAME", "test-asset-table")
@@ -83,6 +86,9 @@ def fileIndexer():
         for name, mod in saved.items():
             if mod is not None:
                 sys.modules[name] = mod
+    # The index name and endpoint are read on first use through common.ssmParameters: from the stub.
+    serve_parameters_from(module, _ssm_stub)
+    module.load_opensearch_settings()
     return module
 
 
@@ -191,7 +197,7 @@ def _run(m, history, asset_is_archived=False):
     Returns (result, run), where run carries the fake client, the listing spy and the stubs.
     """
     client = _fake_s3(history)
-    listing = MagicMock(wraps=sys.modules["common.s3"].list_all_object_versions)
+    listing = MagicMock(wraps=sys.modules["common.s3"].list_key_versions_to_newest_version)
     index = MagicMock(return_value=True)
     delete_one = MagicMock(return_value=True)
     delete_by_path = MagicMock(return_value=1)
@@ -203,7 +209,7 @@ def _run(m, history, asset_is_archived=False):
     with ExitStack() as stack:
         for name, value in (
             ("s3_client", client),
-            ("list_all_object_versions", listing),
+            ("list_key_versions_to_newest_version", listing),
             ("get_asset_details_any_state", MagicMock(return_value=(ASSET, asset_is_archived))),
             ("get_bucket_details", MagicMock(return_value=BUCKET)),
             ("get_file_metadata", MagicMock(return_value=({}, {}))),
@@ -236,12 +242,10 @@ class TestDeleteEventReadsAFullPageOfVersionHistory:
         assert run.delete_one.call_count == 0
         assert run.delete_by_path.call_count == 0
         assert result.success is True and result.operation == "index"
-        # The history is read through the shared paging helper, one S3_VERSIONS_PAGE_SIZE page,
-        # with the handler's client
-        signature = inspect.signature(sys.modules["common.s3"].list_all_object_versions)
+        # The history is read through the shared paging helper with the handler's client
+        signature = inspect.signature(sys.modules["common.s3"].list_key_versions_to_newest_version)
         listed = [signature.bind(*c.args, **c.kwargs).arguments for c in run.listing.call_args_list]
-        assert [(a["bucket"], a["prefix"], a.get("client"), a.get("max_keys")) for a in listed] == \
-            [(BUCKET_NAME, KEY, run.client, sys.modules["common.s3"].S3_VERSIONS_PAGE_SIZE)]
+        assert (BUCKET_NAME, KEY, run.client) in [(a["bucket"], a["key"], a.get("client")) for a in listed]
         capped = [c.kwargs["MaxKeys"] for c in run.client.list_object_versions.call_args_list
                   if c.kwargs.get("MaxKeys") is not None and c.kwargs["MaxKeys"] < len(STACKED)]
         assert capped == [], "the delete branch read a capped ListObjectVersions page"

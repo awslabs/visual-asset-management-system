@@ -17,7 +17,8 @@ hand-kept list) it:
    `.github/python-audit-allowlist.json`. pip-audit cannot read a `name @ <URL>` requirement, so a
    prebuilt wheel in an export (flash-attn in the GR00T image) is audited as `name==<version>`, the
    version read from the wheel's file name, when its URL is under an allowed prefix; any other direct URL fails
-   the run (see `pin_direct_urls`).
+   the run (see `pin_direct_urls`). A pin with a local version label (`torch==2.10.0+cu128`, from the PyTorch index)
+   is audited as the public release (`drop_local_versions`), since PyPI has no such version.
 
 The allowlist is validated first: every entry needs `id`, `package`, `reason`, a `reviewBy` date
 (ISO, not in the past) and `projects`, the uv project directories it applies to (each one a directory
@@ -441,12 +442,34 @@ def pin_direct_urls(text, source):
     return "\n".join(lines)
 
 
+# A PEP 440 local label (`+cu128`, `+cu12.torch2`) that is the whole remainder of the version: lowercase letters and
+# digits in dot-separated parts, followed by white space, `;`, a backslash or the end of the line. Anything else
+# (`+Ev-il`, `+cu128-extra`, upper case, a second `+`) is left as it is, so pip-audit fails on it instead of auditing
+# a version the lock does not hold.
+LOCAL_VERSION_PIN = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][^\s;+\\]*)\+[a-z0-9]+(?:\.[a-z0-9]+)*(?P<rest>(?:[\s;\\].*)?)$"
+)
+
+
+def drop_local_versions(text):
+    """The requirements text with the local version label of each `name==<version>+<label>` pin removed.
+
+    A build from a non-default index carries a label (`torch==2.10.0+cu128`, the CUDA 12.8 build from the PyTorch
+    index). PyPI has no such version, so pip-audit reports "Dependency not found on PyPI" and cannot audit the
+    package. Advisories name the public release, so the pin is audited as `torch==2.10.0`, the same way a prebuilt
+    wheel's label is dropped in `pin_direct_urls`. Hash and continuation lines are kept as they are."""
+    return "\n".join(
+        f"{m.group('name')}{m.group('rest')}" if (m := LOCAL_VERSION_PIN.match(line)) else line
+        for line in text.split("\n")
+    )
+
+
 def audit_export(root, rel_path, pip_audit):
     """Findings for one requirements file: list of (package, version, [ids])."""
     source = os.path.join(root, rel_path)
     with open(source, encoding="utf-8") as handle:
         text = handle.read()
-    pinned = pin_direct_urls(text, rel_path)
+    pinned = drop_local_versions(pin_direct_urls(text, rel_path))
     if pinned != text:
         # pip-audit reads a copy in which each wheel-URL requirement is a name==version pin.
         handle, copy = tempfile.mkstemp(prefix="uv-export-pinned-", suffix=".txt")

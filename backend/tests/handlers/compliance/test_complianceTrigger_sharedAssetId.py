@@ -5,13 +5,11 @@
 evaluates the asset whose bucket and location hold the event's object, read from every page of the
 asset id index, and never another database's asset with the same id."""
 
-from unittest.mock import patch
-
 import pytest
 
 from backend.tests.handlers.compliance._harness import ASSET, DB, SCHEMA
 from backend.tests.handlers.compliance.test_complianceTrigger import (
-    AUTO_EVAL_DB, STORE, _run, _sns_event)
+    AUTO_EVAL_DB, _run, _sns_event)
 from backend.tests.pagingStub import Pager
 
 OTHER_DB = "db0"  # sorts before DB, so the asset id index lists its row first
@@ -23,12 +21,6 @@ def _located_row(database_id, bucket_id, key=f"{ASSET}/"):
             "assetLocation": {"Key": key}}
 
 
-def _bucket_rows(**kwargs):
-    bucket_id = kwargs["KeyConditionExpression"]._values[1]
-    name = BUCKETS.get(bucket_id)
-    return {"Items": [{"bucketId": bucket_id, "bucketName": name}] if name else []}
-
-
 def _file_event_in(bucket_name, key=f"{ASSET}/model.glb", prefix=""):
     return {"s3": {"bucket": {"name": bucket_name}, "object": {"key": key}},
             "ASSET_BUCKET_NAME": bucket_name, "ASSET_BUCKET_PREFIX": prefix}
@@ -36,12 +28,12 @@ def _file_event_in(bucket_name, key=f"{ASSET}/model.glb", prefix=""):
 
 def _run_located(message, asset_rows=None, asset_query_effect=None):
     database_items = {DB: AUTO_EVAL_DB, OTHER_DB: dict(AUTO_EVAL_DB, databaseId=OTHER_DB)}
-    with patch(f"{STORE}.s3_asset_buckets_table") as buckets:
-        buckets.query.side_effect = _bucket_rows
-        return _run(_sns_event(message), compliance_record={"schemaName": SCHEMA},
-                    asset_rows=asset_rows, asset_query_effect=asset_query_effect,
-                    database_effect=lambda Key: {"Item": database_items.get(Key["databaseId"])},
-                    real_location_check=True)
+    registrations = [{"bucketId": bucket_id, "bucketName": name, "baseAssetsPrefix": "/"}
+                     for bucket_id, name in BUCKETS.items()]
+    return _run(_sns_event(message), compliance_record={"schemaName": SCHEMA},
+                asset_rows=asset_rows, asset_query_effect=asset_query_effect,
+                database_effect=lambda Key: {"Item": database_items.get(Key["databaseId"])},
+                registrations=registrations)
 
 
 def _evaluated(mocks):
