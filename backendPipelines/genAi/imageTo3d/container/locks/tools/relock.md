@@ -30,7 +30,9 @@ Use the repository's pinned uv (`required-version` in each `pyproject.toml`) and
 4. Copy the new upstream requirements file to `upstream/<file>.recorded` and update the matching lines in
    `pyproject.toml` `dependencies`. A line that a later Dockerfile step replaces gets an entry in
    `override-dependencies` with a comment.
-5. `uv lock`, then the three exports above.
+5. Move `exclude-newer` in `pyproject.toml` (an absolute date, not "7 days") to the day of the build you froze in
+   step 2, never earlier: an earlier date or a relative window rejects versions that build installed, and
+   `uv lock --check` then fails. Then `uv lock`, then the three exports above.
 6. Build the image. The build runs both checks. Compare `pip freeze --all` of the new image with
    `frozen-set.txt`: the diff must be empty, or every difference must be one you meant.
 7. Run `python .github/scripts/python_dependency_audit.py` from the repository root. An advisory in a version that
