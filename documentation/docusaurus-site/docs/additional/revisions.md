@@ -72,7 +72,7 @@ This page tracks the version history of the Visual Asset Management System (VAMS
 -   **Search, indexing and web start under Parameter Store throttling** — Search, the OpenSearch indexers and the web application's start read their Parameter Store settings on first use within about 4 seconds, keep them for a while and back off after a failed read, instead of waiting out about 30 seconds of retries. (issue #1820)
     -   Note: While the reads fail, search requests answer an internal server error, the web application starts without the map until a later reload, and the indexers return their batch to the queue, which delivers it again about 16 minutes later. (issue #1820)
 -   **Asset IDs are unique across databases** — Creating an asset with an asset ID that another asset already uses, in any database and including an archived asset, is refused with the `400` `Asset with specified ID already exists` that an ID taken in the same database gets. Generated asset IDs are unaffected. (PR #1862)
-    -   Note: Bucket sync creates no asset for a new top-level folder whose name is the asset ID of an asset in another database, live or archived, and logs an error that names the object key. Rename the folder to import it. (PR #1862)
+    -   Note: Bucket sync creates no asset for a new top-level folder whose name is the asset ID of an asset stored under another registered bucket, live or archived, and logs an error that names the object key. Rename the folder to import it. A folder named like an asset stored in the same bucket keeps its earlier behaviour. (PR #1862)
 
 **Other changes:**
 

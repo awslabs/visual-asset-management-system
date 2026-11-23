@@ -654,7 +654,7 @@ Each 3D model (and its supporting files) must reside in its own folder directly 
 :::warning[Asset ID requirements]
 The folder name used as the asset ID must match VAMS validation rules: alphanumeric characters, hyphens, underscores, and periods only, with a maximum length of 256 characters. Folders with names containing spaces or special characters are skipped by the sync process.
 
-The folder name must also not be the asset ID of an asset that already exists in another database, including an archived asset. Bucket sync creates no asset for such a folder and logs an error that names the object key; rename the folder to import it.
+The folder name must also not be the asset ID of an asset stored under another registered bucket, including an archived asset. Bucket sync creates no asset for such a folder and logs an error that names the object key; rename the folder to import it. A folder named like an asset stored in the same bucket keeps its earlier behaviour: its files are added to that asset.
 :::
 
 :::warning[Reserved folder names]
