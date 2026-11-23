@@ -211,7 +211,8 @@ class ImageEditBroker(threading.Thread):
         images = payload.get("images") or []
         if not images:
             raise RuntimeError(f"{model} returned no image: {json.dumps(payload)[:500]}")
-        result = Image.open(io.BytesIO(base64.b64decode(images[0]))).convert("RGB")
+        # The request asks for PNG (output_format above), so the reply is decoded as PNG only.
+        result = Image.open(io.BytesIO(base64.b64decode(images[0])), formats=("PNG",)).convert("RGB")
         if result.size != original_size:
             result = result.resize(original_size, Image.LANCZOS)
         if mask is not None:

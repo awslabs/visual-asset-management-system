@@ -590,12 +590,14 @@ def attach_generated_texture(mesh, texture_paths):
         return mesh
 
     from PIL import Image
+    from preprocess import INPUT_IMAGE_FORMATS
 
     chosen = images[0]
     if len(images) > 1:
         logger.info(f"The model wrote {len(images)} image sidecars; binding {chosen} to the uv field")
     try:
-        with Image.open(chosen) as handle:
+        # Every model writes its bindable texture as PNG or JPEG, so those are the decoders it is opened with.
+        with Image.open(chosen, formats=INPUT_IMAGE_FORMATS) as handle:
             image = handle.convert("RGBA") if "A" in handle.getbands() else handle.convert("RGB")
     except Exception as e:
         raise TextureTransferError(

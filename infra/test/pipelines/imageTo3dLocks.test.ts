@@ -355,6 +355,7 @@ describe("the Stable3DGen image's pillow and gradio", () => {
         expect(check).toContain("'__main__.py'");
         expect(check).toContain("from hi3dgen.pipelines import Hi3DGenPipeline");
         expect(check).toContain("import hubconf");
+        expect(check).toContain("/opt/torchhome/hub/facebookresearch_dinov2_main/hubconf.py");
         // After the code is copied into the image, so the entry module it loads is the one that ships.
         const codeCopy = dockerText.indexOf("COPY __init__.py __main__.py");
         expect(codeCopy).toBeGreaterThan(0);
