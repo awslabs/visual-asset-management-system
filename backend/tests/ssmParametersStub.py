@@ -10,7 +10,9 @@ at that moment, and it outlives the test that filled it. These helpers give a te
 * ``load_ssm_parameters(client)`` loads a private copy of the shipped module whose reads go to
   ``client`` (anything answering ``get_parameter(Name=...)``), with an empty cache and no window.
 * ``serve_parameters_from(module, client)`` points a loaded handler module's ``get_parameter_value``
-  at such a copy and returns the copy, so the test can inspect it.
+  at such a copy and returns the copy, so the test can inspect it. A handler that resolves the
+  deploy-time values (``common.deployTimeValues``) gets a private copy of that module too, whose
+  legacy reads go through the same helper copy (``load_deploy_time_values(helper)``).
 
 ``ParameterStoreStub`` is a small fake client: named values, scripted errors per call, a ``fault``
 hook, and the names of every call it answered. ``FakeClock`` and ``install_clock`` drive a helper's
@@ -25,6 +27,8 @@ from botocore.exceptions import ClientError
 
 SSM_PARAMETERS_PATH = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "backend", "common", "ssmParameters.py"))
+DEPLOY_TIME_VALUES_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "backend", "common", "deployTimeValues.py"))
 
 _copies = itertools.count()
 
@@ -40,11 +44,33 @@ def load_ssm_parameters(client=None):
     return module
 
 
-def serve_parameters_from(module, client):
-    """Point ``module.get_parameter_value`` at a private helper copy that reads ``client``. Use it on a
-    handler module the test loaded itself (by path); patch a shared one with ``monkeypatch.setattr``."""
-    helper = load_ssm_parameters(client)
+def load_deploy_time_values(helper):
+    """A private copy of the shipped common/deployTimeValues.py whose legacy reads go through
+    ``helper`` (a copy from ``load_ssm_parameters``). Its resource-name lookup is the
+    ``common.resourceNames`` registered for the test, which raises KeyError for these keys unless the
+    test publishes them (no ``VAMS_RESOURCE_PARAM_PREFIX``), so the legacy reads are what it serves."""
+    spec = importlib.util.spec_from_file_location(f"deployTimeValues_under_test_{next(_copies)}",
+                                                  DEPLOY_TIME_VALUES_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     module.get_parameter_value = helper.get_parameter_value
+    return module
+
+
+def serve_parameters_from(module, client):
+    """Point a handler module's Parameter Store reads at a private helper copy that reads ``client``:
+    ``module.get_parameter_value`` and, for a handler that resolves the deploy-time values,
+    ``module.resolve`` / ``module.resolve_together`` (bound to a private common.deployTimeValues copy
+    whose legacy reads go through the helper). Use it on a handler module the test loaded itself (by
+    path); patch a shared one with ``monkeypatch.setattr``. Returns the helper."""
+    helper = load_ssm_parameters(client)
+    if hasattr(module, "get_parameter_value"):
+        module.get_parameter_value = helper.get_parameter_value
+    if hasattr(module, "resolve") or hasattr(module, "resolve_together"):
+        values = load_deploy_time_values(helper)
+        for name in ("resolve", "resolve_together"):
+            if hasattr(module, name):
+                setattr(module, name, getattr(values, name))
     return helper
 
 

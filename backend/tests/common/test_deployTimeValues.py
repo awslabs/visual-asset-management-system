@@ -13,7 +13,6 @@ that serves chunk parameters, counting the calls.
 
 import importlib.util
 import json
-import os
 import re
 from pathlib import Path
 
@@ -64,7 +63,7 @@ class Names:
         if key.param_key in self.errors:
             raise self.errors[key.param_key]
         if key.param_key not in self.values:
-            raise KeyError(f"Resource name parameter not found in SSM: {key.param_key}")
+            raise KeyError("Resource name parameter missing from SSM: " + key.param_key)
         return self.values[key.param_key]
 
 
@@ -95,8 +94,8 @@ def _canonical_deploy_time_keys():
     source = re.sub(r"//[^\n]*", "", source)
     keys = set()
     for category in DEPLOY_TIME_CATEGORIES:
-        block = re.search(rf"\b{category}:\s*\{{([^}}]*)\}}", source)
-        assert block, f"category {category} not found in resourceParamKeys.ts"
+        block = re.search(r"\b" + category + r":\s*\{([^}]*)\}", source)
+        assert block, "category %s missing from resourceParamKeys.ts" % category
         keys |= set(re.findall(r'[A-Za-z][A-Za-z0-9_]*\s*:\s*"([^"]+)"', block.group(1)))
     return keys
 
