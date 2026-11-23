@@ -2813,16 +2813,6 @@ def _comment_subscription_files(output_dir: str, dry_run: bool, table: str) -> T
             os.path.join(output_dir, f"{COMMENT_SUBSCRIPTION_STEP}-{table}-{mode}-checkpoint.json"))
 
 
-def _resume_report_offset(checkpoint_paths: List[str]) -> Optional[int]:
-    """The report length the latest saved checkpoint recorded, or None when no checkpoint is left."""
-    offset = None
-    for path in checkpoint_paths:
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                offset = json.load(f).get('reportOffset')
-    return offset
-
-
 def load_resolution_file(path: Optional[str]) -> Dict[str, str]:
     """The operator's {"<assetId>": "<databaseId>"} mapping for ids several databases hold."""
     if _is_unset(path):
@@ -2881,13 +2871,9 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
          copier.copy_subscription),
     )
     checkpoint_paths = [_comment_subscription_files(output_dir, dry_run, name)[1] for name, _, _, _ in tables]
-    resume_offset = _resume_report_offset(checkpoint_paths) if args.resume else None
-    if args.resume and resume_offset is None:
+    resume = bool(args.resume) and any(os.path.exists(path) for path in checkpoint_paths)
+    if args.resume and not resume:
         logger.info(f"{COMMENT_SUBSCRIPTION_STEP}: no checkpoint to resume from; starting over.")
-    if resume_offset is None:
-        for path in checkpoint_paths:
-            if os.path.exists(path):
-                os.remove(path)
 
     logger.info("=" * 80)
     logger.info("VAMS v2.6 -> v2.7 COMMENT AND SUBSCRIPTION KEYS")
@@ -2901,15 +2887,23 @@ def run_comment_subscription_keys_step(config: dict, args, base_param_prefix, pr
     totals = {}
     complete = True
     try:
-        if resume_offset is not None and os.path.exists(report_path):
-            # The lines written after the last saved page are written again by the resumed scan
-            with open(report_path, 'r+b') as f:
-                f.truncate(resume_offset)
-        with open(report_path, 'a' if resume_offset is not None else 'w', encoding='utf-8') as report:
+        if resume:
+            # A checkpoint of another table is refused here, before the report is touched
+            saved = [_read_checkpoint(path, source) for (_, source, _, _), path in zip(tables, checkpoint_paths)]
+            offsets = [c['reportOffset'] for c in saved if c and c.get('reportOffset') is not None]
+            if offsets and os.path.exists(report_path):
+                # The lines written after the last saved page are written again by the resumed scan
+                with open(report_path, 'r+b') as f:
+                    f.truncate(offsets[-1])
+        else:
+            for path in checkpoint_paths:
+                if os.path.exists(path):
+                    os.remove(path)
+        with open(report_path, 'a' if resume else 'w', encoding='utf-8') as report:
             for (name, source, key_names, copy), checkpoint_path in zip(tables, checkpoint_paths):
                 counts = {'scanned': 0, **{c: 0 for c in COMMENT_SUBSCRIPTION_CLASSES}}
                 complete = copier.run_table(source, key_names, copy, report, checkpoint_path, counts,
-                                            resume_offset is not None) and complete
+                                            resume) and complete
                 totals[name] = counts
     except Exception as e:
         logger.error(f"{COMMENT_SUBSCRIPTION_STEP} step failed: {e}. Re-run with --resume to continue from the last "
