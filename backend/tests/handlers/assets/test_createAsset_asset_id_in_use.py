@@ -24,7 +24,6 @@ from tests.handlers.assets.test_createAsset_cross_database_prefix_takeover impor
     _BUCKET_NAME,
     _OTHER_DB,
     _OWN_DB,
-    _VICTIM_ASSET_ID,
     _assert_nothing_persisted,
     _asset_record,
     _condition_terms,
@@ -33,13 +32,16 @@ from tests.handlers.assets.test_createAsset_cross_database_prefix_takeover impor
     _wire,
 )
 
+# The chosen assetId the cases below ask for.
+_TAKEN_ASSET_ID = "taken-asset"
+
 # A bucket record no colocation lookup returns, so the location layers never see its assets.
 _ELSEWHERE_BUCKET_ID = "bucket-record-elsewhere"
-_ELSEWHERE_KEY = "elsewhere/" + _VICTIM_ASSET_ID + "/"
+_ELSEWHERE_KEY = "elsewhere/" + _TAKEN_ASSET_ID + "/"
 
 
 def _elsewhere(database_id, archived=False):
-    return _asset_record(database_id, _VICTIM_ASSET_ID, _ELSEWHERE_KEY,
+    return _asset_record(database_id, _TAKEN_ASSET_ID, _ELSEWHERE_KEY,
                          bucket_id=_ELSEWHERE_BUCKET_ID, archived=archived)
 
 
@@ -69,7 +71,7 @@ class TestAnIdTakenInAnotherDatabase:
         _wire(m, owned_records=[_elsewhere(_OTHER_DB)], prefix_exists=False)
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
-            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         _assert_nothing_persisted(m)
 
@@ -79,7 +81,7 @@ class TestAnIdTakenInAnotherDatabase:
               prefix_exists=False)
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
-            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         _assert_nothing_persisted(m)
 
@@ -88,7 +90,7 @@ class TestAnIdTakenInAnotherDatabase:
         _wire(m, owned_records=[_elsewhere(_OTHER_DB)], prefix_exists=False)
 
         with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
-            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         assert str(caught.value).endswith("Asset with specified ID already exists")
         assert _OTHER_DB not in str(caught.value)
@@ -100,7 +102,7 @@ class TestAnIdTakenInAnotherDatabase:
         _wire(m, owned_records=[_elsewhere(_OTHER_DB)], prefix_exists=True)
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
-            m.create_asset(_request_model(m), {"tokens": ["SYSTEM_USER"]}, True)
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["SYSTEM_USER"]}, True)
 
         _assert_nothing_persisted(m)
 
@@ -112,10 +114,10 @@ class TestTheSameDatabaseAnswerIsUnchanged:
         m = _load(fresh=True)
         _wire(m, owned_records=[], prefix_exists=False)
         m.asset_table.get_item.return_value = {
-            "Item": {"databaseId": _OWN_DB, "assetId": _VICTIM_ASSET_ID}}
+            "Item": {"databaseId": _OWN_DB, "assetId": _TAKEN_ASSET_ID}}
 
         with pytest.raises(m.VAMSGeneralErrorResponse) as caught:
-            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         assert str(caught.value).endswith("Asset with specified ID already exists")
         _assert_nothing_persisted(m)
@@ -164,13 +166,13 @@ class TestTheIdRead:
         m = _load(fresh=True)
         _wire(m, owned_records=[], prefix_exists=False)
 
-        m.create_asset(_request_model(m), {"tokens": ["user1"]})
+        m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         reads = _id_reads(m)
         assert reads, "the chosen id was never looked up"
         for call in reads:
             terms = _condition_terms(call.kwargs["KeyConditionExpression"])
-            assert _term_selects(terms["assetId"], _VICTIM_ASSET_ID)
+            assert _term_selects(terms["assetId"], _TAKEN_ASSET_ID)
             # Not narrowed to a database or a bucket: the id must be free in all of them.
             assert "databaseId" not in terms
             assert "bucketId" not in terms
@@ -179,14 +181,14 @@ class TestTheIdRead:
         m = _load(fresh=True)
         _wire(m, owned_records=[], prefix_exists=False)
         pager = Pager(
-            {"Items": [], "LastEvaluatedKey": {"assetId": _VICTIM_ASSET_ID, "databaseId": "m"}},
+            {"Items": [], "LastEvaluatedKey": {"assetId": _TAKEN_ASSET_ID, "databaseId": "m"}},
             {"Items": [_elsewhere(f"{_OTHER_DB}#deleted", archived=True)]},
             name="assetIdGSI",
         )
         _route_id_reads(m, pager)
 
         with pytest.raises(m.VAMSGeneralErrorResponse):
-            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         pager.assert_paged_to_exhaustion()
         _assert_nothing_persisted(m)
@@ -202,12 +204,12 @@ class TestTheIdRead:
         _route_id_reads(m, _throttled)
 
         with pytest.raises(ClientError):
-            m.create_asset(_request_model(m), {"tokens": ["user1"]})
+            m.create_asset(_request_model(m, asset_id=_TAKEN_ASSET_ID), {"tokens": ["user1"]})
 
         _assert_nothing_persisted(m)
 
 
-def _event(asset_id=_VICTIM_ASSET_ID):
+def _event(asset_id=_TAKEN_ASSET_ID):
     return {
         "requestContext": {"http": {"method": "POST", "path": "/assets"}},
         "body": json.dumps({
@@ -249,7 +251,7 @@ class TestTheApiAnswer:
         m = _handler(_load(fresh=True))
         _wire(m, owned_records=[], prefix_exists=False)
         m.asset_table.get_item.return_value = {
-            "Item": {"databaseId": _OWN_DB, "assetId": _VICTIM_ASSET_ID}}
+            "Item": {"databaseId": _OWN_DB, "assetId": _TAKEN_ASSET_ID}}
 
         response = m.lambda_handler(_event(), None)
 
