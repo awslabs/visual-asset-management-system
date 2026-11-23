@@ -1,0 +1,28 @@
+{
+    "packages": [
+        {
+            "name": "nvdiffrast",
+            "version": "0.4.0",
+            "source": "git https://github.com/NVlabs/nvdiffrast.git, built in the Dockerfile at NVDIFFRAST_COMMIT",
+            "commit": "253ac4fcea7de5f396371124af597e6cc957bfae"
+        },
+        {
+            "name": "pytorch3d",
+            "version": "0.7.8",
+            "source": "git https://github.com/facebookresearch/pytorch3d.git, built in the Dockerfile at PYTORCH3D_COMMIT (upstream's requirements name the moving branch `stable`; the commit is the one the baseline build resolved it to)",
+            "commit": "75ebeeaea0908c5527e7b1e305fbc7681382db47"
+        },
+        {
+            "name": "custom_rasterizer",
+            "version": "0.1",
+            "source": "the Step1X-3D clone at STEP1X3D_COMMIT, step1x3d_texture/custom_rasterizer, built in the Dockerfile",
+            "commit": "cb5ac944709c6c913109070c7b90c3447f57f3d4"
+        },
+        {
+            "name": "mesh_processor",
+            "version": "0.0.0",
+            "source": "the Step1X-3D clone at STEP1X3D_COMMIT, step1x3d_texture/differentiable_renderer, built in the Dockerfile",
+            "commit": "cb5ac944709c6c913109070c7b90c3447f57f3d4"
+        }
+    ]
+}

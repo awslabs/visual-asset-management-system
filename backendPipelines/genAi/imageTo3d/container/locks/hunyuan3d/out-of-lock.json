@@ -1,0 +1,16 @@
+{
+    "packages": [
+        {
+            "name": "custom_rasterizer",
+            "version": "0.1",
+            "source": "the Hunyuan3D-2 clone at HUNYUAN3D_COMMIT, hy3dgen/texgen/custom_rasterizer, built in the Dockerfile",
+            "commit": "f8db63096c8282cb27354314d896feba5ba6ff8a"
+        },
+        {
+            "name": "mesh_processor",
+            "version": "0.0.0",
+            "source": "the Hunyuan3D-2 clone at HUNYUAN3D_COMMIT, hy3dgen/texgen/differentiable_renderer, built in the Dockerfile",
+            "commit": "f8db63096c8282cb27354314d896feba5ba6ff8a"
+        }
+    ]
+}
