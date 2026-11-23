@@ -884,8 +884,8 @@ describe("the container images that clone an upstream repository pin its revisio
             "gr00t=1",
             // cosmos-predict1, and APEX inside the environment-setup RUN
             "cosmos predict v1=2",
-            // MoGe
-            "image to 3d blenderagent=1",
+            // MoGe, utils3d
+            "image to 3d blenderagent=2",
             "image to 3d hunyuan3d=1",
             // SAM 3D Objects, and the DINOv2 checkout torch.hub loads its encoder from
             "image to 3d sam3d=2",
@@ -893,8 +893,8 @@ describe("the container images that clone an upstream repository pin its revisio
             "image to 3d stable3dgen=3",
             // Step1X-3D, nvdiffrast, pytorch3d
             "image to 3d step1x3d=3",
-            // TRELLIS.2, CuMesh, FlexGEMM, nvdiffrast
-            "image to 3d trellis2=4",
+            // TRELLIS.2, CuMesh, FlexGEMM, nvdiffrast, utils3d
+            "image to 3d trellis2=5",
             // TripoSR, torchmcubes
             "image to 3d triposr=2",
         ]);
