@@ -313,6 +313,14 @@ class TestOwnAuxScope:
         assert not keep("db1/p1/model.glb/preview/PotreeViewer/m.json")
         assert keep("db1/p1/model.glb/preview/x.glb/preview/m.json")
 
+    def test_the_companion_folder_takes_its_files_data_and_not_the_objects(self):
+        """D2: deleting the companion folder ``{file key}/`` deletes its files' viewer data, the object's stays."""
+        prefix, keep = al.own_aux_scope("db1", LOCATION, "p1/model.glb/")
+        assert prefix == "db1/p1/model.glb/"
+        assert keep("db1/p1/model.glb/sub/x.obj/preview/PotreeViewer/m.json")
+        assert keep("db1/p1/model.glb/preview/x.glb/preview/m.json")
+        assert not keep("db1/p1/model.glb/preview/PotreeViewer/m.json")
+
     def test_other_files_use_their_whole_base(self):
         assert al.own_aux_scope("db1", LOCATION, COMPANION) == ("db1/p1/model.glb/sub/x.obj/", None)
         assert al.own_aux_scope("db1", FOLDER, "proj/a/x.txt") == ("db1/proj/a/x.txt/", None)

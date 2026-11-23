@@ -263,7 +263,8 @@ def own_aux_scope(database_id: Optional[str], location: Optional[str],
     """``(prefix, keep)`` of one file's (or folder's) own auxiliary data under ``{databaseId}/{file key}/``.
 
     A single-file object owns only that base's ``preview/`` folder. In it, ``{entry}/preview/...`` keys belong
-    to companion entries in a ``preview/`` folder, which ``keep`` tells apart; otherwise ``keep`` is None.
+    to companion entries in a ``preview/`` folder, which ``keep`` tells apart. The companion folder ``{file key}/``
+    holds everything else under the base. Otherwise ``keep`` is None.
     """
     loc = normalize_location(location)
     key = (file_key or "").strip("/")
@@ -271,10 +272,12 @@ def own_aux_scope(database_id: Optional[str], location: Optional[str],
     prefix = f"{db}/{key}/" if key else f"{db}/"
     if not loc or loc.endswith("/"):
         return prefix, None
-    is_object = key == loc
+    is_object = (file_key or "").lstrip("/") == loc
     if is_object:
         prefix += "preview/"
     shared = f"{db}/{loc}/preview/"
+    if shared.startswith(prefix) and not is_object:
+        return prefix, lambda aux_key: not aux_key.startswith(shared) or "/preview/" in aux_key[len(shared):]
     if not prefix.startswith(shared):
         return prefix, None
     return prefix, lambda aux_key: ("/preview/" in aux_key[len(shared):]) != is_object

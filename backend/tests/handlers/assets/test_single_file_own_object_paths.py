@@ -352,3 +352,13 @@ class TestPrefixOperationsStayInTheCompanionFolder:
         result = af.delete_file("db1", "a2", "/sub/", True, True, CLAIMS)
         assert result.affectedFiles == ["sub/y.txt"] and af.metadata_deletes == ["sub/y.txt"]
         assert _live(af.test_client, "proj/a/x.txt")
+
+
+@pytest.mark.unit
+class TestCompanionFolderDeleteAuxData:
+    def test_deleting_the_companion_folder_by_its_key_keeps_the_objects_viewer_data(self, af):
+        """D2: the companion folder's files lose their viewer data; the object keeps the file and its data."""
+        af.delete_file("db1", "a1", "p1/model.glb/", True, True, CLAIMS)
+        assert _live(af.test_client, LOCATION) and not _live(af.test_client, COMPANION)
+        assert _live(af.test_client, "db1/p1/model.glb/preview/PotreeViewer/m.json", AUX_BUCKET)
+        assert _versions(af.test_client, "db1/p1/model.glb/sub/x.obj/preview/PotreeViewer/m.json", AUX_BUCKET) == []
