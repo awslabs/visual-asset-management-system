@@ -92,7 +92,7 @@ function canonicalKeys(): string[] {
  *   * the whole `integration` category -- the orchestration bus ARN, event source prefix and
  *     workflow state-machine role ARN that an externally owned pipeline bridge stack resolves at
  *     its own deploy time; no handler reads them; and
- *   * the five deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
+ *   * the seven deprecated-table keys under `dynamoTables/legacy/` whose only consumer is a
  *     migration script. Each is named through the registry object rather than as a string, so a
  *     rename fails compilation instead of drifting into a stale allow-list entry.
  *
@@ -112,6 +112,8 @@ function toolingOnlyKeys(): string[] {
         legacy.assetLinksStorage,
         legacy.metadataStorage,
         legacy.metadataSchemaStorage,
+        legacy.commentStorageV1,
+        legacy.subscriptionsStorageV1,
     ];
 }
 

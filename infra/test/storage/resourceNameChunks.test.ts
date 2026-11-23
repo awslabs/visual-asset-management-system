@@ -573,18 +573,18 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
         const s = synthFor("commercial", false);
         expect(layout(s)).toEqual({
             chunks: 7,
-            names: 76,
+            names: 78,
             perSource: { core: 7 },
             stacks: ["root"],
         });
-        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 5]);
+        expect(namesPerChunk(s)).toEqual([13, 13, 13, 13, 10, 9, 7]);
     });
 
     test("commercial template, every add-on on", () => {
         const s = synthFor("commercial", true);
         expect(layout(s)).toEqual({
             chunks: 8,
-            names: 78,
+            names: 80,
             perSource: { core: 7, addon: 1 },
             stacks: ["root"],
         });
@@ -603,8 +603,8 @@ describe("chunk layout per configuration (recorded: a change that adds names sho
     });
 
     test.each([
-        ["govcloud", [13, 13, 13, 13, 10, 9, 5]],
-        ["eusovereign", [13, 13, 13, 13, 10, 10, 3]],
+        ["govcloud", [13, 13, 13, 13, 10, 9, 7]],
+        ["eusovereign", [13, 13, 13, 13, 10, 10, 5]],
     ] as [TemplateName, number[]][])("%s template", (name, perChunk) => {
         expect(namesPerChunk(synthFor(name, false))).toEqual(perChunk);
     });
