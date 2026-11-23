@@ -770,6 +770,12 @@ def resolve_owner(table, bucket: str, object_key: str, include_archived: bool = 
     GetItem on the asset row: a row that is gone or no longer holds the location answers NOT_FOUND,
     and that lookup is dropped from the cache.
 
+    Without `include_archived` an archived row deeper than a live one is skipped and the live one is
+    named, also for a key of an archived asset nested in the live one's location. Callers therefore ask
+    with `include_archived=True` and treat an archived answer as no owner when they attribute only to
+    live assets (`fileAttribution.attribute_object`); `tests/common/test_owner_lookups_read_archived_rows.py`
+    pins that for every caller.
+
     Callers must not act on the answer before `index_ready()` is True.
     """
     bucket = bucket or ''
@@ -896,7 +902,8 @@ class BucketLocations:
     `owner(key)` answers like `resolve_owner` without a read per key: the deepest candidate location
     holding a row that `contains` the key wins, a live row wins over an archived one there, two rows of
     the chosen state on one location answer AMBIGUOUS, and a key with too many candidates answers
-    TOO_DEEP. The rows are not confirmed against the table; a bulk walk reads a snapshot.
+    TOO_DEEP. The rows are not confirmed against the table; a bulk walk reads a snapshot. As with
+    `resolve_owner`, callers ask with `include_archived=True` and decide on an archived owner themselves.
     """
 
     def __init__(self, entries):

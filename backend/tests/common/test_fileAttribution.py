@@ -242,3 +242,68 @@ class TestBeforeTheIndexIsReady:
         lookalike = asset_row('db1', 'projects', 'reg-root', 'elsewhere/', BUCKET, indexed=False)
         result, _, _ = _attribute([unindexed, lookalike], 'projects/building-a/x.obj', monkeypatch=monkeypatch)
         assert not result.attributed
+
+
+# An archived asset nested in a live one (D10): the deepest stored location that holds a key owns it, live
+# or archived, so a caller that attributes only to live assets gets no owner for the archived asset's files.
+NEST_OUTER = asset_row('db1', 'outer', 'reg-root', 'outer/', BUCKET)
+NEST_OTHER_DB = asset_row('db2', 'annex', 'reg-root', 'outer/annex/', BUCKET, archived=True)
+NEST_SAME_DB = asset_row('db1', 'wing', 'reg-root', 'outer/wing/', BUCKET, archived=True)
+NEST_TWIN_A = asset_row('db1', 'twin-a', 'reg-root', 'outer/twin/', BUCKET, archived=True)
+NEST_TWIN_B = asset_row('db2', 'twin-b', 'reg-root', 'outer/twin/', BUCKET, archived=True)
+NEST_ROWS = [NEST_OUTER, NEST_OTHER_DB, NEST_SAME_DB, NEST_TWIN_A, NEST_TWIN_B]
+OUTER_STAMP = {'databaseid': 'db1', 'assetid': 'outer'}
+
+
+def _identity(result):
+    return (result.status, result.database_id, result.asset_id, result.relative_path)
+
+
+@pytest.mark.unit
+class TestArchivedNestedOwner:
+    @pytest.mark.parametrize('key', ['outer/annex/b.glb', 'outer/wing/c.glb'])
+    def test_a_file_of_an_archived_nested_asset_attributes_nothing_once_the_index_is_ready(self, monkeypatch,
+                                                                                            key):
+        result, _, stamp_reads = _attribute(NEST_ROWS, key, ready=True, monkeypatch=monkeypatch, stamp=OUTER_STAMP)
+        assert result.status == fa.NOT_ATTRIBUTED and not result.attributed
+        assert stamp_reads == []
+
+    def test_before_readiness_an_indexed_archived_nested_owner_attributes_nothing(self, monkeypatch):
+        # An index hit counts at any time; the stamp and the first folder (both the outer asset) are not read.
+        result, table, stamp_reads = _attribute(NEST_ROWS, 'outer/annex/b.glb', ready=False,
+                                                monkeypatch=monkeypatch, stamp=OUTER_STAMP)
+        assert result.status == fa.NOT_ATTRIBUTED
+        assert stamp_reads == []
+        read_kinds = [r[0] for r in table.reads]
+        assert 'index' in read_kinds and 'query' not in read_kinds
+
+    def test_two_archived_rows_on_the_nested_location_attribute_nothing_and_are_not_ambiguous(self, monkeypatch):
+        result, _, _ = _attribute(NEST_ROWS, 'outer/twin/f.glb', ready=True, monkeypatch=monkeypatch)
+        assert result.status == fa.NOT_ATTRIBUTED
+
+    def test_control_with_archived_owners_asked_for_the_nested_asset_is_named(self, monkeypatch):
+        result, _, _ = _attribute(NEST_ROWS, 'outer/annex/b.glb', ready=True, monkeypatch=monkeypatch,
+                                  include_archived=True)
+        assert _identity(result) == (fa.ATTRIBUTED, 'db2', 'annex', '/b.glb')
+        assert result.archived is True
+        twin, _, _ = _attribute(NEST_ROWS, 'outer/twin/f.glb', ready=True, monkeypatch=monkeypatch,
+                                include_archived=True)
+        assert twin.status == fa.AMBIGUOUS
+
+    def test_control_the_containing_assets_own_file_is_its(self, monkeypatch):
+        result, _, _ = _attribute(NEST_ROWS, 'outer/a.glb', ready=True, monkeypatch=monkeypatch)
+        assert _identity(result) == (fa.ATTRIBUTED, 'db1', 'outer', '/a.glb')
+        assert result.resolved_by == fa.RESOLVED_BY_LOCATION_INDEX
+
+    def test_control_a_live_asset_nested_in_an_archived_one_keeps_its_files(self, monkeypatch):
+        rows = [asset_row('db3', 'vault', 'reg-root', 'vault/', BUCKET, archived=True),
+                asset_row('db3', 'kept', 'reg-root', 'vault/kept/', BUCKET)]
+        result, _, _ = _attribute(rows, 'vault/kept/d.glb', ready=True, monkeypatch=monkeypatch)
+        assert _identity(result) == (fa.ATTRIBUTED, 'db3', 'kept', '/d.glb')
+
+    def test_control_an_accepted_binding_is_used_as_before(self, monkeypatch):
+        # The binding is bucket sync's decision and is accepted when its asset's location holds the key.
+        result, _, _ = _attribute(NEST_ROWS, 'outer/annex/b.glb', ready=True, monkeypatch=monkeypatch,
+                                  binding=_binding('db1', 'outer'))
+        assert _identity(result) == (fa.ATTRIBUTED, 'db1', 'outer', '/annex/b.glb')
+        assert result.resolved_by == fa.RESOLVED_BY_BINDING

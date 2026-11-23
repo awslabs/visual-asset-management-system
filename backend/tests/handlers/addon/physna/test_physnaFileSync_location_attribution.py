@@ -115,6 +115,40 @@ class TestPresentObjects:
         assert physnaFileSync._resolve_asset_from_s3_event(BUCKET, key, _record(key)) is None
 
 
+OUTER = asset_row("db1", "outer", "reg-1", "outer/", BUCKET)
+ARCHIVED_NESTED = asset_row("db2", "annex", "reg-1", "outer/annex/", BUCKET, archived=True)
+NESTED_KEY = "outer/annex/part.step"
+
+
+@pytest.mark.unit
+class TestArchivedNestedAsset:
+    """A file of an archived asset nested in a live one has no live owner: the deepest stored location
+    that holds it is the archived asset's, so it is not synced under the containing asset (D10)."""
+
+    @pytest.mark.parametrize("ready", [True, False])
+    def test_a_present_file_without_a_binding_is_not_synced_under_the_containing_asset(self, wire, ready):
+        wire([OUTER, ARCHIVED_NESTED], ready=ready, metadata={"databaseid": "db1", "assetid": "outer"})
+        assert physnaFileSync._resolve_asset_from_s3_event(BUCKET, NESTED_KEY, _record(NESTED_KEY)) is None
+
+    def test_the_record_is_acknowledged_and_nothing_is_synced(self, wire, monkeypatch):
+        wire([OUTER, ARCHIVED_NESTED], ready=True)
+        synced = []
+        monkeypatch.setattr(physnaFileSync, "is_sync_supported_file", lambda path: synced.append(path) or True)
+        assert physnaFileSync._handle_s3_record(_record(NESTED_KEY)) is True
+        assert synced == []
+
+    def test_control_the_containing_assets_own_file_is_synced_under_it(self, wire):
+        wire([OUTER, ARCHIVED_NESTED], ready=True)
+        key = "outer/part.step"
+        assert _identity(physnaFileSync._resolve_asset_from_s3_event(BUCKET, key, _record(key))) == \
+            ("db1", "outer", "/part.step")
+
+    def test_control_a_removed_file_resolves_to_the_archived_nested_asset(self, wire):
+        wire([OUTER, ARCHIVED_NESTED], ready=True)
+        assert _identity(physnaFileSync._resolve_asset_from_s3_key_without_metadata(BUCKET, NESTED_KEY)) == \
+            ("db2", "annex", "/part.step")
+
+
 @pytest.mark.unit
 class TestRemovedObjects:
     def test_a_removed_custom_root_file_of_an_archived_asset_resolves(self, wire):

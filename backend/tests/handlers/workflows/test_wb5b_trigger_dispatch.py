@@ -517,6 +517,39 @@ class TestResolveAssetRelativeKey:
         assert m_head.call_args.kwargs["VersionId"] == "ver-3"
 
 
+NEST_OUTER = asset_row("db1", "outer", "bk1", "prefix/outer/", "b1")
+NEST_ARCHIVED = asset_row("db2", "annex", "bk1", "prefix/outer/annex/", "b1", archived=True)
+
+
+@pytest.mark.unit
+class TestArchivedNestedAsset:
+    """A file of an archived asset nested in a live one has no live owner, so no fileUpload trigger of the
+    containing asset fires for it (D10)."""
+
+    @pytest.mark.parametrize("ready", [True, False])
+    def test_an_unbound_upload_into_the_archived_nested_folder_binds_nothing(self, tables, ready):
+        tables([NEST_OUTER, NEST_ARCHIVED], ready=ready)
+        stamp = {"Metadata": {"databaseid": "db1", "assetid": "outer"}}
+        with patch.object(wd.s3_client, "head_object", return_value=stamp):
+            assert wd._resolve_asset_relative_key("b1", "prefix/outer/annex/scan.e57", "ver-1") is None
+
+    def test_no_workflow_is_launched_for_it(self, tables):
+        tables([NEST_OUTER, NEST_ARCHIVED], ready=True)
+        trigger = {"triggerType": "fileUpload", "workflowDatabaseId": "GLOBAL", "workflowId": "wfG",
+                   "enabled": True, "triggerConfig": {"inputFileFilters": {"allow": [".e57"]},
+                                                      "defaultTemplateIds": {}}}
+        with patch.object(wd.s3_client, "head_object", return_value={"Metadata": {}}), \
+                patch(f"{DMOD}._launch_matching_triggers") as m_launch:
+            assert wd._dispatch_uploaded_file("b1", "prefix/outer/annex/scan.e57", [trigger], "ver-1") == 0
+        m_launch.assert_not_called()
+
+    def test_control_the_containing_assets_own_upload_binds_to_it(self, tables):
+        tables([NEST_OUTER, NEST_ARCHIVED], ready=True)
+        with patch.object(wd.s3_client, "head_object", return_value={"Metadata": {}}):
+            assert wd._resolve_asset_relative_key("b1", "prefix/outer/scan.e57", "ver-1")[:3] == (
+                "db1", "outer", "/scan.e57")
+
+
 @pytest.mark.unit
 class TestBindingFromTheEvent:
     """Bucket sync forwards which asset holds the file (`vamsBinding`), so a direct write needs no stamp

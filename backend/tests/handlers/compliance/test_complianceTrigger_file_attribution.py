@@ -8,6 +8,8 @@ A custom-root asset (created with `bucketExistingKey`) is reached through the re
 or the location index; the first folder of its key names no asset. Once the index is ready its miss
 is final, and a location several assets claim evaluates none of them."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from botocore.exceptions import ClientError
 
@@ -23,6 +25,14 @@ from backend.tests.handlers.compliance.test_complianceTrigger import (
     _sns_event,
 )
 from common import assetLocations as asset_locations
+from common import fileAttribution as file_attribution
+from handlers.compliance import complianceTrigger as trigger
+from tests.common.fileAttributionFakes import (
+    AttributionAssetTable,
+    AttributionBucketsTable,
+    asset_row,
+    registration,
+)
 
 CUSTOM_ASSET = "custom-asset"
 CUSTOM_LOCATION = "projects/alpha/"
@@ -90,3 +100,55 @@ class TestAnUnreadableRegistrationIsRetried:
                      buckets_effect=throttled)
         mocks["run_evaluation"].assert_not_called()
         assert mocks["response"] == {"batchItemFailures": [{"itemIdentifier": "q-1"}]}
+
+
+# An archived asset nested in a live one (D10), read through the real location index lookups.
+NEST_BUCKET = "asset-bucket"
+NEST_OUTER = asset_row(DB, "outer", BUCKET_ID, "outer/", NEST_BUCKET)
+NEST_ARCHIVED = asset_row("db-other", "annex", BUCKET_ID, "outer/annex/", NEST_BUCKET, archived=True)
+
+
+@pytest.mark.unit
+class TestArchivedNestedAsset:
+    """A file of an archived asset nested in a live one has no live owner: the deepest stored location that
+    holds it is the archived asset's, so no compliance evaluation of the containing asset starts for it."""
+
+    @pytest.fixture
+    def target(self, monkeypatch):
+        def _target(key, ready=True):
+            file_attribution.clear_registration_cache()
+            asset_locations.clear_location_cache()
+            monkeypatch.setattr(file_attribution, "index_ready", lambda name: ready)
+            monkeypatch.setattr(trigger, "asset_table", AttributionAssetTable([NEST_OUTER, NEST_ARCHIVED]))
+            monkeypatch.setattr(trigger.store, "s3_asset_buckets_table",
+                                AttributionBucketsTable([registration(BUCKET_ID, NEST_BUCKET, "/")]))
+            targets = MagicMock(name="evaluation_target", return_value={"schemaName": SCHEMA})
+            monkeypatch.setattr(trigger.TriggerBatch, "evaluation_target", targets)
+            resolved = trigger._file_event_target(s3_event_record(key), NEST_BUCKET, key, batch=trigger.TriggerBatch())
+            file_attribution.clear_registration_cache()
+            return resolved, targets
+        return _target
+
+    @pytest.mark.parametrize("ready", [True, False])
+    def test_an_unbound_file_event_in_the_archived_nested_folder_evaluates_nothing(self, target, ready):
+        resolved, targets = target("outer/annex/model.glb", ready=ready)
+        assert resolved is None
+        targets.assert_not_called()
+
+    def test_control_the_containing_assets_own_file_is_evaluated_for_it(self, target):
+        resolved, targets = target("outer/model.glb")
+        assert resolved is not None and resolved[:2] == (DB, "outer")
+        targets.assert_called_once_with(DB, "outer")
+
+    def test_the_queue_record_succeeds_with_no_evaluation(self):
+        # The location index names the archived nested asset: the record is consumed, not retried.
+        archived = asset_locations.Resolution(
+            asset_locations.RESOLVED_FOUND,
+            entry=asset_locations.LocationEntry(database_id="db-other#deleted", asset_id="annex",
+                                                bucket_id=BUCKET_ID, location="outer/annex/"),
+            row={**NEST_ARCHIVED})
+        mocks = _run(_sns_event(_message(s3_event_record("outer/annex/model.glb"))), database_item=AUTO_EVAL_DB,
+                     compliance_record={"schemaName": SCHEMA}, asset_rows={}, index_ready=True,
+                     resolution=archived)
+        mocks["run_evaluation"].assert_not_called()
+        assert not (mocks["response"] or {}).get("batchItemFailures")

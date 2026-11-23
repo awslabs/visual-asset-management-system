@@ -11,10 +11,12 @@ same bucket. ``attribute_object`` answers it in this order:
    ``asset.file.uploaded`` event. It is accepted only when its ``bucketId`` is a registration of the
    event's bucket, the asset row exists (strongly consistent read) in that registration, and the row's
    stored location contains the key. A binding that fails a check is logged and not used.
-2. The location index (``assetLocations.resolve_owner``). A hit is used at any time; a miss is final
-   only once ``index_ready()`` is True. A key the index cannot answer for (more candidate locations
-   than it resolves, or a lookup that does not finish within its page limit) goes on to step 3, as
-   before the index.
+2. The location index (``assetLocations.resolve_owner``, archived rows included): the deepest stored
+   location that holds the key decides, live or archived. Without ``include_archived`` an archived
+   deepest owner attributes nothing, so a file of an archived asset nested in a live asset's location is
+   never the live asset's. A hit is used at any time; a miss is final only once ``index_ready()`` is
+   True. A key the index cannot answer for (more candidate locations than it resolves, or a lookup that
+   does not finish within its page limit) goes on to step 3, as before the index.
 3. Before the index is ready: the stamp metadata (``databaseid``/``assetid``) the caller read from the
    object, then the first folder under a registered prefix (``assetIdGSI``), each accepted only when
    the asset row's registration is in the event's bucket and its stored location contains the key. A
@@ -333,6 +335,16 @@ def _from_first_folder(asset_table, buckets_table, bucket_name: str, object_key:
     return NOT_ATTRIBUTED_RESULT
 
 
+def _held_by_archived_owner(resolution: Resolution) -> bool:
+    """Whether the deepest owner the location index found is archived: an archived row (or a row read
+    back as archived), or several archived rows on one location and no live one."""
+    if resolution.status == RESOLVED_FOUND:
+        return resolution.entry.archived or (resolution.row or {}).get('status') == 'archived'
+    if resolution.status == RESOLVED_AMBIGUOUS:
+        return bool(resolution.candidates) and all(entry.archived for entry in resolution.candidates)
+    return False
+
+
 class _Readers:
     """The row and registration reads `attribute_object` makes, from the tables or the caller's own."""
 
@@ -369,7 +381,8 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
 
     Args:
         binding: the record's `vamsBinding` (`binding_of(record)`), or None.
-        include_archived: also attribute to an archived asset (delete and archive events).
+        include_archived: also attribute to an archived asset (delete and archive events). Without it a
+            key whose deepest owner in the location index is archived attributes nothing.
         read_stamp: returns the object's S3 metadata, or None when it cannot be read. Called only
             before the index is ready and only when nothing else attributed the key.
         use_index_cache: False to resolve without the per-container index cache.
@@ -396,13 +409,19 @@ def attribute_object(bucket_name: str, object_key: str, *, asset_table, buckets_
         logger.warning(f"The binding of {key} in bucket {bucket_name} to "
                        f"{binding.get('databaseId')}:{binding.get('assetId')} was not accepted; resolving again")
 
+    # The deepest stored location that holds the key owns it, live or archived (a live row wins at one
+    # location). Archived rows are always read, so an archived asset nested in a live one is never
+    # skipped over to the live one; a caller that attributes only to live assets gets no owner then.
     try:
-        resolution = resolve_owner(asset_table, bucket_name, key, include_archived=include_archived,
+        resolution = resolve_owner(asset_table, bucket_name, key, include_archived=True,
                                    use_cache=use_index_cache)
     except RuntimeError as e:
         logger.warning(f"The location index cannot resolve {key} in bucket {bucket_name} ({e}); "
                        "attributing it as before the index")
         resolution = Resolution(RESOLVED_TOO_DEEP)
+    if not include_archived and _held_by_archived_owner(resolution):
+        logger.info(f"Key {key} in bucket {bucket_name} is in an archived asset's location; nothing is attributed")
+        return NOT_ATTRIBUTED_RESULT
     if resolution.status == RESOLVED_AMBIGUOUS:
         logger.error(f"Key {key} in bucket {bucket_name} is in a location several assets claim; "
                      "nothing is attributed")
