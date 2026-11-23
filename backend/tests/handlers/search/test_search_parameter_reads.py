@@ -199,9 +199,11 @@ class TestAnUnreadableSettingAnswersAtOnce:
     @pytest.mark.parametrize("method,path", ROUTES)
     def test_a_missing_setting_is_the_internal_error_without_the_parameter_name(self, monkeypatch, method, path):
         module, _ = _load(monkeypatch)
-        serve_parameters_from(module, ParameterStoreStub(values={}))
+        stub = ParameterStoreStub(values={})
+        serve_parameters_from(module, stub)
         with patch.dict(sys.modules, {"opensearchpy": MagicMock()}):
             response = module.lambda_handler(_event(method, path), None)
+        assert stub.calls, "the request read no setting, so the answer says nothing about a missing one"
         assert response["statusCode"] == 500
         assert json.loads(response["body"]) == INTERNAL_ERROR_BODY
         assert "/vams-test/" not in response["body"] and "parameter" not in response["body"].lower()

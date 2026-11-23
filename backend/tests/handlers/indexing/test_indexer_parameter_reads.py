@@ -149,7 +149,7 @@ class TestThrottledFirstUse:
     def test_the_batch_after_the_window_reads_again_and_is_handled(self, throttled):
         module, recorder, clock = throttled
         with patch("boto3.client", side_effect=recorder):
-            module.lambda_handler(_batch("m1"), None)
+            assert _failed_ids(module.lambda_handler(_batch("m1"), None)) == ["m1"]
             clock.advance(60)
             recorder.ssm.get_parameter.side_effect = _answer
             response = module.lambda_handler(_batch("m2"), None)
