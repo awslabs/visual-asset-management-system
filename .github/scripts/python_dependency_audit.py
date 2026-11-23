@@ -442,7 +442,13 @@ def pin_direct_urls(text, source):
     return "\n".join(lines)
 
 
-LOCAL_VERSION_PIN = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][^\s;+\\]*)\+[A-Za-z0-9.]+(?P<rest>.*)$")
+# A PEP 440 local label (`+cu128`, `+cu12.torch2`) that is the whole remainder of the version: lowercase letters and
+# digits in dot-separated parts, followed by white space, `;`, a backslash or the end of the line. Anything else
+# (`+Ev-il`, `+cu128-extra`, upper case, a second `+`) is left as it is, so pip-audit fails on it instead of auditing
+# a version the lock does not hold.
+LOCAL_VERSION_PIN = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][^\s;+\\]*)\+[a-z0-9]+(?:\.[a-z0-9]+)*(?P<rest>(?:[\s;\\].*)?)$"
+)
 
 
 def drop_local_versions(text):
