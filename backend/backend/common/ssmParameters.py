@@ -279,19 +279,29 @@ def read_parameter_value(name: str) -> str:
     value written moments ago. Bypasses the cache (it neither serves nor stores a value) and the
     record of missing parameters, but is bounded, classified and logged as get_parameter_value is,
     and shares its back-off window: inside the window it raises ParameterUnavailableError without a
-    call, and a transient failure opens the window."""
+    call, and a transient failure opens the window. It takes the same lock, so reads of either kind
+    run one at a time per container and the window is updated by one thread at a time."""
     if not name:
         raise ValueError("A Parameter Store parameter name is required")
-    if _in_backoff_window():
+
+    def refused_inside_window():
         _log_backoff_window_once()
-        raise ParameterUnavailableError(
+        return ParameterUnavailableError(
             f"Parameter Store parameter not read while reads back off after a failure: {name}")
-    try:
-        value = _read(name)
-    except Exception as e:
-        if _error_code(e) == "ParameterNotFound":
-            logger.warning(f"Parameter Store parameter not found: {name}")
-            raise ParameterNotFoundError(f"Parameter Store parameter not found: {name}") from e
-        raise _refusal(name, e)
-    _record_completed_read()
-    return value
+
+    if _in_backoff_window():
+        raise refused_inside_window()
+
+    with _read_lock:
+        # A read by another thread may have opened the window while this one waited.
+        if _in_backoff_window():
+            raise refused_inside_window()
+        try:
+            value = _read(name)
+        except Exception as e:
+            if _error_code(e) == "ParameterNotFound":
+                logger.warning(f"Parameter Store parameter not found: {name}")
+                raise ParameterNotFoundError(f"Parameter Store parameter not found: {name}") from e
+            raise _refusal(name, e)
+        _record_completed_read()
+        return value
