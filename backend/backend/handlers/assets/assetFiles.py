@@ -38,8 +38,8 @@ from common.s3MetadataKeys import (
     UserMetadataTooLargeError,
 )
 from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXTENSIONS
-from common.assetLocations import contains
-from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE
+from common.assetLocations import contains, own_aux_scope
+from common.s3 import list_all_object_versions, is_object_version_archived, S3_VERSIONS_PAGE_SIZE, asset_file_paths
 from common.apiRoutes import (
     API_LIST_FILES, API_FILE_INFO, API_MOVE_FILE, API_COPY_FILE,
     API_ARCHIVE_FILE, API_UNARCHIVE_FILE, API_DELETE_FILE,
@@ -328,35 +328,37 @@ def get_asset_s3_location(asset: Dict) -> Tuple[str, str]:
     
     return bucket, key
 
-def resolve_asset_file_path(asset_base_key: str, file_path: str) -> str:
+# The refusal of a request path that names no file of the asset ('..' segments, or a key outside it)
+FILE_PATH_NOT_IN_ASSET_MESSAGE = "The file path does not name a file in this asset."
+
+# A single-file asset's object holds the asset's location; it cannot be moved or renamed away from it
+OWN_FILE_MOVE_REFUSAL = ("The file of a single-file asset cannot be moved or renamed. "
+                         "Copy it to another path instead.")
+
+
+def file_paths_for(bucket: str, location: str):
+    """The asset-relative path <-> S3 key mapping of one asset location for this request (``common.assetLocations``)."""
+    return asset_file_paths(bucket, location, client=s3_client)
+
+
+def resolve_asset_file_path(paths, file_path: str) -> str:
+    """The S3 key a file route's path names in the asset (``AssetFilePaths.request_key_for``).
+
+    Raises:
+        VAMSGeneralErrorResponse: The path names no key the asset holds.
     """
-    Intelligently resolve the full S3 key, avoiding duplication if file_path already contains the asset base key.
-    
-    Args:
-        asset_base_key: The base key from assetLocation (e.g., "assetId/" or "custom/path/")
-        file_path: The file path from the request (may or may not include the base key)
-        
-    Returns:
-        The properly resolved S3 key without duplication
-    """
-    # Normalize the asset base key to ensure it ends with '/'
-    if asset_base_key and not asset_base_key.endswith('/'):
-        asset_base_key = asset_base_key + '/'
-    
-    # Remove leading slash from file path if present
-    if file_path.startswith('/'):
-        file_path = file_path[1:]
-    
-    # Check if file_path already starts with the asset_base_key
-    if file_path.startswith(asset_base_key):
-        # File path already contains the base key, use as-is
-        logger.info(f"File path '{file_path}' already contains base key '{asset_base_key}', using as-is")
-        return file_path
-    else:
-        # File path doesn't contain base key, combine them
-        resolved_path = asset_base_key + file_path
-        logger.info(f"Combined base key '{asset_base_key}' with file path '{file_path}' to get '{resolved_path}'")
-        return resolved_path
+    full_key = paths.request_key_for(file_path)
+    if full_key is None:
+        logger.warning(f"File path {file_path!r} names no key of location {paths.location!r}")
+        raise VAMSGeneralErrorResponse(FILE_PATH_NOT_IN_ASSET_MESSAGE)
+    return full_key
+
+
+def relative_path_of(paths, key: str, fallback: str = "") -> str:
+    """The asset-relative path a resolved key is listed at, or ``fallback`` for a key outside the asset."""
+    path = paths.path_for(key)
+    return path if path is not None else fallback
+
 
 def _is_missing_object_error(e: ClientError) -> bool:
     """Return True when a ClientError reports the S3 object as missing.
@@ -546,7 +548,7 @@ def aux_bucket_asset_file_base(database_id: str, asset_file_key: str) -> str:
     base = (database_id or "").strip('/')
     return f"{base}/{key}/" if key else f"{base}/"
 
-def delete_assetAuxiliary_files(prefix):
+def delete_assetAuxiliary_files(prefix, keep=None):
     """Permanently delete the auxiliary files under a prefix, with every version and delete marker
 
     The auxiliary bucket is versioned, so a delete that names no VersionId would only hide the data.
@@ -554,6 +556,8 @@ def delete_assetAuxiliary_files(prefix):
 
     Args:
         prefix: Auxiliary-bucket prefix (see aux_bucket_asset_file_base); a trailing '/' is added
+        keep: Optional predicate on an auxiliary key; only the keys it accepts are deleted
+            (``common.assetLocations.own_aux_scope``)
     """
 
     if not prefix:
@@ -571,7 +575,8 @@ def delete_assetAuxiliary_files(prefix):
         paginator = s3_client.get_paginator('list_object_versions')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=prefix):
             entries = [{'Key': entry['Key'], 'VersionId': entry['VersionId']}
-                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])]
+                       for entry in page.get('Versions', []) + page.get('DeleteMarkers', [])
+                       if keep is None or keep(entry['Key'])]
             for i in range(0, len(entries), 1000):  # DeleteObjects takes at most 1000 entries
                 batch = entries[i:i + 1000]
                 response = s3_client.delete_objects(
@@ -634,13 +639,14 @@ def move_auxiliary_files(source_key: str, dest_key: str) -> None:
         # Log error but don't raise exception to caller
         logger.warning(f"Error processing auxiliary files for move operation: {e}")
 
-def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
+def copy_auxiliary_files(source_key: str, dest_key: str, keep=None) -> None:
     """Copy auxiliary files from source prefix to destination prefix.
     Silently logs errors if operations fail.
     
     Args:
         source_key: Source key prefix
         dest_key: Destination key prefix
+        keep: Optional predicate on a source auxiliary key; only the keys it accepts are copied
     """
     try:
         # List all objects with the source prefix in auxiliary bucket
@@ -652,6 +658,8 @@ def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
                 
             for obj in page.get('Contents', []):
                 source_aux_key = obj['Key']
+                if keep is not None and not keep(source_aux_key):
+                    continue
                 
                 # Calculate the destination key by replacing the source prefix with destination prefix
                 dest_aux_key = source_aux_key.replace(source_key, dest_key, 1)
@@ -672,6 +680,13 @@ def copy_auxiliary_files(source_key: str, dest_key: str) -> None:
     except Exception as e:
         # Log error but don't raise exception to caller
         logger.warning(f"Error processing auxiliary files for copy operation: {e}")
+
+def own_aux_args(database_id: str, location: str, file_key: str) -> tuple:
+    """The auxiliary prefix of one file's own data, plus its ``keep`` filter when one is needed
+    (``common.assetLocations.own_aux_scope``), as arguments for the auxiliary delete and copy helpers."""
+    prefix, keep = own_aux_scope(database_id, location, file_key)
+    return (prefix,) if keep is None else (prefix, keep)
+
 
 def delete_s3_object(bucket: str, key: str) -> bool:
     """Permanently delete an S3 object (current version only)
@@ -1007,7 +1022,7 @@ def process_preview_files(
     bucket: str,
     source_key: str,
     dest_key: str,
-    base_key: str,
+    paths,
     source_asset_id: str = None,
     source_database_id: str = None,
     dest_asset_id: str = None,
@@ -1021,7 +1036,7 @@ def process_preview_files(
         bucket: The source S3 bucket
         source_key: Source file key
         dest_key: Destination file key
-        base_key: Base key for relative path calculation
+        paths: The destination asset's path mapping (``file_paths_for``), for the reported paths
         source_asset_id: Source asset ID (for copy operations)
         source_database_id: Source database ID (for copy operations)
         dest_asset_id: Destination asset ID (for copy operations)
@@ -1074,15 +1089,8 @@ def process_preview_files(
         
         if operation_success:
             # Get relative paths for reporting
-            if preview_file.startswith(base_key):
-                rel_preview_source = '/' + preview_file[len(base_key):]
-            else:
-                rel_preview_source = '/' + preview_file
-                
-            if preview_dest.startswith(base_key):
-                rel_preview_dest = '/' + preview_dest[len(base_key):]
-            else:
-                rel_preview_dest = '/' + preview_dest
+            rel_preview_source = relative_path_of(paths, preview_file, '/' + preview_file)
+            rel_preview_dest = relative_path_of(paths, preview_dest, '/' + preview_dest)
             
             # For move/rename, include both source and dest; for copy, only dest
             if operation == 'move' or operation == 'rename':
@@ -1285,7 +1293,25 @@ def get_s3_object_metadata(bucket: str, key: str, include_versions: bool = False
                 raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
         raise VAMSGeneralErrorResponse(f"Error retrieving file metadata.")
 
-def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False, basic_mode: bool = False) -> Dict:
+def _listing_relative_path(paths, listed_prefix: str, key: str, folder_filter: bool) -> str:
+    """The relativePath the file list reports for a key.
+
+    Without a folder filter it is the path the key is listed at (``AssetFilePaths.path_for``). A listing
+    filtered to a folder reports the path after the filter prefix, the form clients of that filter read.
+    """
+    if not folder_filter:
+        path = paths.path_for(key)
+        if path is not None:
+            return path
+    relative_path = key
+    if relative_path.startswith(listed_prefix):
+        relative_path = relative_path[len(listed_prefix):]
+    if not relative_path.startswith('/'):
+        relative_path = '/' + relative_path
+    return relative_path
+
+
+def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: Dict, include_archived: bool = False, basic_mode: bool = False, paths=None) -> Dict:
     """List S3 objects with pagination and archive status
     
     Args:
@@ -1294,6 +1320,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
         query_params: Dictionary containing pagination parameters
         include_archived: Whether to include archived files
         basic_mode: If True, skip expensive head_object calls and return only S3 list data
+        paths: The location's path mapping for this request (``file_paths_for``); built when omitted
         
     Returns:
         Dictionary containing the list of files and pagination token if applicable
@@ -1303,6 +1330,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
     # The S3 prefix also matches keys that only share the location's characters; a single-file
     # location holds its own key, its companion folder and its own previews only
     location = prefix
+    if paths is None:
+        paths = file_paths_for(bucket, location)
+    folder_filter = bool(query_params.get('prefix'))
     
     # If prefix filter is provided, append it to the base prefix
     if query_params.get('prefix'):
@@ -1344,13 +1374,9 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
             # Determine if it's a folder (key ends with '/' or fileName is empty)
             is_folder = obj['Key'].endswith('/') or not file_name
             
-            # Get relative path by removing the prefix
-            relative_path = obj['Key']
-            if relative_path.startswith(prefix):
-                relative_path = relative_path[len(prefix):]
-                # Ensure relative path starts with /
-                if not relative_path.startswith('/'):
-                    relative_path = '/' + relative_path
+            # The path the key is listed at. A folder-filtered listing keeps reporting the path after
+            # the filter prefix, as it always has
+            relative_path = _listing_relative_path(paths, prefix, obj['Key'], folder_filter)
             
             # Create the item with fields available from S3 list operation
             item = {
@@ -1472,11 +1498,7 @@ def list_s3_objects_with_archive_status(bucket: str, prefix: str, query_params: 
                         
                         # Extract filename and relative path
                         file_name = os.path.basename(key)
-                        relative_path = key
-                        if relative_path.startswith(prefix):
-                            relative_path = relative_path[len(prefix):]
-                            if not relative_path.startswith('/'):
-                                relative_path = '/' + relative_path
+                        relative_path = _listing_relative_path(paths, prefix, key, folder_filter)
                         
                         # Find the latest version before the delete marker
                         latest_version = None
@@ -2129,9 +2151,8 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
+    paths = file_paths_for(bucket, base_key)
+    full_key = resolve_asset_file_path(paths, file_path)
     
     # Check if path exists (including archived files)
     try:
@@ -2179,10 +2200,10 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
     
     if is_prefix:
         # Delete all files under prefix including all versions
-        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key)
+        deleted_keys = delete_s3_prefix_all_versions(bucket, full_key, location=paths.location)
 
         # Delete aux files under prefix if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        delete_assetAuxiliary_files(*own_aux_args(databaseId, paths.location, full_key))
         
         # Convert full keys to relative paths and delete metadata
         for key in deleted_keys:
@@ -2203,10 +2224,7 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         for preview_file in preview_files:
             if delete_s3_object_all_versions(bucket, preview_file):
                 # Get relative path for reporting
-                if preview_file.startswith(base_key):
-                    rel_preview_path = '/' + preview_file[len(base_key):]
-                else:
-                    rel_preview_path = '/' + preview_file
+                rel_preview_path = relative_path_of(paths, preview_file, '/' + preview_file)
                 
                 affected_files.append(rel_preview_path)
                 logger.info(f"Deleted preview file: {rel_preview_path}")
@@ -2215,16 +2233,16 @@ def delete_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool, 
         success = delete_s3_object_all_versions(bucket, full_key)
 
         # Delete aux files if they exist
-        delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+        delete_assetAuxiliary_files(*own_aux_args(databaseId, paths.location, full_key))
         
         if not success:
             raise VAMSGeneralErrorResponse(f"Failed to delete file.")
         
         affected_files.append(file_path)
         
-        # Delete metadata for the main file (not a folder since we checked earlier)
-        # Extract relative path from file_path (remove leading slash if present)
-        relative_path = file_path.lstrip('/')
+        # Delete metadata for the main file (not a folder since we checked earlier), keyed by the
+        # path the file is listed at, whichever form the request named it by
+        relative_path = relative_path_of(paths, full_key, file_path).lstrip('/')
         delete_file_metadata(databaseId, assetId, relative_path)
 
     # Clean up version snapshot records in DynamoDB for deleted files
@@ -2297,9 +2315,8 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
+    paths = file_paths_for(bucket, base_key)
+    full_key = resolve_asset_file_path(paths, file_path)
     
     # Check if path exists and if it's already archived
     try:
@@ -2361,10 +2378,7 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
             for preview_file in preview_files:
                 if delete_s3_object(bucket, preview_file):
                     # Get relative path for reporting
-                    if preview_file.startswith(base_key):
-                        rel_preview_path = '/' + preview_file[len(base_key):]
-                    else:
-                        rel_preview_path = '/' + preview_file
+                    rel_preview_path = relative_path_of(paths, preview_file, '/' + preview_file)
                     
                     affected_files.append(rel_preview_path)
                     logger.info(f"Archived preview file: {rel_preview_path}")
@@ -2380,9 +2394,10 @@ def archive_file(databaseId: str, assetId: str, file_path: str, is_prefix: bool,
         # Archive uses a delete marker (no S3 metadata) so sqsBucketSync cannot
         # derive provenance -- write the history record directly. Key it to the new
         # delete-marker VersionId so it matches the version shown in file history.
-        # Use the relative path (no leading slash) to match sqsBucketSync's filePath key form.
+        # Use the path the file is listed at (no leading slash), sqsBucketSync's filePath key form.
         write_archive_history(
-            databaseId, assetId, file_path.lstrip('/'), delete_marker_version_id, acting_user
+            databaseId, assetId, relative_path_of(paths, full_key, file_path).lstrip('/'),
+            delete_marker_version_id, acting_user
         )
 
     # Send email for asset file change
@@ -2413,9 +2428,8 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
+    paths = file_paths_for(bucket, base_key)
+    full_key = resolve_asset_file_path(paths, file_path)
     
     # Find the delete marker and the most recent content version to restore.
     # S3 returns versions newest-first per key, so the latest delete marker and
@@ -2555,10 +2569,7 @@ def unarchive_file(databaseId: str, assetId: str, file_path: str, claims_and_rol
                         logger.info(f"Successfully unarchived preview file {preview_file} from version {preview_latest_version['VersionId']}")
                             
                         # Get relative path for reporting
-                        if preview_file.startswith(base_key):
-                            rel_preview_path = '/' + preview_file[len(base_key):]
-                        else:
-                            rel_preview_path = '/' + preview_file
+                        rel_preview_path = relative_path_of(paths, preview_file, '/' + preview_file)
                         
                         affected_files.append(rel_preview_path)
                         logger.info(f"Unarchived preview file: {rel_preview_path}")
@@ -2630,10 +2641,10 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     # Get asset locations
     source_bucket, source_base_key = get_asset_s3_location(source_asset)
     dest_bucket, dest_base_key = get_asset_s3_location(dest_asset)
-    
-    # Use smart path resolution to avoid duplication for both source and destination
-    source_key = resolve_asset_file_path(source_base_key, source_path)
-    dest_key = resolve_asset_file_path(dest_base_key, dest_path)
+    source_paths = file_paths_for(source_bucket, source_base_key)
+    dest_paths = file_paths_for(dest_bucket, dest_base_key) if is_cross_asset else source_paths
+    source_key = resolve_asset_file_path(source_paths, source_path)
+    dest_key = resolve_asset_file_path(dest_paths, dest_path)
 
     # The request model bounded destinationPath; the resolved key carries the destination asset's prefix
     # as well and is what S3 measures. Refuse it here, before the source is even looked up, so an
@@ -2684,7 +2695,7 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
         bucket=source_bucket,
         source_key=source_key,
         dest_key=dest_key,
-        base_key=dest_base_key,
+        paths=dest_paths,
         source_asset_id=assetId,
         source_database_id=databaseId,
         dest_asset_id=dest_asset_id if is_cross_asset else assetId,
@@ -2693,13 +2704,16 @@ def copy_file(databaseId: str, assetId: str, source_path: str, dest_path: str, d
     )
 
     # Copy auxiliary files if they exist
-    copy_auxiliary_files(
-        aux_bucket_asset_file_base(databaseId, source_key),
-        aux_bucket_asset_file_base(effective_dest_db, dest_key)
-    )
+    # A single-file asset's object owns only the preview/ folder of its auxiliary base
+    aux_source = own_aux_args(databaseId, source_paths.location, source_key)
+    aux_dest = aux_bucket_asset_file_base(effective_dest_db, dest_key)
+    if source_paths.names_object(source_key):
+        aux_dest += 'preview/'
+    copy_auxiliary_files(aux_source[0], aux_dest, *aux_source[1:])
 
-    # Copy metadata and attributes to the destination (merge with existing)
-    source_rel = source_path.lstrip('/')
+    # Copy metadata and attributes to the destination (merge with existing); the source is keyed by the
+    # path it is listed at, whichever form the request named it by
+    source_rel = relative_path_of(source_paths, source_key, source_path).lstrip('/')
     dest_rel = dest_path.lstrip('/')
     actual_dest_asset = dest_asset_id if is_cross_asset else assetId
     metadata_copied = _copy_file_metadata_to_destination(
@@ -2749,10 +2763,13 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    source_key = resolve_asset_file_path(base_key, source_path)
-    dest_key = resolve_asset_file_path(base_key, dest_path)
+    paths = file_paths_for(bucket, base_key)
+    source_key = resolve_asset_file_path(paths, source_path)
+    dest_key = resolve_asset_file_path(paths, dest_path)
+
+    # The object of a single-file asset is the asset's location: moving it would leave the asset empty
+    if paths.names_object(source_key):
+        raise VAMSGeneralErrorResponse(OWN_FILE_MOVE_REFUSAL)
 
     # The request model bounded destinationPath; the resolved key carries the asset prefix as well and
     # is what S3 measures. Refuse it here, before the source is even looked up, so an over-long
@@ -2845,7 +2862,7 @@ def move_file(databaseId: str, assetId: str, source_path: str, dest_path: str, c
         bucket=bucket,
         source_key=source_key,
         dest_key=dest_key,
-        base_key=base_key
+        paths=paths
     )
     
     # Move auxiliary files if they exist
@@ -2895,9 +2912,8 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
+    paths = file_paths_for(bucket, base_key)
+    full_key = resolve_asset_file_path(paths, file_path)
     
     # Check if file exists
     try:
@@ -2967,7 +2983,7 @@ def revert_file_version(databaseId: str, assetId: str, file_path: str, version_i
         raise VAMSGeneralErrorResponse(f"Failed to revert file version.")
 
     #Delete aux files for asset as they don't match anymore with the version.
-    delete_assetAuxiliary_files(aux_bucket_asset_file_base(databaseId, full_key))
+    delete_assetAuxiliary_files(*own_aux_args(databaseId, paths.location, full_key))
 
     #send email for asset file change
     send_subscription_email(databaseId, assetId)
@@ -3000,19 +3016,12 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
+    paths = file_paths_for(bucket, base_key)
+    full_key = resolve_asset_file_path(paths, file_path)
 
-    # Get the relative path for comparison with fileKey in version records.
-    # fileKey is stored as the path relative to the asset prefix (e.g., "model.glb"
-    # or "subfolder/model.glb"), while file_path may include the assetId prefix and
-    # may or may not carry a leading slash. Strip the base_key prefix from the
-    # resolved key to get the same relative path format.
-    relative_path_for_lookup = full_key
-    if base_key and relative_path_for_lookup.startswith(base_key):
-        relative_path_for_lookup = relative_path_for_lookup[len(base_key):]
-    relative_path_for_lookup = relative_path_for_lookup.lstrip('/')
+    # The path the file is listed at, without its leading slash: the form of fileKey in version
+    # records (e.g. "model.glb" or "subfolder/model.glb"), whichever form file_path named it by.
+    relative_path_for_lookup = relative_path_of(paths, full_key).lstrip('/')
     
     # Get object metadata
     metadata = get_s3_object_metadata(bucket, full_key, include_versions)
@@ -3161,12 +3170,7 @@ def get_file_info(databaseId: str, assetId: str, file_path: str, include_version
         
         if top_preview_file:
             # Add relative path to the preview file
-            if top_preview_file.startswith(base_key):
-                relative_preview_path = '/' + top_preview_file[len(base_key):]
-            else:
-                relative_preview_path = '/' + top_preview_file
-            
-            metadata['previewFile'] = relative_preview_path
+            metadata['previewFile'] = relative_path_of(paths, top_preview_file, '/' + top_preview_file)
         else:
             metadata['previewFile'] = ""
     else:
@@ -3192,8 +3196,9 @@ def create_folder(databaseId: str, assetId: str, request_model: CreateFolderRequ
     # Get the asset's base location
     asset_base_key = asset.get('assetLocation', {}).get('Key', f"{baseAssetsPrefix}{assetId}/")
 
-    # Normalize the path by combining asset base key with the relative folder path
-    normalized_key_path = resolve_asset_file_path(asset_base_key, request_model.relativeKey)
+    # The folder key the relative folder path names in the asset
+    normalized_key_path = resolve_asset_file_path(
+        file_paths_for(asset_bucket, asset_base_key), request_model.relativeKey)
 
     # The request model bounded relativeKey; the resolved key carries the asset prefix as well and is
     # what S3 measures. Refuse it here, before put_object, so an over-long folder key is a plain 400
@@ -3245,9 +3250,7 @@ def set_primary_file(databaseId: str, assetId: str, file_path: str, primary_type
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
+    full_key = resolve_asset_file_path(file_paths_for(bucket, base_key), file_path)
     
     # Check if file exists and is not archived
     try:
@@ -3375,13 +3378,16 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
         'prefix': request_model.prefix
     }
 
+    paths = file_paths_for(bucket, key)
+
     # List files with archive status, passing basic_mode flag
     result = list_s3_objects_with_archive_status(
         bucket,
         key,
         resolved_query_params,
         request_model.includeArchived,
-        basic_mode=request_model.basic
+        basic_mode=request_model.basic,
+        paths=paths
     )
 
     # Convert to response model
@@ -3428,10 +3434,8 @@ def list_asset_files_current(databaseId: str, assetId: str, asset: Dict,
                     # Only add if the base file doesn't already have a preview file
                     if not hasattr(file_items[base_file_index], 'previewFile') or not file_items[base_file_index].previewFile:
                         # Add relative path to the preview file
-                        if preview_item['key'].startswith(key):
-                            relative_preview_path = '/' + preview_item['key'][len(key):]
-                        else:
-                            relative_preview_path = '/' + preview_item['key']
+                        relative_preview_path = relative_path_of(
+                            paths, preview_item['key'], '/' + preview_item['key'])
 
                         # Add preview file to base file
                         file_items[base_file_index].previewFile = relative_preview_path
@@ -4485,10 +4489,10 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
     
     # Get asset location
     bucket, base_key = get_asset_s3_location(asset)
-    
-    # Use smart path resolution to avoid duplication
-    full_key = resolve_asset_file_path(base_key, file_path)
-    aux_prefix = aux_bucket_asset_file_base(databaseId, full_key)
+    paths = file_paths_for(bucket, base_key)
+    full_key = resolve_asset_file_path(paths, file_path)
+    # A single-file asset's object owns only the preview/ folder of its base; the rest is the companion entries'
+    aux_prefix, aux_keep = own_aux_scope(databaseId, paths.location, full_key)
 
     # Check if auxiliary files exist under the prefix
     file_count = 0
@@ -4498,16 +4502,16 @@ def delete_auxiliary_preview_asset_files(databaseId: str, assetId: str, file_pat
         # List objects in the auxiliary bucket with the prefix
         paginator = s3_client.get_paginator('list_objects_v2')
         for page in paginator.paginate(Bucket=asset_aux_bucket_name, Prefix=aux_prefix):
-            if 'Contents' in page:
-                file_count += len(page['Contents'])
-                for item in page['Contents']:
+            for item in page.get('Contents', []):
+                if aux_keep is None or aux_keep(item['Key']):
+                    file_count += 1
                     deleted_files.append(item['Key'])
 
         if file_count == 0:
             raise VAMSGeneralErrorResponse(f"No auxiliary files found under prefix")
 
         # Delete the auxiliary files
-        delete_assetAuxiliary_files(aux_prefix)
+        delete_assetAuxiliary_files(*own_aux_args(databaseId, paths.location, full_key))
         
         # Send email notification for asset change
         send_subscription_email(databaseId, assetId)

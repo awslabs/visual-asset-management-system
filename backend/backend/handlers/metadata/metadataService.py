@@ -21,6 +21,7 @@ from common.apiRoutes import (
     API_FILE_METADATA, API_DATABASE_METADATA,
 )
 from common.validators import validate
+from common.s3 import asset_file_paths
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
 from customLogging.logger import safeLogger
@@ -691,18 +692,10 @@ def validate_file_exists(database_id: str, asset_id: str, file_path: str) -> boo
         if 'assetLocation' not in asset or 'Key' not in asset['assetLocation']:
             raise VAMSGeneralErrorResponse("Asset location not found")
         
-        # Use the asset's actual location as the base path
-        asset_base_path = asset['assetLocation']['Key']
-        
-        # Ensure asset base path ends with slash
-        if not asset_base_path.endswith('/'):
-            asset_base_path += '/'
-        
-        # Remove leading slash from file_path before combining (to avoid double slash)
-        normalized_file_path = file_path.lstrip('/')
-        
-        # Construct full S3 key using asset's actual location
-        full_key = f"{asset_base_path}{normalized_file_path}"
+        # The key the asset-relative path names in the asset's location (common.assetLocations)
+        full_key = asset_file_paths(bucket_name, asset['assetLocation']['Key'], client=s3).key_for(file_path)
+        if full_key is None:
+            raise VAMSGeneralErrorResponse("File not found in S3")
         
         # Check if file exists in S3
         try:

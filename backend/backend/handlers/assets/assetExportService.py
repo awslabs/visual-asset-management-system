@@ -21,7 +21,8 @@ from common.s3PathPatterns import PREVIEW_FILE_PATTERN, ALLOWED_PREVIEW_FILE_EXT
 from common.apiRoutes import API_ASSET_EXPORT
 from common.dynamoDbMetadataKeys import HIDDEN_FIELD_PREFIX
 from common.dynamodb import query_all_items
-from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params
+from common.s3 import validateUnallowedFileExtensionAndContentType, presigned_get_object_params, asset_file_paths
+from common.assetLocations import contains
 from common.validators import validate
 from handlers.authz import CasbinEnforcer
 from handlers.auth import request_to_claims
@@ -832,7 +833,9 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
 
     Args:
         bucket: The S3 bucket name
-        prefix: The asset's S3 key prefix
+        prefix: The asset's location key. A single-file asset lists its companion folder, and its
+            object and previews while the object is listed at its file name
+            (``common.assetLocations.AssetFilePaths.listing_prefix``)
         max_objects: Optional ceiling on the objects listed. One object beyond the ceiling is
             returned when more remain, so a caller can tell a full page from the last one.
         start_after_key: Resume the listing after this key, as returned by a previous page.
@@ -849,10 +852,9 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
     files = []
 
     try:
-        if not prefix.endswith('/'):
-            prefix = prefix + '/'
+        paths = asset_file_paths(bucket, prefix, client=s3_client)
 
-        list_kwargs = {'Bucket': bucket, 'Prefix': prefix, 'MaxKeys': S3_LISTING_PAGE_SIZE}
+        list_kwargs = {'Bucket': bucket, 'Prefix': paths.listing_prefix(), 'MaxKeys': S3_LISTING_PAGE_SIZE}
         if start_after_key:
             list_kwargs['KeyMarker'] = start_after_key
 
@@ -876,6 +878,10 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                 if start_after_key and key <= start_after_key:
                     continue
 
+                # Keys that only share the location's characters are another asset's
+                if not contains(paths.location, key):
+                    continue
+
                 is_folder = key.endswith('/')
 
                 # Dropped before the row is built, so it is neither returned nor counted against
@@ -883,11 +889,7 @@ def list_s3_files(bucket: str, prefix: str, max_objects: Optional[int] = None,
                 if is_folder and exclude_folders:
                     continue
 
-                relative_path = key
-                if relative_path.startswith(prefix):
-                    relative_path = relative_path[len(prefix):]
-                    if not relative_path.startswith('/'):
-                        relative_path = '/' + relative_path
+                relative_path = paths.path_for(key)
 
                 item = {
                     'fileName': os.path.basename(key),
