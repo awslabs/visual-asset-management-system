@@ -6,6 +6,7 @@ job identity, settings bounds, the job and batch rows against moto's DynamoDB (e
 and notification, in both orders of token registration and job completion), cancellation of an
 execution's copies, and the read-path hold for a run still ingesting outputs."""
 
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
@@ -301,6 +302,7 @@ def test_a_conflict_on_every_attempt_is_raised_after_the_bound_and_a_rerun_count
 @pytest.mark.parametrize("error", [
     _cancelled([None, "ThrottlingError"]),
     _cancelled([None, "ProvisionedThroughputExceeded"]),
+    _cancelled(["TransactionConflict", "ThrottlingError"]),
     _cancelled(["ValidationError", None]),
     ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "x"}}, "TransactWriteItems"),
 ])
@@ -315,6 +317,64 @@ def test_any_other_cancellation_is_raised_at_once_and_counts_nothing(table, wait
         loc.count_job_terminal(failing, TABLE, jobs[0]["jobId"], "exec-1", loc.STATUS_SUCCEEDED)
     assert failing.transact_write_items.call_count == 1 and waits == []
     assert loc.get_batch(tbl, "exec-1")["terminalCount"] == 0
+
+
+class _Raw:
+    def __init__(self, body):
+        self._body = body
+
+    def stream(self, **kwargs):
+        yield self._body
+
+
+@pytest.fixture
+def botocore_dynamodb(monkeypatch):
+    """A real boto3 DynamoDB client and resource with the engine's retry config, whose HTTP answers
+    are DynamoDB JSON bodies scripted per operation. ``sends`` counts the requests botocore sent."""
+    from botocore.awsrequest import AWSResponse
+    from botocore.config import Config
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    config = Config(retries={"max_attempts": 5, "mode": "adaptive"})
+    client = boto3.client("dynamodb", region_name=REGION, config=config)
+    table = boto3.resource("dynamodb", region_name=REGION, config=config).Table(TABLE)
+    script, sends = [], []
+
+    def _answer(request, **kwargs):
+        status, error_type, extra = script.pop(0)
+        sends.append(status)
+        body = {"__type": f"com.amazonaws.dynamodb.v20120810#{error_type}", "message": "m", **extra} \
+            if error_type else {}
+        return AWSResponse(request.url, status, {"x-amzn-RequestId": "r", "Content-Type": "application/x-amz-json-1.0"},
+                           _Raw(json.dumps(body).encode()))
+
+    for events in (client.meta.events, table.meta.client.meta.events):
+        events.register("before-send.dynamodb", _answer)
+    return client, table, script, sends
+
+
+def test_a_real_botocore_cancellation_for_a_conflict_is_read_and_tried_again(botocore_dynamodb, waits):
+    client, _table, script, sends = botocore_dynamodb
+    script += [(400, "TransactionCanceledException",
+                {"CancellationReasons": [{"Code": "None"}, {"Code": "TransactionConflict"}]}),
+               (200, "", {})]
+    assert loc.count_job_terminal(client, TABLE, "exec-1#a", "exec-1", loc.STATUS_SUCCEEDED) is True
+    assert sends == [400, 200]
+
+
+def test_a_batch_row_write_that_meets_a_transaction_fails_as_a_transient_transaction_conflict(
+        botocore_dynamodb):
+    """A plain UpdateItem on the batch row while a count transaction holds it is rejected with
+    TransactionConflictException. botocore does not retry it, and the engine fails with that error
+    type, which call_engine waits out because it is transient."""
+    _client, table, script, sends = botocore_dynamodb
+    script.append((400, "TransactionConflictException", {}))
+    with pytest.raises(ClientError) as raised:
+        loc.register_task_token(table, "exec-1", "token-1")
+    assert type(raised.value).__name__ == "TransactionConflictException"  # the Lambda errorType
+    assert sends == [400]
+    assert loc.is_transient(raised.value)
 
 
 def test_a_job_with_no_batch_retries_a_conflict_on_its_own_row(table, waits):

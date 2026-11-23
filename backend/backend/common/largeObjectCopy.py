@@ -224,11 +224,14 @@ ENGINE_CALL_DEPLOY_DELAYS = (5, 10, 15, 20, 30, 40)
 # Throttling and the other transient refusals a busy account answers with (Lambda concurrency used
 # up, a function still updating, a service-side fault, a throttled table or state machine call).
 # A throttle slows a copy rather than failing it, so callers wait for capacity (TRANSIENT_DELAYS).
+# TransactionConflictException rejects a single-item write that met a transaction in flight on the
+# same item (the output step's batch row writes against count_job_terminal); nothing was written, and
+# botocore does not retry it.
 TRANSIENT_ERROR_CODES = frozenset({
     "TooManyRequestsException", "ThrottlingException", "Throttling", "ThrottledException",
     "EC2ThrottledException", "RequestLimitExceeded", "RequestThrottled", "SlowDown",
     "ProvisionedThroughputExceededException", "ResourceConflictException", "ServiceException",
-    "ServiceUnavailable", "ServiceUnavailableException",
+    "ServiceUnavailable", "ServiceUnavailableException", "TransactionConflictException",
 })
 # The refusal of a call whose grant the deployment is still applying (L1: each caller's role loses
 # its old grant a few seconds before the new one arrives).
