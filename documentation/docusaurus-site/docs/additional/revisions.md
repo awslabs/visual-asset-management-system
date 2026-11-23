@@ -653,6 +653,7 @@ Edit `config.json` (disable or remove the two retired pipeline blocks; add `app.
 -   **A file delete reports a kept preview** — A file delete fails with an error that says what to check when a preview of the file cannot be listed or deleted, instead of reporting success; deleting the file again removes the previews that were kept. (issue #1789)
 -   **CLI asset delete names the refusal** — `vamscli assets delete` reports a delete the API refuses as a delete error with the API's reason, instead of "Unexpected error", and its `--json-output` names the `error_type`. (issue #1782)
 -   **File operations keep other files' viewer data** — A file delete, revert, move, rename or copy, an asset version revert and the auxiliary preview delete act on the file's own viewer data only, not on the data of the files in a folder named like it, such as an asset stored in that folder. (issue #1870)
+-   **A file's viewer data next to a nested asset** — When an asset is stored in a folder named like a file, the file's viewer opens again, and an asset permanent delete or folder delete removes the file's own viewer data; the nested asset's data stays its own. (issue #1877)
 
 **Documentation:**
 
