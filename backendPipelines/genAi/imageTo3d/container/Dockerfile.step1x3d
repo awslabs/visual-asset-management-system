@@ -30,6 +30,10 @@ ARG STEP1X3D_COMMIT=cb5ac944709c6c913109070c7b90c3447f57f3d4
 # nvdiffrast at the commit its v0.4.0 tag names, the revision Dockerfile.trellis2 carries too. A tag can
 # be moved, so the commit is what is checked.
 ARG NVDIFFRAST_COMMIT=253ac4fcea7de5f396371124af597e6cc957bfae
+# pytorch3d at the commit the upstream manifest's `git+...pytorch3d.git@stable` pointed to when the lock was made.
+# `stable` is a branch that moves, so it is the commit that is pinned and checked, not the branch.
+# pragma: allowlist nextline secret
+ARG PYTORCH3D_COMMIT=75ebeeaea0908c5527e7b1e305fbc7681382db47
 # The GPL-3.0 mesh-repair rungs (pymeshfix, pymeshlab) complete the repair ladder. A run selects
 # which rungs it walks through the template's REPAIR_BACKENDS setting.
 ARG ENABLE_GPL_MESH_REPAIR=true
@@ -74,25 +78,35 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWS_CLI_V
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# Every Python package of this image is installed from locks/step1x3d, hashed exports of its uv.lock (#1726): the
+# same versions, from the same files, on every build. The lock holds the image's whole set, so nothing is resolved
+# at build time and no later step can move a version. pip and the build tools come first from their own lock, then
+# the rest with --require-hashes --no-deps: pip refuses a file whose hash is not in the lock and installs nothing the
+# lock does not name. The four extensions built from source below compile AFTER this install, against the numpy and
+# torch the image ships, and nothing installs a package after them.
+COPY locks/step1x3d/requirements-build.lock locks/step1x3d/requirements.lock locks/step1x3d/requirements-gpl.lock locks/step1x3d/out-of-lock.json /opt/locks/step1x3d/
+COPY locks/step1x3d/upstream /opt/locks/step1x3d/upstream
+COPY locks/tools/check_installed_set.py locks/tools/check_upstream_requirements.py /opt/locks/tools/
+RUN pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/step1x3d/requirements-build.lock
 
-# CUDA 12.8 torch stack, at fixed versions. The geometry stage's extensions compile against this torch,
-# so it comes first.
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu128 \
-    torch==2.11.0 torchvision==0.26.0
+# CUDA 12.8 torch stack, at fixed versions, and every shared and upstream package: torch and torchvision are the
+# CUDA 12.8 builds from the PyTorch index (the lock pins them to 2.11.0+cu128 and the hashes are those files'),
+# every other package comes from the default index.
+RUN pip install --no-cache-dir --require-hashes --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -r /opt/locks/step1x3d/requirements.lock
 
-# Shared pipeline dependencies
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt
-
-# Clone Step1X-3D and install both stages' dependency stacks. The texture stage pulls the SD-XL
-# diffusion stack, which is the bulk of the image.
+# Clone Step1X-3D. Its dependency stack, the SD-XL diffusion stack of the texture stage included, is already
+# installed from the lock; the check after the clone fails the build when the upstream requirements.txt differs
+# from the copy the lock was resolved from, which is what a moved STEP1X3D_COMMIT without a re-lock looks like.
 RUN git clone --recurse-submodules https://github.com/stepfun-ai/Step1X-3D.git /opt/step1x3d && \
     cd /opt/step1x3d && \
     git checkout --detach ${STEP1X3D_COMMIT} && \
     test "$(git rev-parse HEAD)" = "${STEP1X3D_COMMIT}" && \
     git submodule update --init --recursive && \
-    git rev-parse HEAD > /opt/step1x3d/VAMS_UPSTREAM_COMMIT
+    git rev-parse HEAD > /opt/step1x3d/VAMS_UPSTREAM_COMMIT && \
+    python /opt/locks/tools/check_upstream_requirements.py \
+        --recorded /opt/locks/step1x3d/upstream --clone /opt/step1x3d requirements.txt
 WORKDIR /opt/step1x3d
 # Every GPU family the pipeline can schedule onto has to be in this list, or an extension
 # compiles for the wrong architecture and fails at runtime with "no kernel image is available
@@ -102,12 +116,10 @@ ENV TORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
 # nvcc parallelism, capped as the two peers that also compile from source cap it: an uncapped job
 # count exhausts the CodeBuild container's memory and the compile is killed rather than failing.
 ENV MAX_JOBS=2
-# nvdiffrast is installed BEFORE the upstream manifest and separately from it, because the two need
-# opposite pip settings. nvdiffrast cannot build under build isolation -- its setup.py imports torch to
-# find the CUDA toolchain, and an isolated build environment has no torch, so the wheel step fails with
-# "Cannot compile nvdiffrast CUDA extension". PyMCubes, in the same manifest, needs isolation for the
-# opposite reason: its metadata step wants build-time packages the image does not carry. Installing the
-# manifest with isolation off to satisfy the first breaks the second, which is how both were found.
+# The four packages below are built from source, after the locked install, against the torch and numpy the image
+# ships (out-of-lock.json records each). They need pip's build isolation OFF: their setup.py imports torch to find
+# the CUDA toolchain, and an isolated build environment has no torch -- nvdiffrast fails with "Cannot compile
+# nvdiffrast CUDA extension". --no-deps keeps pip from resolving anything: their dependencies are in the lock.
 #
 # The import is asserted rather than assumed: the compile is the part that fails, and a package whose
 # extension did not build still installs.
@@ -116,38 +128,25 @@ RUN git clone https://github.com/NVlabs/nvdiffrast.git /tmp/nvdiffrast && \
     git checkout --detach ${NVDIFFRAST_COMMIT} && \
     test "$(git rev-parse HEAD)" = "${NVDIFFRAST_COMMIT}" && \
     mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/nvdiffrast.VAMS_UPSTREAM_COMMIT && \
-    pip install --no-cache-dir --no-build-isolation /tmp/nvdiffrast && \
+    pip install --no-cache-dir --no-build-isolation --no-deps /tmp/nvdiffrast && \
     cd / && rm -rf /tmp/nvdiffrast && \
     python -c "import nvdiffrast; print('nvdiffrast imported')"
 
-# The manifest is installed in two passes, split by requirement KIND rather than by package name.
-#
-# A `git+` requirement in this manifest is a source build whose setup.py imports torch to find the CUDA
-# toolchain, so it needs pip's build isolation OFF -- an isolated build environment has no torch.
-# Everything else is an exact PyPI pin that needs isolation ON, because its build-time dependencies are
-# not in the image. Switching isolation off for the whole file to satisfy the first kind breaks the
-# second: nvdiffrast fails isolated, and PyMCubes fails unisolated. At the pinned commit the manifest has
-# exactly two source requirements, nvdiffrast and pytorch3d, and fifty pins.
-#
-# nvdiffrast is dropped from the source pass because it is already installed above; pip treats a direct
-# git requirement as always-rebuild and would compile it a second time.
+# pytorch3d: upstream's manifest names it as a git requirement on the moving `stable` branch, so it is built here
+# from a clone at PYTORCH3D_COMMIT, which is checked.
 #
 # FORCE_CUDA=1 is required, not optional: pytorch3d decides at build time whether to compile its CUDA
 # kernels by asking torch whether a GPU is visible, and no GPU is visible in a build container. Without
 # it the wheel installs cleanly and every CUDA op it provides is simply absent at run time -- on a GPU
 # instance, minutes into a job.
-RUN set -eux; \
-    for req in requirements.txt requirements/base.txt; do \
-        if [ -f "$req" ]; then \
-            grep -v 'git+' "$req" > /tmp/req.pypi || true; \
-            grep 'git+' "$req" | sed '/nvdiffrast/d' > /tmp/req.source || true; \
-            if [ -s /tmp/req.pypi ]; then pip install --no-cache-dir -r /tmp/req.pypi; fi; \
-            if [ -s /tmp/req.source ]; then \
-                FORCE_CUDA=1 pip install --no-cache-dir --no-build-isolation -r /tmp/req.source; \
-            fi; \
-        fi; \
-    done; \
-    rm -f /tmp/req.pypi /tmp/req.source
+RUN git clone https://github.com/facebookresearch/pytorch3d.git /tmp/pytorch3d && \
+    cd /tmp/pytorch3d && \
+    git checkout --detach ${PYTORCH3D_COMMIT} && \
+    test "$(git rev-parse HEAD)" = "${PYTORCH3D_COMMIT}" && \
+    mkdir -p /opt/vams-upstream && git rev-parse HEAD > /opt/vams-upstream/pytorch3d.VAMS_UPSTREAM_COMMIT && \
+    FORCE_CUDA=1 pip install --no-cache-dir --no-build-isolation --no-deps /tmp/pytorch3d && \
+    cd /opt && rm -rf /tmp/pytorch3d && \
+    python -c "import pytorch3d; print('pytorch3d imported')"
 
 # The texture stage rasterizes UVs through a differentiable renderer and the geometry stage packs
 # them with custom CUDA kernels; both ship in the repo's step1x3d_texture extension tree.
@@ -155,16 +154,16 @@ RUN set -eux; \
 # silently would push an image whose texture stage fails at run time on a GPU instance. If a later
 # commit moves them, the build fails here naming the path, which is where that belongs.
 RUN set -eux; \
-    pip install --no-cache-dir --no-build-isolation \
+    pip install --no-cache-dir --no-build-isolation --no-deps \
         /opt/step1x3d/step1x3d_texture/custom_rasterizer; \
-    pip install --no-cache-dir --no-build-isolation \
+    pip install --no-cache-dir --no-build-isolation --no-deps \
         /opt/step1x3d/step1x3d_texture/differentiable_renderer
 
 # GPL-3.0 mesh-repair rungs. Both VAMS build paths pass ENABLE_GPL_MESH_REPAIR=true, so every image
 # carries them; only a hand-run build that sets it to false leaves them out.
 RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
         echo "Installing GPL-3.0 mesh repair backends (pymeshfix, pymeshlab)" && \
-        pip install --no-cache-dir pymeshfix==0.18.1 pymeshlab==2025.7.post1; \
+        pip install --no-cache-dir --require-hashes --no-deps -r /opt/locks/step1x3d/requirements-gpl.lock; \
     else \
         echo "GPL mesh repair backends not installed (ENABLE_GPL_MESH_REPAIR=$ENABLE_GPL_MESH_REPAIR)"; \
     fi
@@ -173,12 +172,15 @@ RUN if [ "$ENABLE_GPL_MESH_REPAIR" = "true" ]; then \
 # its working directory; adding it to PYTHONPATH keeps the imports working from anywhere.
 ENV PYTHONPATH="/opt/step1x3d:${PYTHONPATH}"
 
-# A model repo's own requirements are installed after the shared ones and can pull a shared
-# dependency backwards -- TripoSR pins trimesh 4.0.5, whose manifold backend calls an API that
-# manifold3d 3.x removed, silently disabling the manifold repair rung. Reasserting the shared
-# constraint here restores the version the pipeline's own code is written against.
-COPY requirements.txt /opt/ml/code/requirements.txt
-RUN pip install --no-cache-dir -r /opt/ml/code/requirements.txt && python -c "import trimesh, manifold3d; print('trimesh', trimesh.__version__)"
+# The installed set is exactly the lock plus the four packages built above: this fails the build on any package
+# that is missing, extra or at another version than locks/step1x3d names (the GPL pair only when it was requested),
+# and pip check confirms the declared dependencies of what is installed. The import check confirms the CUDA torch
+# build survived and the repair stack the pipeline's own code is written against is present.
+RUN python /opt/locks/tools/check_installed_set.py --dir /opt/locks/step1x3d --gpl "$ENABLE_GPL_MESH_REPAIR" && \
+    pip check
+RUN python -c "import trimesh, manifold3d, torch; \
+assert torch.version.cuda, 'the locked install displaced the CUDA torch build'; \
+print('trimesh', trimesh.__version__, 'torch', torch.__version__)"
 
 # rembg resolves its segmentation weights under U2NET_HOME and downloads them on first use,
 # defaulting to a home directory nothing carries between jobs -- which had the preprocessing stage
