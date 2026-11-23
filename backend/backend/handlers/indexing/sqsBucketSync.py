@@ -12,7 +12,7 @@ import urllib.parse
 from datetime import datetime
 from customLogging.logger import safeLogger
 from common.resourceNames import get_table_name, ResourceKeys
-from handlers.assets.createAsset import create_asset
+from handlers.assets.createAsset import create_asset, AssetIdInUseError
 from handlers.assets.assetCount import update_asset_count
 from models.assetsV3 import CreateAssetRequestModel
 from handlers.databases.createDatabase import create_database
@@ -914,6 +914,9 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         
     Returns:
         str: Asset ID if created successfully, None otherwise
+
+    Raises:
+        AssetIdInUseError: if an asset in any database already carries asset_id; nothing is created
     """
     try:
         # Create asset request model
@@ -944,6 +947,8 @@ def create_new_asset(bucket_id: str, database_id: str, asset_id: str) -> Optiona
         asset_cache.set(cache_key, new_asset)
         
         return response.assetId
+    except AssetIdInUseError:
+        raise
     except Exception as e:
         logger.exception(f"Error creating asset: {e}")
         return None
@@ -1656,7 +1661,8 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
               failures still forward to the indexers so OpenSearch and other
               registered indexers can reconcile their own records. Only records
               that are truly out of scope (wrong bucket/prefix, reserved folders,
-              init files, folder markers, malformed records) are withheld.
+              init files, folder markers, malformed records, a folder whose asset
+              ID another asset already uses) are withheld.
             - message: string with details about the processing result
     """
     try:
@@ -1811,7 +1817,15 @@ def process_s3_record(record: Dict) -> Tuple[bool, bool, str]:
 
                 # Create the asset
                 logger.info(f"Creating new asset {asset_id} in database {database_id_to_use}")
-                created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                try:
+                    created_asset_id = create_new_asset(bucket_id, database_id_to_use, asset_id)
+                except AssetIdInUseError:
+                    # The folder name is an asset ID another asset already uses, so no asset is
+                    # created. The file then belongs to no asset and is not forwarded to the indexers.
+                    logger.error(
+                        f"No asset created for {object_key}: asset ID {asset_id} is already used by another asset"
+                    )
+                    return False, False, f"Asset ID {asset_id} is already used by another asset"
                 if not created_asset_id:
                     logger.error(f"Failed to create asset {asset_id} in database {database_id_to_use}")
                     return False, True, f"Failed to create asset {asset_id} in database {database_id_to_use}"
@@ -2083,7 +2097,8 @@ def lambda_handler_created(event, context):
     processing failed or was skipped, so OpenSearch and other registered
     indexers can reconcile their records independently. Only truly
     out-of-scope records (wrong bucket/prefix, reserved folders, init files,
-    folder markers, malformed records) are withheld from the indexers.
+    folder markers, malformed records, a folder whose asset ID another asset
+    already uses) are withheld from the indexers.
 
     Args:
         event: The event from the event source (SQS, SNS, or direct S3)
