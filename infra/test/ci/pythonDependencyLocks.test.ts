@@ -885,6 +885,14 @@ function pinDirectUrls(text: string): { text?: string; error?: string } {
         ["a wheel named for another package", `torch @ ${wheel}`],
         ["a source archive", "flash-attn @ https://example.com/flash_attn-2.8.3.tar.gz"],
         ["a non-https wheel URL", `flash-attn @ ${wheel.replace("https://", "http://")}`],
+        [
+            "a wheel named for the package on another https host",
+            `flash-attn @ https://example.com/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp310-cp310-linux_x86_64.whl`,
+        ],
+        [
+            "a wheel of another repository on the allowed host",
+            `flash-attn @ ${wheel.replace("Dao-AILab/flash-attention", "someone/flash-attention")}`,
+        ],
     ])("%s fails the run instead of passing unaudited", (_label, line) => {
         const result = pinDirectUrls(`${line} ; sys_platform == 'linux'\n`);
         expect(result.text).toBeUndefined();

@@ -231,3 +231,11 @@ def test_the_gr00t_suite_installs_only_the_common_requirements():
     suite = {s.rel: s for s in runner.suites()}["backendPipelines/genAi/nvidia/gr00t/container/tests"]
     assert suite.requirement_files == (runner.COMMON_REQUIREMENTS,)
     assert (runner.REPO_ROOT / "backendPipelines/genAi/nvidia/gr00t/container/uv.lock").is_file()
+
+
+def test_only_the_gr00t_container_opts_out_of_its_own_requirements(settings):
+    """A suite that skips its container's lock runs on the common requirements alone, so each opt-out is listed."""
+    opted_out = sorted(path for path, entry in settings.items() if "ownRequirements" in entry)
+    assert opted_out == ["backendPipelines/genAi/nvidia/gr00t/container/tests"], (
+        "a new ownRequirements opt-out needs its reason in suite-settings.json and an edit to this list"
+    )

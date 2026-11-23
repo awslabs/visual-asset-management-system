@@ -225,6 +225,8 @@ PIP_AUDIT_VERSION=2.10.1 python3 .github/scripts/python_dependency_audit.py
 
 The script regenerates stale exports in place, so `git diff` afterwards shows the fix to commit. `PIP_AUDIT_VERSION` is the version the workflow sets.
 
+pip-audit cannot read a `name @ <URL>` requirement. The audit therefore accepts one only as a wheel whose file name is the package's and whose URL starts with an allowed prefix (today the flash-attn release assets used by the GR00T image), checks it as `name==<version>` with the version read from the file name, and fails the run on any other direct URL: a git source, an archive, or a wheel on another host. A new prebuilt wheel needs its prefix added to `ALLOWED_DIRECT_URL_PREFIXES` in `.github/scripts/python_dependency_audit.py`, with a test.
+
 The audit covers only the packages in a `uv.lock` and its committed exports. It does not cover:
 
 -   the files listed in `.github/python-lock-exemptions.json`, until each moves to a uv project;

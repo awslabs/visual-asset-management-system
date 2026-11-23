@@ -16,7 +16,8 @@ hand-kept list) it:
 3. audits each export with pip-audit and fails on every advisory that is not on the allowlist
    `.github/python-audit-allowlist.json`. pip-audit cannot read a `name @ <URL>` requirement, so a
    prebuilt wheel in an export (flash-attn in the GR00T image) is audited as `name==<version>`, the
-   version read from the wheel's file name; any other direct URL fails the run (see `pin_direct_urls`).
+   version read from the wheel's file name, when its URL is under an allowed prefix; any other direct URL fails
+   the run (see `pin_direct_urls`).
 
 The allowlist is validated first: every entry needs `id`, `package`, `reason`, a `reviewBy` date
 (ISO, not in the past) and `projects`, the uv project directories it applies to (each one a directory
@@ -394,6 +395,9 @@ def check_ranged_inputs(root, tracked, lock_dirs):
     return paths
 
 
+# Where a wheel URL requirement may point: the release assets of the one project that needs it (the prebuilt
+# flash-attn wheel of the GR00T image). Add a prefix, with a test, when another image needs a prebuilt wheel.
+ALLOWED_DIRECT_URL_PREFIXES = ("https://github.com/Dao-AILab/flash-attention/releases/download/",)
 DIRECT_URL_LINE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)(?P<extras>\[[^\]]*\])?\s+@\s+(?P<url>\S+)(?P<rest>.*)$")
 WHEEL_URL_FILE = re.compile(r"^(?P<dist>[A-Za-z0-9_.]+)-(?P<version>[0-9][A-Za-z0-9_.!+]*)-[^/]+\.whl$")
 
@@ -406,8 +410,9 @@ def pin_direct_urls(text, source):
     the package unaudited. The version is read from the wheel file's own name (`name-version-tags.whl`,
     a local version such as `+cu12torch2.8` dropped, since advisories name the public release) after
     checking the file's distribution name is the requirement's, and pip-audit then checks that
-    name and version like any other pin. Anything else behind an `@` (a git source, an archive, a
-    file that is not a wheel) fails the run: its version cannot be read, so it must not pass unaudited.
+    name and version like any other pin. The URL must start with one of ALLOWED_DIRECT_URL_PREFIXES.
+    Anything else behind an `@` (a git source, an archive, a file that is not a wheel, a wheel elsewhere)
+    fails the run: its version cannot be read, so it must not pass unaudited.
     Hash and continuation lines are kept as they are."""
     lines = []
     for line in text.split("\n"):
@@ -417,10 +422,10 @@ def pin_direct_urls(text, source):
             continue
         name, url = match.group("name"), match.group("url")
         wheel = WHEEL_URL_FILE.match(url.split("?", 1)[0].split("#", 1)[0].rsplit("/", 1)[-1])
-        if not url.startswith("https://") or not wheel or canonical_name(wheel.group("dist")) != canonical_name(name):
+        if not url.startswith(ALLOWED_DIRECT_URL_PREFIXES) or not wheel or canonical_name(wheel.group("dist")) != canonical_name(name):
             raise AuditError(
                 f"{source}: `{name} @ {url}` is a direct URL requirement the audit cannot read a version "
-                f"from (only an https wheel URL named for the package is supported); pip-audit would "
+                f"from (only a wheel URL named for the package, under an allowed prefix, is supported); pip-audit would "
                 f"skip it, so it must not stay in an exported lock unaudited"
             )
         version = wheel.group("version").split("+", 1)[0]

@@ -452,7 +452,7 @@
             "id": "PYSEC-2026-2477",
             "package": "flash-attn",
             "projects": ["backendPipelines/genAi/nvidia/gr00t/container"],
-            "reason": "flash-attn 2.8.3 is the newest release; the advisory names no fixed release. The image installs the project's prebuilt wheel, which the audit checks by its name and version because pip-audit cannot read a URL requirement. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
+            "reason": "flash-attn 2.8.3 is the release the image installs as a prebuilt wheel for torch 2.8, CUDA 12, CPython 3.10 and the C++11 ABI, the combination #1812 chose. flash-attn 2.8.3.post2 exists on PyPI but as a source archive only, and the advisory names no fixed release. The audit checks the wheel by its name and version because pip-audit cannot read a URL requirement. Tracked in #1816 (move the image to a newer Isaac-GR00T commit and a Python 3.11+ base); the entry is removed with that change.",
             "reviewBy": "2027-02-28"
         },
         {
