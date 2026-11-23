@@ -11,7 +11,8 @@ and wrote different records, and the web's create and update on a custom locatio
 found in S3". Each route now keys both forms by the listed path. An asset at ``{assetId}/`` is the control:
 the dropped segment already gave its listed path.
 
-The read records the keyed path on its action record, as the writes do, without another read.
+The read records the keyed path on its action record, as the writes do, without another read; and the
+writes authorize the asset before they check the file.
 """
 
 import json
@@ -323,6 +324,57 @@ class TestTheReadRecordsTheListedPath:
         assert harness.table.reads == (2 if show_archived else 1)
         assert len(harness.queries) == 1
         harness.s3.head_object.assert_not_called()
+
+
+WRITES = [
+    ("create", "POST", {"type": "metadata", "metadata": [_ITEM]}),
+    ("update", "PUT", {"type": "metadata", "metadata": [_ITEM], "updateType": "update"}),
+    ("replace all", "PUT", {"type": "metadata", "metadata": [_ITEM], "updateType": "replace_all"}),
+]
+WRITE_IDS = [write[0] for write in WRITES]
+
+
+@pytest.mark.unit
+class TestWritesAuthorizeTheAssetBeforeTheFile:
+    """File metadata writes decide Tier 2 on the asset before they check the file in S3."""
+
+    @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
+    @pytest.mark.parametrize("file_exists", [True, False], ids=["existing file", "missing file"])
+    @pytest.mark.parametrize("path", ["/sub/x.obj", "/projects/site-a/sub/x.obj"], ids=["listed path", "full key"])
+    def test_a_caller_refused_on_the_asset_is_refused_before_the_file_is_checked(
+            self, write, method, body, file_exists, path):
+        harness = _Harness(_asset("projects/site-a/"), allowed=False,
+                           existing_keys={"projects/site-a/sub/x.obj"} if file_exists else set())
+        response = harness.call(method, body={"filePath": path, **body})
+        assert response["statusCode"] == 403, response
+        assert harness.checked_keys() == []
+        assert harness.queries == []
+        harness.client.batch_write_item.assert_not_called()
+
+    @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
+    def test_an_allowed_caller_is_still_told_the_file_is_missing(self, write, method, body):
+        harness = _Harness(_asset("projects/site-a/"), existing_keys=set())
+        response = harness.call(method, body={"filePath": "/projects/site-a/sub/x.obj", **body})
+        assert _status(response) == (400, "VAMS General Error: File not found in S3")
+        assert harness.checked_keys() == ["projects/site-a/sub/x.obj"]
+        harness.client.batch_write_item.assert_not_called()
+
+    def test_a_delete_refused_on_the_asset_reads_no_records(self):
+        harness = _Harness(_asset("projects/site-a/"), allowed=False,
+                           stored={_record("/sub/x.obj"): [_stored_row("/sub/x.obj")]})
+        response = harness.call("DELETE", body={"filePath": "/projects/site-a/sub/x.obj", "type": "metadata",
+                                                "metadataKeys": ["k"]})
+        assert response["statusCode"] == 403, response
+        assert harness.queries == []
+        harness.client.batch_write_item.assert_not_called()
+
+    @pytest.mark.parametrize("write,method,body", WRITES, ids=WRITE_IDS)
+    @pytest.mark.parametrize("allowed", [True, False], ids=["allowed", "refused"])
+    def test_a_missing_asset_is_answered_as_on_every_metadata_route(self, write, method, body, allowed):
+        harness = _Harness({"databaseId": _DB, "assetId": "another"}, allowed=allowed)
+        response = harness.call(method, body={"filePath": "/sub/x.obj", **body})
+        assert _status(response) == (400, "VAMS General Error: Asset not found")
+        assert harness.checked_keys() == []
 
 
 @pytest.mark.unit

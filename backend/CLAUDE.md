@@ -743,6 +743,12 @@ object from `asset_authorization_object`, whose stand-in for a missing id carrie
 `<databaseId>#deleted` id, so a caller refused that database's archived records gets the same 403
 for an archived asset as for a missing one. Write routes never pass it.
 
+The file metadata writes (`metadataService.create_file_metadata`, `update_file_metadata` and
+`delete_file_metadata`) authorize the asset before they check the file: they read the asset, decide
+Tier-2 on it (403 when refused), then key the path (`file_record_path`) and check the file in S3
+(`validate_file_exists`, create and update only). A missing asset answers 400 `Asset not found`
+before authorization, the convention `authorize_asset_read` documents for the metadata routes.
+
 ---
 
 ## Pydantic v1 Model Patterns

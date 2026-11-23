@@ -3455,13 +3455,15 @@ def get_file_metadata_from_version(database_id: str, asset_id: str, file_path: s
 def create_file_metadata(database_id: str, asset_id: str, request_model: CreateFileMetadataRequestModel, claims_and_roles: dict):
     """Create metadata or attributes for a file (bulk operation)"""
     try:
+        # Authorize the asset before the file is checked
         asset = validate_asset_exists(database_id, asset_id)
-        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
-        validate_file_exists(database_id, asset_id, request_model.filePath)
         asset.update({"object__type": "asset"})
         
         if not check_entity_authorization(asset, "POST", claims_and_roles):
             raise PermissionError("Not authorized to create metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
+        validate_file_exists(database_id, asset_id, request_model.filePath)
         
         # Validate 500 record limit: Fetch existing + count with new (separate limits for metadata vs attributes)
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
@@ -3681,9 +3683,8 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
     A REPLACE_ALL that removes stored keys also checks the route's DELETE on ``event``.
     """
     try:
+        # Authorize the asset before the file is checked
         asset = validate_asset_exists(database_id, asset_id)
-        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
-        validate_file_exists(database_id, asset_id, request_model.filePath)
         asset.update({"object__type": "asset"})
         
         # Check authorization based on updateType
@@ -3695,6 +3696,9 @@ def update_file_metadata(database_id: str, asset_id: str, request_model: UpdateF
             # UPDATE mode requires only PUT permission
             if not check_entity_authorization(asset, "PUT", claims_and_roles):
                 raise PermissionError("Not authorized to update metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
+        validate_file_exists(database_id, asset_id, request_model.filePath)
         
         # Check if user is SYSTEM_USER - bypass schema validation
         username = claims_and_roles.get("tokens", ["SYSTEM_USER"])[0]
@@ -4093,11 +4097,12 @@ def delete_file_metadata(database_id: str, asset_id: str, request_model: DeleteF
     try:
         # No S3 validation for DELETE - allow deleting metadata even if file doesn't exist
         asset = validate_asset_exists(database_id, asset_id)
-        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         asset.update({"object__type": "asset"})
         
         if not check_entity_authorization(asset, "DELETE", claims_and_roles):
             raise PermissionError("Not authorized to delete metadata for this file")
+
+        request_model.filePath = file_record_path(asset, asset_id, request_model.filePath)
         
         # NEW: Schema validation for deletion
         composite_key = f"{database_id}:{asset_id}:{request_model.filePath}"
